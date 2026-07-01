@@ -47,6 +47,19 @@ npm -v
 pm2 -v
 ```
 
+Oracle ARM 인스턴스에서는 `better-sqlite3` prebuilt binary가 없을 수 있어 `npm ci --omit=dev` 중 네이티브 컴파일이 필요하다. 배포 워크플로는 `make`, C++ compiler, `python3`가 없으면 passwordless sudo로 자동 설치를 시도한다. 수동으로 준비하려면 Ubuntu 계열에서는 아래를 한 번 실행한다.
+
+```bash
+sudo apt-get update
+sudo apt-get install -y build-essential python3
+```
+
+Oracle Linux 계열이면 아래를 사용한다.
+
+```bash
+sudo dnf install -y make gcc gcc-c++ python3
+```
+
 ```bash
 npm ci --omit=dev
 npm run server

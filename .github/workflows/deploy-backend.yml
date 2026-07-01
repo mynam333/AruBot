@@ -193,6 +193,55 @@ jobs:
             echo "Using npm: $(command -v npm) ($(npm -v))"
           }
 
+          ensure_native_build_tools() {
+            local missing_tools=()
+
+            if ! command -v make >/dev/null 2>&1; then
+              missing_tools+=("make")
+            fi
+            if ! command -v python3 >/dev/null 2>&1; then
+              missing_tools+=("python3")
+            fi
+            if ! command -v g++ >/dev/null 2>&1 && ! command -v c++ >/dev/null 2>&1 && ! command -v clang++ >/dev/null 2>&1; then
+              missing_tools+=("g++")
+            fi
+
+            if [ "${#missing_tools[@]}" -eq 0 ]; then
+              return 0
+            fi
+
+            echo "Missing native build tools for better-sqlite3: ${missing_tools[*]}" >&2
+
+            if ! command -v sudo >/dev/null 2>&1 || ! sudo -n true 2>/dev/null; then
+              {
+                echo "Cannot install native build tools because passwordless sudo is unavailable."
+                echo "Run one of these commands once on the Oracle VM, then rerun this workflow:"
+                echo
+                echo "  sudo apt-get update && sudo apt-get install -y build-essential python3"
+                echo "  sudo dnf install -y make gcc gcc-c++ python3"
+                echo "  sudo yum install -y make gcc gcc-c++ python3"
+              } >&2
+              exit 127
+            fi
+
+            if command -v apt-get >/dev/null 2>&1; then
+              sudo apt-get update
+              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential python3
+            elif command -v dnf >/dev/null 2>&1; then
+              sudo dnf install -y make gcc gcc-c++ python3
+            elif command -v yum >/dev/null 2>&1; then
+              sudo yum install -y make gcc gcc-c++ python3
+            elif command -v apk >/dev/null 2>&1; then
+              sudo apk add --no-cache make gcc g++ python3
+            else
+              {
+                echo "Unsupported package manager. Install make, a C++ compiler, and python3 manually."
+                echo "Detected missing tools: ${missing_tools[*]}"
+              } >&2
+              exit 127
+            fi
+          }
+
           ensure_deploy_dirs
           rm -rf "$TMP_RELEASE_DIR"
           mkdir -p "$TMP_RELEASE_DIR"
@@ -209,6 +258,7 @@ jobs:
 
           cd "$TMP_RELEASE_DIR"
           load_node_runtime
+          ensure_native_build_tools
           npm ci --omit=dev
 
           if ! command -v pm2 >/dev/null 2>&1; then
