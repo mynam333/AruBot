@@ -1,0 +1,338 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  --background: 204 33% 98%;
+  --foreground: 225 33% 13%;
+  --card: 0 0% 100%;
+  --card-foreground: 225 33% 13%;
+  --primary: 174 63% 37%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 210 28% 95%;
+  --secondary-foreground: 225 33% 13%;
+  --muted: 210 30% 96%;
+  --muted-foreground: 220 12% 43%;
+  --accent: 12 86% 70%;
+  --accent-foreground: 225 33% 13%;
+  --accent-mint: 171 72% 90%;
+  --accent-coral: 9 88% 88%;
+  --accent-lemon: 48 92% 88%;
+  --accent-sky: 202 82% 90%;
+  --destructive: 355 74% 56%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 220 25% 88%;
+  --input: 220 25% 88%;
+  --ring: 176 65% 39%;
+  --surface-tint: 195 65% 96%;
+  --radius-control: clamp(0.625rem, 0.55rem + 0.25vw, 0.875rem);
+  --radius-panel: clamp(1rem, 0.85rem + 0.5vw, 1.375rem);
+  --radius-card: clamp(0.875rem, 0.75rem + 0.4vw, 1.125rem);
+  --control-height: clamp(2.25rem, 3.2vw, 2.75rem);
+  --control-height-sm: clamp(2rem, 2.6vw, 2.375rem);
+  --control-height-lg: clamp(2.625rem, 3.8vw, 3.125rem);
+  --icon-box: clamp(2.25rem, 3.3vw, 2.75rem);
+  --shell-sidebar: clamp(16rem, 18vw, 20rem);
+  --shell-header: clamp(3.75rem, 7vw, 4.5rem);
+  --page-gutter: clamp(1rem, 2.4vw, 1.75rem);
+  --grid-cell: clamp(1.75rem, 3vw, 2.75rem);
+  --hairline: max(0.0625rem, 0.08vw);
+  --sb-track: hsl(210 22% 92% / 0.8);
+  --sb-thumb: hsl(214 10% 62% / 0.75);
+  --sb-thumb-hover: hsl(214 10% 48% / 0.95);
+}
+
+.dark {
+  color-scheme: dark;
+  --background: 223 38% 8%;
+  --foreground: 214 40% 96%;
+  --card: 222 30% 12%;
+  --card-foreground: 214 40% 96%;
+  --primary: 173 70% 46%;
+  --primary-foreground: 223 38% 8%;
+  --secondary: 222 25% 16%;
+  --secondary-foreground: 214 40% 96%;
+  --muted: 222 22% 16%;
+  --muted-foreground: 218 15% 70%;
+  --accent: 12 72% 64%;
+  --accent-foreground: 223 38% 8%;
+  --accent-mint: 170 48% 24%;
+  --accent-coral: 9 46% 26%;
+  --accent-lemon: 45 52% 25%;
+  --accent-sky: 203 44% 25%;
+  --destructive: 355 72% 58%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 220 22% 20%;
+  --input: 220 22% 20%;
+  --ring: 174 70% 48%;
+  --surface-tint: 218 34% 11%;
+  --sb-track: hsl(222 32% 11% / 0.88);
+  --sb-thumb: hsl(220 12% 45% / 0.85);
+  --sb-thumb-hover: hsl(220 12% 62% / 0.95);
+}
+
+* {
+  border-color: hsl(var(--border));
+  scrollbar-width: thin;
+  scrollbar-color: var(--sb-thumb) transparent;
+}
+
+html {
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  min-height: 100vh;
+  overflow-x: hidden;
+  background:
+    linear-gradient(180deg, hsl(var(--background)) 0%, hsl(var(--surface-tint)) 100%);
+  color: hsl(var(--foreground));
+  font-feature-settings: "rlig" 1, "calt" 1;
+}
+
+body::before {
+  pointer-events: none;
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background-image:
+    linear-gradient(hsl(var(--foreground) / 0.035) var(--hairline), transparent var(--hairline)),
+    linear-gradient(90deg, hsl(var(--foreground) / 0.035) var(--hairline), transparent var(--hairline));
+  background-size: var(--grid-cell) var(--grid-cell);
+  mask-image: linear-gradient(to bottom, black, transparent 70%);
+}
+
+.dark body::before {
+  background-image:
+    linear-gradient(hsl(var(--foreground) / 0.045) var(--hairline), transparent var(--hairline)),
+    linear-gradient(90deg, hsl(var(--foreground) / 0.045) var(--hairline), transparent var(--hairline));
+}
+
+body.arubot-viewer-body {
+  overflow: hidden;
+  background: transparent !important;
+}
+
+body.arubot-viewer-body::before {
+  display: none;
+}
+
+body.arubot-viewer-body .viewer-route,
+.viewer-surface {
+  min-height: 100vh;
+  background: transparent !important;
+}
+
+nextjs-portal {
+  display: none !important;
+}
+
+.loading-skeleton {
+  position: relative;
+  overflow: hidden;
+  background: hsl(var(--muted) / 0.74);
+}
+
+.loading-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    hsl(var(--card) / 0.72),
+    transparent
+  );
+  animation: loading-shimmer 1.55s ease-in-out infinite;
+}
+
+.loading-orbit {
+  animation: loading-orbit 1.8s linear infinite;
+}
+
+.landing-sheen {
+  animation: landing-sheen 9s ease-in-out infinite alternate;
+}
+
+.landing-device {
+  animation: landing-device 7s ease-in-out infinite;
+}
+
+.landing-chip {
+  animation: landing-chip 520ms ease-out both;
+}
+
+.landing-bar {
+  transform-origin: left center;
+  animation: landing-bar 1.2s ease-out both;
+}
+
+.arubot-toast {
+  position: relative !important;
+  width: min(24rem, calc(100vw - 2rem)) !important;
+  border: max(0.0625rem, 0.08vw) solid hsl(var(--border)) !important;
+  border-radius: var(--radius-card) !important;
+  background:
+    linear-gradient(135deg, hsl(var(--card) / 0.98), hsl(var(--surface-tint) / 0.92)) !important;
+  color: hsl(var(--foreground)) !important;
+  box-shadow: 0 1rem 2.75rem hsl(var(--foreground) / 0.14) !important;
+  backdrop-filter: blur(1rem);
+  padding: clamp(0.875rem, 1.6vw, 1.125rem) !important;
+  gap: clamp(0.625rem, 1.2vw, 0.875rem) !important;
+}
+
+.arubot-toast::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  width: max(0.25rem, 0.28vw);
+  border-radius: var(--radius-card) 0 0 var(--radius-card);
+  background: hsl(var(--primary));
+}
+
+.arubot-toast-success::before {
+  background: linear-gradient(180deg, hsl(var(--primary)), hsl(var(--accent-mint)));
+}
+
+.arubot-toast-error::before {
+  background: linear-gradient(180deg, hsl(var(--destructive)), hsl(var(--accent-coral)));
+}
+
+.arubot-toast-warning::before {
+  background: linear-gradient(180deg, hsl(38 94% 56%), hsl(var(--accent-lemon)));
+}
+
+.arubot-toast-info::before {
+  background: linear-gradient(180deg, hsl(202 82% 52%), hsl(var(--accent-sky)));
+}
+
+.arubot-toast-title {
+  font-size: 0.875rem !important;
+  font-weight: 700 !important;
+  line-height: 1.35 !important;
+  letter-spacing: 0 !important;
+}
+
+.arubot-toast-description {
+  color: hsl(var(--muted-foreground)) !important;
+  font-size: 0.8125rem !important;
+  line-height: 1.55 !important;
+}
+
+.arubot-toast-icon {
+  display: grid !important;
+  width: 1.75rem !important;
+  height: 1.75rem !important;
+  place-items: center !important;
+  border-radius: var(--radius-control) !important;
+  background: hsl(var(--muted) / 0.9) !important;
+  color: hsl(var(--primary)) !important;
+}
+
+.arubot-toast-error .arubot-toast-icon {
+  color: hsl(var(--destructive)) !important;
+}
+
+.arubot-toast-warning .arubot-toast-icon {
+  color: hsl(38 94% 46%) !important;
+}
+
+.arubot-toast-action,
+.arubot-toast-cancel {
+  min-height: var(--control-height-sm) !important;
+  border-radius: var(--radius-control) !important;
+  font-weight: 700 !important;
+}
+
+.arubot-toast-close {
+  top: clamp(0.5rem, 1vw, 0.75rem) !important;
+  right: clamp(0.5rem, 1vw, 0.75rem) !important;
+  border-color: hsl(var(--border)) !important;
+  background: hsl(var(--card)) !important;
+  color: hsl(var(--muted-foreground)) !important;
+}
+
+*::-webkit-scrollbar {
+  width: clamp(0.5rem, 0.8vw, 0.75rem);
+  height: clamp(0.5rem, 0.8vw, 0.75rem);
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--sb-track);
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--sb-thumb);
+  border-radius: 999rem;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--sb-thumb-hover);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@keyframes loading-shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes loading-orbit {
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes landing-sheen {
+  0% {
+    transform: translateX(-8%) skewY(-3deg);
+    opacity: 0.45;
+  }
+  100% {
+    transform: translateX(8%) skewY(-3deg);
+    opacity: 0.78;
+  }
+}
+
+@keyframes landing-device {
+  0%, 100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-1.2%) rotate(-0.4deg);
+  }
+}
+
+@keyframes landing-chip {
+  0% {
+    opacity: 0;
+    transform: translateY(0.75rem) scale(0.98);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes landing-bar {
+  0% {
+    transform: scaleX(0);
+    opacity: 0.35;
+  }
+  100% {
+    transform: scaleX(1);
+    opacity: 1;
+  }
+}

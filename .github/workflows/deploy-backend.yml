@@ -1,0 +1,123 @@
+name: Deploy Backend
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/deploy-backend.yml'
+      - 'ecosystem.config.cjs'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'server/**'
+      - 'scripts/**'
+
+concurrency:
+  group: backend-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+      ORACLE_USER: ${{ secrets.ORACLE_USER }}
+      ORACLE_PORT: ${{ secrets.ORACLE_PORT || '22' }}
+      BACKEND_APP_DIR: ${{ vars.BACKEND_APP_DIR || '/opt/arubot' }}
+      RELEASE_SHA: ${{ github.sha }}
+      ARCHIVE_NAME: arubot-backend-${{ github.sha }}.tar.gz
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify backend build safety
+        run: |
+          npm run lint
+          npx tsc --noEmit --pretty false --incremental false
+
+      - name: Create backend artifact
+        run: |
+          tar \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='node_modules' \
+            --exclude='.next' \
+            --exclude='dist' \
+            --exclude='logs' \
+            --exclude='.env' \
+            --exclude='.env.*' \
+            -czf "$ARCHIVE_NAME" .
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.ORACLE_SSH_PRIVATE_KEY }}" > ~/.ssh/arubot_deploy_key
+          chmod 600 ~/.ssh/arubot_deploy_key
+          ssh-keyscan -p "$ORACLE_PORT" -H "$ORACLE_HOST" >> ~/.ssh/known_hosts
+
+      - name: Upload artifact
+        run: |
+          scp -P "$ORACLE_PORT" -i ~/.ssh/arubot_deploy_key "$ARCHIVE_NAME" "$ORACLE_USER@$ORACLE_HOST:/tmp/$ARCHIVE_NAME"
+
+      - name: Deploy with PM2
+        run: |
+          ssh -p "$ORACLE_PORT" -i ~/.ssh/arubot_deploy_key "$ORACLE_USER@$ORACLE_HOST" \
+            "APP_DIR='$BACKEND_APP_DIR' RELEASE_SHA='$RELEASE_SHA' ARCHIVE_NAME='$ARCHIVE_NAME' bash -s" <<'REMOTE'
+          set -euo pipefail
+
+          APP_DIR="${APP_DIR:-/opt/arubot}"
+          RELEASE_SHA="${RELEASE_SHA:?RELEASE_SHA is required}"
+          ARCHIVE_NAME="${ARCHIVE_NAME:?ARCHIVE_NAME is required}"
+
+          RELEASES_DIR="$APP_DIR/releases"
+          SHARED_DIR="$APP_DIR/shared"
+          CURRENT_DIR="$APP_DIR/current"
+          RELEASE_DIR="$RELEASES_DIR/$RELEASE_SHA"
+          ARCHIVE_PATH="/tmp/$ARCHIVE_NAME"
+
+          mkdir -p "$RELEASES_DIR" "$SHARED_DIR/logs" "$RELEASE_DIR"
+
+          if [ ! -f "$SHARED_DIR/.env" ]; then
+            echo "Missing $SHARED_DIR/.env. Create the production backend .env before deploying." >&2
+            exit 1
+          fi
+
+          tar -xzf "$ARCHIVE_PATH" -C "$RELEASE_DIR"
+          rm -f "$ARCHIVE_PATH"
+
+          ln -sfn "$SHARED_DIR/.env" "$RELEASE_DIR/.env"
+          ln -sfn "$SHARED_DIR/logs" "$RELEASE_DIR/logs"
+
+          cd "$RELEASE_DIR"
+          npm ci --omit=dev
+
+          if ! command -v pm2 >/dev/null 2>&1; then
+            npm install -g pm2
+          fi
+
+          ln -sfn "$RELEASE_DIR" "$CURRENT_DIR"
+          cd "$CURRENT_DIR"
+
+          pm2 startOrReload ecosystem.config.cjs --env production --update-env
+          pm2 save
+
+          find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d \
+            | sort -r \
+            | tail -n +6 \
+            | xargs -r rm -rf
+
+          pm2 status arubot-api
+          REMOTE
