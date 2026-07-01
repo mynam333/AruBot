@@ -133,7 +133,9 @@ Tunnel 구성에서는 브라우저와 Cloudflare 사이가 HTTPS로 처리되�
 
 ## GitHub Actions 백엔드 자동 배포
 
-`.github/workflows/deploy-backend.yml`은 `main` 브랜치의 백엔드 관련 변경이 push되거나 수동 실행될 때 Oracle VM으로 백엔드를 배포한다. Actions가 저장소를 압축해 VM에 업로드하고, VM에서는 릴리스 디렉터리에 풀어 `npm ci --omit=dev` 후 PM2를 reload한다.
+`.github/workflows/deploy-backend.yml`은 `main` 브랜치의 백엔드 관련 변경이 push되거나 수동 실행될 때 Oracle VM으로 백엔드를 배포한다. Actions는 백엔드 실행에 필요한 파일만 임시 staging 디렉터리에 복사한 뒤 압축해 VM에 업로드하고, VM에서는 임시 릴리스 디렉터리에 풀어 `npm ci --omit=dev` 후 PM2를 reload한다.
+
+아티펙트 압축은 저장소 루트 `.`를 직접 대상으로 삼지 않는다. 압축 중 파일이 바뀌어 `tar: .: file changed as we read it`가 나는 일을 막기 위해 staging 디렉터리를 따로 만들고, 압축 파일도 staging 밖에 생성한다.
 
 GitHub 저장소에는 다음 Secrets/Variables를 설정한다.
 
@@ -158,7 +160,7 @@ nano /opt/arubot/shared/.env
 
 `/opt/arubot/shared/.env`에는 백엔드 운영 환경변수를 넣는다. 이 파일은 GitHub Actions artifact에 포함되지 않으며, 각 릴리스의 `.env`로 symlink된다.
 
-배포 후 현재 릴리스는 `/opt/arubot/current`를 가리키고, 이전 릴리스는 `/opt/arubot/releases` 아래에 최대 5개까지 남는다.
+배포 후 현재 릴리스는 `/opt/arubot/current`를 가리키고, 이전 릴리스는 `/opt/arubot/releases` 아래에 최대 5개까지 남는다. 업로드된 `/tmp` 압축파일, Actions 러너의 로컬 압축파일, 임시 릴리스 디렉터리, 배포용 SSH 키 파일은 배포 성공/실패와 관계없이 정리한다.
 
 ## 배포 후 점검
 

@@ -7,6 +7,8 @@ on:
       - main
     paths:
       - '.github/workflows/deploy-backend.yml'
+      - '.nvmrc'
+      - '.node-version'
       - 'ecosystem.config.cjs'
       - 'package.json'
       - 'package-lock.json'
@@ -37,7 +39,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
@@ -50,16 +52,21 @@ jobs:
 
       - name: Create backend artifact
         run: |
-          tar \
-            --exclude='.git' \
-            --exclude='.github' \
-            --exclude='node_modules' \
-            --exclude='.next' \
-            --exclude='dist' \
-            --exclude='logs' \
-            --exclude='.env' \
-            --exclude='.env.*' \
-            -czf "$ARCHIVE_NAME" .
+          set -euo pipefail
+
+          STAGING_DIR="$RUNNER_TEMP/arubot-backend-staging"
+          ARCHIVE_PATH="$RUNNER_TEMP/$ARCHIVE_NAME"
+
+          rm -rf "$STAGING_DIR"
+          rm -f "$ARCHIVE_PATH"
+          mkdir -p "$STAGING_DIR"
+
+          cp -a package.json package-lock.json ecosystem.config.cjs "$STAGING_DIR/"
+          cp -a server scripts "$STAGING_DIR/"
+          cp -a .nvmrc .node-version "$STAGING_DIR/"
+
+          tar -C "$STAGING_DIR" -czf "$ARCHIVE_PATH" .
+          mv "$ARCHIVE_PATH" "$ARCHIVE_NAME"
 
       - name: Configure SSH
         run: |
@@ -71,6 +78,7 @@ jobs:
       - name: Upload artifact
         run: |
           scp -P "$ORACLE_PORT" -i ~/.ssh/arubot_deploy_key "$ARCHIVE_NAME" "$ORACLE_USER@$ORACLE_HOST:/tmp/$ARCHIVE_NAME"
+          rm -f "$ARCHIVE_NAME"
 
       - name: Deploy with PM2
         run: |
@@ -86,38 +94,56 @@ jobs:
           SHARED_DIR="$APP_DIR/shared"
           CURRENT_DIR="$APP_DIR/current"
           RELEASE_DIR="$RELEASES_DIR/$RELEASE_SHA"
+          TMP_RELEASE_DIR="$RELEASES_DIR/.tmp-$RELEASE_SHA-$$"
           ARCHIVE_PATH="/tmp/$ARCHIVE_NAME"
 
-          mkdir -p "$RELEASES_DIR" "$SHARED_DIR/logs" "$RELEASE_DIR"
+          cleanup() {
+            rm -f "$ARCHIVE_PATH"
+            rm -rf "$TMP_RELEASE_DIR"
+          }
+          trap cleanup EXIT
+
+          mkdir -p "$RELEASES_DIR" "$SHARED_DIR/logs"
+          rm -rf "$TMP_RELEASE_DIR"
+          mkdir -p "$TMP_RELEASE_DIR"
 
           if [ ! -f "$SHARED_DIR/.env" ]; then
             echo "Missing $SHARED_DIR/.env. Create the production backend .env before deploying." >&2
             exit 1
           fi
 
-          tar -xzf "$ARCHIVE_PATH" -C "$RELEASE_DIR"
-          rm -f "$ARCHIVE_PATH"
+          tar -xzf "$ARCHIVE_PATH" -C "$TMP_RELEASE_DIR"
 
-          ln -sfn "$SHARED_DIR/.env" "$RELEASE_DIR/.env"
-          ln -sfn "$SHARED_DIR/logs" "$RELEASE_DIR/logs"
+          ln -sfn "$SHARED_DIR/.env" "$TMP_RELEASE_DIR/.env"
+          ln -sfn "$SHARED_DIR/logs" "$TMP_RELEASE_DIR/logs"
 
-          cd "$RELEASE_DIR"
+          cd "$TMP_RELEASE_DIR"
           npm ci --omit=dev
 
           if ! command -v pm2 >/dev/null 2>&1; then
             npm install -g pm2
           fi
 
+          rm -rf "$RELEASE_DIR"
+          mv "$TMP_RELEASE_DIR" "$RELEASE_DIR"
           ln -sfn "$RELEASE_DIR" "$CURRENT_DIR"
           cd "$CURRENT_DIR"
 
           pm2 startOrReload ecosystem.config.cjs --env production --update-env
           pm2 save
 
-          find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d \
-            | sort -r \
+          find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d ! -name '.*' -printf '%T@ %p\n' \
+            | sort -rn \
+            | cut -d' ' -f2- \
             | tail -n +6 \
             | xargs -r rm -rf
 
           pm2 status arubot-api
           REMOTE
+
+      - name: Cleanup local deployment files
+        if: always()
+        run: |
+          rm -f "$ARCHIVE_NAME"
+          rm -rf "$RUNNER_TEMP/arubot-backend-staging"
+          rm -f ~/.ssh/arubot_deploy_key
