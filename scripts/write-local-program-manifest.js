@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+const localProgramVersion = process.env.ARUBOT_LOCAL_VERSION || packageJson.version;
 const outputDir = path.join(root, 'public', 'downloads', 'local-program');
 const installerDir = process.env.ARUBOT_LOCAL_INSTALLER_DIR
   ? path.resolve(root, process.env.ARUBOT_LOCAL_INSTALLER_DIR)
@@ -53,7 +54,7 @@ if (!installer) {
 const buffer = fs.readFileSync(installer.fullPath);
 const manifest = {
   product: 'AruBot Local Program',
-  version: packageJson.version,
+  version: localProgramVersion,
   platform: 'win32',
   arch: 'x64',
   fileName: installer.fileName,

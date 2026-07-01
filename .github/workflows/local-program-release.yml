@@ -1,0 +1,84 @@
+name: Local Program Release
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'local-program/**'
+      - 'electron-builder.local.yml'
+      - 'scripts/build-local-program.js'
+      - 'scripts/create-local-program-icon.js'
+      - 'scripts/write-local-program-manifest.js'
+      - 'scripts/write-local-program-release-notes.js'
+      - 'public/files/logo.png'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/local-program-release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: local-program-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-release:
+    name: Build and publish Windows local program
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prepare release variables
+        shell: bash
+        run: |
+          BASE_VERSION="$(node -p "require('./package.json').version")"
+          VERSION="$(node -e "const [major, minor] = process.argv[1].split('.'); console.log((major || 0) + '.' + (minor || 0) + '.' + (process.env.GITHUB_RUN_NUMBER || 0))" "${BASE_VERSION}")"
+          TAG="local-v${VERSION}"
+          DOWNLOAD_BASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
+          echo "LOCAL_PROGRAM_VERSION=${VERSION}" >> "${GITHUB_ENV}"
+          echo "ARUBOT_LOCAL_VERSION=${VERSION}" >> "${GITHUB_ENV}"
+          echo "RELEASE_TAG=${TAG}" >> "${GITHUB_ENV}"
+          echo "ARUBOT_LOCAL_DOWNLOAD_BASE_URL=${DOWNLOAD_BASE_URL}" >> "${GITHUB_ENV}"
+
+      - name: Build local program
+        run: npm run local:release:external
+
+      - name: Write release notes
+        run: node scripts/write-local-program-release-notes.js
+
+      - name: Verify release files
+        shell: bash
+        run: |
+          test -f "dist/local-program/AruBot-Local-Program-${LOCAL_PROGRAM_VERSION}-x64.exe"
+          test -f "dist/local-program/latest.json"
+          test -f "dist/local-program/RELEASE_NOTES.md"
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: AruBot Local Program v${{ env.LOCAL_PROGRAM_VERSION }}
+          body_path: dist/local-program/RELEASE_NOTES.md
+          files: |
+            dist/local-program/AruBot-Local-Program-${{ env.LOCAL_PROGRAM_VERSION }}-x64.exe
+            dist/local-program/latest.json
+          fail_on_unmatched_files: true
+          overwrite_files: true
+          make_latest: true

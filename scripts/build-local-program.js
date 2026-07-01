@@ -9,6 +9,7 @@ const appStageDir = path.join(root, 'dist', 'local-program-app');
 const distDir = path.join(root, 'dist', 'local-program');
 const publicDir = path.join(root, 'public', 'downloads', 'local-program');
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+const localProgramVersion = process.env.ARUBOT_LOCAL_VERSION || packageJson.version;
 const externalMode = process.argv.includes('--external') || process.env.ARUBOT_LOCAL_COPY_EXE_TO_PUBLIC === 'false';
 
 function run(command, args, env = {}) {
@@ -61,7 +62,7 @@ function prepareAppStage() {
   fs.writeFileSync(path.join(appStageDir, 'package.json'), `${JSON.stringify({
     name: 'arubot-local-program',
     productName: 'AruBot Local Program',
-    version: packageJson.version,
+    version: localProgramVersion,
     description: 'AruBot broadcast PC automation client',
     author: packageJson.author || 'AruBot',
     main: 'main.cjs',
@@ -79,5 +80,6 @@ syncPublicInstallers();
 run('node', ['scripts/write-local-program-manifest.js'], {
   ARUBOT_LOCAL_INSTALLER_DIR: externalMode ? distDir : publicDir,
   ARUBOT_LOCAL_MANIFEST_EXTRA_DIRS: distDir,
+  ARUBOT_LOCAL_VERSION: localProgramVersion,
   ARUBOT_LOCAL_REQUIRE_EXTERNAL_URL: externalMode ? 'true' : '',
 });
