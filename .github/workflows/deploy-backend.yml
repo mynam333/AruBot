@@ -120,15 +120,15 @@ jobs:
               return 0
             fi
 
-            cat >&2 <<EOF
-Cannot prepare deploy directory.
-Run these commands once on the Oracle VM, then rerun this workflow:
-
-  sudo mkdir -p "$APP_DIR/shared/logs" "$APP_DIR/releases"
-  sudo chown -R "$REMOTE_USER:$REMOTE_GROUP" "$APP_DIR"
-
-If BACKEND_APP_DIR is wrong, update the GitHub Actions variable BACKEND_APP_DIR.
-EOF
+            {
+              echo "Cannot prepare deploy directory."
+              echo "Run these commands once on the Oracle VM, then rerun this workflow:"
+              echo
+              echo "  sudo mkdir -p \"$APP_DIR/shared/logs\" \"$APP_DIR/releases\""
+              echo "  sudo chown -R \"$REMOTE_USER:$REMOTE_GROUP\" \"$APP_DIR\""
+              echo
+              echo "If BACKEND_APP_DIR is wrong, update the GitHub Actions variable BACKEND_APP_DIR."
+            } >&2
             exit 1
           }
 
