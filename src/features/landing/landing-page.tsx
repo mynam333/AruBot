@@ -22,8 +22,8 @@ import { apiUrl } from '@/shared/api/http';
 import { cn } from '@/shared/lib/utils';
 
 const platformButtons = [
-  { label: 'CHZZK로 시작', href: '/api/auth/chzzk/login', icon: '/brands/chzzk.svg' },
-  { label: 'CIME으로 시작', href: '/api/auth/cime/login', icon: '/brands/cime.svg' },
+  { label: 'CHZZK으로 시작', href: '/api/auth/chzzk/login', icon: '/brands/chzzk.svg' },
+  { label: 'CIME로 시작', href: '/api/auth/cime/login', icon: '/brands/cime.svg' },
 ] as const;
 
 const highlights = [

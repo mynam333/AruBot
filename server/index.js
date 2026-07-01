@@ -14,11 +14,12 @@ import { WebSocketServer, WebSocket } from 'ws';
 dotenv.config();
 
 const app = express();
+app.set('trust proxy', 1);
 const PORT = process.env.PORT || process.env.SERVER_PORT || 3001;
 const INSTANCE_ID = 'inst_' + Math.random().toString(16).slice(2) + '_' + Date.now().toString(36);
 const PROCESS_ROLE = process.env.ARUBOT_PROCESS_ROLE || 'api-runtime';
-const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'https://arubot.yuaru.kr';
-const BACKEND_ORIGIN = process.env.BACKEND_ORIGIN || 'https://arubotapi.yuaru.kr';
+const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'https://arubot.yuaru.com';
+const BACKEND_ORIGIN = process.env.BACKEND_ORIGIN || 'https://arubotapi.yuaru.com';
 const SERVER_STARTED_AT = new Date().toISOString();
 const ALLOWED_ORIGINS = [
   FRONTEND_ORIGIN,
@@ -46,8 +47,8 @@ const corsOptions = {
       ) {
         return cb(null, true);
       }
-      // allow any subdomain of yuaru.kr over https
-      if (u.protocol === 'https:' && u.hostname.endsWith('.yuaru.kr')) return cb(null, true);
+      // allow deployed yuaru service subdomains over https
+      if (u.protocol === 'https:' && (u.hostname.endsWith('.yuaru.kr') || u.hostname.endsWith('.yuaru.com'))) return cb(null, true);
     } catch { }
     return cb(null, false);
   },
@@ -8335,7 +8336,7 @@ function getSeverityLevel(eventType, details) {
 
 function getCookieOptions({ maxAge } = {}) {
   const isProduction = process.env.NODE_ENV === 'production';
-  const cookieDomain = process.env.COOKIE_DOMAIN || (isProduction ? '.yuaru.kr' : undefined);
+  const cookieDomain = String(process.env.COOKIE_DOMAIN || '').trim();
   const secure = process.env.COOKIE_SECURE
     ? String(process.env.COOKIE_SECURE).toLowerCase() !== 'false'
     : isProduction;
@@ -8347,7 +8348,7 @@ function getCookieOptions({ maxAge } = {}) {
   };
 
   if (maxAge) cookieOptions.maxAge = maxAge;
-  if (isProduction && cookieDomain) cookieOptions.domain = cookieDomain;
+  if (cookieDomain) cookieOptions.domain = cookieDomain;
   return cookieOptions;
 }
 
@@ -8361,6 +8362,25 @@ function setOAuthStateCookie(res, name, state) {
 
 function clearManagedCookie(res, name) {
   res.clearCookie(name, getCookieOptions());
+  // Older deployments defaulted to .yuaru.kr, which breaks yuaru.com callbacks.
+  // Clear both legacy and current common domains during auth/logout cleanup.
+  for (const legacyDomain of ['.yuaru.kr', '.yuaru.com']) {
+    res.clearCookie(name, { ...getCookieOptions(), domain: legacyDomain });
+  }
+}
+
+function getAuthRedirectUrl(req, params = {}) {
+  const appRedirect = process.env.APP_REDIRECT_AFTER_LOGIN || '/?auth=success';
+  const base = `${req.protocol}://${req.get('host')}`;
+  const redirectUrl = new URL(appRedirect, base);
+  for (const [key, value] of Object.entries(params)) {
+    if (value == null || value === '') {
+      redirectUrl.searchParams.delete(key);
+    } else {
+      redirectUrl.searchParams.set(key, String(value));
+    }
+  }
+  return redirectUrl.toString();
 }
 
 // --- API Key management endpoints (registered after app init) ---
@@ -8743,8 +8763,28 @@ app.get('/api/auth/cime/login', (req, res) => {
 
 app.get('/api/auth/cime/callback', async (req, res) => {
   try {
-    const { code, state } = req.query;
+    const { code, state, error, error_description } = req.query;
     const savedState = req.cookies.oauth_state_cime;
+
+    if (error) {
+      if (savedState && state && state === savedState) {
+        clearManagedCookie(res, 'oauth_state_cime');
+      }
+      const errorCode = String(error || '');
+      const authStatus = errorCode === 'access_denied' ? 'cancelled' : 'error';
+      console.warn('[CIME] OAuth authorization did not complete:', {
+        error: errorCode,
+        description: error_description ? String(error_description) : null,
+        state: state ? 'present' : 'missing',
+        savedState: savedState ? 'present' : 'missing'
+      });
+      return res.redirect(getAuthRedirectUrl(req, {
+        auth: authStatus,
+        platform: 'cime',
+        reason: errorCode
+      }));
+    }
+
     if (!code || !state || !savedState || state !== savedState) {
       return res.status(400).send('Invalid state or code');
     }
@@ -8787,13 +8827,10 @@ app.get('/api/auth/cime/callback', async (req, res) => {
     await upsertSession(sidToken, userId, 30);
     if (!getCookieSid(req)) setCookieSid(res, sidToken);
 
-    const appRedirect = process.env.APP_REDIRECT_AFTER_LOGIN || '/?auth=success';
-    const redirectUrl = new URL(appRedirect, `${req.protocol}://${req.get('host')}`);
-    redirectUrl.searchParams.set('platform', 'cime');
-    return res.redirect(redirectUrl.toString());
+    return res.redirect(getAuthRedirectUrl(req, { auth: 'success', platform: 'cime', reason: null }));
   } catch (e) {
     console.error('[CIME] Callback error', e?.response?.data || e.message);
-    return res.redirect('/?auth=error&platform=cime');
+    return res.redirect(getAuthRedirectUrl(req, { auth: 'error', platform: 'cime' }));
   }
 });
 
@@ -9670,13 +9707,33 @@ app.post('/api/chzzk/chat/send', async (req, res) => {
 app.get('/api/auth/chzzk/callback', async (req, res) => {
   try {
     console.log('[auth:callback] Callback received');
-    const { code, state } = req.query;
+    const { code, state, error, error_description } = req.query;
     const savedState = req.cookies.oauth_state;
     console.log('[auth:callback] Parameters:', { 
       code: code ? 'present' : 'missing',
       state: state ? 'present' : 'missing',
-      savedState: savedState ? 'present' : 'missing'
+      savedState: savedState ? 'present' : 'missing',
+      error: error ? String(error) : null
     });
+
+    if (error) {
+      if (savedState && state && state === savedState) {
+        clearManagedCookie(res, 'oauth_state');
+      }
+      const errorCode = String(error || '');
+      const authStatus = errorCode === 'access_denied' ? 'cancelled' : 'error';
+      console.warn('[CHZZK] OAuth authorization did not complete:', {
+        error: errorCode,
+        description: error_description ? String(error_description) : null,
+        state: state ? 'present' : 'missing',
+        savedState: savedState ? 'present' : 'missing'
+      });
+      return res.redirect(getAuthRedirectUrl(req, {
+        auth: authStatus,
+        platform: 'chzzk',
+        reason: errorCode
+      }));
+    }
 
     if (!code || !state || !savedState || state !== savedState) {
       return res.status(400).send('Invalid state or code');
@@ -9798,11 +9855,10 @@ app.get('/api/auth/chzzk/callback', async (req, res) => {
     });
 
     // Redirect back to app with success flag
-    const appRedirect = process.env.APP_REDIRECT_AFTER_LOGIN || '/?auth=success';
-    return res.redirect(appRedirect);
+    return res.redirect(getAuthRedirectUrl(req, { auth: 'success', platform: 'chzzk', reason: null }));
   } catch (e) {
     console.error('Callback error', e?.response?.data || e.message);
-    return res.redirect('/?auth=error');
+    return res.redirect(getAuthRedirectUrl(req, { auth: 'error', platform: 'chzzk' }));
   }
 });
 

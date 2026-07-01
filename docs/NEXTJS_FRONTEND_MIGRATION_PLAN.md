@@ -461,7 +461,7 @@ Next.js에서는 다음 중 하나로 처리한다.
 백엔드 Express가 계속 `/api/*`를 담당한다. Next.js dev/prod에서 API base 처리 방식:
 
 - 개발: Next dev server에서 `/api/:path*` rewrite -> `http://localhost:3001/api/:path*`
-- 운영: `NEXT_PUBLIC_API_BASE=https://arubotapi.yuaru.kr`
+- 운영: `NEXT_PUBLIC_API_BASE=https://arubotapi.yuaru.com`
 - 필요 시 `app/api/proxy/[...path]/route.ts`는 same-origin 배포용 bridge로만 둔다.
 
 ### Viewer behavior 보존

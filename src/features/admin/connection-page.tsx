@@ -125,6 +125,7 @@ export function ConnectionPage() {
   useEffect(() => {
     const auth = searchParams.get('auth');
     if (auth === 'success') toast.success('플랫폼 연결이 완료되었습니다.');
+    if (auth === 'cancelled') toast.info('플랫폼 연결을 취소했습니다.');
     if (auth === 'failed' || auth === 'error') toast.error('플랫폼 연결을 완료하지 못했습니다.');
   }, [searchParams]);
 

@@ -86,6 +86,8 @@ PORT=3001
 FRONTEND_ORIGIN=https://arubot.example.com
 BACKEND_ORIGIN=https://api.example.com
 APP_REDIRECT_AFTER_LOGIN=https://arubot.example.com/?auth=success
+# 기본값은 host-only cookie다. 꼭 필요할 때만 .example.com처럼 명시한다.
+COOKIE_DOMAIN=
 
 CHZZK_CLIENT_ID=...
 CHZZK_CLIENT_SECRET=...
@@ -111,6 +113,8 @@ YOUTUBE_API_KEY=...
 
 - `https://api.example.com/api/auth/chzzk/callback`
 - `https://api.example.com/api/auth/cime/callback`
+
+CHZZK OAuth는 로그인 시작 시 `https://chzzk.naver.com/account-interlock`로 `clientId`, `redirectUri`, `state`를 보내고, callback에서 같은 `state`를 돌려받는다. `Invalid state or code`가 뜨면 대부분 `oauth_state` 쿠키가 저장되지 않았거나 callback에 같이 오지 않은 상태다. 운영 도메인이 `api.example.com`이면 `COOKIE_DOMAIN`은 비워두거나 `.example.com`이어야 하며, 다른 최상위 도메인 값으로 설정하면 브라우저가 쿠키를 버린다.
 
 ## Cloudflare Tunnel 설정
 
