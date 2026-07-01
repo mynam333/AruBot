@@ -31,6 +31,8 @@ jobs:
       BACKEND_APP_DIR: ${{ vars.BACKEND_APP_DIR || '/opt/arubot' }}
       RELEASE_SHA: ${{ github.sha }}
       ARCHIVE_NAME: arubot-backend-${{ github.sha }}.tar.gz
+      NODE_VERSION: '22'
+      REMOTE_NODE_BIN_DIR: ${{ vars.REMOTE_NODE_BIN_DIR || '' }}
 
     steps:
       - name: Checkout
@@ -39,7 +41,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
       - name: Install dependencies
@@ -83,12 +85,14 @@ jobs:
       - name: Deploy with PM2
         run: |
           ssh -p "$ORACLE_PORT" -i ~/.ssh/arubot_deploy_key "$ORACLE_USER@$ORACLE_HOST" \
-            "APP_DIR='$BACKEND_APP_DIR' RELEASE_SHA='$RELEASE_SHA' ARCHIVE_NAME='$ARCHIVE_NAME' bash -s" <<'REMOTE'
+            "APP_DIR='$BACKEND_APP_DIR' RELEASE_SHA='$RELEASE_SHA' ARCHIVE_NAME='$ARCHIVE_NAME' NODE_VERSION='$NODE_VERSION' REMOTE_NODE_BIN_DIR='$REMOTE_NODE_BIN_DIR' bash -s" <<'REMOTE'
           set -euo pipefail
 
           APP_DIR="${APP_DIR:-/opt/arubot}"
           RELEASE_SHA="${RELEASE_SHA:?RELEASE_SHA is required}"
           ARCHIVE_NAME="${ARCHIVE_NAME:?ARCHIVE_NAME is required}"
+          NODE_VERSION="${NODE_VERSION:-22}"
+          REMOTE_NODE_BIN_DIR="${REMOTE_NODE_BIN_DIR:-}"
 
           RELEASES_DIR="$APP_DIR/releases"
           SHARED_DIR="$APP_DIR/shared"
@@ -132,6 +136,63 @@ jobs:
             exit 1
           }
 
+          load_node_runtime() {
+            for profile in /etc/profile "$HOME/.profile" "$HOME/.bash_profile" "$HOME/.bashrc"; do
+              if [ -r "$profile" ]; then
+                # shellcheck disable=SC1090
+                set +e +u
+                . "$profile" >/dev/null 2>&1 || true
+                set -euo pipefail
+              fi
+            done
+
+            if [ -n "$REMOTE_NODE_BIN_DIR" ]; then
+              export PATH="$REMOTE_NODE_BIN_DIR:$PATH"
+            fi
+
+            export PATH="$HOME/.npm-global/bin:$HOME/.local/bin:$HOME/.volta/bin:$HOME/.asdf/shims:$HOME/.asdf/bin:/usr/local/bin:/usr/bin:/bin:/snap/bin:$PATH"
+            export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+
+            if [ -s "$NVM_DIR/nvm.sh" ]; then
+              # shellcheck disable=SC1090
+              . "$NVM_DIR/nvm.sh"
+              nvm use "$NODE_VERSION" >/dev/null 2>&1 || nvm install "$NODE_VERSION" >/dev/null 2>&1 || true
+            fi
+
+            for node_bin_dir in "$HOME/.nvm/versions/node/v$NODE_VERSION/bin" "$HOME/.nvm/versions/node/v$NODE_VERSION."*/bin "$HOME/.local/share/fnm/node-versions/v$NODE_VERSION"*/installation/bin "$HOME/.fnm/node-versions/v$NODE_VERSION"*/installation/bin /usr/local/node/bin /opt/node/bin /opt/nodejs/bin; do
+              if [ -d "$node_bin_dir" ]; then
+                export PATH="$node_bin_dir:$PATH"
+              fi
+            done
+
+            if ! command -v npm >/dev/null 2>&1 || ! command -v node >/dev/null 2>&1; then
+              {
+                echo "Node.js/npm is not available in this non-interactive SSH session."
+                echo "Install Node.js $NODE_VERSION for the SSH deploy user, or set GitHub Actions variable REMOTE_NODE_BIN_DIR to the directory that contains node and npm."
+                echo
+                echo "Quick diagnosis on the Oracle VM:"
+                echo "  whoami"
+                echo "  command -v node || true"
+                echo "  command -v npm || true"
+                echo "  find \"\$HOME\" /usr/local /usr /opt -path '*/bin/npm' -type f 2>/dev/null | head -20"
+                echo
+                echo "Recommended one-time setup:"
+                echo "  curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash"
+                echo "  export NVM_DIR=\"\$HOME/.nvm\""
+                echo "  . \"\$NVM_DIR/nvm.sh\""
+                echo "  nvm install $NODE_VERSION"
+                echo "  nvm alias default $NODE_VERSION"
+                echo "  npm install -g pm2"
+                echo
+                echo "If npm is already installed somewhere else, set REMOTE_NODE_BIN_DIR to that bin directory."
+              } >&2
+              exit 127
+            fi
+
+            echo "Using node: $(command -v node) ($(node -v))"
+            echo "Using npm: $(command -v npm) ($(npm -v))"
+          }
+
           ensure_deploy_dirs
           rm -rf "$TMP_RELEASE_DIR"
           mkdir -p "$TMP_RELEASE_DIR"
@@ -147,10 +208,18 @@ jobs:
           ln -sfn "$SHARED_DIR/logs" "$TMP_RELEASE_DIR/logs"
 
           cd "$TMP_RELEASE_DIR"
+          load_node_runtime
           npm ci --omit=dev
 
           if ! command -v pm2 >/dev/null 2>&1; then
-            npm install -g pm2
+            npm install -g pm2 || {
+              if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+                sudo env "PATH=$PATH" npm install -g pm2
+              else
+                echo "PM2 is not installed and npm global install failed. Install PM2 once on the Oracle VM: npm install -g pm2" >&2
+                exit 127
+              fi
+            }
           fi
 
           rm -rf "$RELEASE_DIR"

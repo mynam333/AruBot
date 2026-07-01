@@ -31,7 +31,21 @@ SERVER_API_BASE=https://api.example.com
 
 ## Oracle Cloud 백엔드 설정
 
-Oracle VM에는 Node.js LTS를 설치하고 저장소를 배포한다. 백엔드는 `npm run server`로 실행된다.
+Oracle VM에는 Node.js 22 LTS를 설치하고 저장소를 배포한다. 백엔드는 `npm run server`로 실행된다. nvm을 쓴다면 GitHub Actions의 비대화형 SSH 세션에서도 읽을 수 있도록 deploy 사용자 홈의 `$HOME/.nvm`에 설치한다.
+
+권장 Node.js 준비:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+export NVM_DIR="$HOME/.nvm"
+. "$NVM_DIR/nvm.sh"
+nvm install 22
+nvm alias default 22
+npm install -g pm2
+node -v
+npm -v
+pm2 -v
+```
 
 ```bash
 npm ci --omit=dev
@@ -149,6 +163,7 @@ Secrets:
 Variables:
 
 - `BACKEND_APP_DIR`: 배포 경로, 기본값은 `/opt/arubot`
+- `REMOTE_NODE_BIN_DIR`: 선택값. 원격 SSH 세션에서 `npm`을 찾지 못할 때 `node`와 `npm`이 들어 있는 bin 디렉터리. 예: `/home/ubuntu/.nvm/versions/node/v22.23.0/bin`
 
 Oracle VM 최초 1회 준비:
 
@@ -159,6 +174,17 @@ nano /opt/arubot/shared/.env
 ```
 
 `BACKEND_APP_DIR`를 `/home/<user>/AruBot`처럼 다른 경로로 바꿨다면 위 명령의 `/opt/arubot`도 같은 경로로 바꾼다. 배포 워크플로는 SSH 사용자에게 배포 디렉터리 쓰기 권한이 없을 때 passwordless sudo가 가능하면 자동으로 `mkdir`와 `chown`을 시도한다. passwordless sudo가 불가능하면 워크플로 로그에 표시되는 `sudo mkdir -p ...`와 `sudo chown -R ...` 명령을 Oracle VM에서 한 번 실행한 뒤 다시 배포한다.
+
+`npm: command not found`가 계속 나면 Node/npm이 설치되지 않은 것이 아니라 배포 SSH 사용자의 비대화형 셸 PATH에 없는 경우가 많다. Oracle VM에서 배포 사용자로 아래를 확인한다.
+
+```bash
+whoami
+command -v node || true
+command -v npm || true
+find "$HOME" /usr/local /usr /opt -path '*/bin/npm' -type f 2>/dev/null | head -20
+```
+
+예를 들어 `npm`이 `/home/ubuntu/.nvm/versions/node/v22.23.0/bin/npm`에 있다면 GitHub Actions Variables에 `REMOTE_NODE_BIN_DIR=/home/ubuntu/.nvm/versions/node/v22.23.0/bin`을 추가한다. 가능하면 Node는 `root`가 아니라 `ORACLE_USER`로 접속하는 배포 사용자 홈에 설치한다.
 
 `/opt/arubot/shared/.env`에는 백엔드 운영 환경변수를 넣는다. 이 파일은 GitHub Actions artifact에 포함되지 않으며, 각 릴리스의 `.env`로 symlink된다.
 
