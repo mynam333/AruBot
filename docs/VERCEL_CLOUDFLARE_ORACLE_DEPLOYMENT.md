@@ -114,7 +114,9 @@ YOUTUBE_API_KEY=...
 - `https://api.example.com/api/auth/chzzk/callback`
 - `https://api.example.com/api/auth/cime/callback`
 
-CHZZK OAuth는 로그인 시작 시 `https://chzzk.naver.com/account-interlock`로 `clientId`, `redirectUri`, `state`를 보내고, callback에서 같은 `state`를 돌려받는다. `Invalid state or code`가 뜨면 대부분 `oauth_state` 쿠키가 저장되지 않았거나 callback에 같이 오지 않은 상태다. 운영 도메인이 `api.example.com`이면 `COOKIE_DOMAIN`은 비워두거나 `.example.com`이어야 하며, 다른 최상위 도메인 값으로 설정하면 브라우저가 쿠키를 버린다.
+CHZZK OAuth는 로그인 시작 시 `https://chzzk.naver.com/account-interlock`로 `clientId`, `redirectUri`, `state`를 보내고, callback에서 같은 `state`를 돌려받는다. 서버는 state를 `oauth_state` 쿠키와 10분 TTL 서버 메모리 저장소에 동시에 저장한다. callback은 쿠키 또는 서버 저장소 중 하나가 일치하면 통과한다. 그래도 `invalid_state`가 뜨면 로그인 시작과 callback이 서로 다른 백엔드 인스턴스로 갔거나, 서버가 로그인 중간에 재시작된 경우다. 현재 배포는 PM2 단일 인스턴스를 권장하며, 다중 인스턴스로 확장할 때는 state 저장소를 Redis/Postgres로 옮긴다.
+
+운영 도메인이 `api.example.com`이면 `COOKIE_DOMAIN`은 비워두거나 `.example.com`이어야 한다. 다른 최상위 도메인 값으로 설정하면 브라우저가 쿠키를 버린다. CIME OAuth도 같은 `clientId`, `redirectUri`, `state` 흐름으로 처리하며, 사용자가 인증을 취소해 `error=access_denied`로 돌아오면 400을 내지 않고 프론트엔드로 `auth=cancelled`를 전달한다.
 
 ## Cloudflare Tunnel 설정
 

@@ -8383,6 +8383,51 @@ function getAuthRedirectUrl(req, params = {}) {
   return redirectUrl.toString();
 }
 
+const oauthStateStore = new Map();
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+
+function cleanupOAuthStateStore() {
+  const now = Date.now();
+  for (const [state, record] of oauthStateStore.entries()) {
+    if (!record || now - Number(record.createdAt || 0) > OAUTH_STATE_TTL_MS) {
+      oauthStateStore.delete(state);
+    }
+  }
+}
+
+function createOAuthState(provider, req) {
+  cleanupOAuthStateStore();
+  const state = crypto.randomBytes(16).toString('hex');
+  oauthStateStore.set(state, {
+    provider: String(provider || ''),
+    createdAt: Date.now(),
+    sid: getCookieSid(req) || null,
+  });
+  return state;
+}
+
+function consumeOAuthState(provider, state, cookieState) {
+  cleanupOAuthStateStore();
+  const textState = String(state || '');
+  const textCookieState = String(cookieState || '');
+  const record = textState ? oauthStateStore.get(textState) : null;
+  const providerMatches = !!record && record.provider === provider;
+  const ageOk = !!record && Date.now() - Number(record.createdAt || 0) <= OAUTH_STATE_TTL_MS;
+  const cookieMatches = !!textState && !!textCookieState && textState === textCookieState;
+  const storeMatches = !!textState && providerMatches && ageOk;
+
+  if (storeMatches) oauthStateStore.delete(textState);
+
+  return {
+    ok: cookieMatches || storeMatches,
+    cookieMatches,
+    storeMatches,
+    storeFound: !!record,
+    providerMatches,
+    ageOk,
+  };
+}
+
 // --- API Key management endpoints (registered after app init) ---
 // Issue a new API key for the logged-in user (cookie session required)
 app.post('/api/apikey/issue', async (req, res) => {
@@ -8727,7 +8772,7 @@ app.get('/api/auth/chzzk/login', (req, res) => {
     }
     // Ensure per-user session id cookie exists
     // Do NOT create random sid pre-login; only set oauth_state here
-    const state = crypto.randomBytes(16).toString('hex');
+    const state = createOAuthState('chzzk', req);
     setOAuthStateCookie(res, 'oauth_state', state);
 
     const authUrl = new URL('https://chzzk.naver.com/account-interlock');
@@ -8747,7 +8792,7 @@ app.get('/api/auth/cime/login', (req, res) => {
     if (!CIME_CLIENT_ID || !CIME_CLIENT_SECRET) {
       return res.status(500).json({ error: 'Server not configured with CIME credentials' });
     }
-    const state = crypto.randomBytes(16).toString('hex');
+    const state = createOAuthState('cime', req);
     setOAuthStateCookie(res, 'oauth_state_cime', state);
 
     const authUrl = new URL(CIME_AUTH_URL);
@@ -8765,9 +8810,10 @@ app.get('/api/auth/cime/callback', async (req, res) => {
   try {
     const { code, state, error, error_description } = req.query;
     const savedState = req.cookies.oauth_state_cime;
+    const stateValidation = consumeOAuthState('cime', state, savedState);
 
     if (error) {
-      if (savedState && state && state === savedState) {
+      if (stateValidation.ok || savedState) {
         clearManagedCookie(res, 'oauth_state_cime');
       }
       const errorCode = String(error || '');
@@ -8776,7 +8822,8 @@ app.get('/api/auth/cime/callback', async (req, res) => {
         error: errorCode,
         description: error_description ? String(error_description) : null,
         state: state ? 'present' : 'missing',
-        savedState: savedState ? 'present' : 'missing'
+        savedState: savedState ? 'present' : 'missing',
+        stateValidation
       });
       return res.redirect(getAuthRedirectUrl(req, {
         auth: authStatus,
@@ -8785,8 +8832,19 @@ app.get('/api/auth/cime/callback', async (req, res) => {
       }));
     }
 
-    if (!code || !state || !savedState || state !== savedState) {
-      return res.status(400).send('Invalid state or code');
+    if (!code || !state || !stateValidation.ok) {
+      console.warn('[CIME] Invalid OAuth callback state/code:', {
+        code: code ? 'present' : 'missing',
+        state: state ? 'present' : 'missing',
+        savedState: savedState ? 'present' : 'missing',
+        stateValidation
+      });
+      if (savedState) clearManagedCookie(res, 'oauth_state_cime');
+      return res.redirect(getAuthRedirectUrl(req, {
+        auth: 'error',
+        platform: 'cime',
+        reason: !code ? 'missing_code' : 'invalid_state'
+      }));
     }
     clearManagedCookie(res, 'oauth_state_cime');
 
@@ -9709,15 +9767,17 @@ app.get('/api/auth/chzzk/callback', async (req, res) => {
     console.log('[auth:callback] Callback received');
     const { code, state, error, error_description } = req.query;
     const savedState = req.cookies.oauth_state;
+    const stateValidation = consumeOAuthState('chzzk', state, savedState);
     console.log('[auth:callback] Parameters:', { 
       code: code ? 'present' : 'missing',
       state: state ? 'present' : 'missing',
       savedState: savedState ? 'present' : 'missing',
-      error: error ? String(error) : null
+      error: error ? String(error) : null,
+      stateValidation
     });
 
     if (error) {
-      if (savedState && state && state === savedState) {
+      if (stateValidation.ok || savedState) {
         clearManagedCookie(res, 'oauth_state');
       }
       const errorCode = String(error || '');
@@ -9726,7 +9786,8 @@ app.get('/api/auth/chzzk/callback', async (req, res) => {
         error: errorCode,
         description: error_description ? String(error_description) : null,
         state: state ? 'present' : 'missing',
-        savedState: savedState ? 'present' : 'missing'
+        savedState: savedState ? 'present' : 'missing',
+        stateValidation
       });
       return res.redirect(getAuthRedirectUrl(req, {
         auth: authStatus,
@@ -9735,8 +9796,19 @@ app.get('/api/auth/chzzk/callback', async (req, res) => {
       }));
     }
 
-    if (!code || !state || !savedState || state !== savedState) {
-      return res.status(400).send('Invalid state or code');
+    if (!code || !state || !stateValidation.ok) {
+      console.warn('[CHZZK] Invalid OAuth callback state/code:', {
+        code: code ? 'present' : 'missing',
+        state: state ? 'present' : 'missing',
+        savedState: savedState ? 'present' : 'missing',
+        stateValidation
+      });
+      if (savedState) clearManagedCookie(res, 'oauth_state');
+      return res.redirect(getAuthRedirectUrl(req, {
+        auth: 'error',
+        platform: 'chzzk',
+        reason: !code ? 'missing_code' : 'invalid_state'
+      }));
     }
 
     clearManagedCookie(res, 'oauth_state');
