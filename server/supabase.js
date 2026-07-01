@@ -133,6 +133,11 @@ async function withPgClient(fn, retries = 2) {
   throw lastErr;
 }
 
+function isUndefinedDbFunctionError(error, functionName) {
+  const message = String(error?.message || error?.toString?.() || '');
+  return error?.code === '42883' && (!functionName || message.includes(functionName));
+}
+
 export async function ensureChannelPointsTable(streamerUid) {
   const suffix = sanitizeTableNameSuffix(streamerUid);
   const table = `channelpoint_${suffix}`;
@@ -1219,17 +1224,25 @@ export async function analyzeQueryPerformanceSupabase() {
     throw new Error('SUPABASE_DB_URL is required for query analysis');
   }
   
-  return withPgClient(async (pg) => {
-    const result = await pg.query('SELECT * FROM analyze_channel_query_performance()');
-    
-    return result.rows.map(row => ({
-      tableName: row.table_name,
-      indexName: row.index_name,
-      indexUsageCount: parseInt(row.index_usage_count),
-      tableSize: row.table_size,
-      indexSize: row.index_size
-    }));
-  });
+  try {
+    return await withPgClient(async (pg) => {
+      const result = await pg.query('SELECT * FROM analyze_channel_query_performance()');
+
+      return result.rows.map(row => ({
+        tableName: row.table_name,
+        indexName: row.index_name,
+        indexUsageCount: parseInt(row.index_usage_count),
+        tableSize: row.table_size,
+        indexSize: row.index_size
+      }));
+    });
+  } catch (error) {
+    if (isUndefinedDbFunctionError(error, 'analyze_channel_query_performance')) {
+      console.warn('[Performance Monitor] analyze_channel_query_performance() is not installed; skipping query analysis');
+      return [];
+    }
+    throw error;
+  }
 }
 
 // 인덱스 사용률 모니터링
@@ -1239,16 +1252,24 @@ export async function monitorIndexUsageSupabase() {
     throw new Error('SUPABASE_DB_URL is required for index monitoring');
   }
   
-  return withPgClient(async (pg) => {
-    const result = await pg.query('SELECT * FROM monitor_index_usage()');
-    
-    return result.rows.map(row => ({
-      tableName: row.table_name,
-      indexName: row.index_name,
-      usageRatio: parseFloat(row.usage_ratio),
-      recommendation: row.recommendation
-    }));
-  });
+  try {
+    return await withPgClient(async (pg) => {
+      const result = await pg.query('SELECT * FROM monitor_index_usage()');
+
+      return result.rows.map(row => ({
+        tableName: row.table_name,
+        indexName: row.index_name,
+        usageRatio: parseFloat(row.usage_ratio),
+        recommendation: row.recommendation
+      }));
+    });
+  } catch (error) {
+    if (isUndefinedDbFunctionError(error, 'monitor_index_usage')) {
+      console.warn('[Performance Monitor] monitor_index_usage() is not installed; skipping index monitoring');
+      return [];
+    }
+    throw error;
+  }
 }
 
 // 성능 최적화 권장사항
@@ -1258,16 +1279,24 @@ export async function getPerformanceRecommendationsSupabase() {
     throw new Error('SUPABASE_DB_URL is required for performance recommendations');
   }
   
-  return withPgClient(async (pg) => {
-    const result = await pg.query('SELECT * FROM get_performance_recommendations()');
-    
-    return result.rows.map(row => ({
-      category: row.category,
-      recommendation: row.recommendation,
-      priority: row.priority,
-      estimatedImpact: row.estimated_impact
-    }));
-  });
+  try {
+    return await withPgClient(async (pg) => {
+      const result = await pg.query('SELECT * FROM get_performance_recommendations()');
+
+      return result.rows.map(row => ({
+        category: row.category,
+        recommendation: row.recommendation,
+        priority: row.priority,
+        estimatedImpact: row.estimated_impact
+      }));
+    });
+  } catch (error) {
+    if (isUndefinedDbFunctionError(error, 'get_performance_recommendations')) {
+      console.warn('[Performance Monitor] get_performance_recommendations() is not installed; skipping recommendations');
+      return [];
+    }
+    throw error;
+  }
 }
 
 // 데이터베이스 통계 업데이트
@@ -1287,6 +1316,10 @@ export async function updateChannelStatisticsSupabase() {
     return true;
     
   } catch (error) {
+    if (isUndefinedDbFunctionError(error, 'update_channel_statistics')) {
+      console.warn('[Statistics] update_channel_statistics() is not installed; skipping statistics update');
+      return false;
+    }
     console.error('[Statistics] Failed to update statistics:', error);
     return false;
   }
@@ -1709,17 +1742,16 @@ export async function ensureSchema() {
       end $$;
       
       -- 성능 최적화 인덱스
-      create index if not exists idx_sessions_channel_user_active on sessions(channel_id, user_id) 
-        where revoked = false and (expires_at is null or expires_at > now());
+      create index if not exists idx_sessions_channel_user_active on sessions(channel_id, user_id, expires_at) 
+        where revoked = false;
       create index if not exists idx_roulette_sessions_channel_created on roulette_sessions(channel_id, created_at desc);
       create index if not exists idx_channel_tokens_channel_type_active on channel_tokens(channel_id, token_type, active) 
         where active = true;
-      create index if not exists idx_sessions_active_by_channel on sessions(channel_id, last_seen desc) 
-        where revoked = false and (expires_at is null or expires_at > now());
-      create index if not exists idx_channel_tokens_unexpired on channel_tokens(channel_id, token_type, created_at desc) 
-        where active = true and (expires_at is null or expires_at > now());
-      create index if not exists idx_roulette_sessions_recent on roulette_sessions(channel_id, sid, created_at desc) 
-        where created_at > now() - interval '7 days';
+      create index if not exists idx_sessions_active_by_channel on sessions(channel_id, last_seen desc, expires_at) 
+        where revoked = false;
+      create index if not exists idx_channel_tokens_unexpired on channel_tokens(channel_id, token_type, expires_at, created_at desc) 
+        where active = true;
+      create index if not exists idx_roulette_sessions_recent on roulette_sessions(channel_id, sid, created_at desc);
       create index if not exists idx_channel_tokens_usage_stats on channel_tokens(channel_id, token_type, usage_count desc, last_used desc) 
         where active = true;
       create index if not exists idx_roulette_sessions_stats on roulette_sessions(channel_id, roulette_name, created_at desc);

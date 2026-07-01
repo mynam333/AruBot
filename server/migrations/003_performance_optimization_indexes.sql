@@ -2,8 +2,8 @@
 -- Migration: 003_performance_optimization_indexes.sql
 
 -- 복합 인덱스 (채널 ID 기반 조회 최적화)
-CREATE INDEX IF NOT EXISTS idx_sessions_channel_user_active ON sessions(channel_id, user_id) 
-  WHERE revoked = FALSE AND (expires_at IS NULL OR expires_at > NOW());
+CREATE INDEX IF NOT EXISTS idx_sessions_channel_user_active ON sessions(channel_id, user_id, expires_at)
+  WHERE revoked = FALSE;
 
 CREATE INDEX IF NOT EXISTS idx_roulette_sessions_channel_created ON roulette_sessions(channel_id, created_at DESC);
 
@@ -11,14 +11,13 @@ CREATE INDEX IF NOT EXISTS idx_channel_tokens_channel_type_active ON channel_tok
   WHERE active = TRUE;
 
 -- 부분 인덱스 (조건부 인덱스로 성능 향상)
-CREATE INDEX IF NOT EXISTS idx_sessions_active_by_channel ON sessions(channel_id, last_seen DESC) 
-  WHERE revoked = FALSE AND (expires_at IS NULL OR expires_at > NOW());
+CREATE INDEX IF NOT EXISTS idx_sessions_active_by_channel ON sessions(channel_id, last_seen DESC, expires_at)
+  WHERE revoked = FALSE;
 
-CREATE INDEX IF NOT EXISTS idx_channel_tokens_unexpired ON channel_tokens(channel_id, token_type, created_at DESC) 
-  WHERE active = TRUE AND (expires_at IS NULL OR expires_at > NOW());
+CREATE INDEX IF NOT EXISTS idx_channel_tokens_unexpired ON channel_tokens(channel_id, token_type, expires_at, created_at DESC)
+  WHERE active = TRUE;
 
-CREATE INDEX IF NOT EXISTS idx_roulette_sessions_recent ON roulette_sessions(channel_id, sid, created_at DESC) 
-  WHERE created_at > NOW() - INTERVAL '7 days';
+CREATE INDEX IF NOT EXISTS idx_roulette_sessions_recent ON roulette_sessions(channel_id, sid, created_at DESC);
 
 -- 통계 수집을 위한 인덱스
 CREATE INDEX IF NOT EXISTS idx_channel_tokens_usage_stats ON channel_tokens(channel_id, token_type, usage_count DESC, last_used DESC) 

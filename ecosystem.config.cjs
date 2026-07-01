@@ -11,6 +11,7 @@ const logsDir = process.env.ARUBOT_LOG_DIR || path.join(rootDir, 'logs');
 const port = process.env.PORT || process.env.SERVER_PORT || '3001';
 const maxOldSpaceSize = process.env.ARUBOT_NODE_MAX_OLD_SPACE_SIZE || '768';
 const maxMemoryRestart = process.env.ARUBOT_PM2_MAX_MEMORY_RESTART || '900M';
+const releaseSha = process.env.ARUBOT_RELEASE_SHA || process.env.RELEASE_SHA || 'local';
 
 module.exports = {
   apps: [
@@ -38,6 +39,7 @@ module.exports = {
         PORT: port,
         SERVER_PORT: port,
         ARUBOT_PROCESS_ROLE: 'api-runtime',
+        ARUBOT_RELEASE_SHA: releaseSha,
       },
     },
   ],

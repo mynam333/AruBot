@@ -86,6 +86,7 @@ PORT=3001
 FRONTEND_ORIGIN=https://arubot.example.com
 BACKEND_ORIGIN=https://api.example.com
 APP_REDIRECT_AFTER_LOGIN=https://arubot.example.com/?auth=success
+OAUTH_STATE_SECRET=replace_with_stable_random_32_bytes
 # 기본값은 host-only cookie다. 꼭 필요할 때만 .example.com처럼 명시한다.
 COOKIE_DOMAIN=
 
@@ -114,7 +115,7 @@ YOUTUBE_API_KEY=...
 - `https://api.example.com/api/auth/chzzk/callback`
 - `https://api.example.com/api/auth/cime/callback`
 
-CHZZK OAuth는 로그인 시작 시 `https://chzzk.naver.com/account-interlock`로 `clientId`, `redirectUri`, `state`를 보내고, callback에서 같은 `state`를 돌려받는다. 서버는 state를 `oauth_state` 쿠키와 10분 TTL 서버 메모리 저장소에 동시에 저장한다. callback은 쿠키 또는 서버 저장소 중 하나가 일치하면 통과한다. 그래도 `invalid_state`가 뜨면 로그인 시작과 callback이 서로 다른 백엔드 인스턴스로 갔거나, 서버가 로그인 중간에 재시작된 경우다. 현재 배포는 PM2 단일 인스턴스를 권장하며, 다중 인스턴스로 확장할 때는 state 저장소를 Redis/Postgres로 옮긴다.
+CHZZK OAuth는 로그인 시작 시 `https://chzzk.naver.com/account-interlock`로 `clientId`, `redirectUri`, `state`를 보내고, callback에서 같은 `state`를 돌려받는다. 서버는 state를 `oauth_state` 쿠키와 10분 TTL 서버 메모리 저장소에 저장하고, `OAUTH_STATE_SECRET`으로 서명한 state 자체도 검증한다. 그래서 쿠키가 누락되거나 서버가 재시작돼도 같은 비밀값을 유지하면 callback을 통과할 수 있다. 그래도 `invalid_state`가 뜨면 로그인 시작 URL과 callback URL이 서로 다른 백엔드/도메인으로 갔거나, 운영 서버의 `OAUTH_STATE_SECRET`이 배포 중 바뀐 경우를 우선 확인한다.
 
 운영 도메인이 `api.example.com`이면 `COOKIE_DOMAIN`은 비워두거나 `.example.com`이어야 한다. 다른 최상위 도메인 값으로 설정하면 브라우저가 쿠키를 버린다. CIME OAuth도 같은 `clientId`, `redirectUri`, `state` 흐름으로 처리하며, 사용자가 인증을 취소해 `error=access_denied`로 돌아오면 400을 내지 않고 프론트엔드로 `auth=cancelled`를 전달한다.
 
@@ -166,7 +167,7 @@ Tunnel 구성에서는 브라우저와 Cloudflare 사이가 HTTPS로 처리되�
 
 ## GitHub Actions 백엔드 자동 배포
 
-`.github/workflows/deploy-backend.yml`은 `main` 브랜치의 백엔드 관련 변경이 push되거나 수동 실행될 때 Oracle VM으로 백엔드를 배포한다. Actions는 백엔드 실행에 필요한 파일만 임시 staging 디렉터리에 복사한 뒤 압축해 VM에 업로드하고, VM에서는 임시 릴리스 디렉터리에 풀어 `npm ci --omit=dev` 후 PM2를 reload한다.
+`.github/workflows/deploy-backend.yml`은 `main` 브랜치의 백엔드 관련 변경이 push되거나 수동 실행될 때 Oracle VM으로 백엔드를 배포한다. Actions는 백엔드 실행에 필요한 파일만 임시 staging 디렉터리에 복사한 뒤 압축해 VM에 업로드하고, VM에서는 임시 릴리스 디렉터리에 풀어 `npm ci --omit=dev` 후 `current` symlink를 새 릴리스로 전환하고 PM2를 다시 시작한다.
 
 아티펙트 압축은 저장소 루트 `.`를 직접 대상으로 삼지 않는다. 압축 중 파일이 바뀌어 `tar: .: file changed as we read it`가 나는 일을 막기 위해 staging 디렉터리를 따로 만들고, 압축 파일도 staging 밖에 생성한다.
 
@@ -207,7 +208,7 @@ find "$HOME" /usr/local /usr /opt -path '*/bin/npm' -type f 2>/dev/null | head -
 
 `/opt/arubot/shared/.env`에는 백엔드 운영 환경변수를 넣는다. 이 파일은 GitHub Actions artifact에 포함되지 않으며, 각 릴리스의 `.env`로 symlink된다.
 
-배포 후 현재 릴리스는 `/opt/arubot/current`를 가리키고, 이전 릴리스는 `/opt/arubot/releases` 아래에 최대 5개까지 남는다. 업로드된 `/tmp` 압축파일, Actions 러너의 로컬 압축파일, 임시 릴리스 디렉터리, 배포용 SSH 키 파일은 배포 성공/실패와 관계없이 정리한다.
+배포 후 현재 릴리스는 `/opt/arubot/current`를 가리키고, 이전 릴리스는 `/opt/arubot/releases` 아래에 최대 5개까지 남는다. 만약 기존 `/opt/arubot/current`가 symlink가 아니라 일반 디렉터리라면 `releases/legacy-current-*`로 한 번 이동한 뒤 symlink로 교체한다. PM2는 같은 앱 이름의 기존 cwd를 계속 물고 있지 않도록 `arubot-api` 프로세스를 삭제한 뒤 새 `current` 기준으로 다시 시작한다. 업로드된 `/tmp` 압축파일, Actions 러너의 로컬 압축파일, 임시 릴리스 디렉터리, 배포용 SSH 키 파일은 배포 성공/실패와 관계없이 정리한다.
 
 ## 배포 후 점검
 
@@ -216,7 +217,7 @@ curl -i https://api.example.com/api/health
 curl -i https://api.example.com/api/account/platforms
 ```
 
-프론트엔드에서는 브라우저 개발자 도구 Network 탭에서 API 요청이 `https://api.example.com`으로 나가는지 확인한다. OAuth 로그인 후 다시 `https://arubot.example.com/?auth=success`로 돌아오면 프론트엔드, 백엔드, Cloudflare Tunnel, OAuth Redirect URI가 모두 맞게 연결된 상태다.
+`/api/health` 또는 `/api/version` 응답의 `releaseSha`가 GitHub Actions 실행 SHA와 같아야 새 빌드가 실제로 실행 중인 상태다. 프론트엔드에서는 브라우저 개발자 도구 Network 탭에서 API 요청이 `https://api.example.com`으로 나가는지 확인한다. OAuth 로그인 후 다시 `https://arubot.example.com/?auth=success`로 돌아오면 프론트엔드, 백엔드, Cloudflare Tunnel, OAuth Redirect URI가 모두 맞게 연결된 상태다.
 
 ## 공식 문서
 

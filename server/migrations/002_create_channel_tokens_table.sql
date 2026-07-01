@@ -29,12 +29,32 @@ CREATE INDEX IF NOT EXISTS idx_channel_tokens_channel_active ON channel_tokens(c
 CREATE INDEX IF NOT EXISTS idx_channel_tokens_type_active ON channel_tokens(token_type, active) WHERE active = TRUE;
 
 -- 토큰 타입 제약조건
-ALTER TABLE channel_tokens ADD CONSTRAINT chk_token_type 
-  CHECK (token_type IN ('roulette', 'pvd', 'api'));
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'chk_token_type'
+      AND conrelid = 'public.channel_tokens'::regclass
+  ) THEN
+    ALTER TABLE public.channel_tokens ADD CONSTRAINT chk_token_type
+      CHECK (token_type IN ('roulette', 'pvd', 'api'));
+  END IF;
+END $$;
 
 -- 토큰 값 길이 제약조건
-ALTER TABLE channel_tokens ADD CONSTRAINT chk_token_value_length 
-  CHECK (LENGTH(token_value) >= 8 AND LENGTH(token_value) <= 255);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'chk_token_value_length'
+      AND conrelid = 'public.channel_tokens'::regclass
+  ) THEN
+    ALTER TABLE public.channel_tokens ADD CONSTRAINT chk_token_value_length
+      CHECK (LENGTH(token_value) >= 8 AND LENGTH(token_value) <= 255);
+  END IF;
+END $$;
 
 -- 토큰 사용 통계 뷰
 CREATE OR REPLACE VIEW channel_token_stats AS

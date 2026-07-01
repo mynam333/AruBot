@@ -42,6 +42,7 @@ cp .env.example .env
 
 - `SERVER_PORT`: Express 서버 포트. 기본값은 `3001`
 - `APP_REDIRECT_AFTER_LOGIN`: OAuth 완료 후 이동할 프론트엔드 URL
+- `OAUTH_STATE_SECRET`: OAuth state 서명에 사용하는 고정 비밀값
 - `NEXT_PUBLIC_API_BASE`: 프론트엔드와 백엔드를 분리 배포할 때 사용할 API base URL
 - `CHZZK_CLIENT_ID`, `CHZZK_CLIENT_SECRET`, `CHZZK_REDIRECT_URI`
 - `CIME_CLIENT_ID`, `CIME_CLIENT_SECRET`, `CIME_REDIRECT_URI`

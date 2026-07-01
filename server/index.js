@@ -21,6 +21,7 @@ const PROCESS_ROLE = process.env.ARUBOT_PROCESS_ROLE || 'api-runtime';
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'https://arubot.yuaru.com';
 const BACKEND_ORIGIN = process.env.BACKEND_ORIGIN || 'https://arubotapi.yuaru.com';
 const SERVER_STARTED_AT = new Date().toISOString();
+const RELEASE_SHA = process.env.ARUBOT_RELEASE_SHA || process.env.RELEASE_SHA || 'local';
 const ALLOWED_ORIGINS = [
   FRONTEND_ORIGIN,
   BACKEND_ORIGIN,
@@ -67,6 +68,7 @@ app.use('/files', cors(), express.static(path.join(path.dirname(new URL(import.m
 // =============================
 // =============================
 const sessionContextCache = new Map(); // sidToken -> { sid, channelId, userId, lastActivity, sessionKey }
+const sessionStore = new Map(); // sid -> entry
 const CACHE_TTL = 5 * 60 * 1000;
 
 const CONNECTION_CLEANUP_INTERVAL = 5 * 60 * 1000;
@@ -4612,8 +4614,10 @@ app.get('/api/version', (req, res) => {
     ok: true,
     instanceId: INSTANCE_ID,
     role: PROCESS_ROLE,
+    releaseSha: RELEASE_SHA,
     pid: process.pid,
     startedAt: SERVER_STARTED_AT,
+    cwd: process.cwd(),
     wsPvdPerMessageDeflate: false,
     node: process.version
   });
@@ -4626,9 +4630,11 @@ app.get('/api/health', (req, res) => {
     ok: true,
     instanceId: INSTANCE_ID,
     role: PROCESS_ROLE,
+    releaseSha: RELEASE_SHA,
     pid: process.pid,
     uptimeSec: Math.round(process.uptime()),
     startedAt: SERVER_STARTED_AT,
+    cwd: process.cwd(),
     node: process.version,
     memory: {
       rss: memory.rss,
@@ -8386,6 +8392,52 @@ function getAuthRedirectUrl(req, params = {}) {
 const oauthStateStore = new Map();
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
+function getOAuthStateSecret() {
+  return String(
+    process.env.OAUTH_STATE_SECRET ||
+    process.env.SESSION_SECRET ||
+    CHZZK_CLIENT_SECRET ||
+    CIME_CLIENT_SECRET ||
+    'arubot-oauth-state-development-secret'
+  );
+}
+
+function signOAuthState(provider, nonce, tsHex) {
+  return crypto
+    .createHmac('sha256', getOAuthStateSecret())
+    .update(`${provider}:${nonce}:${tsHex}`)
+    .digest('hex')
+    .slice(0, 32);
+}
+
+function createSignedOAuthState(provider) {
+  const nonce = crypto.randomBytes(16).toString('hex');
+  const tsHex = Date.now().toString(16).padStart(12, '0');
+  const signature = signOAuthState(provider, nonce, tsHex);
+  return `${nonce}${tsHex}${signature}`;
+}
+
+function verifySignedOAuthState(provider, state) {
+  const text = String(state || '');
+  if (!/^[a-f0-9]{76}$/i.test(text)) {
+    return { ok: false, reason: 'format' };
+  }
+  const nonce = text.slice(0, 32);
+  const tsHex = text.slice(32, 44);
+  const signature = text.slice(44, 76).toLowerCase();
+  const issuedAt = Number.parseInt(tsHex, 16);
+  if (!Number.isFinite(issuedAt)) {
+    return { ok: false, reason: 'timestamp' };
+  }
+  const age = Date.now() - issuedAt;
+  if (age < -60 * 1000 || age > OAUTH_STATE_TTL_MS) {
+    return { ok: false, reason: 'expired', age };
+  }
+  const expected = signOAuthState(provider, nonce, tsHex);
+  const ok = crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+  return { ok, reason: ok ? null : 'signature', age };
+}
+
 function cleanupOAuthStateStore() {
   const now = Date.now();
   for (const [state, record] of oauthStateStore.entries()) {
@@ -8397,7 +8449,7 @@ function cleanupOAuthStateStore() {
 
 function createOAuthState(provider, req) {
   cleanupOAuthStateStore();
-  const state = crypto.randomBytes(16).toString('hex');
+  const state = createSignedOAuthState(provider);
   oauthStateStore.set(state, {
     provider: String(provider || ''),
     createdAt: Date.now(),
@@ -8415,13 +8467,17 @@ function consumeOAuthState(provider, state, cookieState) {
   const ageOk = !!record && Date.now() - Number(record.createdAt || 0) <= OAUTH_STATE_TTL_MS;
   const cookieMatches = !!textState && !!textCookieState && textState === textCookieState;
   const storeMatches = !!textState && providerMatches && ageOk;
+  const signedState = verifySignedOAuthState(provider, textState);
+  const signedMatches = signedState.ok;
 
   if (storeMatches) oauthStateStore.delete(textState);
 
   return {
-    ok: cookieMatches || storeMatches,
+    ok: cookieMatches || storeMatches || signedMatches,
     cookieMatches,
     storeMatches,
+    signedMatches,
+    signedStateReason: signedState.reason,
     storeFound: !!record,
     providerMatches,
     ageOk,
@@ -11007,7 +11063,7 @@ function normalizeEvents(type, items) {
 // GET /api/chzzk/events?channelId=xxx&since=timestamp
 // --- Session-based subscription manager ---
 // Keyed by sid (per user). Each entry can subscribe to one or more channels, but our current flow subscribes to the user's own channel.
-const sessionStore = new Map(); // sid -> entry
+// sessionStore is declared near app initialization because early timers reference it during top-level awaits.
 // Deduplicate: share one socket per channelId across multiple sids
 const channelSessionStore = new Map(); // channelId -> entry
 // Global per-channel dedup for processed chat ids and sent replies to avoid duplicates on reconnects

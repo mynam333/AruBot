@@ -39,6 +39,16 @@ create table if not exists public.channel_viewer_tokens (
   metadata jsonb not null default '{}'::jsonb
 );
 
+alter table public.channel_viewer_tokens add column if not exists id uuid default gen_random_uuid();
+alter table public.channel_viewer_tokens add column if not exists channel_uid text;
+alter table public.channel_viewer_tokens add column if not exists token_type text;
+alter table public.channel_viewer_tokens add column if not exists token text;
+alter table public.channel_viewer_tokens add column if not exists is_active boolean not null default true;
+alter table public.channel_viewer_tokens add column if not exists created_at timestamptz not null default now();
+alter table public.channel_viewer_tokens add column if not exists rotated_at timestamptz;
+alter table public.channel_viewer_tokens add column if not exists expires_at timestamptz;
+alter table public.channel_viewer_tokens add column if not exists metadata jsonb not null default '{}'::jsonb;
+
 create index if not exists idx_channel_viewer_tokens_channel_type
   on public.channel_viewer_tokens (channel_uid, token_type)
   where is_active = true;
@@ -65,6 +75,22 @@ create table if not exists public.video_donation_queue (
   metadata jsonb not null default '{}'::jsonb
 );
 
+alter table public.video_donation_queue add column if not exists id uuid default gen_random_uuid();
+alter table public.video_donation_queue add column if not exists channel_uid text;
+alter table public.video_donation_queue add column if not exists requester_user_id text;
+alter table public.video_donation_queue add column if not exists requester_username text;
+alter table public.video_donation_queue add column if not exists video_id text;
+alter table public.video_donation_queue add column if not exists title text;
+alter table public.video_donation_queue add column if not exists start_sec integer not null default 0;
+alter table public.video_donation_queue add column if not exists duration_sec integer;
+alter table public.video_donation_queue add column if not exists cost integer not null default 0;
+alter table public.video_donation_queue add column if not exists status text not null default 'queued';
+alter table public.video_donation_queue add column if not exists sort_order bigint not null default extract(epoch from now())::bigint;
+alter table public.video_donation_queue add column if not exists created_at timestamptz not null default now();
+alter table public.video_donation_queue add column if not exists updated_at timestamptz not null default now();
+alter table public.video_donation_queue add column if not exists played_at timestamptz;
+alter table public.video_donation_queue add column if not exists metadata jsonb not null default '{}'::jsonb;
+
 create index if not exists idx_video_donation_queue_active
   on public.video_donation_queue (channel_uid, status, sort_order, created_at)
   where status in ('queued', 'playing');
@@ -79,6 +105,14 @@ create table if not exists public.viewer_playback_state (
   metadata jsonb not null default '{}'::jsonb
 );
 
+alter table public.viewer_playback_state add column if not exists channel_uid text;
+alter table public.viewer_playback_state add column if not exists current_queue_id uuid;
+alter table public.viewer_playback_state add column if not exists base_start_ms bigint;
+alter table public.viewer_playback_state add column if not exists paused boolean not null default false;
+alter table public.viewer_playback_state add column if not exists paused_at_sec integer;
+alter table public.viewer_playback_state add column if not exists server_updated_at timestamptz not null default now();
+alter table public.viewer_playback_state add column if not exists metadata jsonb not null default '{}'::jsonb;
+
 create table if not exists public.channel_points_balances (
   channel_uid text not null,
   user_id text not null,
@@ -87,6 +121,12 @@ create table if not exists public.channel_points_balances (
   updated_at timestamptz not null default now(),
   primary key (channel_uid, user_id)
 );
+
+alter table public.channel_points_balances add column if not exists channel_uid text;
+alter table public.channel_points_balances add column if not exists user_id text;
+alter table public.channel_points_balances add column if not exists username text;
+alter table public.channel_points_balances add column if not exists points bigint not null default 0;
+alter table public.channel_points_balances add column if not exists updated_at timestamptz not null default now();
 
 create index if not exists idx_channel_points_balances_rank
   on public.channel_points_balances (channel_uid, points desc);
@@ -104,6 +144,18 @@ create table if not exists public.macro_schedules (
   updated_at timestamptz not null default now(),
   metadata jsonb not null default '{}'::jsonb
 );
+
+alter table public.macro_schedules add column if not exists id uuid default gen_random_uuid();
+alter table public.macro_schedules add column if not exists channel_uid text;
+alter table public.macro_schedules add column if not exists name text;
+alter table public.macro_schedules add column if not exists message text;
+alter table public.macro_schedules add column if not exists enabled boolean not null default true;
+alter table public.macro_schedules add column if not exists interval_sec integer;
+alter table public.macro_schedules add column if not exists next_run_at timestamptz;
+alter table public.macro_schedules add column if not exists last_run_at timestamptz;
+alter table public.macro_schedules add column if not exists created_at timestamptz not null default now();
+alter table public.macro_schedules add column if not exists updated_at timestamptz not null default now();
+alter table public.macro_schedules add column if not exists metadata jsonb not null default '{}'::jsonb;
 
 create index if not exists idx_macro_schedules_due
   on public.macro_schedules (channel_uid, next_run_at)
