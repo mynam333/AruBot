@@ -75,7 +75,7 @@ function prepareAppStage() {
 cleanDirectory(distDir);
 run('node', ['scripts/create-local-program-icon.js']);
 prepareAppStage();
-run('npx', ['electron-builder', '--config', 'electron-builder.local.yml']);
+run('npx', ['electron-builder', '--config', 'electron-builder.local.yml', '--publish', 'never']);
 syncPublicInstallers();
 run('node', ['scripts/write-local-program-manifest.js'], {
   ARUBOT_LOCAL_INSTALLER_DIR: externalMode ? distDir : publicDir,
