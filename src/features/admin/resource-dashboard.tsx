@@ -28,11 +28,13 @@ export function ResourceDashboard({
   title,
   description,
   actions = [],
+  actionSlot,
 }: {
   endpoint?: string;
   title: string;
   description: string;
   actions?: Action[];
+  actionSlot?: React.ReactNode;
 }) {
   const [data, setData] = useState<unknown>(null);
   const [query, setQuery] = useState('');
@@ -61,6 +63,15 @@ export function ResourceDashboard({
     load();
   }, [load]);
 
+  useEffect(() => {
+    const refresh = (event: Event) => {
+      const targetEndpoint = (event as CustomEvent<{ endpoint?: string }>).detail?.endpoint;
+      if (!targetEndpoint || targetEndpoint === endpoint) load();
+    };
+    window.addEventListener('arubot:resource-refresh', refresh);
+    return () => window.removeEventListener('arubot:resource-refresh', refresh);
+  }, [endpoint, load]);
+
   return (
     <div className="grid gap-5">
       <Card>
@@ -77,6 +88,7 @@ export function ResourceDashboard({
                   <ExternalLink className="h-4 w-4" />
                 </LinkButton>
               ))}
+              {actionSlot}
               <Button type="button" onClick={load} disabled={!endpoint || isPending}>
                 <RefreshCw className={isPending ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
                 새로고침

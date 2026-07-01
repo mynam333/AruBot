@@ -15,6 +15,8 @@ AruBot은 CHZZK와 CIME 채팅 운영을 함께 지원하는 Next.js + Express �
 - 룰렛 정의, 확률/가중치 방식, OBS 룰렛 뷰어, 실행 로그
 - 후원 금액 기반 포인트 정산과 자동 응답
 - 방송 중 자동 매크로 전송
+- 방송 자동화: T.I.T.S., Toonation, TTS, 사운드, Stream Deck/Touch Portal 제어 URL
+- GUI 로컬 프로그램: 방송 PC에서 로컬 앱, 민감정보, 대용량 사운드 폴더, 자동화 큐 처리
 - 공개 페이지: 명령어 목록, 포인트 목록, 룰렛 로그, 룰렛 정보
 
 ## 프로젝트 구조
@@ -26,6 +28,7 @@ src/features/         관리자 기능별 화면 조합
 src/shared/           API 헬퍼, 라우팅/내비게이션 설정
 server/               Express API, OAuth, WebSocket, Supabase/SQLite 연동
 server/migrations/    PostgreSQL 마이그레이션 SQL
+local-program/        Electron 기반 AruBot Local Program GUI
 public/               정적 공개 파일과 복사된 viewer 리소스
 tests/                Jest 기반 통합/비즈니스 로직 테스트
 docs/                 리팩터링, 최적화, DB, CIME 연동 문서
@@ -68,6 +71,31 @@ npm run server
 npm run dev
 ```
 
+GUI 로컬 프로그램:
+
+```bash
+npm run local:app
+```
+
+Windows 설치 파일 빌드:
+
+```bash
+npm run local:release
+```
+
+빌드 결과는 `public/downloads/local-program`에 생성됩니다. 이 폴더에는 Windows 설치용 `.exe`와 로컬 프로그램이 업데이트 확인에 사용하는 `latest.json` manifest가 함께 들어갑니다. 홈페이지의 `/downloads/local-program` 페이지에서 최신 설치 파일을 다운로드할 수 있습니다.
+
+Vercel에 설치 파일을 직접 올리지 않고 GitHub Releases에서 받게 하려면 아래처럼 외부 다운로드 URL을 manifest에 넣습니다.
+
+```powershell
+$env:ARUBOT_LOCAL_DOWNLOAD_BASE_URL="https://github.com/OWNER/REPO/releases/download/local-v0.1.0"
+npm run local:release:external
+```
+
+이 모드는 `dist/local-program`에 생성된 `.exe`와 `latest.json`을 GitHub Release asset으로 올리고, `public/downloads/local-program/latest.json`만 Vercel에 배포하는 방식입니다. 로컬 프로그램의 업데이트 버튼도 이 manifest를 읽어 GitHub의 설치 파일을 내려받고 SHA-256을 검증한 뒤 실행합니다.
+
+다운로드 페이지(`/downloads/local-program`)는 동적 페이지입니다. `LOCAL_PROGRAM_MANIFEST_URL` 또는 `NEXT_PUBLIC_LOCAL_PROGRAM_MANIFEST_URL`을 설정하면 Vercel 배포를 다시 하지 않아도 해당 외부 manifest를 `no-store`로 읽어 최신 설치 파일 링크를 보여줍니다.
+
 Next.js 개발 서버는 기본적으로 `http://localhost:3000`에서 실행됩니다. 로컬 프론트엔드는 `NEXT_PUBLIC_API_BASE`가 비어 있으면 `http://127.0.0.1:3001` Express API를 사용합니다.
 
 ## 빌드와 검증
@@ -83,6 +111,7 @@ npm run build
 ## 주요 URL
 
 - 메인 랜딩: `/`
+- 로컬 프로그램 다운로드: `/downloads/local-program`
 - 스트리머 콘솔: `/streamer`, `/dashboard`
 - 시청자 포인트: `/viewer/me`
 - 대시보드: `/dashboard`
@@ -91,6 +120,7 @@ npm run build
 - 매크로: `/macros`
 - 포인트: `/points`
 - 예측 베팅: `/predictions`
+- 방송 자동화: `/automations`
 - 예측 베팅 OBS 오버레이: `/viewer/prediction/:channelUid`
 - 영상 후원 큐: `/video-donations/queue`
 - 영상 후원 OBS 뷰어: `/pvd/:viewerToken`
@@ -120,3 +150,4 @@ npm run build
 - 영상 후원 뷰어는 페이지 가시성 변화와 플레이어 버퍼링을 고려해 상태 복구 로직을 강화했습니다.
 - CHZZK와 CIME 계정은 플랫폼 계정 테이블을 통해 하나의 내부 사용자로 연결하는 방향으로 확장됩니다.
 - Supabase 마이그레이션은 `server/migrations`의 순서대로 적용합니다.
+- 로컬 프로그램 업데이트는 `public/downloads/local-program/latest.json`의 버전과 SHA-256을 확인한 뒤 새 설치 파일을 임시 폴더에 다운로드하고 실행합니다. 배포 도메인이 `https://arubot.vercel.app`가 아니라면 로컬 프로그램의 업데이트 정보 주소를 실제 프론트엔드 도메인의 `/downloads/local-program/latest.json`로 바꿔 주세요.

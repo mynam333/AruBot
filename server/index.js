@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import axios from 'axios';
 import https from 'https';
 import dns from 'dns';
@@ -7,7 +8,7 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
-import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, getSessionUserId, getAnyTokens, listChannelPoints, listViewerPointBalancesForUserIds, setChannelPoints, incrChannelPoints, getChannelPoints, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, deletePlatformTokens, deletePlatformAccount, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet } from './supabase.js';
+import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, getSessionUserId, getAnyTokens, listChannelPoints, listViewerPointBalancesForUserIds, setChannelPoints, incrChannelPoints, getChannelPoints, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, deletePlatformTokens, deletePlatformAccount, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, createAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet } from './supabase.js';
 import { createPlatformProfileService } from './platform-profiles.js';
 import { WebSocketServer, WebSocket } from 'ws';
 
@@ -25,6 +26,9 @@ const RELEASE_SHA = process.env.ARUBOT_RELEASE_SHA || process.env.RELEASE_SHA ||
 const ALLOWED_ORIGINS = [
   FRONTEND_ORIGIN,
   BACKEND_ORIGIN,
+  process.env.PUBLIC_ORIGIN,
+  process.env.NEXT_PUBLIC_SITE_URL,
+  process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null,
   'http://localhost:3000',
   'http://127.0.0.1:3000',
   'http://localhost:5173',
@@ -33,37 +37,126 @@ const ALLOWED_ORIGINS = [
   `http://127.0.0.1:${PORT}`,
 ].filter(Boolean);
 
+function isTrustedOrigin(origin) {
+  if (!origin) return true;
+  try {
+    const u = new URL(origin);
+    const o = u.origin;
+    if (ALLOWED_ORIGINS.includes(o)) return true;
+    if (
+      ['localhost', '127.0.0.1', '::1'].includes(u.hostname) &&
+      Number(u.port) >= 3000 &&
+      Number(u.port) < 3100
+    ) {
+      return true;
+    }
+    return u.protocol === 'https:' && (u.hostname.endsWith('.yuaru.kr') || u.hostname.endsWith('.yuaru.com'));
+  } catch {
+    return false;
+  }
+}
+
 const corsOptions = {
   origin: (origin, cb) => {
-    if (!origin) return cb(null, true); // allow same-origin/non-browser (e.g., OBS)
-    try {
-      const u = new URL(origin);
-      const o = u.origin;
-      // exact allowlist
-      if (ALLOWED_ORIGINS.includes(o)) return cb(null, true);
-      if (
-        ['localhost', '127.0.0.1', '::1'].includes(u.hostname) &&
-        Number(u.port) >= 3000 &&
-        Number(u.port) < 3100
-      ) {
-        return cb(null, true);
-      }
-      // allow deployed yuaru service subdomains over https
-      if (u.protocol === 'https:' && (u.hostname.endsWith('.yuaru.kr') || u.hostname.endsWith('.yuaru.com'))) return cb(null, true);
-    } catch { }
-    return cb(null, false);
+    return cb(null, isTrustedOrigin(origin));
   },
   credentials: true,
 };
+
+function constantTimeEqualText(a, b) {
+  const left = Buffer.from(String(a || ''), 'utf8');
+  const right = Buffer.from(String(b || ''), 'utf8');
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+function getOpsAdminToken() {
+  return String(process.env.OPS_ADMIN_TOKEN || process.env.ADMIN_API_TOKEN || process.env.ADMIN_TOKEN || '').trim();
+}
+
+function hasOpsAdminToken(req) {
+  const expected = getOpsAdminToken();
+  if (!expected) return false;
+  const auth = String(req.get('authorization') || '');
+  const bearer = auth.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : '';
+  const headerToken = String(req.get('x-admin-token') || '').trim();
+  return constantTimeEqualText(bearer, expected) || constantTimeEqualText(headerToken, expected);
+}
+
+function requireOpsAuth(req, res, next) {
+  if (hasOpsAdminToken(req)) return next();
+  return res.status(getOpsAdminToken() ? 403 : 404).json({ error: 'Not found' });
+}
+
+const rateLimitBuckets = new Map();
+
+function createIpRateLimiter({ windowMs, max, prefix }) {
+  return (req, res, next) => {
+    const now = Date.now();
+    const key = `${prefix}:${req.ip || req.socket?.remoteAddress || 'unknown'}`;
+    const current = rateLimitBuckets.get(key);
+    if (!current || current.resetAt <= now) {
+      rateLimitBuckets.set(key, { count: 1, resetAt: now + windowMs });
+      return next();
+    }
+    current.count += 1;
+    if (current.count > max) {
+      const retryAfterSec = Math.max(1, Math.ceil((current.resetAt - now) / 1000));
+      res.setHeader('Retry-After', String(retryAfterSec));
+      return res.status(429).json({ error: 'Too many requests' });
+    }
+    return next();
+  };
+}
+
+const rateLimiters = {
+  externalLookup: createIpRateLimiter({ prefix: 'externalLookup', windowMs: 60 * 1000, max: 30 }),
+  userWrite: createIpRateLimiter({ prefix: 'userWrite', windowMs: 60 * 1000, max: 120 }),
+  apiKeyCommand: createIpRateLimiter({ prefix: 'apiKeyCommand', windowMs: 60 * 1000, max: 240 }),
+};
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, bucket] of rateLimitBuckets.entries()) {
+    if (!bucket || bucket.resetAt <= now) rateLimitBuckets.delete(key);
+  }
+}, 5 * 60 * 1000).unref?.();
+
+function rejectUntrustedBrowserOrigin(req, res, next) {
+  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+  const origin = req.get('origin');
+  if (origin && !isTrustedOrigin(origin)) {
+    return res.status(403).json({ error: 'Untrusted origin' });
+  }
+  const referer = req.get('referer');
+  if (!origin && referer) {
+    try {
+      if (!isTrustedOrigin(new URL(referer).origin)) {
+        return res.status(403).json({ error: 'Untrusted origin' });
+      }
+    } catch {
+      return res.status(403).json({ error: 'Untrusted origin' });
+    }
+  }
+  return next();
+}
+
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
+  next();
+});
 
 app.use(cors(corsOptions));
 // Explicit preflight support for all routes
 app.options('*', cors(corsOptions));
 app.use(express.json({ limit: '5mb' }));
 app.use(cookieParser());
+app.use(rejectUntrustedBrowserOrigin);
 
 // Serve static files (SFX, etc.) with CORS
-app.use('/files', cors(), express.static(path.join(path.dirname(new URL(import.meta.url).pathname), 'files')));
+app.use('/files', cors(corsOptions), express.static(path.join(path.dirname(new URL(import.meta.url).pathname), 'files')));
 
 // =============================
 // =============================
@@ -2312,7 +2405,7 @@ app.post('/api/macros/delete', async (req, res) => {
 });
 
 // GET macro timer debug info
-app.get('/api/macros/debug', async (req, res) => {
+app.get('/api/macros/debug', requireOpsAuth, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
@@ -2371,7 +2464,7 @@ app.get('/api/macros/performance', async (req, res) => {
 });
 
 // GET system-wide performance report (admin only)
-app.get('/api/macros/performance/system', async (req, res) => {
+app.get('/api/macros/performance/system', requireOpsAuth, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
@@ -2395,7 +2488,7 @@ app.get('/api/macros/performance/system', async (req, res) => {
 });
 
 // POST trigger cache cleanup (admin/debugging)
-app.post('/api/macros/cleanup', async (req, res) => {
+app.post('/api/macros/cleanup', requireOpsAuth, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
@@ -2428,7 +2521,7 @@ app.post('/api/macros/cleanup', async (req, res) => {
   }
 });
 
-app.get('/api/attendance/performance', async (req, res) => {
+app.get('/api/attendance/performance', requireOpsAuth, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
@@ -2461,7 +2554,7 @@ app.get('/api/attendance/performance', async (req, res) => {
   }
 });
 
-app.post('/api/attendance/validate-sessions', async (req, res) => {
+app.post('/api/attendance/validate-sessions', requireOpsAuth, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
@@ -2500,7 +2593,7 @@ app.post('/api/attendance/validate-sessions', async (req, res) => {
   }
 });
 
-app.get('/api/memory/report', async (req, res) => {
+app.get('/api/memory/report', requireOpsAuth, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
@@ -2512,7 +2605,7 @@ app.get('/api/memory/report', async (req, res) => {
   }
 });
 
-app.post('/api/memory/cleanup', async (req, res) => {
+app.post('/api/memory/cleanup', requireOpsAuth, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
@@ -2531,7 +2624,7 @@ app.post('/api/memory/cleanup', async (req, res) => {
   }
 });
 
-app.get('/api/memory/sessions', async (req, res) => {
+app.get('/api/memory/sessions', requireOpsAuth, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
@@ -2563,7 +2656,7 @@ app.get('/api/memory/sessions', async (req, res) => {
   }
 });
 
-app.get('/api/memory/channel-cache', async (req, res) => {
+app.get('/api/memory/channel-cache', requireOpsAuth, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
@@ -2590,7 +2683,7 @@ app.get('/api/memory/channel-cache', async (req, res) => {
   }
 });
 
-app.get('/api/memory/connection-pool', async (req, res) => {
+app.get('/api/memory/connection-pool', requireOpsAuth, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
@@ -2617,7 +2710,7 @@ app.get('/api/memory/connection-pool', async (req, res) => {
   }
 });
 
-app.post('/api/memory/channel-cache/cleanup', async (req, res) => {
+app.post('/api/memory/channel-cache/cleanup', requireOpsAuth, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
@@ -2654,7 +2747,7 @@ app.post('/api/memory/channel-cache/cleanup', async (req, res) => {
 });
 
 //
-app.get('/api/memory/resource-stats', async (req, res) => {
+app.get('/api/memory/resource-stats', requireOpsAuth, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
@@ -2674,7 +2767,7 @@ app.get('/api/memory/resource-stats', async (req, res) => {
 });
 
 //
-app.post('/api/memory/resource-cleanup', async (req, res) => {
+app.post('/api/memory/resource-cleanup', requireOpsAuth, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
@@ -2713,7 +2806,7 @@ app.post('/api/memory/resource-cleanup', async (req, res) => {
   }
 });
 
-app.get('/api/memory/usage-detail', async (req, res) => {
+app.get('/api/memory/usage-detail', requireOpsAuth, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
@@ -2744,7 +2837,7 @@ app.get('/api/memory/usage-detail', async (req, res) => {
   }
 });
 
-app.get('/api/debug/token-validation', async (req, res) => {
+app.get('/api/debug/token-validation', requireOpsAuth, async (req, res) => {
   try {
     const { token, type } = req.query;
 
@@ -2839,7 +2932,11 @@ app.get('/api/debug/token-validation', async (req, res) => {
         }
       }
     } catch (e) { console.error(e) }
-  } catch (e) { console.error(e) }
+    return res.json(debugInfo);
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'failed' });
+  }
 })
 
 const macroCache = new Map(); // sid -> { macros, fetchedAt }
@@ -4242,6 +4339,91 @@ app.post('/api/donation/rules/delete', async (req, res) => {
   } catch { return res.status(500).json({ error: 'failed' }); }
 });
 
+function normalizeRouletteDefinition(input = {}) {
+  const id = String(input.id || '').trim();
+  const name = String(input.name || '').trim();
+  const type = String(input.type || 'items') === 'probability' ? 'probability' : 'items';
+  const themeText = String(input.theme || 'pastel').toLowerCase();
+  const allowedThemes = new Set(['classic', 'fire', 'ice', 'cyber', 'gold', 'pastel', 'forest', 'sakura', 'midnight', 'sunset']);
+  const items = (Array.isArray(input.items) ? input.items : [])
+    .map((item) => ({
+      label: String(item?.label || '').trim(),
+      value: item?.value == null || item?.value === '' ? null : String(item.value),
+      weight: Math.max(1, Number(item?.weight || 1)),
+      probability: Number.isFinite(Number(item?.probability)) ? Math.max(0, Number(item.probability)) : undefined,
+    }))
+    .filter((item) => item.label);
+  return {
+    id: id || `rlt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+    name,
+    type,
+    theme: allowedThemes.has(themeText) ? themeText : 'pastel',
+    items,
+  };
+}
+
+app.get('/api/roulette/definitions', async (req, res) => {
+  try {
+    const sid = await getPartitionId(req, res);
+    if (!sid) return res.status(401).json({ error: 'Login required' });
+    const settings = await getBotSettings(sid) || {};
+    const definitions = Array.isArray(settings.rouletteDefs) ? settings.rouletteDefs : [];
+    return res.json({ definitions });
+  } catch (e) {
+    console.error('[roulette:definitions:list] error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to list roulette definitions' });
+  }
+});
+
+app.post('/api/roulette/definitions/upsert', async (req, res) => {
+  try {
+    const sid = await getPartitionId(req, res);
+    if (!sid) return res.status(401).json({ error: 'Login required' });
+    const definition = normalizeRouletteDefinition(req.body?.definition || {});
+    if (!definition.name) return res.status(400).json({ error: '룰렛 이름이 필요합니다.' });
+    if (definition.items.length < 2) return res.status(400).json({ error: '룰렛 항목은 2개 이상 필요합니다.' });
+    if (definition.type === 'probability') {
+      const totalPercent = definition.items.reduce((sum, item) => sum + Number(item.probability || 0), 0);
+      if (Math.abs(totalPercent - 100) > 0.001) {
+        return res.status(400).json({ error: '확률형 룰렛은 확률 합계가 정확히 100%여야 합니다.' });
+      }
+    }
+
+    const settings = await getBotSettings(sid) || {};
+    const definitions = Array.isArray(settings.rouletteDefs) ? settings.rouletteDefs.slice() : [];
+    const index = definitions.findIndex((item) => (
+      String(item?.id || '') === definition.id ||
+      String(item?.name || '').trim().toLowerCase() === definition.name.toLowerCase()
+    ));
+    if (index >= 0) definitions[index] = { ...definitions[index], ...definition, id: definitions[index].id || definition.id };
+    else definitions.push(definition);
+
+    await setBotSettings(sid, { ...settings, rouletteDefs: definitions });
+    return res.json({ ok: true, definition });
+  } catch (e) {
+    console.error('[roulette:definitions:upsert] error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to save roulette definition' });
+  }
+});
+
+app.post('/api/roulette/definitions/delete', async (req, res) => {
+  try {
+    const sid = await getPartitionId(req, res);
+    if (!sid) return res.status(401).json({ error: 'Login required' });
+    const id = String(req.body?.id || '').trim();
+    const name = String(req.body?.name || '').trim().toLowerCase();
+    if (!id && !name) return res.status(400).json({ error: 'id or name is required' });
+    const settings = await getBotSettings(sid) || {};
+    const definitions = (Array.isArray(settings.rouletteDefs) ? settings.rouletteDefs : [])
+      .filter((item) => String(item?.id || '') !== id && String(item?.name || '').trim().toLowerCase() !== name);
+    await setBotSettings(sid, { ...settings, rouletteDefs: definitions });
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error('[roulette:definitions:delete] error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to delete roulette definition' });
+  }
+});
+
 // Public: list roulette definitions by channel UID (no auth)
 // GET /api/public/:uid/roulette-defs
 app.get('/api/public/:uid/roulette-defs', async (req, res) => {
@@ -4293,7 +4475,7 @@ app.get('/api/public/:uid/roulette-defs', async (req, res) => {
 
 // Proxy route used by the roulette queue to send chat via CHZZK OpenAPI.
 // Expects Authorization header (Bearer <accessToken>) and sessionKey as query.
-app.post('/api/chzzk/send', async (req, res) => {
+app.post('/api/chzzk/send', rateLimiters.userWrite, async (req, res) => {
   try {
     const sessionKey = String(req.query?.sessionKey || '');
     const auth = String(req.headers?.authorization || '');
@@ -4462,6 +4644,17 @@ function getPvdItemStartSec(item) {
   return Math.max(0, Math.floor(Number(item?.startSec || 0)));
 }
 
+function getPvdPlayDurationSec({ maxDurationSec, ytDurationSec = null, startSec = 0, playSec = null } = {}) {
+  const maxDur = Math.max(1, Math.floor(Number(maxDurationSec || 600)));
+  const start = Math.max(0, Math.floor(Number(startSec || 0)));
+  const explicitPlay = Number(playSec);
+  const play = Number.isFinite(explicitPlay) && explicitPlay > 0 ? Math.floor(explicitPlay) : null;
+  const fullDuration = Number(ytDurationSec);
+  const remainingFromStart = Number.isFinite(fullDuration) ? Math.max(1, Math.floor(fullDuration) - start) : maxDur;
+  const requestedDuration = play != null ? play : remainingFromStart;
+  return Math.max(1, Math.min(maxDur, requestedDuration));
+}
+
 function createPvdPlaybackState(item) {
   return { baseStartMs: Date.now(), paused: false, pausedAtSec: null };
 }
@@ -4612,49 +4805,27 @@ async function broadcastPvdStart(sid) {
 app.get('/api/version', (req, res) => {
   res.json({
     ok: true,
-    instanceId: INSTANCE_ID,
     role: PROCESS_ROLE,
     releaseSha: RELEASE_SHA,
-    pid: process.pid,
     startedAt: SERVER_STARTED_AT,
-    cwd: process.cwd(),
     wsPvdPerMessageDeflate: false,
-    node: process.version
   });
 });
 
 app.get('/api/health', (req, res) => {
-  const memory = process.memoryUsage();
-  const poolStatus = connectionPool.getPoolStatus();
   res.json({
     ok: true,
-    instanceId: INSTANCE_ID,
     role: PROCESS_ROLE,
     releaseSha: RELEASE_SHA,
-    pid: process.pid,
     uptimeSec: Math.round(process.uptime()),
     startedAt: SERVER_STARTED_AT,
-    cwd: process.cwd(),
-    node: process.version,
-    memory: {
-      rss: memory.rss,
-      heapUsed: memory.heapUsed,
-      heapTotal: memory.heapTotal,
-    },
-    websocket: {
-      pvdClients: Array.from(pvdSidSockets.values()).reduce((sum, sockets) => sum + sockets.size, 0),
-      channelPoolConnections: poolStatus.totalConnections,
-      channelPoolChannels: poolStatus.totalChannels,
-      desktopClients: Array.from(desktopPidSockets.values()).reduce((sum, sockets) => sum + sockets.size, 0),
-      warudoClients: Array.from(pidSockets.values()).reduce((sum, sockets) => sum + sockets.size, 0),
-    },
   });
 });
 
 // Send a command to desktop clients via API key
 // POST /api/desktop/command
 // Authorization: Bearer <API_KEY>  OR  body.token / query.token
-app.post('/api/desktop/command', async (req, res) => {
+app.post('/api/desktop/command', rateLimiters.apiKeyCommand, async (req, res) => {
   try {
     const auth = String(req.headers?.authorization || '').trim();
     let token = '';
@@ -4736,7 +4907,7 @@ app.post('/api/video-donation/pop-by-token', async (req, res) => {
 });
 
 // Resolve YouTube title/duration for a given url or id (helper for clients)
-app.get('/api/video-donation/resolve-title', async (req, res) => {
+app.get('/api/video-donation/resolve-title', rateLimiters.externalLookup, async (req, res) => {
   try {
     const q = String(req.query?.url || req.query?.id || req.query?.q || '');
     if (!q) return res.status(400).json({ error: 'url, id or q required' });
@@ -4774,7 +4945,7 @@ app.post('/api/video-donation/settings', async (req, res) => {
 
 // POST request: enqueue a video donation request, deduct points
 // body: { videoUrl, title?, startSec?, playSec?, requesterUserId, requesterUsername }
-app.post('/api/video-donation/request', async (req, res) => {
+app.post('/api/video-donation/request', rateLimiters.userWrite, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
@@ -4810,8 +4981,7 @@ app.post('/api/video-donation/request', async (req, res) => {
     }
     const start = Math.max(0, Number(startSec || 0) || 0);
     const play = Number.isFinite(Number(playSec)) && Number(playSec) > 0 ? Math.floor(Number(playSec)) : null;
-    const baseDur = play != null ? play : (ytDuration != null ? ytDuration : maxDur);
-    const dur = Math.max(1, Math.min(maxDur, baseDur));
+    const dur = getPvdPlayDurationSec({ maxDurationSec: maxDur, ytDurationSec: ytDuration, startSec: start, playSec: play });
     const cost = Math.ceil(pps * dur);
 
     // Deduct points
@@ -6533,8 +6703,6 @@ app.get('/api/warudo/debug/ws', async (req, res) => {
     const summary = {
       yourPid: pid,
       yourSocketCount: own ? own.size : 0,
-      totalPids: pidSockets.size,
-      pids: Array.from(pidSockets.keys()).slice(0, 50),
     };
     return res.json(summary);
   } catch (e) {
@@ -8346,12 +8514,18 @@ function getCookieOptions({ maxAge } = {}) {
   const secure = process.env.COOKIE_SECURE
     ? String(process.env.COOKIE_SECURE).toLowerCase() !== 'false'
     : isProduction;
+  const requestedSameSite = String(process.env.COOKIE_SAME_SITE || 'lax').trim().toLowerCase();
+  const sameSite = ['strict', 'lax', 'none'].includes(requestedSameSite) ? requestedSameSite : 'lax';
 
   const cookieOptions = {
     httpOnly: true,
-    sameSite: isProduction && secure ? 'none' : 'lax',
+    sameSite,
     secure,
   };
+
+  if (sameSite === 'none') {
+    cookieOptions.secure = true;
+  }
 
   if (maxAge) cookieOptions.maxAge = maxAge;
   if (cookieDomain) cookieOptions.domain = cookieDomain;
@@ -8762,30 +8936,192 @@ async function getCurrentSessionUserId(req) {
   try { return await getSessionUserId(sidToken); } catch { return null; }
 }
 
+const AUTOMATION_SOUND_QUOTA_BYTES = Number(process.env.AUTOMATION_SOUND_QUOTA_BYTES || 10 * 1024 * 1024);
+const AUTOMATION_SOUND_MAX_FILE_BYTES = Number(process.env.AUTOMATION_SOUND_MAX_FILE_BYTES || 5 * 1024 * 1024);
+const AUTOMATION_USER_FILE_ROOT = process.env.AUTOMATION_USER_FILE_ROOT || path.join(process.cwd(), 'server', 'user-files', 'automation');
+
+function automationOwnerKey(ownerUserId) {
+  return crypto.createHash('sha256').update(String(ownerUserId || '')).digest('hex').slice(0, 32);
+}
+
+function sanitizeFileBase(name) {
+  const clean = String(name || 'sound')
+    .normalize('NFKD')
+    .replace(/[^\w.-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 80);
+  return clean || 'sound';
+}
+
+function automationSoundDir(ownerUserId) {
+  return path.join(AUTOMATION_USER_FILE_ROOT, automationOwnerKey(ownerUserId), 'sounds');
+}
+
+function ensureAutomationSoundDir(ownerUserId) {
+  const dir = automationSoundDir(ownerUserId);
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function listAutomationSoundFiles(ownerUserId) {
+  const dir = ensureAutomationSoundDir(ownerUserId);
+  const rows = fs.readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => {
+      const fullPath = path.join(dir, entry.name);
+      const stat = fs.statSync(fullPath);
+      const encoded = encodeURIComponent(entry.name);
+      return {
+        id: entry.name,
+        name: entry.name.replace(/^[a-z0-9]+_/, ''),
+        size: stat.size,
+        updatedAt: stat.mtime.toISOString(),
+        url: `/api/automations/assets/sounds/${encoded}`
+      };
+    })
+    .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+  return {
+    quotaBytes: AUTOMATION_SOUND_QUOTA_BYTES,
+    usedBytes: rows.reduce((sum, file) => sum + Number(file.size || 0), 0),
+    files: rows
+  };
+}
+
+function getTitsEndpoint(endpoint, kind = 'data') {
+  const raw = String(endpoint || '').trim() || 'ws://localhost:42069';
+  const base = raw.endsWith('/websocket') || raw.endsWith('/events') ? raw.replace(/\/(websocket|events)$/, '') : raw.replace(/\/$/, '');
+  return `${base}/${kind === 'events' ? 'events' : 'websocket'}`;
+}
+
+function makeTitsMessage(messageType, data = {}) {
+  return {
+    apiName: 'TITSPublicApi',
+    apiVersion: '1.0',
+    requestID: `arubot_${Date.now().toString(36)}_${crypto.randomBytes(4).toString('hex')}`,
+    messageType,
+    ...(Object.keys(data || {}).length ? { data } : {})
+  };
+}
+
+function sendTitsRequest(endpoint, messageType, data = {}, timeoutMs = 4500) {
+  return new Promise((resolve, reject) => {
+    const message = makeTitsMessage(messageType, data);
+    const ws = new WebSocket(getTitsEndpoint(endpoint, 'data'));
+    const timer = setTimeout(() => {
+      try { ws.close(); } catch { }
+      reject(new Error('T.I.T.S. response timeout'));
+    }, timeoutMs);
+
+    ws.once('open', () => {
+      ws.send(JSON.stringify(message));
+    });
+    ws.on('message', (raw) => {
+      try {
+        const parsed = JSON.parse(String(raw));
+        if (parsed?.requestID && parsed.requestID !== message.requestID) return;
+        clearTimeout(timer);
+        try { ws.close(); } catch { }
+        resolve(parsed);
+      } catch (error) {
+        clearTimeout(timer);
+        try { ws.close(); } catch { }
+        reject(error);
+      }
+    });
+    ws.once('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+}
+
+function normalizeTitsItems(response) {
+  const items = response?.data?.items;
+  return Array.isArray(items)
+    ? items.map((item) => ({
+      id: String(item.ID || item.id || ''),
+      name: String(item.name || item.ID || ''),
+      encodedImage: item.encodedImage || null
+    })).filter((item) => item.id)
+    : [];
+}
+
+function normalizeTitsTriggers(response) {
+  const triggers = response?.data?.triggers;
+  return Array.isArray(triggers)
+    ? triggers.map((trigger) => ({
+      id: String(trigger.ID || trigger.id || ''),
+      name: String(trigger.name || trigger.ID || '')
+    })).filter((trigger) => trigger.id || trigger.name)
+    : [];
+}
+
+function ownerFromControlToken(token) {
+  const parts = String(token || '').split('_');
+  if (parts.length < 3 || parts[0] !== 'ctl') return null;
+  try {
+    return Buffer.from(parts[1], 'base64url').toString('utf8');
+  } catch {
+    return null;
+  }
+}
+
+function hashControlToken(token) {
+  return crypto.createHash('sha256').update(String(token || '')).digest('hex');
+}
+
+function getBearerToken(req) {
+  const auth = String(req.get('authorization') || '').trim();
+  if (auth.toLowerCase().startsWith('bearer ')) return auth.slice(7).trim();
+  return String(req.get('x-local-agent-token') || '').trim();
+}
+
+async function requireAutomationLocalAgent(req, res, next) {
+  try {
+    const token = getBearerToken(req);
+    const agent = await authenticateAutomationLocalAgent(token);
+    if (!agent) return res.status(401).json({ error: 'Invalid local program token' });
+    req.automationLocalAgent = agent;
+    return next();
+  } catch (error) {
+    console.error('[Automations] local agent auth error', error?.message || error);
+    return res.status(401).json({ error: 'Invalid local program token' });
+  }
+}
+
 function collectViewerPointIdentityKeys(ownerUserId, platforms = []) {
   const keys = new Set();
-  const add = (value) => {
+  const add = (value, provider = '') => {
     const text = String(value || '').trim();
     if (!text) return;
     keys.add(text);
     if (text.startsWith('user:')) keys.add(text.slice(5));
     if (text.startsWith('cime:')) keys.add(text.slice(5));
     if (text.startsWith('chzzk:')) keys.add(text.slice(6));
+    const normalizedProvider = String(provider || '').toLowerCase();
+    if (normalizedProvider && !text.startsWith(`${normalizedProvider}:`)) {
+      keys.add(`${normalizedProvider}:${text}`);
+    }
   };
 
   add(ownerUserId);
   for (const account of Array.isArray(platforms) ? platforms : []) {
-    add(account.platform_user_id);
-    add(account.channel_id);
-    add(account.channel_handle);
+    const provider = account.provider;
+    add(account.platform_user_id, provider);
+    add(account.channel_id, provider);
+    add(account.channel_handle, provider);
     const metadata = account.metadata || {};
     const raw = metadata.raw || {};
-    add(raw.userId);
-    add(raw.channelId);
-    add(raw.id);
+    add(raw.userId, provider);
+    add(raw.channelId, provider);
+    add(raw.id, provider);
+    add(raw.channel?.channelId, provider);
+    add(raw.channel?.id, provider);
+    add(raw.profile?.userId, provider);
+    add(raw.profile?.channelId, provider);
     const publicProfile = metadata.publicProfile || {};
-    add(publicProfile.userId);
-    add(publicProfile.channelId);
+    add(publicProfile.userId, provider);
+    add(publicProfile.channelId, provider);
   }
   return Array.from(keys);
 }
@@ -9011,7 +9347,7 @@ app.get('/api/cime/me', async (req, res) => {
   }
 });
 
-app.post('/api/cime/chat/send', async (req, res) => {
+app.post('/api/cime/chat/send', rateLimiters.userWrite, async (req, res) => {
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
@@ -9149,6 +9485,469 @@ app.post('/api/account/platforms/refresh', async (req, res) => {
     return res.json({ userId: ownerUserId, sid: `user:${ownerUserId}`, platforms: nextPlatforms, refreshed, errors });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to refresh platform profiles' });
+  }
+});
+
+app.get('/api/automations/overview', async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const [settings, connections] = await Promise.all([
+      getAutomationSettings(ownerUserId).catch(() => ({})),
+      listAutomationConnections(ownerUserId).catch(() => [])
+    ]);
+    const localAgents = await listAutomationLocalAgents(ownerUserId).catch(() => []);
+    const soundStorage = listAutomationSoundFiles(ownerUserId);
+    return res.json({
+      settings: {
+        integrationMode: settings.integrationMode === 'local_program' ? 'local_program' : 'oracle_direct',
+        queueBackend: 'postgres',
+        secretPolicy: 'local_storage_or_local_agent',
+        soundStorageMode: settings.soundStorageMode === 'local_program' ? 'local_program' : 'server_hosted',
+        tts: {
+          enabled: settings?.tts?.enabled !== false,
+          provider: settings?.tts?.provider || 'browser',
+          voice: settings?.tts?.voice || '',
+          rate: Number(settings?.tts?.rate || 1),
+          pitch: Number(settings?.tts?.pitch || 1)
+        },
+        ...settings
+      },
+      connections,
+      localAgents,
+      soundStorage,
+      supportedConnectors: ['obs', 'vtube_studio', 'tits', 'toonation_alertbox', 'tts', 'stream_deck_touch_portal', 'http', 'websocket', 'udp'],
+      disabledConnectors: ['soop', 'ssapi', 'twip']
+    });
+  } catch (e) {
+    console.error('[Automations] overview error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to load automation overview' });
+  }
+});
+
+app.put('/api/automations/settings', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const body = req.body || {};
+    const next = {
+      integrationMode: body.integrationMode === 'local_program' ? 'local_program' : 'oracle_direct',
+      soundStorageMode: body.soundStorageMode === 'local_program' ? 'local_program' : 'server_hosted',
+      tts: {
+        enabled: body?.tts?.enabled !== false,
+        provider: ['browser', 'local_program'].includes(String(body?.tts?.provider || '')) ? body.tts.provider : 'browser',
+        voice: String(body?.tts?.voice || '').slice(0, 120),
+        rate: Math.min(2, Math.max(0.5, Number(body?.tts?.rate || 1))),
+        pitch: Math.min(2, Math.max(0.5, Number(body?.tts?.pitch || 1)))
+      },
+      updatedAt: new Date().toISOString()
+    };
+    const settings = await setAutomationSettings(ownerUserId, next);
+    return res.json({ settings });
+  } catch (e) {
+    console.error('[Automations] settings error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to save automation settings' });
+  }
+});
+
+app.post('/api/automations/local-agents/pair', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const name = String(req.body?.name || 'AruBot Local Program').trim().slice(0, 120) || 'AruBot Local Program';
+    const result = await createAutomationLocalAgent(ownerUserId, name);
+    return res.json({
+      ...result,
+      backendUrl: BACKEND_ORIGIN.replace(/\/$/, ''),
+      tokenShownOnce: true
+    });
+  } catch (e) {
+    console.error('[Automations] local agent pair error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to create local program token' });
+  }
+});
+
+app.get('/api/automations/local-agents', async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    return res.json({ agents: await listAutomationLocalAgents(ownerUserId) });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to load local programs' });
+  }
+});
+
+app.post('/api/automations/local-agent/heartbeat', requireAutomationLocalAgent, async (req, res) => {
+  try {
+    const agent = await touchAutomationLocalAgent(req.automationLocalAgent.id, req.body?.capabilities || {});
+    return res.json({ ok: true, agent });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to update local program heartbeat' });
+  }
+});
+
+app.post('/api/automations/local-agent/jobs/claim', requireAutomationLocalAgent, async (req, res) => {
+  try {
+    await touchAutomationLocalAgent(req.automationLocalAgent.id, req.body?.capabilities || {});
+    const jobs = await claimAutomationJobsForAgent(req.automationLocalAgent, req.body?.limit || 5);
+    return res.json({ jobs });
+  } catch (e) {
+    console.error('[Automations] local agent claim error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to claim automation jobs' });
+  }
+});
+
+app.post('/api/automations/local-agent/jobs/:jobId/complete', requireAutomationLocalAgent, async (req, res) => {
+  try {
+    const job = await completeAutomationJobForAgent(req.automationLocalAgent, req.params.jobId, {
+      status: req.body?.status,
+      result: req.body?.result || {},
+      errorMessage: req.body?.errorMessage || req.body?.error || null
+    });
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    return res.json({ job });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to complete automation job' });
+  }
+});
+
+app.get('/api/automations/connections', async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const connections = await listAutomationConnections(ownerUserId);
+    return res.json({ connections });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to load automation connections' });
+  }
+});
+
+app.post('/api/automations/connections', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const type = String(req.body?.type || '').toLowerCase();
+    if (['soop', 'soop_openapi', 'soop_extension', 'ssapi', 'twip', 'twip_toonation_alertbox'].includes(type)) {
+      return res.status(400).json({ error: 'Unsupported connector for this product plan' });
+    }
+    const connection = await upsertAutomationConnection(ownerUserId, {
+      id: req.body?.id,
+      type,
+      name: req.body?.name,
+      enabled: req.body?.enabled !== false,
+      executionMode: req.body?.executionMode,
+      endpoint: req.body?.endpoint,
+      config: req.body?.config || {},
+      capabilities: req.body?.capabilities || {},
+      discoveryCache: req.body?.discoveryCache || {},
+      discoveryUpdatedAt: req.body?.discoveryUpdatedAt || null
+    });
+    return res.json({ connection });
+  } catch (e) {
+    console.error('[Automations] connection save error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to save automation connection' });
+  }
+});
+
+app.delete('/api/automations/connections/:id', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const deleted = await deleteAutomationConnection(ownerUserId, req.params.id);
+    return res.json({ deleted });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to delete automation connection' });
+  }
+});
+
+app.post('/api/automations/tits/discover', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const executionMode = req.body?.executionMode === 'local_program' ? 'local_program' : 'oracle_direct';
+    const endpoint = String(req.body?.endpoint || 'ws://localhost:42069').trim();
+    const connectionId = req.body?.connectionId || null;
+    if (executionMode === 'local_program') {
+      const job = await enqueueAutomationJob(ownerUserId, {
+        connectionId,
+        jobType: 'tits.discover',
+        payload: { endpoint, sendImage: req.body?.sendImage !== false }
+      });
+      return res.json({ queued: true, jobId: job?.id, executionMode, message: '로컬 프로그램이 T.I.T.S. 목록을 가져오도록 요청했습니다.' });
+    }
+    const [itemResponse, triggerResponse] = await Promise.all([
+      sendTitsRequest(endpoint, 'TITSItemListRequest', { sendImage: req.body?.sendImage !== false }),
+      sendTitsRequest(endpoint, 'TITSTriggerListRequest')
+    ]);
+    const discoveryCache = {
+      source: 'tits',
+      endpoint: getTitsEndpoint(endpoint, 'data'),
+      items: normalizeTitsItems(itemResponse),
+      triggers: normalizeTitsTriggers(triggerResponse),
+      fetchedAt: new Date().toISOString()
+    };
+    if (connectionId) {
+      await upsertAutomationConnection(ownerUserId, {
+        id: connectionId,
+        type: 'tits',
+        name: req.body?.name || 'T.I.T.S.',
+        enabled: true,
+        executionMode,
+        endpoint,
+        discoveryCache,
+        discoveryUpdatedAt: discoveryCache.fetchedAt,
+        lastStatus: 'ok',
+        lastCheckedAt: discoveryCache.fetchedAt
+      }).catch(() => null);
+    }
+    return res.json({ executionMode, discovery: discoveryCache });
+  } catch (e) {
+    console.error('[Automations] TITS discover error', e?.message || e);
+    return res.status(502).json({ error: 'T.I.T.S. 연결에 실패했습니다.', details: e?.message || String(e) });
+  }
+});
+
+app.post('/api/automations/tits/throw', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const executionMode = req.body?.executionMode === 'local_program' ? 'local_program' : 'oracle_direct';
+    const payload = {
+      items: Array.isArray(req.body?.items) ? req.body.items.map(String).filter(Boolean) : [],
+      delayTime: Math.min(5, Math.max(0.01, Number(req.body?.delayTime || 0.05))),
+      amountOfThrows: Math.min(500, Math.max(1, Number(req.body?.amountOfThrows || 1))),
+      errorOnMissingID: !!req.body?.errorOnMissingID
+    };
+    if (!payload.items.length) return res.status(400).json({ error: 'items is required' });
+    if (executionMode === 'local_program') {
+      const job = await enqueueAutomationJob(ownerUserId, { connectionId: req.body?.connectionId || null, jobType: 'tits.throw', payload });
+      return res.json({ queued: true, jobId: job?.id, executionMode });
+    }
+    const response = await sendTitsRequest(req.body?.endpoint || 'ws://localhost:42069', 'TITSThrowItemsRequest', payload);
+    return res.json({ response });
+  } catch (e) {
+    return res.status(502).json({ error: 'T.I.T.S. 아이템 던지기에 실패했습니다.', details: e?.message || String(e) });
+  }
+});
+
+app.post('/api/automations/tits/trigger', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const executionMode = req.body?.executionMode === 'local_program' ? 'local_program' : 'oracle_direct';
+    const payload = {
+      triggerID: String(req.body?.triggerID || req.body?.triggerId || ''),
+      triggerName: String(req.body?.triggerName || '')
+    };
+    if (!payload.triggerID && !payload.triggerName) return res.status(400).json({ error: 'triggerID or triggerName is required' });
+    if (executionMode === 'local_program') {
+      const job = await enqueueAutomationJob(ownerUserId, { connectionId: req.body?.connectionId || null, jobType: 'tits.trigger', payload });
+      return res.json({ queued: true, jobId: job?.id, executionMode });
+    }
+    const response = await sendTitsRequest(req.body?.endpoint || 'ws://localhost:42069', 'TITSTriggerActivateRequest', payload);
+    return res.json({ response });
+  } catch (e) {
+    return res.status(502).json({ error: 'T.I.T.S. 트리거 실행에 실패했습니다.', details: e?.message || String(e) });
+  }
+});
+
+app.post('/api/automations/toonation/test', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const executionMode = req.body?.executionMode === 'local_program' ? 'local_program' : 'oracle_direct';
+    if (executionMode === 'local_program') {
+      const job = await enqueueAutomationJob(ownerUserId, {
+        connectionId: req.body?.connectionId || null,
+        jobType: 'toonation.alertbox.test',
+        payload: { keyStorage: 'local', eventTypes: ['donation'] }
+      });
+      return res.json({ queued: true, jobId: job?.id, executionMode });
+    }
+    return res.status(409).json({
+      error: 'Toonation alertbox key is stored locally by design.',
+      action: 'local_secret_required',
+      message: '투네이션 알림 키는 브라우저 또는 로컬 프로그램에만 저장됩니다. 오라클 직접 모드에서는 서버에 키를 저장하지 않으므로 테스트할 수 없습니다.'
+    });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to test Toonation connector' });
+  }
+});
+
+app.post('/api/automations/tts/test', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const text = String(req.body?.text || '아루봇 음성 안내 테스트입니다.').trim().slice(0, 240);
+    const job = await enqueueAutomationJob(ownerUserId, {
+      jobType: 'tts.speak',
+      payload: {
+        text,
+        voice: String(req.body?.voice || '').slice(0, 120),
+        rate: Math.min(2, Math.max(0.5, Number(req.body?.rate || 1))),
+        pitch: Math.min(2, Math.max(0.5, Number(req.body?.pitch || 1)))
+      }
+    });
+    return res.json({ queued: true, jobId: job?.id });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to queue TTS test' });
+  }
+});
+
+app.post('/api/automations/sounds/test', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const fileId = path.basename(String(req.body?.fileId || req.body?.name || ''));
+    if (!fileId) return res.status(400).json({ error: 'fileId is required' });
+    const job = await enqueueAutomationJob(ownerUserId, {
+      jobType: 'sound.play',
+      payload: {
+        fileId,
+        volume: Math.min(1, Math.max(0, Number(req.body?.volume ?? 1)))
+      }
+    });
+    return res.json({ queued: true, jobId: job?.id });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to queue sound test' });
+  }
+});
+
+app.get('/api/automations/local-agent/assets/sounds/:fileId', requireAutomationLocalAgent, async (req, res) => {
+  try {
+    const ownerUserId = req.automationLocalAgent?.ownerUserId;
+    if (!ownerUserId) return res.status(401).json({ error: 'Invalid local program token' });
+    const fileId = path.basename(String(req.params.fileId || ''));
+    const fullPath = path.join(automationSoundDir(ownerUserId), fileId);
+    if (!fullPath.startsWith(automationSoundDir(ownerUserId)) || !fs.existsSync(fullPath)) return res.status(404).json({ error: 'Not found' });
+    return res.sendFile(fullPath);
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to serve sound asset' });
+  }
+});
+
+app.post('/api/automations/control-links', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const label = String(req.body?.label || '빠른 실행').trim().slice(0, 80) || '빠른 실행';
+    const token = `ctl_${crypto.randomBytes(32).toString('base64url')}`;
+    const connection = await upsertAutomationConnection(ownerUserId, {
+      type: 'stream_deck_touch_portal',
+      name: label,
+      enabled: true,
+      executionMode: 'oracle_direct',
+      endpoint: `/api/automations/inbound/control/${token}`,
+      config: {
+        tokenHash: hashControlToken(token),
+        tool: 'stream_deck_touch_portal',
+        label
+      },
+      capabilities: { httpPost: true, httpGet: true }
+    });
+    return res.json({
+      connection,
+      url: `${BACKEND_ORIGIN.replace(/\/$/, '')}/api/automations/inbound/control/${token}`,
+      method: 'POST'
+    });
+  } catch (e) {
+    console.error('[Automations] control link error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to create control link' });
+  }
+});
+
+app.all('/api/automations/inbound/control/:token', async (req, res) => {
+  try {
+    const tokenHash = hashControlToken(req.params.token);
+    let connection = await findAutomationConnectionByControlTokenHash(tokenHash);
+    let ownerUserId = connection?.ownerUserId || null;
+    if (!connection) {
+      ownerUserId = ownerFromControlToken(req.params.token);
+      if (ownerUserId) {
+        const connections = await listAutomationConnections(ownerUserId);
+        connection = connections.find((item) => item.type === 'stream_deck_touch_portal' && item.config?.tokenHash === tokenHash && item.enabled);
+      }
+    }
+    if (!connection) return res.status(404).json({ error: 'Not found' });
+    const job = await enqueueAutomationJob(ownerUserId, {
+      connectionId: connection.id,
+      jobType: 'control.trigger',
+      payload: {
+        source: 'stream_deck_touch_portal',
+        label: connection.name,
+        method: req.method,
+        body: req.body && typeof req.body === 'object' ? req.body : {},
+        at: new Date().toISOString()
+      }
+    });
+    return res.json({ ok: true, queued: true, jobId: job?.id });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to enqueue control event' });
+  }
+});
+
+app.get('/api/automations/assets/sounds', async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    return res.json(listAutomationSoundFiles(ownerUserId));
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to list sound assets' });
+  }
+});
+
+app.post('/api/automations/assets/sounds', rateLimiters.userWrite, express.raw({ type: ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/ogg', 'audio/webm', 'application/octet-stream'], limit: '10mb' }), async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    if (!body.length) return res.status(400).json({ error: 'Sound file body is required' });
+    if (body.length > AUTOMATION_SOUND_MAX_FILE_BYTES) return res.status(413).json({ error: 'Sound file must be 5MB or less' });
+    const current = listAutomationSoundFiles(ownerUserId);
+    if (current.usedBytes + body.length > AUTOMATION_SOUND_QUOTA_BYTES) {
+      return res.status(413).json({
+        error: 'Sound storage quota exceeded',
+        quotaBytes: AUTOMATION_SOUND_QUOTA_BYTES,
+        usedBytes: current.usedBytes,
+        guidance: '10MB를 초과하는 사운드 라이브러리는 AruBot 로컬 프로그램 모드에서 본인 컴퓨터 파일을 직접 호스팅하세요.'
+      });
+    }
+    const originalName = decodeURIComponent(String(req.get('x-file-name') || req.query.name || 'sound.bin'));
+    const ext = path.extname(originalName).slice(0, 12) || '.bin';
+    const base = sanitizeFileBase(path.basename(originalName, ext));
+    const fileId = `${Date.now().toString(36)}_${base}${ext}`;
+    const fullPath = path.join(ensureAutomationSoundDir(ownerUserId), fileId);
+    fs.writeFileSync(fullPath, body, { flag: 'wx' });
+    return res.json({ uploaded: true, soundStorage: listAutomationSoundFiles(ownerUserId) });
+  } catch (e) {
+    console.error('[Automations] sound upload error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to upload sound asset' });
+  }
+});
+
+app.get('/api/automations/assets/sounds/:fileId', async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const fileId = path.basename(String(req.params.fileId || ''));
+    const fullPath = path.join(automationSoundDir(ownerUserId), fileId);
+    if (!fullPath.startsWith(automationSoundDir(ownerUserId)) || !fs.existsSync(fullPath)) return res.status(404).json({ error: 'Not found' });
+    return res.sendFile(fullPath);
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to serve sound asset' });
+  }
+});
+
+app.delete('/api/automations/assets/sounds/:fileId', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const fileId = path.basename(String(req.params.fileId || ''));
+    const fullPath = path.join(automationSoundDir(ownerUserId), fileId);
+    if (fullPath.startsWith(automationSoundDir(ownerUserId)) && fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+    return res.json({ deleted: true, soundStorage: listAutomationSoundFiles(ownerUserId) });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to delete sound asset' });
   }
 });
 
@@ -9426,6 +10225,20 @@ async function handlePredictionBetCommand({ channelUid, userId, username, text }
 
 // List channel points for the current streamer
 app.get('/api/channelpoints', async (req, res) => {
+  const sid = await getPartitionId(req, res);
+  if (!sid) return res.status(401).json({ error: 'Login required' });
+  const uid = await resolveStreamerUidForSid(sid);
+  if (!uid) return res.json({ points: [] });
+  try {
+    const rows = await listChannelPoints(uid);
+    return res.json({ points: rows });
+  } catch (e) {
+    console.error('[channelpoints:list] error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to list channel points' });
+  }
+});
+
+app.get('/api/channelpoints/list', async (req, res) => {
   const sid = await getPartitionId(req, res);
   if (!sid) return res.status(401).json({ error: 'Login required' });
   const uid = await resolveStreamerUidForSid(sid);
@@ -10162,7 +10975,7 @@ app.get('/api/channel/context', async (req, res) => {
   }
 });
 
-app.get('/api/channel/cache-stats', async (req, res) => {
+app.get('/api/channel/cache-stats', requireOpsAuth, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) {
@@ -10190,7 +11003,7 @@ app.get('/api/channel/cache-stats', async (req, res) => {
   }
 });
 
-app.get('/api/channel/performance', async (req, res) => {
+app.get('/api/channel/performance', requireOpsAuth, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) {
@@ -10237,7 +11050,7 @@ app.get('/api/channel/performance', async (req, res) => {
   }
 });
 
-app.get('/api/admin/database/performance', async (req, res) => {
+app.get('/api/admin/database/performance', requireOpsAuth, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) {
@@ -10290,7 +11103,7 @@ app.get('/api/admin/database/performance', async (req, res) => {
   }
 });
 
-app.post('/api/admin/database/optimize', async (req, res) => {
+app.post('/api/admin/database/optimize', requireOpsAuth, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) {
@@ -10329,7 +11142,7 @@ app.post('/api/admin/database/optimize', async (req, res) => {
   }
 });
 
-app.get('/api/admin/security/channel-access', async (req, res) => {
+app.get('/api/admin/security/channel-access', requireOpsAuth, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) {
@@ -10366,7 +11179,7 @@ app.get('/api/admin/security/channel-access', async (req, res) => {
   }
 });
 
-app.post('/api/admin/security/channel-access/reset', async (req, res) => {
+app.post('/api/admin/security/channel-access/reset', requireOpsAuth, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) {
@@ -10396,7 +11209,7 @@ app.post('/api/admin/security/channel-access/reset', async (req, res) => {
   }
 });
 
-app.get('/api/admin/security/events', async (req, res) => {
+app.get('/api/admin/security/events', requireOpsAuth, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) {
@@ -10439,7 +11252,7 @@ app.get('/api/admin/security/events', async (req, res) => {
   }
 });
 
-app.get('/api/admin/security/statistics', async (req, res) => {
+app.get('/api/admin/security/statistics', requireOpsAuth, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) {
@@ -10470,7 +11283,7 @@ app.get('/api/admin/security/statistics', async (req, res) => {
   }
 });
 
-app.get('/api/admin/security/suspicious-tokens', async (req, res) => {
+app.get('/api/admin/security/suspicious-tokens', requireOpsAuth, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) {
@@ -10513,7 +11326,7 @@ app.get('/api/admin/security/suspicious-tokens', async (req, res) => {
   }
 });
 
-app.get('/api/channel/tokens/stats', async (req, res) => {
+app.get('/api/channel/tokens/stats', requireOpsAuth, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) {
@@ -10569,7 +11382,7 @@ app.get('/api/channel/tokens/stats', async (req, res) => {
   }
 });
 
-app.get('/api/channel/tokens/usage', async (req, res) => {
+app.get('/api/channel/tokens/usage', requireOpsAuth, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) {
@@ -10609,7 +11422,7 @@ app.get('/api/channel/tokens/usage', async (req, res) => {
   }
 });
 
-app.post('/api/channel/tokens/cleanup', async (req, res) => {
+app.post('/api/channel/tokens/cleanup', requireOpsAuth, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) {
@@ -10648,7 +11461,7 @@ app.post('/api/channel/tokens/cleanup', async (req, res) => {
   }
 });
 
-app.post('/api/channel/tokens/validate', async (req, res) => {
+app.post('/api/channel/tokens/validate', requireOpsAuth, async (req, res) => {
   try {
     const { token, expectedChannelId } = req.body;
 
@@ -10686,7 +11499,7 @@ app.post('/api/channel/tokens/validate', async (req, res) => {
   }
 });
 
-app.get('/api/channel/tokens/management', async (req, res) => {
+app.get('/api/channel/tokens/management', requireOpsAuth, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) {
@@ -10715,7 +11528,7 @@ app.get('/api/channel/tokens/management', async (req, res) => {
   }
 });
 
-app.post('/api/channel/tokens/generate', async (req, res) => {
+app.post('/api/channel/tokens/generate', requireOpsAuth, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) {
@@ -10818,7 +11631,7 @@ app.post('/api/channel/validate', async (req, res) => {
   }
 });
 
-app.get('/api/channel/tokens/report', async (req, res) => {
+app.get('/api/channel/tokens/report', requireOpsAuth, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) {
@@ -10860,7 +11673,7 @@ app.get('/api/channel/tokens/report', async (req, res) => {
   }
 });
 
-app.get('/api/channel/tokens/health', async (req, res) => {
+app.get('/api/channel/tokens/health', requireOpsAuth, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) {
@@ -10883,7 +11696,7 @@ app.get('/api/channel/tokens/health', async (req, res) => {
   }
 });
 
-app.post('/api/channel/tokens/maintenance', async (req, res) => {
+app.post('/api/channel/tokens/maintenance', requireOpsAuth, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) {
@@ -11574,10 +12387,8 @@ async function ensureSession(sid, channelId) {
                           console.warn('[pvd:autoReply] oEmbed title fetch failed');
                         }
                       }
-                      // If explicit play length provided, use it; otherwise use remaining duration from start
-                      const remaining = ytDuration != null ? Math.max(1, (ytDuration - start)) : maxDur;
-                      const baseDur = play != null ? play : remaining;
-                      const dur = Math.max(1, Math.min(maxDur, baseDur));
+                      // maxDur limits the played length, not the absolute YouTube timestamp.
+                      const dur = getPvdPlayDurationSec({ maxDurationSec: maxDur, ytDurationSec: ytDuration, startSec: start, playSec: play });
                       const cost = Math.ceil(pps * dur);
                       
                       if (ytDuration == null && play == null) {
@@ -12299,8 +13110,7 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
     } catch { }
   }
 
-  const remaining = ytDuration != null ? Math.max(1, ytDuration - start) : maxDur;
-  const dur = Math.max(1, Math.min(maxDur, play != null ? play : remaining));
+  const dur = getPvdPlayDurationSec({ maxDurationSec: maxDur, ytDurationSec: ytDuration, startSec: start, playSec: play });
   const cost = Math.ceil(pps * dur);
   if (!channelUid) return cleaned || '채널 ID를 확인할 수 없습니다.';
   const have = await getChannelPoints(channelUid, String(userId)).catch(() => 0);

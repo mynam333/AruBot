@@ -5,6 +5,7 @@ import {
   BadgeCheck,
   Bell,
   Coins,
+  Download,
   GalleryVerticalEnd,
   HeartHandshake,
   MessageSquare,
@@ -96,6 +97,10 @@ export function LandingPage() {
               <LinkButton href="/viewer/me" variant="soft" size="lg">
                 내 포인트 보기
                 <Coins className="h-4 w-4" />
+              </LinkButton>
+              <LinkButton href="/downloads/local-program" variant="outline" size="lg">
+                로컬 프로그램
+                <Download className="h-4 w-4" />
               </LinkButton>
             </div>
             <div className="mt-5">
@@ -239,6 +244,10 @@ export function LandingPage() {
               시청자 페이지
               <Coins className="h-4 w-4" />
             </LinkButton>
+            <LinkButton href="/downloads/local-program" variant="soft" size="lg">
+              로컬 프로그램 다운로드
+              <Download className="h-4 w-4" />
+            </LinkButton>
           </div>
           <div className="mt-5">
             <PlatformLoginButtons compact />
@@ -255,6 +264,7 @@ export function LandingPage() {
           <div className="flex flex-wrap gap-3">
             <Link href="/streamer" className="transition hover:text-foreground">스트리머 콘솔</Link>
             <Link href="/viewer/me" className="transition hover:text-foreground">시청자 포인트</Link>
+            <Link href="/downloads/local-program" className="transition hover:text-foreground">로컬 프로그램</Link>
           </div>
         </div>
       </footer>

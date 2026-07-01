@@ -64,21 +64,26 @@ function normalizeProvider(provider?: string) {
   return provider?.toLowerCase() as ProviderId | undefined;
 }
 
-function ProviderMark({ label, color }: { label: string; color: string }) {
+function ProviderMark({ label, color, iconPath }: { label: string; color: string; iconPath: string }) {
   return (
     <span
       className={cn(
-        'grid aspect-square w-[calc(var(--icon-box)*1.08)] place-items-center rounded-[var(--radius-card)] border text-sm font-semibold shadow-subtle',
+        'grid aspect-square w-[calc(var(--icon-box)*1.22)] shrink-0 place-items-center overflow-hidden rounded-[var(--radius-card)] border shadow-subtle',
         color === 'mint' && 'bg-pastel-mint/80 text-teal-950 dark:bg-primary/20 dark:text-teal-50',
         color === 'sky' && 'bg-pastel-sky/85 text-sky-950 dark:bg-sky-500/20 dark:text-sky-50',
       )}
     >
-      {label.slice(0, 2)}
+      <img
+        src={iconPath}
+        alt={`${label} 아이콘`}
+        className="h-[78%] w-[78%] object-contain"
+        draggable={false}
+      />
     </span>
   );
 }
 
-function AccountAvatar({ account, label, color }: { account: PlatformAccount; label: string; color: string }) {
+function AccountAvatar({ account, label, color, iconPath }: { account: PlatformAccount; label: string; color: string; iconPath: string }) {
   const imageUrl = account.profile_image_url || account.avatar_url;
   if (imageUrl) {
     return (
@@ -86,11 +91,11 @@ function AccountAvatar({ account, label, color }: { account: PlatformAccount; la
         src={imageUrl}
         alt=""
         referrerPolicy="no-referrer"
-        className="aspect-square w-[calc(var(--icon-box)*1.08)] rounded-[var(--radius-card)] border object-cover shadow-subtle"
+        className="aspect-square w-[calc(var(--icon-box)*1.22)] shrink-0 rounded-[var(--radius-card)] border object-cover shadow-subtle"
       />
     );
   }
-  return <ProviderMark label={label} color={color} />;
+  return <ProviderMark label={label} color={color} iconPath={iconPath} />;
 }
 
 function compactCount(value?: number | null) {
@@ -232,7 +237,7 @@ export function ConnectionPage() {
               <CardHeader>
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex min-w-0 items-start gap-3">
-                    <ProviderMark label={config.label} color={config.color} />
+                    <ProviderMark label={config.label} color={config.color} iconPath={config.iconPath} />
                     <div className="min-w-0">
                       <CardTitle>{config.label}</CardTitle>
                       <CardDescription>{config.description}</CardDescription>
@@ -247,7 +252,7 @@ export function ConnectionPage() {
                     accounts.map((account) => (
                       <div key={`${account.provider}-${account.channel_id}`} className="flex items-center justify-between gap-3 rounded-[var(--radius-control)] border bg-background/75 p-[clamp(0.75rem,1.4vw,1rem)]">
                         <div className="flex min-w-0 items-center gap-3">
-                          <AccountAvatar account={account} label={config.label} color={config.color} />
+                          <AccountAvatar account={account} label={config.label} color={config.color} iconPath={config.iconPath} />
                           <div className="min-w-0">
                             <div className="truncate text-sm font-semibold">{account.channel_name || account.channel_id || `${config.label} 채널`}</div>
                             <div className="mt-1 truncate text-xs font-medium text-muted-foreground">
@@ -297,7 +302,7 @@ export function ConnectionPage() {
                         src={config.iconPath}
                         alt=""
                         aria-hidden="true"
-                        className="h-5 w-5 shrink-0 rounded-[calc(var(--radius-control)*0.35)] object-contain"
+                        className="h-6 w-6 shrink-0 rounded-[calc(var(--radius-control)*0.35)] object-contain"
                         draggable={false}
                       />
                       {connected ? '다시 연결' : `${config.label}로 로그인`}

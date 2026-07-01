@@ -1,0 +1,581 @@
+'use client';
+
+import * as Dialog from '@radix-ui/react-dialog';
+import * as Switch from '@radix-ui/react-switch';
+import {
+  Check,
+  Gift,
+  Loader2,
+  MessageSquare,
+  PlaySquare,
+  Settings,
+  Sparkles,
+  X,
+} from 'lucide-react';
+import { useMemo, useState, useTransition } from 'react';
+import { toast } from 'sonner';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { apiUrl } from '@/shared/api/http';
+import { cn } from '@/shared/lib/utils';
+
+type DialogButtonVariant = 'default' | 'secondary' | 'outline' | 'soft';
+
+type ActionDialogButtonProps = {
+  variant?: DialogButtonVariant;
+  label?: string;
+  className?: string;
+};
+
+type ActionDialogFrameProps = ActionDialogButtonProps & {
+  icon: React.ReactNode;
+  badge: string;
+  title: string;
+  description: string;
+  children: React.ReactNode;
+  submitLabel?: string;
+  pending?: boolean;
+  onSubmit: (close: () => void) => void;
+  onOpen?: () => void;
+  testId?: string;
+};
+
+const triggerVariants = {
+  default: 'bg-primary text-primary-foreground shadow-subtle hover:-translate-y-0.5 hover:shadow-lift active:translate-y-0',
+  secondary: 'bg-secondary text-secondary-foreground hover:-translate-y-0.5 hover:bg-muted active:translate-y-0',
+  outline: 'border bg-card/80 hover:-translate-y-0.5 hover:border-primary/35 hover:bg-pastel-sky/45 active:translate-y-0 dark:hover:bg-muted',
+  soft: 'bg-pastel-mint/70 text-teal-950 hover:-translate-y-0.5 hover:bg-pastel-mint dark:bg-primary/20 dark:text-teal-50 dark:hover:bg-primary/25',
+} satisfies Record<DialogButtonVariant, string>;
+
+function refreshResource(endpoint?: string) {
+  window.dispatchEvent(new CustomEvent('arubot:resource-refresh', { detail: endpoint ? { endpoint } : undefined }));
+}
+
+async function postJson(path: string, body: unknown) {
+  const response = await fetch(apiUrl(path), {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const detail = await response.json().catch(() => null);
+    throw new Error(detail?.error || 'request_failed');
+  }
+  return response.json();
+}
+
+function normalizeCommand(value: string) {
+  const text = value.trim().replace(/\s+/g, '');
+  if (!text) return '';
+  return text.startsWith('!') ? text : `!${text}`;
+}
+
+function ActionDialogFrame({
+  icon,
+  badge,
+  title,
+  description,
+  children,
+  submitLabel = '저장하기',
+  pending = false,
+  onSubmit,
+  onOpen,
+  testId,
+  variant = 'secondary',
+  label = badge,
+  className,
+}: ActionDialogFrameProps) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <Dialog.Root
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (next) onOpen?.();
+      }}
+    >
+      <Dialog.Trigger
+        type="button"
+        className={cn(
+          'inline-flex min-h-[var(--control-height)] items-center justify-center gap-2 whitespace-nowrap rounded-[var(--radius-control)] px-[clamp(0.875rem,1.6vw,1.125rem)] text-sm font-semibold tracking-normal transition duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50',
+          triggerVariants[variant],
+          className,
+        )}
+        data-testid={testId}
+      >
+        {icon}
+        {label}
+      </Dialog.Trigger>
+
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-foreground/24 backdrop-blur-[clamp(0.5rem,1.4vw,1rem)] data-[state=open]:animate-fade-in" />
+        <Dialog.Content
+          className="fixed left-1/2 top-1/2 z-50 grid max-h-[min(92svh,50rem)] w-[min(92vw,44rem)] -translate-x-1/2 -translate-y-1/2 grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-[var(--radius-panel)] border bg-card/96 shadow-lift outline-none backdrop-blur-2xl data-[state=open]:animate-modal-in"
+          onOpenAutoFocus={(event) => event.preventDefault()}
+        >
+          <div className="relative overflow-hidden bg-[radial-gradient(circle_at_12%_0%,hsl(var(--accent-mint)/0.82),transparent_36%),linear-gradient(135deg,hsl(var(--card)),hsl(var(--accent-sky)/0.24),hsl(var(--accent-lemon)/0.18))] p-[clamp(1.25rem,3vw,2rem)]">
+            <div className="absolute inset-x-[8%] top-0 h-[max(0.125rem,0.18vw)] rounded-full bg-[linear-gradient(90deg,hsl(var(--accent-mint)),hsl(var(--accent-sky)),hsl(var(--accent-coral)))]" />
+            <div className="relative flex items-start justify-between gap-[clamp(1rem,2vw,1.5rem)]">
+              <div className="min-w-0">
+                <div className="mb-[clamp(0.75rem,1.6vw,1rem)] flex flex-wrap items-center gap-[clamp(0.5rem,1vw,0.75rem)]">
+                  <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-primary/12 text-primary ring-1 ring-primary/25">
+                    {icon}
+                  </span>
+                  <Badge tone="mint">{badge}</Badge>
+                </div>
+                <Dialog.Title className="break-keep text-[clamp(1.5rem,4vw,2.35rem)] font-semibold leading-tight tracking-normal">
+                  {title}
+                </Dialog.Title>
+                <Dialog.Description className="mt-[clamp(0.75rem,1.4vw,1rem)] max-w-[58ch] break-keep text-sm leading-7 text-muted-foreground md:text-base">
+                  {description}
+                </Dialog.Description>
+              </div>
+              <Dialog.Close asChild>
+                <Button type="button" variant="outline" size="icon" aria-label="닫기" className="shrink-0 bg-card/75">
+                  <X className="h-[1em] w-[1em]" />
+                </Button>
+              </Dialog.Close>
+            </div>
+          </div>
+
+          <div className="arubot-modal-scroll grid min-h-0 gap-[clamp(1rem,2vw,1.35rem)] overflow-y-auto p-[clamp(1.25rem,3vw,2rem)]">
+            {children}
+          </div>
+
+          <div className="flex flex-col-reverse gap-[clamp(0.65rem,1.2vw,0.875rem)] border-t bg-background/64 p-[clamp(1rem,2.4vw,1.5rem)] sm:flex-row sm:items-center sm:justify-end">
+            <Dialog.Close asChild>
+              <Button type="button" variant="ghost" disabled={pending}>
+                취소
+              </Button>
+            </Dialog.Close>
+            <Button type="button" disabled={pending} onClick={() => onSubmit(() => setOpen(false))}>
+              {pending ? <Loader2 className="h-[1em] w-[1em] animate-spin" /> : <Check className="h-[1em] w-[1em]" />}
+              {submitLabel}
+            </Button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return <label className="grid gap-[clamp(0.5rem,1vw,0.75rem)] text-sm font-semibold">{label}{children}</label>;
+}
+
+function Textarea({
+  value,
+  onChange,
+  placeholder,
+  min = 'min-h-[clamp(6.75rem,14svh,9.5rem)]',
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  min?: string;
+}) {
+  return (
+    <textarea
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      placeholder={placeholder}
+      className={cn(
+        'w-full resize-y rounded-[var(--radius-control)] border bg-background/80 px-[clamp(0.85rem,1.6vw,1.1rem)] py-[clamp(0.85rem,1.6vw,1.1rem)] text-sm leading-7 outline-none transition placeholder:text-muted-foreground focus:border-primary/45 focus:ring-2 focus:ring-ring',
+        min,
+      )}
+    />
+  );
+}
+
+export function CommandCreateDialog({ variant = 'secondary', label = '명령어 만들기', className }: ActionDialogButtonProps) {
+  const [name, setName] = useState('');
+  const [command, setCommand] = useState('!');
+  const [response, setResponse] = useState('');
+  const [pointsCost, setPointsCost] = useState('0');
+  const [cooldownSec, setCooldownSec] = useState('3');
+  const [enabled, setEnabled] = useState(true);
+  const [isPending, startTransition] = useTransition();
+
+  const submit = (close: () => void) => {
+    const keyword = normalizeCommand(command);
+    const message = response.trim();
+    if (!keyword || keyword === '!') return toast.warning('명령어를 입력해 주세요.');
+    if (!message) return toast.warning('응답 문구를 입력해 주세요.');
+    startTransition(async () => {
+      try {
+        await postJson('/api/bot/rules/upsert', {
+          rule: {
+            id: `cmd_${Date.now().toString(36)}`,
+            name: name.trim() || keyword,
+            keywords: [keyword],
+            responses: [message],
+            enabled,
+            adminOnly: false,
+            requiredRoleLevel: 1,
+            pointsCost: Math.max(0, Number(pointsCost || 0)),
+            cooldown: Math.max(1, Number(cooldownSec || 1)) * 1000,
+            lastUsed: 0,
+          },
+        });
+        toast.success('명령어를 추가했어요.');
+        refreshResource('/api/bot/rules');
+        setName('');
+        setCommand('!');
+        setResponse('');
+        setPointsCost('0');
+        close();
+      } catch {
+        toast.error('명령어를 저장하지 못했어요.');
+      }
+    });
+  };
+
+  return (
+    <ActionDialogFrame
+      icon={<MessageSquare className="h-[1em] w-[1em]" />}
+      badge="채팅 명령어"
+      title="방송에서 바로 쓰는 명령어를 만들어요."
+      description="시청자가 입력할 명령어와 봇이 보낼 답변을 정합니다. 포인트 차감과 쿨다운도 함께 설정할 수 있어요."
+      submitLabel="명령어 추가"
+      pending={isPending}
+      onSubmit={submit}
+      variant={variant}
+      label={label}
+      className={className}
+      testId="command-create-trigger"
+    >
+      <div className="grid gap-[clamp(1rem,2vw,1.35rem)] md:grid-cols-2">
+        <Field label="표시 이름">
+          <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="예: 투표 안내" />
+        </Field>
+        <Field label="채팅 명령어">
+          <Input value={command} onChange={(event) => setCommand(event.target.value)} placeholder="예: !투표" />
+        </Field>
+      </div>
+      <Field label="응답 문구">
+        <Textarea
+          value={response}
+          onChange={setResponse}
+          placeholder="예: !투표 번호 포인트 형식으로 예측에 참여할 수 있어요."
+          min="min-h-[clamp(4.75rem,9svh,6.25rem)]"
+        />
+      </Field>
+      <div className="grid gap-[clamp(1rem,2vw,1.35rem)] md:grid-cols-[1fr_1fr_auto] md:items-end">
+        <Field label="사용 포인트">
+          <Input value={pointsCost} onChange={(event) => setPointsCost(event.target.value)} inputMode="numeric" />
+        </Field>
+        <Field label="쿨다운(초)">
+          <Input value={cooldownSec} onChange={(event) => setCooldownSec(event.target.value)} inputMode="numeric" />
+        </Field>
+        <SwitchRow checked={enabled} onCheckedChange={setEnabled} label="바로 사용" />
+      </div>
+    </ActionDialogFrame>
+  );
+}
+
+function SwitchRow({ checked, onCheckedChange, label }: { checked: boolean; onCheckedChange: (value: boolean) => void; label: string }) {
+  return (
+    <div className="flex min-h-[var(--control-height)] items-center justify-between gap-3 rounded-[var(--radius-control)] border bg-background/70 px-[clamp(0.85rem,1.6vw,1.1rem)]">
+      <span className="text-sm font-semibold">{label}</span>
+      <Switch.Root
+        checked={checked}
+        onCheckedChange={onCheckedChange}
+        className="relative h-[var(--control-height-sm)] w-[clamp(4rem,9vw,5.5rem)] rounded-full border bg-muted transition data-[state=checked]:border-primary/35 data-[state=checked]:bg-primary/75"
+      >
+        <Switch.Thumb className="block aspect-square h-[calc(var(--control-height-sm)-0.45rem)] translate-x-[0.2rem] rounded-full bg-card shadow-subtle transition data-[state=checked]:translate-x-[calc(clamp(4rem,9vw,5.5rem)-var(--control-height-sm)+0.25rem)]" />
+      </Switch.Root>
+    </div>
+  );
+}
+
+export function RouletteCreateDialog({ variant = 'secondary', label = '룰렛 만들기', className }: ActionDialogButtonProps) {
+  const [name, setName] = useState('오늘의 룰렛');
+  const [command, setCommand] = useState('!룰렛');
+  const [itemsText, setItemsText] = useState('당첨\n한 번 더\n꽝');
+  const [pointsCost, setPointsCost] = useState('0');
+  const [isPending, startTransition] = useTransition();
+
+  const items = useMemo(() => (
+    itemsText
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const [labelPart, valuePart, weightPart] = line.split('|').map((part) => part?.trim() || '');
+        return {
+          label: labelPart,
+          value: valuePart || null,
+          weight: Math.max(1, Number(weightPart || 1)),
+        };
+      })
+  ), [itemsText]);
+
+  const submit = (close: () => void) => {
+    const rouletteName = name.trim();
+    const keyword = normalizeCommand(command);
+    if (!rouletteName) return toast.warning('룰렛 이름을 입력해 주세요.');
+    if (items.length < 2) return toast.warning('룰렛 항목은 2개 이상 필요합니다.');
+    startTransition(async () => {
+      try {
+        await postJson('/api/roulette/definitions/upsert', {
+          definition: {
+            id: `rlt_${Date.now().toString(36)}`,
+            name: rouletteName,
+            type: 'items',
+            theme: 'pastel',
+            items,
+          },
+        });
+        if (keyword && keyword !== '!') {
+          await postJson('/api/bot/rules/upsert', {
+            rule: {
+              id: `cmd_roulette_${Date.now().toString(36)}`,
+              name: `${rouletteName} 실행`,
+              keywords: [keyword],
+              responses: [`${rouletteName}을 돌립니다. \${roulette::${rouletteName}}`],
+              enabled: true,
+              adminOnly: false,
+              requiredRoleLevel: 1,
+              pointsCost: Math.max(0, Number(pointsCost || 0)),
+              cooldown: 3000,
+              lastUsed: 0,
+            },
+          });
+          refreshResource('/api/bot/rules');
+        }
+        toast.success('룰렛을 추가했어요.');
+        refreshResource('/api/roulette/definitions');
+        close();
+      } catch {
+        toast.error('룰렛을 저장하지 못했어요.');
+      }
+    });
+  };
+
+  return (
+    <ActionDialogFrame
+      icon={<Sparkles className="h-[1em] w-[1em]" />}
+      badge="룰렛"
+      title="시청자가 바로 돌릴 수 있는 룰렛을 만들어요."
+      description="룰렛 항목과 실행 명령어를 한 번에 준비합니다. 각 줄은 항목명 또는 항목명 | 실행문구 | 가중치 형식으로 입력할 수 있어요."
+      submitLabel="룰렛 추가"
+      pending={isPending}
+      onSubmit={submit}
+      variant={variant}
+      label={label}
+      className={className}
+      testId="roulette-create-trigger"
+    >
+      <div className="grid gap-[clamp(1rem,2vw,1.35rem)] md:grid-cols-2">
+        <Field label="룰렛 이름">
+          <Input value={name} onChange={(event) => setName(event.target.value)} />
+        </Field>
+        <Field label="실행 명령어">
+          <Input value={command} onChange={(event) => setCommand(event.target.value)} />
+        </Field>
+      </div>
+      <Field label="룰렛 항목">
+        <Textarea value={itemsText} onChange={setItemsText} placeholder={'당첨\n꽝\n한 번 더'} min="min-h-[clamp(8rem,18svh,12rem)]" />
+      </Field>
+      <div className="grid gap-[clamp(1rem,2vw,1.35rem)] md:grid-cols-2">
+        <Field label="실행 비용">
+          <Input value={pointsCost} onChange={(event) => setPointsCost(event.target.value)} inputMode="numeric" />
+        </Field>
+        <div className="rounded-[var(--radius-control)] border bg-background/70 p-[clamp(0.85rem,1.6vw,1.1rem)] text-sm leading-6 text-muted-foreground">
+          현재 항목 {items.length}개가 준비되었습니다. 가중치를 생략하면 같은 확률로 추첨됩니다.
+        </div>
+      </div>
+    </ActionDialogFrame>
+  );
+}
+
+export function VideoDonationSettingsDialog({ variant = 'secondary', label = '영상 후원 설정', className }: ActionDialogButtonProps) {
+  const [enabled, setEnabled] = useState(false);
+  const [pointsPerSecond, setPointsPerSecond] = useState('1');
+  const [maxDurationMinutes, setMaxDurationMinutes] = useState('10');
+  const [perUserLimit, setPerUserLimit] = useState('0');
+  const [isPending, startTransition] = useTransition();
+
+  const load = async () => {
+    try {
+      const response = await fetch(apiUrl('/api/video-donation/settings'), { credentials: 'include', cache: 'no-store' });
+      if (!response.ok) return;
+      const payload = await response.json();
+      setEnabled(payload.acceptEnabled === true);
+      setPointsPerSecond(String(payload.pointsPerSecond ?? 1));
+      setMaxDurationMinutes(String(Math.max(1, Math.round(Number(payload.maxDurationSec || 600) / 60))));
+      setPerUserLimit(String(payload.perUserLimit ?? 0));
+    } catch {
+      // Existing values remain editable when loading fails.
+    }
+  };
+
+  const submit = (close: () => void) => {
+    startTransition(async () => {
+      try {
+        await postJson('/api/video-donation/settings', {
+          acceptEnabled: enabled,
+          pointsPerSecond: Math.max(0, Number(pointsPerSecond || 0)),
+          maxDurationSec: Math.max(1, Number(maxDurationMinutes || 1)) * 60,
+          perUserLimit: Math.max(0, Number(perUserLimit || 0)),
+        });
+        toast.success('영상 후원 설정을 저장했어요.');
+        refreshResource('/api/video-donation/queue');
+        close();
+      } catch {
+        toast.error('영상 후원 설정을 저장하지 못했어요.');
+      }
+    });
+  };
+
+  return (
+    <ActionDialogFrame
+      icon={<PlaySquare className="h-[1em] w-[1em]" />}
+      badge="영상 후원"
+      title="영상 후원 접수 방식을 설정해요."
+      description="시청자가 포인트로 영상을 신청할 때 필요한 비용, 재생 길이, 대기열 제한을 정합니다."
+      submitLabel="설정 저장"
+      pending={isPending}
+      onSubmit={submit}
+      onOpen={load}
+      variant={variant}
+      label={label}
+      className={className}
+      testId="video-donation-settings-trigger"
+    >
+      <SwitchRow checked={enabled} onCheckedChange={setEnabled} label="영상 후원 받기" />
+      <div className="grid gap-[clamp(1rem,2vw,1.35rem)] md:grid-cols-3">
+        <Field label="초당 포인트">
+          <Input value={pointsPerSecond} onChange={(event) => setPointsPerSecond(event.target.value)} inputMode="decimal" />
+        </Field>
+        <Field label="최대 재생 시간(분)">
+          <Input value={maxDurationMinutes} onChange={(event) => setMaxDurationMinutes(event.target.value)} inputMode="numeric" />
+        </Field>
+        <Field label="1인 대기열 제한">
+          <Input value={perUserLimit} onChange={(event) => setPerUserLimit(event.target.value)} inputMode="numeric" />
+        </Field>
+      </div>
+    </ActionDialogFrame>
+  );
+}
+
+export function DonationSettingsDialog({ variant = 'secondary', label = '후원 설정', className }: ActionDialogButtonProps) {
+  const [pointsPerK, setPointsPerK] = useState('10');
+  const [isPending, startTransition] = useTransition();
+
+  const load = async () => {
+    try {
+      const response = await fetch(apiUrl('/api/donation/settings'), { credentials: 'include', cache: 'no-store' });
+      if (!response.ok) return;
+      const payload = await response.json();
+      setPointsPerK(String(payload.settings?.pointsPerK ?? 10));
+    } catch {
+      // Keep local defaults.
+    }
+  };
+
+  const submit = (close: () => void) => {
+    startTransition(async () => {
+      try {
+        await postJson('/api/donation/settings', { settings: { pointsPerK: Math.max(0, Number(pointsPerK || 0)) } });
+        toast.success('후원 설정을 저장했어요.');
+        refreshResource('/api/donation/rules');
+        close();
+      } catch {
+        toast.error('후원 설정을 저장하지 못했어요.');
+      }
+    });
+  };
+
+  return (
+    <ActionDialogFrame
+      icon={<Settings className="h-[1em] w-[1em]" />}
+      badge="후원 설정"
+      title="후원 포인트 적립 기준을 정해요."
+      description="후원 금액에 따라 시청자에게 지급할 포인트를 설정합니다."
+      submitLabel="설정 저장"
+      pending={isPending}
+      onSubmit={submit}
+      onOpen={load}
+      variant={variant}
+      label={label}
+      className={className}
+      testId="donation-settings-trigger"
+    >
+      <Field label="1,000원당 지급 포인트">
+        <Input value={pointsPerK} onChange={(event) => setPointsPerK(event.target.value)} inputMode="numeric" />
+      </Field>
+    </ActionDialogFrame>
+  );
+}
+
+export function DonationRuleCreateDialog({ variant = 'secondary', label = '반응 만들기', className }: ActionDialogButtonProps) {
+  const [name, setName] = useState('');
+  const [minAmount, setMinAmount] = useState('1000');
+  const [messageIncludes, setMessageIncludes] = useState('');
+  const [response, setResponse] = useState('');
+  const [enabled, setEnabled] = useState(true);
+  const [isPending, startTransition] = useTransition();
+
+  const submit = (close: () => void) => {
+    if (!response.trim()) return toast.warning('후원 반응 문구를 입력해 주세요.');
+    startTransition(async () => {
+      try {
+        await postJson('/api/donation/rules/upsert', {
+          rule: {
+            id: `don_${Date.now().toString(36)}`,
+            name: name.trim() || `${Number(minAmount || 0).toLocaleString('ko-KR')}원 이상 반응`,
+            enabled,
+            minAmount: Math.max(0, Number(minAmount || 0)),
+            message: messageIncludes.trim(),
+            wildcard: true,
+            response: response.trim(),
+          },
+        });
+        toast.success('후원 반응을 추가했어요.');
+        refreshResource('/api/donation/rules');
+        setName('');
+        setResponse('');
+        setMessageIncludes('');
+        close();
+      } catch {
+        toast.error('후원 반응을 저장하지 못했어요.');
+      }
+    });
+  };
+
+  return (
+    <ActionDialogFrame
+      icon={<Gift className="h-[1em] w-[1em]" />}
+      badge="후원 반응"
+      title="후원 조건에 맞는 반응을 만들어요."
+      description="특정 금액 이상이거나 메시지에 특정 문구가 포함될 때 보낼 반응을 설정합니다."
+      submitLabel="반응 추가"
+      pending={isPending}
+      onSubmit={submit}
+      variant={variant}
+      label={label}
+      className={className}
+      testId="donation-rule-create-trigger"
+    >
+      <div className="grid gap-[clamp(1rem,2vw,1.35rem)] md:grid-cols-2">
+        <Field label="반응 이름">
+          <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="예: 큰손 감사 인사" />
+        </Field>
+        <Field label="최소 금액">
+          <Input value={minAmount} onChange={(event) => setMinAmount(event.target.value)} inputMode="numeric" />
+        </Field>
+      </div>
+      <Field label="메시지 포함 조건">
+        <Input value={messageIncludes} onChange={(event) => setMessageIncludes(event.target.value)} placeholder="비워두면 금액만 확인합니다." />
+      </Field>
+      <Field label="반응 문구">
+        <Textarea value={response} onChange={setResponse} placeholder="예: 후원 감사합니다! 방송에서 바로 확인할게요." />
+      </Field>
+      <SwitchRow checked={enabled} onCheckedChange={setEnabled} label="바로 사용" />
+    </ActionDialogFrame>
+  );
+}

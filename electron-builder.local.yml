@@ -1,0 +1,25 @@
+appId: com.arubot.local
+productName: AruBot Local Program
+copyright: Copyright © 2026 AruBot
+asar: true
+npmRebuild: false
+compression: maximum
+directories:
+  app: dist/local-program-app
+  output: dist/local-program
+files:
+  - '**/*'
+win:
+  icon: local-program/build/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: AruBot-Local-Program-${version}-${arch}.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: AruBot Local Program

@@ -6,6 +6,7 @@ import {
   Home,
   LifeBuoy,
   MessageSquare,
+  Orbit,
   PlaySquare,
   Settings,
   Sparkles,
@@ -20,6 +21,7 @@ export const adminNav = [
   { href: '/macros', label: '자동 알림', icon: Timer },
   { href: '/points', label: '시청자 포인트', icon: Coins },
   { href: '/predictions', label: '예측 베팅', icon: Vote },
+  { href: '/automations', label: '방송 자동화', icon: Orbit },
   { href: '/video-donations/queue', label: '영상 후원', icon: PlaySquare },
   { href: '/roulette', label: '룰렛', icon: Sparkles },
   { href: '/donations/rules', label: '후원 반응', icon: Gift },
@@ -40,10 +42,7 @@ export const adminFeatureMap = {
     description: '시청자가 채팅으로 바로 쓸 수 있는 응답, 안내, 포인트 사용 규칙을 만들어요.',
     endpoint: '/api/bot/rules',
     icon: MessageSquare,
-    actions: [
-      { href: '/commands/new', label: '명령어 만들기' },
-      { href: '/variables', label: '사용 가능한 변수' },
-    ],
+    actions: [{ href: '/variables', label: '사용 가능한 변수' }],
     tips: ['반복 질문을 자동으로 안내해요', '권한과 쿨다운을 정할 수 있어요', '포인트 차감 명령어도 만들 수 있어요'],
   },
   macros: {
@@ -51,7 +50,7 @@ export const adminFeatureMap = {
     description: '방송 중 반복 안내, 예약 공지, 채팅 리마인드를 부드럽게 보내요.',
     endpoint: '/api/macros',
     icon: Timer,
-    actions: [{ href: '/macros/new', label: '알림 만들기' }],
+    actions: [],
     tips: ['방송 공지를 잊지 않게 도와줘요', '반복 간격과 사용 여부를 관리해요', '채팅 흐름에 맞춰 부담 없이 노출해요'],
   },
   points: {
@@ -73,15 +72,20 @@ export const adminFeatureMap = {
     actions: [{ href: '/predictions', label: '예측 열기' }],
     tips: ['채팅 명령어로 바로 참여해요', '선택지는 2개 이상 자유롭게 만들 수 있어요', 'OBS 오버레이로 현재 비율을 보여줘요'],
   },
+  automations: {
+    title: '방송 자동화',
+    description: '후원, 채팅, 포인트 이벤트를 OBS, T.I.T.S., 투네이션, TTS, 제어 버튼과 연결해 방송 연출을 자동으로 실행해요.',
+    endpoint: '/api/automations/overview',
+    icon: Orbit,
+    actions: [{ href: '/automations', label: '자동화 열기' }],
+    tips: ['오라클 직접 연동과 로컬 프로그램 모드를 선택해요', '민감한 키는 로컬에만 저장해요', '사운드는 기본 10MB까지 서버에 보관해요'],
+  },
   videoDonations: {
     title: '영상 후원',
     description: '시청자가 보낸 영상을 순서대로 받고, 방송 화면에 안정적으로 재생해요.',
     endpoint: '/api/video-donation/queue',
     icon: PlaySquare,
-    actions: [
-      { href: '/video-donations/settings', label: '영상 후원 설정' },
-      { href: '/video-donations/viewer', label: 'OBS 주소' },
-    ],
+    actions: [{ href: '/video-donations/viewer', label: 'OBS 주소' }],
     tips: ['요청 순서를 관리해요', '재생 시간을 제한할 수 있어요', 'OBS 브라우저 소스로 바로 연결해요'],
   },
   roulette: {
@@ -90,7 +94,6 @@ export const adminFeatureMap = {
     endpoint: '/api/roulette/definitions',
     icon: Sparkles,
     actions: [
-      { href: '/roulette/new', label: '룰렛 만들기' },
       { href: '/roulette/logs', label: '결과 보기' },
       { href: '/roulette/viewer', label: 'OBS 주소' },
     ],
@@ -101,10 +104,7 @@ export const adminFeatureMap = {
     description: '후원 금액과 메시지에 맞춰 채팅 답변, 포인트 지급, 연출을 자동으로 실행해요.',
     endpoint: '/api/donation/rules',
     icon: HeartHandshake,
-    actions: [
-      { href: '/donations/rules/new', label: '반응 만들기' },
-      { href: '/donations/settings', label: '후원 설정' },
-    ],
+    actions: [],
     tips: ['후원 메시지에 맞춰 반응해요', '금액 구간별 보상을 만들 수 있어요', '방송 연출과 함께 쓰기 좋아요'],
   },
   variables: {

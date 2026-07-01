@@ -16,10 +16,14 @@ export type AdminPageConfig = {
 export function AdminFeaturePage({
   config,
   eyebrow = '관리',
+  actionSlot,
+  resourceActionSlot,
   children,
 }: {
   config: AdminPageConfig;
   eyebrow?: string;
+  actionSlot?: React.ReactNode;
+  resourceActionSlot?: React.ReactNode;
   children?: React.ReactNode;
 }) {
   const Icon = config.icon;
@@ -46,6 +50,7 @@ export function AdminFeaturePage({
                 <ArrowRight className="h-4 w-4" />
               </LinkButton>
             ))}
+            {actionSlot}
           </div>
         </div>
       </section>
@@ -59,6 +64,7 @@ export function AdminFeaturePage({
             title="등록된 항목"
             description="내 채널에 저장된 항목을 확인하고 필요한 화면으로 바로 이동해요."
             actions={config.actions}
+            actionSlot={resourceActionSlot}
           />
         ) : null}
         <Card className="bg-[linear-gradient(180deg,hsl(var(--card)),hsl(var(--accent-sky)/0.12))]">

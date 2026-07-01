@@ -169,6 +169,7 @@ export async function listViewerPointBalancesForUserIds(userIds) {
   if (!ids.length) return [];
 
   return withPgClient(async (pg) => {
+    const balancesByChannel = new Map();
     const tableUidLookup = new Map();
     try {
       const knownChannels = await pg.query(`
@@ -216,16 +217,59 @@ export async function listViewerPointBalancesForUserIds(userIds) {
         username: row.username,
         points: Number(row.points || 0),
       }));
-      balances.push({
-        channelUid: lookup?.channelUid || table.replace(/^channelpoint_/, ''),
+      const channelUid = lookup?.channelUid || table.replace(/^channelpoint_/, '');
+      const existing = balancesByChannel.get(channelUid) || {
+        channelUid,
         channelName: lookup?.channelName || null,
         avatarUrl: lookup?.avatarUrl || null,
         provider: lookup?.provider || null,
-        points: pointRows.reduce((sum, row) => sum + row.points, 0),
-        identities: pointRows,
-      });
+        points: 0,
+        identities: [],
+      };
+      existing.points += pointRows.reduce((sum, row) => sum + row.points, 0);
+      existing.identities.push(...pointRows);
+      balancesByChannel.set(channelUid, existing);
     }
 
+    try {
+      const exists = await pg.query(`
+        select to_regclass('public.channel_points_balances') as table_name
+      `);
+      if (exists.rows?.[0]?.table_name) {
+        const result = await pg.query(
+          `select channel_uid, user_id, username, points from public.channel_points_balances where user_id = any($1::text[])`,
+          [ids]
+        );
+        for (const row of result.rows || []) {
+          const channelUid = String(row.channel_uid || '').trim();
+          if (!channelUid) continue;
+          const lookup = tableUidLookup.get(`channelpoint_${sanitizeTableNameSuffix(channelUid)}`);
+          const existing = balancesByChannel.get(channelUid) || {
+            channelUid,
+            channelName: lookup?.channelName || null,
+            avatarUrl: lookup?.avatarUrl || null,
+            provider: lookup?.provider || null,
+            points: 0,
+            identities: [],
+          };
+          const userId = String(row.user_id || '');
+          if (!existing.identities.some((identity) => String(identity.userId || '') === userId)) {
+            const points = Number(row.points || 0);
+            existing.points += points;
+            existing.identities.push({
+              userId,
+              username: row.username,
+              points,
+            });
+          }
+          balancesByChannel.set(channelUid, existing);
+        }
+      }
+    } catch {
+      // Newer consolidated point table is optional; legacy per-channel tables remain the source of truth.
+    }
+
+    balances.push(...balancesByChannel.values());
     return balances.sort((a, b) => b.points - a.points || String(a.channelUid).localeCompare(String(b.channelUid)));
   });
 }
@@ -2151,6 +2195,465 @@ export async function deletePlatformAccount(provider, userId, platformUserId = n
       tokensDeleted: tokenResult.rowCount || 0,
       accountsDeleted: accountResult.rowCount || 0
     };
+  });
+}
+
+// ---------------- Automation Action Builder ----------------
+async function ensureAutomationTables() {
+  await withPgClient(async (pg) => {
+    await pg.query(`
+      create table if not exists automation_settings (
+        owner_user_id text primary key,
+        settings jsonb not null default '{}'::jsonb,
+        updated_at timestamptz not null default now()
+      );
+
+      create table if not exists automation_connections (
+        id text primary key,
+        owner_user_id text not null,
+        type text not null,
+        name text not null,
+        enabled boolean not null default true,
+        execution_mode text not null default 'oracle_direct',
+        endpoint text,
+        config jsonb not null default '{}'::jsonb,
+        capabilities jsonb not null default '{}'::jsonb,
+        discovery_cache jsonb not null default '{}'::jsonb,
+        discovery_updated_at timestamptz,
+        last_status text,
+        last_checked_at timestamptz,
+        created_at timestamptz not null default now(),
+        updated_at timestamptz not null default now()
+      );
+
+      create index if not exists idx_automation_connections_owner
+        on automation_connections(owner_user_id, type, enabled);
+
+      create table if not exists automation_jobs (
+        id text primary key,
+        owner_user_id text not null,
+        connection_id text,
+        job_type text not null,
+        payload jsonb not null default '{}'::jsonb,
+        status text not null default 'queued',
+        priority integer not null default 100,
+        run_after timestamptz not null default now(),
+        locked_by text,
+        locked_at timestamptz,
+        attempts integer not null default 0,
+        max_attempts integer not null default 3,
+        result jsonb,
+        error_message text,
+        created_at timestamptz not null default now(),
+        updated_at timestamptz not null default now()
+      );
+
+      create index if not exists idx_automation_jobs_claim
+        on automation_jobs(status, run_after, priority, created_at)
+        where status = 'queued';
+
+      create index if not exists idx_automation_jobs_owner_recent
+        on automation_jobs(owner_user_id, created_at desc);
+
+      create table if not exists automation_local_agents (
+        id text primary key,
+        owner_user_id text not null,
+        name text not null,
+        token_hash text not null unique,
+        status text not null default 'offline',
+        capabilities jsonb not null default '{}'::jsonb,
+        last_seen_at timestamptz,
+        created_at timestamptz not null default now(),
+        updated_at timestamptz not null default now(),
+        revoked_at timestamptz
+      );
+
+      create index if not exists idx_automation_local_agents_owner
+        on automation_local_agents(owner_user_id, revoked_at, last_seen_at desc);
+    `);
+  });
+}
+
+function normalizeAutomationOwner(ownerUserId) {
+  return String(ownerUserId || '').replace(/^user:/, '').trim();
+}
+
+function normalizeJsonObject(value, fallback = {}) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : fallback;
+}
+
+function normalizeExecutionMode(value) {
+  return String(value || '').trim() === 'local_program' ? 'local_program' : 'oracle_direct';
+}
+
+function normalizeAutomationConnection(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    ownerUserId: row.owner_user_id,
+    type: row.type,
+    name: row.name,
+    enabled: !!row.enabled,
+    executionMode: normalizeExecutionMode(row.execution_mode),
+    endpoint: row.endpoint || '',
+    config: normalizeJsonObject(row.config),
+    capabilities: normalizeJsonObject(row.capabilities),
+    discoveryCache: normalizeJsonObject(row.discovery_cache),
+    discoveryUpdatedAt: row.discovery_updated_at || null,
+    lastStatus: row.last_status || null,
+    lastCheckedAt: row.last_checked_at || null,
+    createdAt: row.created_at || null,
+    updatedAt: row.updated_at || null
+  };
+}
+
+export async function getAutomationSettings(ownerUserId) {
+  const owner = normalizeAutomationOwner(ownerUserId);
+  if (!owner || !process.env.SUPABASE_DB_URL) return {};
+  await ensureAutomationTables();
+  return withPgClient(async (pg) => {
+    const { rows } = await pg.query(`select settings from automation_settings where owner_user_id = $1`, [owner]);
+    return normalizeJsonObject(rows?.[0]?.settings, {});
+  });
+}
+
+export async function setAutomationSettings(ownerUserId, settings) {
+  const owner = normalizeAutomationOwner(ownerUserId);
+  if (!owner) throw new Error('ownerUserId is required');
+  if (!process.env.SUPABASE_DB_URL) return normalizeJsonObject(settings);
+  await ensureAutomationTables();
+  const safeSettings = normalizeJsonObject(settings, {});
+  return withPgClient(async (pg) => {
+    const { rows } = await pg.query(
+      `insert into automation_settings (owner_user_id, settings, updated_at)
+       values ($1, $2::jsonb, now())
+       on conflict (owner_user_id)
+       do update set settings = excluded.settings, updated_at = now()
+       returning settings`,
+      [owner, JSON.stringify(safeSettings)]
+    );
+    return normalizeJsonObject(rows?.[0]?.settings, {});
+  });
+}
+
+export async function listAutomationConnections(ownerUserId) {
+  const owner = normalizeAutomationOwner(ownerUserId);
+  if (!owner || !process.env.SUPABASE_DB_URL) return [];
+  await ensureAutomationTables();
+  return withPgClient(async (pg) => {
+    const { rows } = await pg.query(
+      `select * from automation_connections where owner_user_id = $1 order by created_at desc`,
+      [owner]
+    );
+    return (rows || []).map(normalizeAutomationConnection).filter(Boolean);
+  });
+}
+
+export async function findAutomationConnectionByControlTokenHash(tokenHash) {
+  if (!tokenHash || !process.env.SUPABASE_DB_URL) return null;
+  await ensureAutomationTables();
+  return withPgClient(async (pg) => {
+    const { rows } = await pg.query(
+      `select * from automation_connections
+       where type = 'stream_deck_touch_portal'
+         and enabled = true
+         and config->>'tokenHash' = $1
+       order by created_at desc
+       limit 1`,
+      [String(tokenHash)]
+    );
+    return normalizeAutomationConnection(rows?.[0]);
+  });
+}
+
+export async function upsertAutomationConnection(ownerUserId, connection) {
+  const owner = normalizeAutomationOwner(ownerUserId);
+  if (!owner) throw new Error('ownerUserId is required');
+  if (!process.env.SUPABASE_DB_URL) {
+    return normalizeAutomationConnection({
+      id: connection?.id || makeId('auto_conn'),
+      owner_user_id: owner,
+      type: connection?.type,
+      name: connection?.name,
+      enabled: connection?.enabled !== false,
+      execution_mode: connection?.executionMode || connection?.execution_mode,
+      endpoint: connection?.endpoint,
+      config: connection?.config || {},
+      capabilities: connection?.capabilities || {},
+      discovery_cache: connection?.discoveryCache || {},
+      discovery_updated_at: connection?.discoveryUpdatedAt || null
+    });
+  }
+  const id = String(connection?.id || makeId('auto_conn'));
+  const type = String(connection?.type || '').trim();
+  const name = String(connection?.name || '').trim() || type || '연결';
+  if (!type) throw new Error('type is required');
+  await ensureAutomationTables();
+  return withPgClient(async (pg) => {
+    const { rows } = await pg.query(
+      `insert into automation_connections
+        (id, owner_user_id, type, name, enabled, execution_mode, endpoint, config, capabilities, discovery_cache, discovery_updated_at, last_status, last_checked_at, updated_at)
+       values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::jsonb, $11, $12, $13, now())
+       on conflict (id)
+       do update set
+         type = excluded.type,
+         name = excluded.name,
+         enabled = excluded.enabled,
+         execution_mode = excluded.execution_mode,
+         endpoint = excluded.endpoint,
+         config = excluded.config,
+         capabilities = excluded.capabilities,
+         discovery_cache = excluded.discovery_cache,
+         discovery_updated_at = excluded.discovery_updated_at,
+         last_status = excluded.last_status,
+         last_checked_at = excluded.last_checked_at,
+         updated_at = now()
+       where automation_connections.owner_user_id = excluded.owner_user_id
+       returning *`,
+      [
+        id,
+        owner,
+        type,
+        name,
+        connection?.enabled === false ? false : true,
+        normalizeExecutionMode(connection?.executionMode || connection?.execution_mode),
+        connection?.endpoint ? String(connection.endpoint).trim() : null,
+        JSON.stringify(normalizeJsonObject(connection?.config)),
+        JSON.stringify(normalizeJsonObject(connection?.capabilities)),
+        JSON.stringify(normalizeJsonObject(connection?.discoveryCache || connection?.discovery_cache)),
+        connection?.discoveryUpdatedAt || connection?.discovery_updated_at || null,
+        connection?.lastStatus || connection?.last_status || null,
+        connection?.lastCheckedAt || connection?.last_checked_at || null
+      ]
+    );
+    return normalizeAutomationConnection(rows?.[0]);
+  });
+}
+
+export async function deleteAutomationConnection(ownerUserId, id) {
+  const owner = normalizeAutomationOwner(ownerUserId);
+  if (!owner || !id || !process.env.SUPABASE_DB_URL) return false;
+  await ensureAutomationTables();
+  return withPgClient(async (pg) => {
+    const result = await pg.query(`delete from automation_connections where owner_user_id = $1 and id = $2`, [owner, String(id)]);
+    return (result.rowCount || 0) > 0;
+  });
+}
+
+export async function enqueueAutomationJob(ownerUserId, job) {
+  const owner = normalizeAutomationOwner(ownerUserId);
+  if (!owner) throw new Error('ownerUserId is required');
+  const payload = normalizeJsonObject(job?.payload);
+  if (!process.env.SUPABASE_DB_URL) {
+    return { id: makeId('auto_job'), owner_user_id: owner, status: 'queued', payload };
+  }
+  await ensureAutomationTables();
+  return withPgClient(async (pg) => {
+    const { rows } = await pg.query(
+      `insert into automation_jobs
+        (id, owner_user_id, connection_id, job_type, payload, priority, run_after, max_attempts)
+       values ($1, $2, $3, $4, $5::jsonb, $6, coalesce($7::timestamptz, now()), $8)
+       returning *`,
+      [
+        String(job?.id || makeId('auto_job')),
+        owner,
+        job?.connectionId || job?.connection_id || null,
+        String(job?.jobType || job?.job_type || 'automation.action'),
+        JSON.stringify(payload),
+        Number.isFinite(Number(job?.priority)) ? Number(job.priority) : 100,
+        job?.runAfter || job?.run_after || null,
+        Number.isFinite(Number(job?.maxAttempts)) ? Number(job.maxAttempts) : 3
+      ]
+    );
+    return rows?.[0] || null;
+  });
+}
+
+function hashAutomationAgentToken(token) {
+  return crypto.createHash('sha256').update(String(token || '')).digest('hex');
+}
+
+function normalizeAutomationLocalAgent(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    ownerUserId: row.owner_user_id,
+    name: row.name,
+    status: row.status || 'offline',
+    capabilities: normalizeJsonObject(row.capabilities),
+    lastSeenAt: row.last_seen_at || null,
+    createdAt: row.created_at || null,
+    updatedAt: row.updated_at || null,
+    revokedAt: row.revoked_at || null
+  };
+}
+
+export async function createAutomationLocalAgent(ownerUserId, name = 'AruBot Local Program') {
+  const owner = normalizeAutomationOwner(ownerUserId);
+  if (!owner) throw new Error('ownerUserId is required');
+  const id = makeId('auto_agent');
+  const token = `alp_${crypto.randomBytes(32).toString('base64url')}`;
+  if (!process.env.SUPABASE_DB_URL) {
+    return {
+      token,
+      agent: normalizeAutomationLocalAgent({
+        id,
+        owner_user_id: owner,
+        name,
+        status: 'offline',
+        capabilities: {},
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      })
+    };
+  }
+  await ensureAutomationTables();
+  return withPgClient(async (pg) => {
+    const { rows } = await pg.query(
+      `insert into automation_local_agents (id, owner_user_id, name, token_hash, status, capabilities)
+       values ($1, $2, $3, $4, 'offline', '{}'::jsonb)
+       returning *`,
+      [id, owner, String(name || 'AruBot Local Program').slice(0, 120), hashAutomationAgentToken(token)]
+    );
+    return { token, agent: normalizeAutomationLocalAgent(rows?.[0]) };
+  });
+}
+
+export async function listAutomationLocalAgents(ownerUserId) {
+  const owner = normalizeAutomationOwner(ownerUserId);
+  if (!owner || !process.env.SUPABASE_DB_URL) return [];
+  await ensureAutomationTables();
+  return withPgClient(async (pg) => {
+    const { rows } = await pg.query(
+      `select
+         id,
+         owner_user_id,
+         name,
+         case
+           when last_seen_at is not null and last_seen_at > now() - interval '45 seconds' then 'online'
+           else 'offline'
+         end as status,
+         capabilities,
+         last_seen_at,
+         created_at,
+         updated_at,
+         revoked_at
+       from automation_local_agents
+       where owner_user_id = $1 and revoked_at is null
+       order by coalesce(last_seen_at, created_at) desc`,
+      [owner]
+    );
+    return (rows || []).map(normalizeAutomationLocalAgent).filter(Boolean);
+  });
+}
+
+export async function authenticateAutomationLocalAgent(token) {
+  if (!token || !process.env.SUPABASE_DB_URL) return null;
+  await ensureAutomationTables();
+  return withPgClient(async (pg) => {
+    const { rows } = await pg.query(
+      `select * from automation_local_agents
+       where token_hash = $1 and revoked_at is null
+       limit 1`,
+      [hashAutomationAgentToken(token)]
+    );
+    return normalizeAutomationLocalAgent(rows?.[0]);
+  });
+}
+
+export async function touchAutomationLocalAgent(agentId, capabilities = {}) {
+  if (!agentId || !process.env.SUPABASE_DB_URL) return null;
+  await ensureAutomationTables();
+  return withPgClient(async (pg) => {
+    const { rows } = await pg.query(
+      `update automation_local_agents
+       set status = 'online',
+           capabilities = coalesce($2::jsonb, capabilities),
+           last_seen_at = now(),
+           updated_at = now()
+       where id = $1 and revoked_at is null
+       returning *`,
+      [String(agentId), JSON.stringify(normalizeJsonObject(capabilities))]
+    );
+    return normalizeAutomationLocalAgent(rows?.[0]);
+  });
+}
+
+export async function claimAutomationJobsForAgent(agent, limit = 5) {
+  if (!agent?.id || !agent?.ownerUserId || !process.env.SUPABASE_DB_URL) return [];
+  await ensureAutomationTables();
+  return withPgClient(async (pg) => {
+    await pg.query('begin');
+    try {
+      await pg.query(
+        `update automation_jobs
+         set status = 'queued',
+             locked_by = null,
+             locked_at = null,
+             run_after = now() + interval '3 seconds',
+             updated_at = now()
+         where owner_user_id = $1
+           and status = 'running'
+           and locked_at is not null
+           and locked_at < now() - interval '2 minutes'
+           and attempts < max_attempts`,
+        [String(agent.ownerUserId)]
+      );
+      const { rows } = await pg.query(
+        `select id from automation_jobs
+         where owner_user_id = $1
+           and status = 'queued'
+           and run_after <= now()
+         order by priority asc, created_at asc
+         limit $2
+         for update skip locked`,
+        [String(agent.ownerUserId), Math.max(1, Math.min(20, Number(limit || 5)))]
+      );
+      const ids = (rows || []).map((row) => row.id);
+      if (!ids.length) {
+        await pg.query('commit');
+        return [];
+      }
+      const claimed = await pg.query(
+        `update automation_jobs
+         set status = 'running',
+             locked_by = $2,
+             locked_at = now(),
+             attempts = attempts + 1,
+             updated_at = now()
+         where id = any($1::text[])
+         returning *`,
+        [ids, String(agent.id)]
+      );
+      await pg.query('commit');
+      return claimed.rows || [];
+    } catch (error) {
+      try { await pg.query('rollback'); } catch {}
+      throw error;
+    }
+  });
+}
+
+export async function completeAutomationJobForAgent(agent, jobId, { status = 'done', result = {}, errorMessage = null } = {}) {
+  if (!agent?.id || !agent?.ownerUserId || !jobId || !process.env.SUPABASE_DB_URL) return null;
+  const nextStatus = status === 'failed' ? 'failed' : 'done';
+  await ensureAutomationTables();
+  return withPgClient(async (pg) => {
+    const { rows } = await pg.query(
+      `update automation_jobs
+       set status = $4,
+           result = $5::jsonb,
+           error_message = $6,
+           locked_by = null,
+           locked_at = null,
+           updated_at = now()
+       where id = $1
+         and owner_user_id = $2
+         and locked_by = $3
+       returning *`,
+      [String(jobId), String(agent.ownerUserId), String(agent.id), nextStatus, JSON.stringify(normalizeJsonObject(result)), errorMessage ? String(errorMessage).slice(0, 1000) : null]
+    );
+    return rows?.[0] || null;
   });
 }
 

@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AruBot Local Program</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">A</div>
+          <div>
+            <strong>AruBot Local</strong>
+            <span>방송 PC 연동 프로그램</span>
+          </div>
+        </div>
+        <nav class="nav">
+          <a class="active" href="#connect">연결</a>
+          <a href="#tits">T.I.T.S.</a>
+          <a href="#toonation">Toonation</a>
+          <a href="#sound">사운드</a>
+          <a href="#updates">업데이트</a>
+          <a href="#logs">실행 기록</a>
+        </nav>
+        <div class="side-card">
+          <span class="chip mint">Local Vault</span>
+          <p>토큰과 후원 알림 키는 이 컴퓨터의 사용자 데이터 영역에 저장됩니다.</p>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <h1>방송 도구를 안전하게 연결하세요.</h1>
+            <p>Oracle 백엔드의 큐를 받아 방송 PC의 OBS, T.I.T.S., Toonation, TTS, 사운드 폴더를 실행합니다.</p>
+          </div>
+          <div class="status-card" id="statusCard">
+            <span class="status-dot"></span>
+            <div>
+              <strong id="statusText">대기 중</strong>
+              <span id="heartbeatText">아직 연결되지 않음</span>
+            </div>
+          </div>
+        </header>
+
+        <section class="hero-grid">
+          <article class="metric">
+            <span>처리한 작업</span>
+            <strong id="completedCount">0</strong>
+          </article>
+          <article class="metric">
+            <span>실패</span>
+            <strong id="failedCount">0</strong>
+          </article>
+          <article class="metric">
+            <span>암호화</span>
+            <strong id="encryptionState">확인 중</strong>
+          </article>
+        </section>
+
+        <section class="panel" id="connect">
+          <div class="panel-head">
+            <div>
+              <span class="chip sky">연결 설정</span>
+              <h2>백엔드와 로컬 프로그램 연결</h2>
+            </div>
+            <div class="actions">
+              <button class="button secondary" id="stopButton">중지</button>
+              <button class="button primary" id="startButton">시작</button>
+            </div>
+          </div>
+          <div class="form-grid">
+            <label>
+              백엔드 주소
+              <input id="backendUrl" placeholder="https://api.example.com" />
+            </label>
+            <label>
+              업데이트 정보 주소
+              <input id="updateManifestUrl" placeholder="https://arubot.vercel.app/downloads/local-program/latest.json" />
+            </label>
+            <label>
+              로컬 프로그램 토큰
+              <input id="token" type="password" placeholder="웹 대시보드에서 발급한 토큰" />
+            </label>
+            <label>
+              폴링 간격(ms)
+              <input id="pollIntervalMs" inputmode="numeric" placeholder="1800" />
+            </label>
+            <label class="check-row">
+              <input id="autoStart" type="checkbox" />
+              프로그램 실행 시 자동 시작
+            </label>
+          </div>
+          <div class="actions">
+            <button class="button primary" id="saveConfigButton">설정 저장</button>
+            <button class="button ghost" id="openDashboardButton">웹 대시보드 열기</button>
+          </div>
+        </section>
+
+        <section class="two-col">
+          <article class="panel" id="tits">
+            <div class="panel-head compact">
+              <div>
+                <span class="chip coral">T.I.T.S.</span>
+                <h2>아이템과 트리거</h2>
+              </div>
+              <button class="button secondary" id="discoverTitsButton">목록 동기화</button>
+            </div>
+            <label>
+              WebSocket 주소
+              <input id="titsEndpoint" placeholder="ws://localhost:42069" />
+            </label>
+            <div class="mini-list">
+              <div>
+                <strong id="titsItemCount">0</strong>
+                <span>아이템</span>
+              </div>
+              <div>
+                <strong id="titsTriggerCount">0</strong>
+                <span>트리거</span>
+              </div>
+            </div>
+          </article>
+
+          <article class="panel" id="toonation">
+            <div class="panel-head compact">
+              <div>
+                <span class="chip lemon">Toonation</span>
+                <h2>후원 알림 키</h2>
+              </div>
+              <span class="chip muted" id="toonationState">미설정</span>
+            </div>
+            <label>
+              Alertbox 키
+              <input id="toonationAlertboxKey" type="password" placeholder="toon.at/widget/alertbox/ 뒤의 키" />
+            </label>
+            <p class="hint">키는 서버로 보내지 않고 이 컴퓨터에만 저장됩니다.</p>
+          </article>
+        </section>
+
+        <section class="panel" id="sound">
+          <div class="panel-head compact">
+            <div>
+              <span class="chip mint">사운드 폴더</span>
+              <h2>대용량 파일은 내 PC에서 호스팅</h2>
+            </div>
+            <div class="actions">
+              <button class="button secondary" id="chooseSoundFolderButton">폴더 선택</button>
+              <button class="button ghost" id="openSoundFolderButton">폴더 열기</button>
+            </div>
+          </div>
+          <div class="folder-path" id="soundFolderText">선택된 폴더 없음</div>
+        </section>
+
+        <section class="panel" id="updates">
+          <div class="panel-head compact">
+            <div>
+              <span class="chip sky">업데이트</span>
+              <h2>로컬 프로그램 최신 버전 유지</h2>
+            </div>
+            <div class="actions">
+              <button class="button secondary" id="checkUpdateButton">업데이트 확인</button>
+              <button class="button primary" id="installUpdateButton" disabled>다운로드 및 실행</button>
+            </div>
+          </div>
+          <div class="update-grid">
+            <div class="folder-path">
+              <strong>현재 버전</strong>
+              <span id="currentVersionText">확인 중</span>
+            </div>
+            <div class="folder-path">
+              <strong>최신 버전</strong>
+              <span id="latestVersionText">확인 전</span>
+            </div>
+          </div>
+          <p class="hint" id="updateStatusText">새 버전이 있으면 설치 파일을 내려받아 실행합니다. 설치가 끝나면 프로그램을 다시 열어주세요.</p>
+        </section>
+
+        <section class="panel" id="logs">
+          <div class="panel-head compact">
+            <div>
+              <span class="chip sky">실행 기록</span>
+              <h2>최근 작업</h2>
+            </div>
+          </div>
+          <div class="logs" id="logList"></div>
+        </section>
+      </main>
+    </div>
+    <script src="./renderer.js"></script>
+  </body>
+</html>

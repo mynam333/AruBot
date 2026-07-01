@@ -274,6 +274,36 @@ nextjs-portal {
   background: var(--sb-thumb-hover);
 }
 
+.arubot-modal-scroll {
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scrollbar-color: hsl(var(--primary) / 0.58) hsl(var(--muted) / 0.45);
+}
+
+.arubot-modal-scroll::-webkit-scrollbar {
+  width: clamp(0.625rem, 1vw, 0.875rem);
+}
+
+.arubot-modal-scroll::-webkit-scrollbar-track {
+  margin-block: clamp(0.5rem, 1.2vw, 0.875rem);
+  border-radius: 999rem;
+  background: linear-gradient(180deg, hsl(var(--muted) / 0.45), hsl(var(--accent-sky) / 0.28));
+}
+
+.arubot-modal-scroll::-webkit-scrollbar-thumb {
+  border: max(0.125rem, 0.18vw) solid transparent;
+  border-radius: 999rem;
+  background:
+    linear-gradient(180deg, hsl(var(--primary) / 0.72), hsl(var(--accent-coral) / 0.72))
+    padding-box;
+}
+
+.arubot-modal-scroll::-webkit-scrollbar-thumb:hover {
+  background:
+    linear-gradient(180deg, hsl(var(--primary) / 0.92), hsl(var(--accent-coral) / 0.9))
+    padding-box;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;

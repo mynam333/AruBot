@@ -16,7 +16,7 @@ AruBot의 명령어, 후원, 포인트, 예측 베팅, 룰렛, 영상 후원 이
 - VTube Studio, T.I.T.S., OBS처럼 목록 조회가 가능한 대상은 모델/핫키/아이템/트리거/장면 목록을 자동으로 불러와 드롭다운에서 선택하게 만든다.
 - 연결 실패, 중복 실행, 과도한 호출, 방송 중 실수 실행을 막는 안전장치를 기본 제공한다.
 - 액션 실행 로그, 재시도, 테스트 실행, 미리보기, 변수 치환을 제공한다.
-- 향후 SOOP 공식 API, SOOP Extension SDK, SSAPI, Twip/Toonation 알림, Discord Webhook, MIDI/OSC, 조명/스마트홈 같은 확장 대상을 같은 구조로 추가할 수 있게 만든다.
+- 향후 Toonation 알림, TTS, Stream Deck, Touch Portal, Discord Webhook, MIDI/OSC, 조명/스마트홈 같은 확장 대상을 같은 구조로 추가할 수 있게 만든다.
 
 ## 2. 확인한 외부 API 기준
 
@@ -353,59 +353,7 @@ Policy: 같은 후원 eventId는 1회만 실행, 실패 시 1회 재시도
 
 ### 1순위: 직접 체감 가치가 큰 연동
 
-#### SOOP Open API
-
-기준 문서:
-
-- SOOP Open API: https://developers.sooplive.co.kr/?szWork=openapi
-
-활용 아이디어:
-
-- SOOP LIVE/CHAT/ANALYTICS 데이터를 AruBot 표준 이벤트로 변환한다.
-- SOOP에서 들어온 채팅/후원/라이브 상태를 CHZZK/CIME와 같은 자동화 규칙으로 처리한다.
-- 스트리머별 방송 통계, 이벤트별 자동화 성과, 시청자 반응 분석에 사용한다.
-
-주의점:
-
-- Developer Registration, Partnership Application, API key 발급 심사가 필요하다.
-- Open API Feedback이 영업일 기준 최대 10일 걸릴 수 있으므로 MVP 핵심 경로로 묶지 않는다.
-- 공식 연동이 가능해지면 SOOP 관련 기능은 비공식 API보다 공식 API를 우선한다.
-
-#### SOOP Extension SDK
-
-기준 문서:
-
-- SOOP Extension SDK API: https://developers.sooplive.com/?sub=api&szWork=extension
-
-활용 아이디어:
-
-- SOOP 확장 UI 안에서 채팅 service message를 수신하고 자동화 이벤트로 변환한다.
-- `MESSAGE`, `BALLOON_GIFTED` 같은 확장 메시지를 오버레이/액션 빌더와 연결한다.
-- 확장 화면에서 버튼을 누르면 AruBot 자동화 트리거가 실행되도록 만든다.
-
-주의점:
-
-- 서버 봇 API라기보다 SOOP 확장 실행 환경용 SDK에 가깝다.
-- 일반 대시보드 기능과 분리해 “SOOP Extension 모드”로 설계한다.
-
-#### SSAPI
-
-기준 문서:
-
-- SSAPI Socket API: https://ssapi.kr/docs/category/-socket-api
-
-활용 아이디어:
-
-- SOOP/Afreeca, CHZZK 채팅과 후원 이벤트를 Socket.IO로 받아 빠르게 자동화 트리거에 연결한다.
-- SOOP 도전미션, CHZZK 미션/참여 후원, 애드벌룬, 구독 같은 이벤트를 표준 이벤트로 매핑한다.
-- 공식 API 발급 전 테스트/개인 사용 단계에서 빠른 연결 옵션으로 제공한다.
-
-주의점:
-
-- AruBot 핵심 인프라가 외부 서드파티 서비스에 의존하면 운영 리스크가 생긴다.
-- 개인정보와 토큰 처리 범위를 명확히 고지하고, 공식 API가 가능한 곳은 공식 API를 우선한다.
-
-#### Twip/Toonation Alertbox 연동
+#### Toonation Alertbox 연동
 
 기준 자료:
 
@@ -413,14 +361,15 @@ Policy: 같은 후원 eventId는 1회만 실행, 실패 시 1회 재시도
 
 활용 아이디어:
 
-- Twip/Toonation alertbox key 또는 URL을 등록하면 후원 알림을 자동화 트리거로 변환한다.
+- Toonation alertbox key 또는 URL을 등록하면 후원 알림을 자동화 트리거로 변환한다.
 - 후원 금액/닉네임/메시지에 따라 OBS, VTube Studio, T.I.T.S., 사운드, 오버레이 액션을 실행한다.
 - 한국 스트리머가 이미 쓰는 후원 플랫폼과 자연스럽게 연결된다.
 
 주의점:
 
 - 위 자료는 비공식 라이브러리이며 alertbox 기반 접근이다.
-- 약관과 안정성 검토 전에는 core 기능이 아니라 “실험적 opt-in 커넥터”로 둔다.
+- Twip은 서비스하지 않는 것으로 판단하고 지원 대상에서 제외한다.
+- Toonation은 core 자동화 입력으로 지원하되, alertbox key는 서버 DB에 저장하지 않고 브라우저 localStorage 또는 AruBot Local Program vault에 저장한다.
 - 사용자가 제공한 alertbox URL/key만 처리하고, 계정 비밀번호 입력 방식은 금지한다.
 
 ### 2순위: 방송 운영 편의가 큰 연동
@@ -436,6 +385,7 @@ Policy: 같은 후원 eventId는 1회만 실행, 실패 시 1회 재시도
 - AruBot inbound HTTP/WebSocket endpoint를 눌러 자동화를 실행한다.
 - 별도 플러그인 없이 URL 호출만으로 연동할 수 있게 한다.
 - 나중에 Stream Deck 플러그인을 만들더라도 현재 구조를 그대로 재사용한다.
+- 1차 구현은 Stream Deck의 System > Website/HTTP 요청류 플러그인과 Touch Portal HTTP action에 붙일 수 있는 `POST /api/automations/inbound/control/:token` URL을 발급한다.
 
 #### OBS Browser Source Control Surface
 
@@ -579,10 +529,9 @@ updated_at timestamptz not null default now()
 - `tits`
 - `vtube_studio`
 - `streamerbot`
-- `soop_openapi`
-- `soop_extension`
-- `ssapi`
-- `twip_toonation_alertbox`
+- `toonation_alertbox`
+- `tts`
+- `stream_deck_touch_portal`
 
 discovery_cache 예시:
 
@@ -685,10 +634,10 @@ primary key (owner_user_id, event_key)
   - 인증/endpoint 테스트, response schema sample 저장
 - `POST /api/automations/discover/udp`
   - Local Agent 기준 송신/수신 테스트
-- `POST /api/automations/discover/soop-openapi`
-  - API key 권한, channel/live/chat/analytics 접근 가능 범위 확인
-- `POST /api/automations/discover/ssapi`
-  - receiver 설정, 수신 가능 이벤트 타입 확인
+- `POST /api/automations/tits/discover`
+  - T.I.T.S. 아이템/트리거 목록 조회. 로컬 프로그램 모드에서는 큐에 discovery job을 넣는다.
+- `POST /api/automations/toonation/test`
+  - Toonation alertbox key는 로컬 저장소/로컬 프로그램에 있으므로 서버는 직접 보관하지 않고 테스트 job만 생성한다.
 
 ### Inbound endpoint
 
@@ -827,13 +776,26 @@ primary key (owner_user_id, event_key)
 
 OBS, VTube Studio, T.I.T.S.는 대부분 스트리머 PC의 localhost에서 실행된다. Vercel/Oracle Cloud 백엔드가 직접 `localhost`에 접근할 수 없으므로 현실적인 구조가 필요하다.
 
-### 1단계: 로컬 개발/셀프호스팅 지원
+### 1단계: 오라클 직접 연동 모드
 
-현재처럼 백엔드를 스트리머 PC 또는 같은 LAN에 띄운 경우 직접 연결한다.
+Oracle Cloud 백엔드가 외부 endpoint에 직접 접근한다.
 
-### 2단계: AruBot Local Agent
+적합한 대상:
 
-스트리머 PC에 작은 로컬 에이전트를 설치한다.
+- HTTPS Webhook
+- 공개 WebSocket API
+- Discord Webhook
+- Stream Deck/Touch Portal에서 호출하는 AruBot 제어 URL
+- 사용자가 별도로 공개 터널을 열어둔 OBS/VTS/T.I.T.S. endpoint
+
+제약:
+
+- Oracle 서버의 `localhost`는 스트리머 PC가 아니므로 OBS/VTS/T.I.T.S. 기본 localhost에는 접근할 수 없다.
+- 개인 토큰, alertbox key, 로컬 앱 인증 정보는 서버 DB에 저장하지 않는다.
+
+### 2단계: AruBot Local Program 모드
+
+스트리머 PC에 GUI 데스크톱 프로그램을 설치한다. 단순 백그라운드 agent가 아니라, 방송자가 상태를 눈으로 확인하고 직접 설정할 수 있는 상용 수준의 로컬 관리 앱이어야 한다.
 
 역할:
 
@@ -843,12 +805,36 @@ OBS, VTube Studio, T.I.T.S.는 대부분 스트리머 PC의 localhost에서 실�
 - 자동화 worker가 액션을 queue에 넣으면 agent가 가져가 실행
 - 로컬 secret은 agent에 저장
 - VTube Studio UDP discovery, T.I.T.S. localhost 연결, OBS localhost 연결을 agent에서 수행
+- 로컬 GUI에서 백엔드 주소, pairing token, T.I.T.S. endpoint, Toonation alertbox key, 사운드 폴더, 자동 시작 여부를 관리
+- 실행 로그, heartbeat, 처리한 작업 수, 실패 수를 GUI에서 확인
 
 장점:
 
 - Cloudflare/Vercel 환경에서도 로컬 앱 연동 가능
 - localhost SSRF 위험 감소
 - 방송 PC의 연결 상태를 정확히 표시 가능
+- Toonation alertbox key, T.I.T.S. endpoint, 로컬 사운드 폴더 같은 민감하거나 개인 PC 의존적인 설정을 사용자의 컴퓨터에 보관 가능
+
+GUI 품질 기준:
+
+- 웹 대시보드와 같은 파스텔 톤, 라이트 모드 중심의 상용 UI를 사용한다.
+- 첫 화면에서 연결 상태, 처리한 작업, 실패, 암호화 상태가 바로 보여야 한다.
+- “시작/중지”, “설정 저장”, “T.I.T.S. 목록 동기화”, “사운드 폴더 선택”은 명확한 버튼으로 제공한다.
+- 민감정보 입력 필드는 비밀번호 타입으로 표시하고, 저장 후에는 원문을 다시 표시하지 않는다.
+- 로그는 최신 항목 우선으로 보여주고, 실패는 시각적으로 구분한다.
+- renderer는 Node 권한 없이 preload IPC만 사용한다.
+
+## 15.1 저장소와 민감정보 정책
+
+- 자동화 큐는 추가 비용이 없는 Postgres queue를 기본값으로 사용한다.
+- worker는 `status = 'queued'`, `run_after <= now()` 조건에 `FOR UPDATE SKIP LOCKED`를 적용해 작업을 가져간다.
+- Redis/Cloudflare Queue는 트래픽이 커진 뒤 선택 옵션으로만 검토한다.
+- Toonation alertbox key, 로컬 프로그램 pairing token, 로컬 앱 비밀번호는 사용자 브라우저 localStorage 또는 Local Program vault에 저장한다.
+- 자동화 규칙, 연결 타입, discovery cache, 실행 로그처럼 민감하지 않고 여러 기기에서 공유해야 하는 데이터는 DB에 저장한다.
+- 사운드 파일은 기본적으로 백엔드 파일 저장소에서 호스팅한다.
+- 사용자별 서버 사운드 저장소는 총 10MB로 제한한다.
+- 10MB를 초과하는 사운드 라이브러리는 Local Program 모드에서 사용자 PC 파일을 직접 호스팅하도록 안내한다.
+- 서버는 업로드 파일 크기, MIME, 총량을 검사하고 초과 시 업로드를 거부한다.
 
 ## 16. 구현 단계
 
@@ -915,16 +901,16 @@ OBS, VTube Studio, T.I.T.S.는 대부분 스트리머 PC의 localhost에서 실�
 - command queue
 - OBS/VTS/TITS/UDP/MIDI 실행 위임
 - discovery proxy
+- Toonation alertbox key와 로컬 사운드 폴더 vault
 
-### Phase 8: 한국 방송 생태계 커넥터
+### Phase 8: 한국 방송 생태계 커넥터와 제어 도구
 
-- SOOP Open API 신청/권한 확인 UI
-- SOOP live/chat/analytics 이벤트 표준화
-- SOOP Extension SDK용 확장 화면 설계
-- SSAPI optional connector
-- Twip/Toonation alertbox optional connector
+- Toonation alertbox connector
+- TTS browser/local connector
+- Stream Deck/Touch Portal 제어 URL 발급
 - Discord Webhook 템플릿
 - 비공식 커넥터 안정성/약관 고지 UI
+- SOOP, SSAPI, Twip은 현재 제품 범위에서 제외
 
 ## 17. 추천 자동화 템플릿
 
@@ -1005,17 +991,17 @@ OBS, VTube Studio, T.I.T.S.는 대부분 스트리머 PC의 localhost에서 실�
 
 - 로컬 앱 연동을 Phase 1부터 Local Agent 기반으로 갈지, 기존 Oracle 백엔드 직접 연결부터 갈지
 - 자동화 실행 큐를 Postgres 기반으로 시작할지, 별도 Redis/Cloudflare Queue류를 둘지
-- OBS/VTS/TITS secret 저장 방식을 Supabase만으로 처리할지, Oracle 서버 파일/환경변수 secret vault를 둘지
+- OBS/VTS/TITS/Toonation 민감정보를 브라우저 localStorage와 Local Program vault 중 어느 쪽에 둘지
 - 사운드 파일 업로드 저장소를 Supabase Storage, 로컬 파일, R2 중 어디로 둘지
 - T.I.T.S. API가 early-stage인 만큼 버전 핀과 fallback 메시지를 어떻게 노출할지
-- SOOP Open API 신청/심사 기간 동안 SSAPI 같은 optional connector를 어느 범위까지 허용할지
-- Twip/Toonation alertbox 연동을 공식 API 확인 전 실험 기능으로 둘지
+- Toonation alertbox 연동을 Local Program 필수로 둘지, 브라우저 localStorage 기반 제어 화면에서도 허용할지
+- 로컬 프로그램 배포 전 T.I.T.S.를 Oracle 직접 모드로 어디까지 지원할지
 
 권장 결정:
 
 - Phase 1은 Postgres 큐와 현재 Express worker로 시작한다.
 - HTTP/WebSocket/UDP/Overlay/Sound부터 구현해 엔진을 안정화한다.
 - Streamer.bot은 기본 경로에서 제외하고 optional compatibility connector로 둔다.
-- OBS/VTS/TITS는 직접 연결 모드로 먼저 구현하되, Cloud 배포 실사용을 위해 Local Agent를 바로 다음 단계에 둔다.
+- OBS/VTS/TITS는 Oracle 직접 모드와 Local Program 모드를 모두 지원하되, 기본 추천은 Local Program 모드로 둔다.
 - VTube Studio와 T.I.T.S.는 구현 시작부터 discovery cache와 드롭다운 선택 UX를 포함한다.
-- secret은 최소한 암호화 저장 또는 서버 환경변수 기반 key encryption을 적용한 뒤 저장한다.
+- 사용자 민감정보는 서버에 저장하지 않는 것을 기본값으로 하고, 서버가 반드시 검증해야 하는 제어 token은 hash만 저장한다.

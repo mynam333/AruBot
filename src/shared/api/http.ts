@@ -1,5 +1,6 @@
 export function getServerApiBase() {
-  return (process.env.API_BASE || process.env.NEXT_PUBLIC_API_BASE || '').replace(/\/$/, '');
+  const serverOnlyBase = typeof window === 'undefined' ? process.env.API_BASE : '';
+  return (serverOnlyBase || process.env.NEXT_PUBLIC_API_BASE || '').replace(/\/$/, '');
 }
 
 export function getBrowserApiBase() {

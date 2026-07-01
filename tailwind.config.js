@@ -64,12 +64,22 @@ export default {
           '0%': { opacity: '0', transform: 'translateY(0.25rem) scale(0.97)' },
           '100%': { opacity: '1', transform: 'translateY(0) scale(1)' },
         },
+        'fade-in': {
+          '0%': { opacity: '0' },
+          '100%': { opacity: '1' },
+        },
+        'modal-in': {
+          '0%': { opacity: '0', transform: 'translate(-50%, -48%) scale(0.96)' },
+          '100%': { opacity: '1', transform: 'translate(-50%, -50%) scale(1)' },
+        },
       },
       animation: {
         'fade-up': 'fade-up 420ms ease-out both',
         float: 'float 3.8s ease-in-out infinite',
         'pulse-line': 'pulse-line 5s ease-in-out infinite',
         'tooltip-in': 'tooltip-in 160ms ease-out both',
+        'fade-in': 'fade-in 160ms ease-out both',
+        'modal-in': 'modal-in 180ms ease-out both',
       },
     },
   },

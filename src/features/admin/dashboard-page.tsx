@@ -17,6 +17,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button, LinkButton } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tooltip } from '@/components/ui/tooltip';
+import { CommandCreateDialog, RouletteCreateDialog } from '@/features/admin/admin-action-dialogs';
 import { apiUrl, readJson } from '@/shared/api/http';
 import { cn } from '@/shared/lib/utils';
 
@@ -114,9 +115,9 @@ const featureCards = [
 
 const quickActions = [
   { href: '/connection', label: '플랫폼 연결', icon: Cable, help: 'CHZZK와 CIME 계정을 연결하고 동기화 상태를 확인합니다.' },
-  { href: '/commands/new', label: '명령어 만들기', icon: MessageSquare, help: '방송에서 바로 사용할 자동 응답을 추가합니다.' },
+  { href: 'dialog:command', label: '명령어 만들기', icon: MessageSquare, help: '방송에서 바로 사용할 자동 응답을 추가합니다.' },
   { href: '/video-donations/viewer', label: '포인트 영상후원', icon: PlaySquare, help: '영상 후원 뷰어 주소를 열어 OBS에 등록합니다.' },
-  { href: '/roulette/new', label: '룰렛 만들기', icon: Sparkles, help: '포인트나 후원과 연결할 룰렛을 준비합니다.' },
+  { href: 'dialog:roulette', label: '룰렛 만들기', icon: Sparkles, help: '포인트나 후원과 연결할 룰렛을 준비합니다.' },
   { href: '/settings', label: '서비스 설정', icon: Settings, help: '공개 페이지와 기본 동작을 조정합니다.' },
 ] as const;
 
@@ -236,7 +237,7 @@ export function DashboardPage() {
           <div className="animate-fade-up">
             <Badge tone="mint">방송 관리 콘솔</Badge>
             <h1 className="mt-4 max-w-3xl break-keep text-3xl font-semibold leading-tight tracking-normal md:text-5xl">
-              채팅 참여를 더 쉽게 만들고 방송 운영은 더 가볍게.
+              채팅 참여를 더 쉽게 만들고<br />방송 운영은 더 가볍게.
             </h1>
             <p className="mt-4 max-w-2xl text-sm leading-7 text-muted-foreground md:text-base">
               CHZZK와 CIME 계정을 연결하고 명령어, 포인트, 룰렛, 영상 후원을 한 흐름으로 관리하세요.
@@ -260,10 +261,7 @@ export function DashboardPage() {
                   </Button>
                 );
               })}
-              <LinkButton href="/commands/new" variant="outline" size="lg">
-                <MessageSquare className="h-4 w-4" />
-                명령어 만들기
-              </LinkButton>
+              <CommandCreateDialog variant="outline" label="명령어 만들기" />
             </div>
           </div>
 
@@ -338,6 +336,26 @@ export function DashboardPage() {
       <section className="grid gap-3 md:grid-cols-5">
         {quickActions.map((action) => {
           const Icon = action.icon;
+          if (action.href === 'dialog:command') {
+            return (
+              <CommandCreateDialog
+                key={action.href}
+                variant="outline"
+                label={action.label}
+                className="min-h-[var(--control-height-lg)] justify-between bg-card/85 px-[clamp(0.875rem,1.6vw,1.125rem)]"
+              />
+            );
+          }
+          if (action.href === 'dialog:roulette') {
+            return (
+              <RouletteCreateDialog
+                key={action.href}
+                variant="outline"
+                label={action.label}
+                className="min-h-[var(--control-height-lg)] justify-between bg-card/85 px-[clamp(0.875rem,1.6vw,1.125rem)]"
+              />
+            );
+          }
           return (
             <Tooltip key={action.href} content={action.help}>
               <LinkButton href={action.href} variant="outline" className="min-h-[var(--control-height-lg)] justify-between bg-card/85 px-[clamp(0.875rem,1.6vw,1.125rem)]">
