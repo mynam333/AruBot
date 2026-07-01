@@ -96,14 +96,43 @@ jobs:
           RELEASE_DIR="$RELEASES_DIR/$RELEASE_SHA"
           TMP_RELEASE_DIR="$RELEASES_DIR/.tmp-$RELEASE_SHA-$$"
           ARCHIVE_PATH="/tmp/$ARCHIVE_NAME"
+          REMOTE_USER="$(id -un)"
+          REMOTE_GROUP="$(id -gn)"
 
           cleanup() {
-            rm -f "$ARCHIVE_PATH"
-            rm -rf "$TMP_RELEASE_DIR"
+            rm -f "$ARCHIVE_PATH" || true
+            rm -rf "$TMP_RELEASE_DIR" || true
           }
           trap cleanup EXIT
 
-          mkdir -p "$RELEASES_DIR" "$SHARED_DIR/logs"
+          ensure_deploy_dirs() {
+            if mkdir -p "$RELEASES_DIR" "$SHARED_DIR/logs"; then
+              return 0
+            fi
+
+            echo "Deploy directory is not writable by $REMOTE_USER: $APP_DIR" >&2
+
+            if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+              echo "Trying to create and chown deploy directory with passwordless sudo..." >&2
+              sudo mkdir -p "$RELEASES_DIR" "$SHARED_DIR/logs"
+              sudo chown -R "$REMOTE_USER:$REMOTE_GROUP" "$APP_DIR"
+              mkdir -p "$RELEASES_DIR" "$SHARED_DIR/logs"
+              return 0
+            fi
+
+            cat >&2 <<EOF
+Cannot prepare deploy directory.
+Run these commands once on the Oracle VM, then rerun this workflow:
+
+  sudo mkdir -p "$APP_DIR/shared/logs" "$APP_DIR/releases"
+  sudo chown -R "$REMOTE_USER:$REMOTE_GROUP" "$APP_DIR"
+
+If BACKEND_APP_DIR is wrong, update the GitHub Actions variable BACKEND_APP_DIR.
+EOF
+            exit 1
+          }
+
+          ensure_deploy_dirs
           rm -rf "$TMP_RELEASE_DIR"
           mkdir -p "$TMP_RELEASE_DIR"
 

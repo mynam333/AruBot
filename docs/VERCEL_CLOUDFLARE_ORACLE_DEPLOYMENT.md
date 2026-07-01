@@ -158,6 +158,8 @@ sudo chown -R "$USER":"$USER" /opt/arubot
 nano /opt/arubot/shared/.env
 ```
 
+`BACKEND_APP_DIR`를 `/home/<user>/AruBot`처럼 다른 경로로 바꿨다면 위 명령의 `/opt/arubot`도 같은 경로로 바꾼다. 배포 워크플로는 SSH 사용자에게 배포 디렉터리 쓰기 권한이 없을 때 passwordless sudo가 가능하면 자동으로 `mkdir`와 `chown`을 시도한다. passwordless sudo가 불가능하면 워크플로 로그에 표시되는 `sudo mkdir -p ...`와 `sudo chown -R ...` 명령을 Oracle VM에서 한 번 실행한 뒤 다시 배포한다.
+
 `/opt/arubot/shared/.env`에는 백엔드 운영 환경변수를 넣는다. 이 파일은 GitHub Actions artifact에 포함되지 않으며, 각 릴리스의 `.env`로 symlink된다.
 
 배포 후 현재 릴리스는 `/opt/arubot/current`를 가리키고, 이전 릴리스는 `/opt/arubot/releases` 아래에 최대 5개까지 남는다. 업로드된 `/tmp` 압축파일, Actions 러너의 로컬 압축파일, 임시 릴리스 디렉터리, 배포용 SSH 키 파일은 배포 성공/실패와 관계없이 정리한다.
