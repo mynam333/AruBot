@@ -1,7 +1,29 @@
 import React from 'react';
+import { getBrowserApiBase } from '@/shared/api/http';
 
 // Module-scope overlay kind and component to avoid remounts on parent re-renders
 type OverlayKind = 'none' | 'sakura' | 'midnight' | 'sunset' | 'grid' | 'noise' | 'embers' | 'snow' | 'scan' | 'shimmer' | 'confetti' | 'leaves' | 'gold-sweep';
+
+const DEFAULT_PRODUCTION_API_BASE = 'https://arubotapi.yuaru.com';
+
+function getRouletteApiBase() {
+  const configured = getBrowserApiBase();
+  if (configured) return configured;
+  if (typeof window === 'undefined') return DEFAULT_PRODUCTION_API_BASE;
+
+  const { hostname, protocol } = window.location;
+  const isLocal = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+  if (isLocal) return `${protocol}//127.0.0.1:3001`;
+  if (hostname.endsWith('.yuaru.com')) return DEFAULT_PRODUCTION_API_BASE;
+  return window.location.origin;
+}
+
+function getRouletteWsUrl(token: string) {
+  const url = new URL('/api/roulette/ws', getRouletteApiBase());
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  url.searchParams.set('token', token);
+  return url.toString();
+}
 
 const OverlaySvg: React.FC<{ kind: OverlayKind }> = React.memo(({ kind }) => {
   const makeSeed = (s: string) => {
@@ -597,11 +619,8 @@ export default function RouletteViewer() {
     // Prefer front-end static assets at /public/files (served at same-origin /files)
     // Fallback to backend API host if same-origin is missing
     try {
-      const loc = (typeof window !== 'undefined' ? window.location : { protocol: 'http:', hostname: 'localhost', origin: 'https://arubot.yuaru.kr' }) as Location | any;
-      const isHttps = loc.protocol === 'https:';
-      const httpProto = isHttps ? 'https:' : 'http:';
-      const backendHost = (loc.hostname === 'localhost') ? `localhost:3001` : `arubotapi.yuaru.kr`;
-      const backendBase = `${httpProto}//${backendHost}`;
+      const loc = (typeof window !== 'undefined' ? window.location : { origin: 'https://arubot.yuaru.com' }) as Location | any;
+      const backendBase = getRouletteApiBase();
       const a = new Audio(`${loc.origin}/files/roulette_start.weba`);
       // Avoid crossOrigin to reduce CORS influence
       a.preload = 'auto';
@@ -621,11 +640,8 @@ export default function RouletteViewer() {
       startAudioRef.current = a;
     } catch {}
     try {
-      const loc = (typeof window !== 'undefined' ? window.location : { protocol: 'http:', hostname: 'localhost', origin: 'https://arubot.yuaru.kr' }) as Location | any;
-      const isHttps = loc.protocol === 'https:';
-      const httpProto = isHttps ? 'https:' : 'http:';
-      const backendHost = (loc.hostname === 'localhost') ? `localhost:3001` : `arubotapi.yuaru.kr`;
-      const backendBase = `${httpProto}//${backendHost}`;
+      const loc = (typeof window !== 'undefined' ? window.location : { origin: 'https://arubot.yuaru.com' }) as Location | any;
+      const backendBase = getRouletteApiBase();
       const b = new Audio(`${loc.origin}/files/roulette_end.mp3`);
       b.preload = 'auto';
       b.addEventListener('canplaythrough', () => { if (!canAutoPlayRef.current) { primeAudio().catch(()=>{}); } }, { once: true });
@@ -718,14 +734,7 @@ export default function RouletteViewer() {
     }
 
     try {
-      const loc = (typeof window !== 'undefined' ? window.location : { protocol: 'http:', hostname: 'localhost' }) as Location | any;
-      const isHttps = loc.protocol === 'https:';
-      const wsProto = isHttps ? 'wss:' : 'ws:';
-      // Use backend API host for WS: arubotapi.yuaru.kr in production, localhost:3001 in dev
-      const wsHost = (loc.hostname === 'localhost')
-        ? `localhost:3001`
-        : `arubotapi.yuaru.kr`;
-      const url = `${wsProto}//${wsHost}/api/roulette/ws?token=${encodeURIComponent(token)}`;
+      const url = getRouletteWsUrl(token);
       
       updateDebugInfo({ 
         connectionState: 'connecting',
