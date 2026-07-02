@@ -58,6 +58,10 @@ type LiveStatus = {
 type ViewerPointsResponse = {
   userId?: string | null;
   platforms?: PlatformAccount[];
+  viewerIdentity?: {
+    arubotUuid?: string | null;
+    identityKeys?: string[];
+  };
   balances?: ViewerBalance[];
   totalPoints?: number;
   error?: string;
@@ -222,6 +226,7 @@ export function ViewerPointsPage() {
   }, [page, totalPages, visibleBalances]);
   const connectedProviders = new Set(platforms.map((account) => String(account.provider || '').toLowerCase()));
   const hasBothPlatforms = connectedProviders.has('chzzk') && connectedProviders.has('cime');
+  const hasArubotIdentity = Boolean(data?.viewerIdentity?.arubotUuid);
 
   useEffect(() => {
     setPage(1);
@@ -301,12 +306,12 @@ export function ViewerPointsPage() {
         <div className="rounded-[var(--radius-panel)] border bg-[linear-gradient(135deg,hsl(var(--card)),hsl(var(--accent-mint)/0.35)_52%,hsl(var(--accent-coral)/0.24))] p-[clamp(1.25rem,3.5vw,2.5rem)] shadow-soft">
           <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(28%,0.38fr)] lg:items-end">
             <div>
-              <Badge tone={hasBothPlatforms ? 'mint' : 'sky'}>{hasBothPlatforms ? '통합 포인트 활성화' : '시청자 포인트'}</Badge>
+              <Badge tone={hasArubotIdentity ? 'mint' : 'sky'}>{hasArubotIdentity ? '아루봇 계정 연동' : '시청자 포인트'}</Badge>
               <h1 className="mt-5 max-w-4xl break-keep text-[clamp(2.15rem,5.5vw,4.5rem)] font-semibold leading-tight">
                 내가 쌓은 방송별 포인트를 한눈에.
               </h1>
               <p className="mt-4 max-w-2xl break-keep text-sm leading-7 text-muted-foreground md:text-base">
-                자주 보는 방송의 포인트를 비교하고, 공개 명령어와 룰렛으로 바로 이어가세요.
+                로그인한 계정에 연결된 플랫폼 포인트를 모아 보고, 공개 명령어와 룰렛으로 바로 이어가세요.
               </p>
               <div className="mt-6 flex flex-wrap gap-2">
                 {platforms.length ? (
@@ -328,7 +333,7 @@ export function ViewerPointsPage() {
                 <div className="text-[clamp(2.4rem,6vw,4rem)] font-semibold leading-none">{formatNumber(totalPoints)}</div>
                 <div className="mt-4 flex flex-wrap gap-2">
                   <Badge tone="mint">{balances.length}개 방송</Badge>
-                  <Badge tone={platforms.length > 1 ? 'sky' : 'neutral'}>{platforms.length}개 플랫폼</Badge>
+                  <Badge tone={hasBothPlatforms ? 'sky' : 'neutral'}>{platforms.length}개 플랫폼</Badge>
                 </div>
                 <Button type="button" variant="outline" className="mt-5 w-full justify-center bg-background/70" onClick={() => load(true)} disabled={refreshing}>
                   <RefreshCw className={cn('h-4 w-4', refreshing && 'animate-spin')} />
@@ -455,7 +460,7 @@ export function ViewerPointsPage() {
             </CardHeader>
             <CardContent className="grid gap-3 text-sm leading-6 text-muted-foreground">
               <div className="rounded-[var(--radius-control)] border bg-background/70 p-3">
-                CHZZK와 CIME에서 같은 방송인을 함께 시청했다면 포인트가 한 줄로 모여 보입니다.
+                아루봇에 연결한 플랫폼 계정의 포인트만 한 줄로 모여 보입니다.
               </div>
               <div className="rounded-[var(--radius-control)] border bg-background/70 p-3">
                 각 방송 카드에서 명령어, 포인트, 룰렛 페이지로 바로 이동해 참여할 수 있습니다.

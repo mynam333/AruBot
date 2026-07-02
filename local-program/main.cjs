@@ -12,7 +12,9 @@ const { WebSocket } = require('ws');
 const APP_NAME = 'AruBot Local Program';
 const LEGACY_UPDATE_MANIFEST_URL = 'https://arubot.vercel.app/downloads/local-program/latest.json';
 const DEFAULT_UPDATE_MANIFEST_URL = 'https://github.com/mynam333/AruBot/releases/latest/download/latest.json';
-const DEFAULT_DASHBOARD_URL = 'https://arubot.vercel.app';
+const LEGACY_DASHBOARD_URL = 'https://arubot.vercel.app';
+const DEFAULT_BACKEND_URL = 'https://arubotapi.yuaru.com';
+const DEFAULT_DASHBOARD_URL = 'https://arubot.yuaru.com';
 
 function readBuildEnv() {
   try {
@@ -28,6 +30,22 @@ function cleanUrl(value) {
   return String(value || '').trim().replace(/\/$/, '');
 }
 
+function normalizeLocalProgramToken(value) {
+  let text = String(value || '')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .trim();
+  const directMatch = text.match(/\balp_[A-Za-z0-9_-]{20,}\b/);
+  if (directMatch) return directMatch[0];
+  text = text
+    .replace(/^bearer\s+/i, '')
+    .replace(/^(토큰|token)\s*[:：]\s*/i, '')
+    .replace(/^["'`]+|["'`]+$/g, '')
+    .replace(/[\u0000-\u001F\u007F\s]+/g, '')
+    .trim();
+  const cleanedMatch = text.match(/\balp_[A-Za-z0-9_-]{20,}\b/);
+  return cleanedMatch ? cleanedMatch[0] : text;
+}
+
 function resolveBuildValue(...keys) {
   for (const key of keys) {
     const value = process.env[key] || BUILD_ENV[key];
@@ -37,9 +55,9 @@ function resolveBuildValue(...keys) {
 }
 
 const DEFAULT_CONFIG = {
-  backendUrl: cleanUrl(resolveBuildValue('ARUBOT_LOCAL_BACKEND_URL', 'NEXT_PUBLIC_API_BASE_URL', 'NEXT_PUBLIC_BACKEND_URL')) || 'http://127.0.0.1:3001',
+  backendUrl: cleanUrl(resolveBuildValue('ARUBOT_LOCAL_BACKEND_URL', 'BACKEND_ORIGIN', 'NEXT_PUBLIC_API_BASE', 'NEXT_PUBLIC_API_BASE_URL', 'NEXT_PUBLIC_BACKEND_URL')) || DEFAULT_BACKEND_URL,
   updateManifestUrl: cleanUrl(resolveBuildValue('ARUBOT_LOCAL_UPDATE_MANIFEST_URL')) || DEFAULT_UPDATE_MANIFEST_URL,
-  dashboardUrl: cleanUrl(resolveBuildValue('ARUBOT_LOCAL_DASHBOARD_URL', 'NEXT_PUBLIC_APP_URL', 'NEXT_PUBLIC_SITE_URL')) || DEFAULT_DASHBOARD_URL,
+  dashboardUrl: cleanUrl(resolveBuildValue('ARUBOT_LOCAL_DASHBOARD_URL', 'FRONTEND_ORIGIN', 'NEXT_PUBLIC_APP_URL', 'NEXT_PUBLIC_SITE_URL')) || DEFAULT_DASHBOARD_URL,
   token: '',
   titsEndpoint: 'ws://localhost:42069',
   vtubeEndpoint: 'ws://localhost:8001',
@@ -53,6 +71,7 @@ let running = false;
 let agentSocket = null;
 let agentSocketReconnectTimer = null;
 let agentSocketHeartbeatTimer = null;
+let agentPollingTimer = null;
 let reconnectAttempt = 0;
 let processingJobs = false;
 let config = { ...DEFAULT_CONFIG };
@@ -215,7 +234,10 @@ function loadConfig() {
   if (!persisted.updateManifestUrl || persisted.updateManifestUrl === LEGACY_UPDATE_MANIFEST_URL) {
     persisted.updateManifestUrl = DEFAULT_UPDATE_MANIFEST_URL;
   }
-  const backendUrl = DEFAULT_CONFIG.backendUrl || cleanUrl(persisted.backendUrl) || 'http://127.0.0.1:3001';
+  if (!persisted.dashboardUrl || persisted.dashboardUrl === LEGACY_DASHBOARD_URL) {
+    persisted.dashboardUrl = DEFAULT_DASHBOARD_URL;
+  }
+  const backendUrl = DEFAULT_CONFIG.backendUrl || cleanUrl(persisted.backendUrl) || DEFAULT_BACKEND_URL;
   const updateManifestUrl = DEFAULT_CONFIG.updateManifestUrl || cleanUrl(persisted.updateManifestUrl) || DEFAULT_UPDATE_MANIFEST_URL;
   const dashboardUrl = DEFAULT_CONFIG.dashboardUrl || cleanUrl(persisted.dashboardUrl) || DEFAULT_DASHBOARD_URL;
   config = {
@@ -224,7 +246,7 @@ function loadConfig() {
     backendUrl,
     updateManifestUrl,
     dashboardUrl,
-    token: decryptText(vault.token),
+    token: normalizeLocalProgramToken(decryptText(vault.token)),
     vtubeAuthToken: decryptText(vault.vtubeAuthToken),
   };
   return config;
@@ -234,10 +256,10 @@ function saveConfig(next) {
   config = {
     ...config,
     ...next,
-    backendUrl: DEFAULT_CONFIG.backendUrl || cleanUrl(config.backendUrl) || 'http://127.0.0.1:3001',
+    backendUrl: DEFAULT_CONFIG.backendUrl || cleanUrl(config.backendUrl) || DEFAULT_BACKEND_URL,
     updateManifestUrl: DEFAULT_CONFIG.updateManifestUrl || cleanUrl(config.updateManifestUrl) || DEFAULT_UPDATE_MANIFEST_URL,
     dashboardUrl: DEFAULT_CONFIG.dashboardUrl || cleanUrl(config.dashboardUrl) || DEFAULT_DASHBOARD_URL,
-    token: String(next.token ?? config.token ?? '').trim(),
+    token: normalizeLocalProgramToken(next.token ?? config.token ?? ''),
     titsEndpoint: String(next.titsEndpoint ?? config.titsEndpoint ?? '').trim() || DEFAULT_CONFIG.titsEndpoint,
     vtubeEndpoint: String(next.vtubeEndpoint ?? config.vtubeEndpoint ?? '').trim() || DEFAULT_CONFIG.vtubeEndpoint,
     vtubeAuthToken: String(next.vtubeAuthToken ?? config.vtubeAuthToken ?? '').trim(),
@@ -444,13 +466,15 @@ async function downloadInstaller(update) {
 }
 
 async function apiFetch(pathname, options = {}) {
-  const token = String(config.token || '').trim();
+  const token = normalizeLocalProgramToken(config.token);
   if (!token) throw new Error('로컬 프로그램 토큰이 없습니다.');
+  config.token = token;
   const response = await fetch(`${normalizeBackendUrl()}${pathname}`, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
+      'X-Local-Agent-Token': token,
       ...(options.headers || {}),
     },
   });
@@ -460,10 +484,11 @@ async function apiFetch(pathname, options = {}) {
 }
 
 async function apiFetchBuffer(pathname) {
-  const token = String(config.token || '').trim();
+  const token = normalizeLocalProgramToken(config.token);
   if (!token) throw new Error('로컬 프로그램 토큰이 없습니다.');
+  config.token = token;
   const response = await fetch(`${normalizeBackendUrl()}${pathname}`, {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: { Authorization: `Bearer ${token}`, 'X-Local-Agent-Token': token },
   });
   if (!response.ok) throw new Error(`파일 다운로드 실패: HTTP ${response.status}`);
   return Buffer.from(await response.arrayBuffer());
@@ -966,6 +991,8 @@ function getAgentWebSocketUrl() {
   base.protocol = base.protocol === 'https:' ? 'wss:' : 'ws:';
   base.pathname = '/api/automations/local-agent/ws';
   base.search = '';
+  const token = normalizeLocalProgramToken(config.token);
+  if (token) base.searchParams.set('token', token);
   base.hash = '';
   return base.toString();
 }
@@ -1002,6 +1029,19 @@ function stopAgentSocket() {
   }
 }
 
+function startAgentPolling() {
+  if (agentPollingTimer) return;
+  agentPollingTimer = setInterval(() => {
+    heartbeat().catch((error) => addLog('error', '연결 확인 실패', error.message || String(error)));
+    claimAndProcessJobs().catch((error) => addLog('error', '작업 확인 실패', error.message || String(error)));
+  }, 15000);
+}
+
+function stopAgentPolling() {
+  if (agentPollingTimer) clearInterval(agentPollingTimer);
+  agentPollingTimer = null;
+}
+
 function sendSocketHeartbeat() {
   const sent = sendAgentSocketMessage({
     type: 'heartbeat',
@@ -1019,12 +1059,15 @@ function sendSocketHeartbeat() {
 }
 
 function connectAgentSocket() {
-  if (!running || !config.token) return;
+  const token = normalizeLocalProgramToken(config.token);
+  if (!running || !token) return;
+  config.token = token;
   stopAgentSocket();
   const url = getAgentWebSocketUrl();
   const socket = new WebSocket(url, {
     headers: {
-      Authorization: `Bearer ${config.token}`,
+      Authorization: `Bearer ${token}`,
+      'X-Local-Agent-Token': token,
       'X-AruBot-Local-Version': app.getVersion(),
     },
   });
@@ -1072,19 +1115,32 @@ function connectAgentSocket() {
   });
 }
 
-function startAgent() {
+async function startAgent() {
   if (running) return getPublicState();
+  config.token = normalizeLocalProgramToken(config.token);
   if (!config.backendUrl || !config.token) throw new Error('로컬 프로그램 토큰이 필요합니다.');
   running = true;
-  addLog('success', '로컬 프로그램을 시작했습니다.');
-  connectAgentSocket();
-  emitState();
-  return getPublicState();
+  try {
+    await heartbeat();
+    addLog('success', '아루봇 백엔드 인증을 확인했습니다.');
+    startAgentPolling();
+    connectAgentSocket();
+    claimAndProcessJobs().catch((error) => addLog('error', '작업 확인 실패', error.message || String(error)));
+    emitState();
+    return getPublicState();
+  } catch (error) {
+    running = false;
+    stopAgentSocket();
+    stopAgentPolling();
+    addLog('error', '아루봇 백엔드 연결 실패', error.message || String(error));
+    throw error;
+  }
 }
 
 function stopAgent() {
   running = false;
   stopAgentSocket();
+  stopAgentPolling();
   addLog('info', '로컬 프로그램을 중지했습니다.');
   emitState();
   return getPublicState();

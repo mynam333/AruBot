@@ -249,7 +249,7 @@ export function PointsPage() {
                 <thead className="bg-muted/70 text-xs text-muted-foreground">
                   <tr>
                     <th className="px-4 py-3 font-semibold">시청자</th>
-                    <th className="px-4 py-3 font-semibold">아루봇 UUID</th>
+                    <th className="px-4 py-3 font-semibold">식별자</th>
                     <th className="px-4 py-3 font-semibold">연결 계정</th>
                     <th className="px-4 py-3 font-semibold">현재 포인트</th>
                     <th className="px-4 py-3 font-semibold">수정</th>
@@ -260,6 +260,8 @@ export function PointsPage() {
                 <tbody>
                   {visibleRows.map((row) => {
                     const userId = rowUserId(row);
+                    const identityValue = row.arubotUuid || userId;
+                    const identityLabel = row.arubotUuid ? '아루봇 UUID' : '플랫폼 채팅 ID';
                     return (
                       <tr key={userId} className="border-t bg-background/45">
                         <td className="px-4 py-3">
@@ -269,11 +271,12 @@ export function PointsPage() {
                         <td className="px-4 py-3">
                           <button
                             type="button"
-                            onClick={() => navigator.clipboard?.writeText(row.arubotUuid || userId).then(() => toast.success('아루봇 UUID를 복사했습니다.')).catch(() => undefined)}
+                            onClick={() => navigator.clipboard?.writeText(identityValue).then(() => toast.success(`${identityLabel}를 복사했습니다.`)).catch(() => undefined)}
                             className="rounded-full border bg-muted/55 px-2.5 py-1 text-xs font-bold transition hover:border-primary/35 hover:bg-pastel-mint/55"
                           >
-                            {row.arubotUuid || userId}
+                            {identityValue}
                           </button>
+                          <div className="mt-1 text-[0.7rem] font-semibold text-muted-foreground">{identityLabel}</div>
                           {row.pointBlocked ? (
                             <div className="mt-2 inline-flex items-center gap-1 rounded-full bg-destructive/10 px-2 py-1 text-xs font-bold text-destructive">
                               <ShieldOff className="h-3 w-3" />
@@ -290,7 +293,7 @@ export function PointsPage() {
                                 <div className="mt-0.5 max-w-[24ch] truncate text-muted-foreground">{account.platformUserId}</div>
                               </div>
                             )) : (
-                              <div className="text-xs leading-5 text-muted-foreground">아직 로그인 계정과 연결되지 않은 채팅 UUID입니다.</div>
+                              <div className="text-xs leading-5 text-muted-foreground">아루봇 로그인 계정과 연결되지 않은 플랫폼 채팅 ID입니다.</div>
                             )}
                           </div>
                         </td>
@@ -376,7 +379,7 @@ export function PointsPage() {
                 <textarea
                   value={excludeText}
                   onChange={(event) => setExcludeText(event.target.value)}
-                  placeholder={'aru_로 시작하는 아루봇 UUID\nCHZZK 또는 CIME 유저 UUID'}
+                  placeholder={'aru_로 시작하는 아루봇 UUID\nCHZZK 또는 CIME 플랫폼 채팅 ID'}
                   className="box-border min-h-[12rem] w-full min-w-0 max-w-full resize-y rounded-[var(--radius-control)] border bg-background/80 p-[clamp(0.75rem,1.4vw,1rem)] text-sm leading-6 outline-none transition placeholder:text-muted-foreground focus:border-primary/45 focus:ring-2 focus:ring-ring"
                 />
               </label>

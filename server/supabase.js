@@ -2096,6 +2096,40 @@ function makeArubotViewerUuid(value) {
   return `aru_${crypto.createHash('sha256').update(String(value || '')).digest('hex').slice(0, 24)}`;
 }
 
+function collectPlatformPointIdentityKeys(account) {
+  const keys = new Set();
+  const provider = normalizeProvider(account?.provider);
+  const add = (value) => {
+    const text = String(value || '').trim();
+    if (!text) return;
+    keys.add(text);
+    if (text.startsWith('user:')) keys.add(text.slice(5));
+    if (text.startsWith('cime:')) keys.add(text.slice(5));
+    if (text.startsWith('chzzk:')) keys.add(text.slice(6));
+    if (provider && !text.startsWith(`${provider}:`)) keys.add(`${provider}:${text}`);
+  };
+
+  add(account?.platformUserId ?? account?.platform_user_id);
+  add(account?.channelId ?? account?.channel_id);
+  add(account?.handle ?? account?.channel_handle);
+
+  const metadata = normalizeJsonObject(account?.metadata);
+  const raw = normalizeJsonObject(metadata.raw);
+  add(raw.userId);
+  add(raw.channelId);
+  add(raw.id);
+  add(raw.channel?.channelId);
+  add(raw.channel?.id);
+  add(raw.profile?.userId);
+  add(raw.profile?.channelId);
+
+  const publicProfile = normalizeJsonObject(metadata.publicProfile);
+  add(publicProfile.userId);
+  add(publicProfile.channelId);
+
+  return Array.from(keys);
+}
+
 export async function listPointViewerIdentitySummaries(userIds) {
   const ids = Array.from(
     new Set((Array.isArray(userIds) ? userIds : []).map((id) => String(id || '').trim()).filter(Boolean))
@@ -2145,17 +2179,22 @@ export async function listPointViewerIdentitySummaries(userIds) {
           String(account.platformUserId || '') === rawId || String(account.channelId || '') === rawId
         ));
       });
-      const identitySeed = matchedAppUserId || rawId;
-      result[rawId] = {
-        arubotUuid: makeArubotViewerUuid(identitySeed),
-        appUserId: matchedAppUserId || null,
-        platformAccounts: matchedAppUserId ? (accountsByAppUser.get(matchedAppUserId) || []) : [],
-        identityKeys: Array.from(new Set([
+      const platformAccounts = matchedAppUserId ? (accountsByAppUser.get(matchedAppUserId) || []) : [];
+      const arubotUuid = matchedAppUserId ? makeArubotViewerUuid(matchedAppUserId) : null;
+      const identityKeys = matchedAppUserId
+        ? Array.from(new Set([
           rawId,
-          matchedAppUserId || '',
-          makeArubotViewerUuid(identitySeed),
-          makeArubotViewerUuid(rawId),
-        ].filter(Boolean))),
+          matchedAppUserId,
+          arubotUuid,
+          ...platformAccounts.flatMap((account) => collectPlatformPointIdentityKeys(account)),
+        ].filter(Boolean)))
+        : [rawId];
+
+      result[rawId] = {
+        arubotUuid,
+        appUserId: matchedAppUserId || null,
+        platformAccounts,
+        identityKeys,
       };
     }
     return result;
@@ -2167,7 +2206,7 @@ export async function listPointIdentityKeysForUserId(userId) {
   if (!id) return [];
   const summaries = await listPointViewerIdentitySummaries([id]).catch(() => ({}));
   const summary = summaries[id];
-  return summary?.identityKeys?.length ? summary.identityKeys : [id, makeArubotViewerUuid(id)];
+  return summary?.identityKeys?.length ? summary.identityKeys : [id];
 }
 
 export async function updatePlatformAccountProfile(provider, userId, platformUserId, profile) {

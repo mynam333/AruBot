@@ -12,6 +12,22 @@ const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 
 const localProgramVersion = process.env.ARUBOT_LOCAL_VERSION || packageJson.version;
 const externalMode = process.argv.includes('--external') || process.env.ARUBOT_LOCAL_COPY_EXE_TO_PUBLIC === 'false';
 
+function loadDotEnv() {
+  const envPath = path.join(root, '.env');
+  if (!fs.existsSync(envPath)) return;
+  for (const line of fs.readFileSync(envPath, 'utf8').split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+    if (!match) continue;
+    const [, key, rawValue] = match;
+    if (process.env[key] != null) continue;
+    process.env[key] = rawValue.replace(/^['"]|['"]$/g, '');
+  }
+}
+
+loadDotEnv();
+
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     stdio: 'inherit',
@@ -72,8 +88,8 @@ function prepareAppStage() {
     },
   }, null, 2)}\n`, 'utf8');
   const runtimeEnv = {
-    ARUBOT_LOCAL_BACKEND_URL: process.env.ARUBOT_LOCAL_BACKEND_URL || process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_BACKEND_URL || '',
-    ARUBOT_LOCAL_DASHBOARD_URL: process.env.ARUBOT_LOCAL_DASHBOARD_URL || process.env.NEXT_PUBLIC_APP_URL || process.env.NEXT_PUBLIC_SITE_URL || '',
+    ARUBOT_LOCAL_BACKEND_URL: process.env.ARUBOT_LOCAL_BACKEND_URL || process.env.BACKEND_ORIGIN || process.env.NEXT_PUBLIC_API_BASE || process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_BACKEND_URL || '',
+    ARUBOT_LOCAL_DASHBOARD_URL: process.env.ARUBOT_LOCAL_DASHBOARD_URL || process.env.FRONTEND_ORIGIN || process.env.NEXT_PUBLIC_APP_URL || process.env.NEXT_PUBLIC_SITE_URL || '',
     ARUBOT_LOCAL_UPDATE_MANIFEST_URL: process.env.ARUBOT_LOCAL_UPDATE_MANIFEST_URL || '',
   };
   fs.writeFileSync(
@@ -87,7 +103,11 @@ function prepareAppStage() {
 cleanDirectory(distDir);
 run('node', ['scripts/create-local-program-icon.js']);
 prepareAppStage();
-run('npx', ['electron-builder', '--config', 'electron-builder.local.yml', '--publish', 'never']);
+run('npx', ['electron-builder', '--config', 'electron-builder.local.yml', '--publish', 'never'], {
+  env: {
+    CSC_IDENTITY_AUTO_DISCOVERY: 'false',
+  },
+});
 syncPublicInstallers();
 run('node', ['scripts/write-local-program-manifest.js'], {
   env: {

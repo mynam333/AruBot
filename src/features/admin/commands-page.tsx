@@ -4,6 +4,7 @@ import { CalendarCheck, Edit3, Loader2, MessageSquare, RefreshCw, Save, Search, 
 import { useCallback, useEffect, useMemo, useState, useTransition } from 'react';
 import { toast } from 'sonner';
 import { CommandCreateDialog } from '@/features/admin/admin-action-dialogs';
+import { CommandVariableHelpButton } from '@/features/admin/command-variable-help';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -315,10 +316,13 @@ export function CommandsPage() {
       {editingRule && form ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-background/55 p-[clamp(1rem,4vw,2rem)] backdrop-blur-sm">
           <div className="grid max-h-[min(92svh,48rem)] w-full max-w-2xl gap-5 overflow-y-auto rounded-[var(--radius-panel)] border bg-card p-[clamp(1rem,2.4vw,1.5rem)] shadow-lift">
-            <div>
-              <Badge tone="sky">명령어 수정</Badge>
-              <h2 className="mt-3 text-xl font-bold">채팅 반응을 다듬어요.</h2>
-              <p className="mt-2 text-sm text-muted-foreground">다음 입력부터 시청자에게 새 답변이 자연스럽게 나갑니다.</p>
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <Badge tone="sky">명령어 수정</Badge>
+                <h2 className="mt-3 text-xl font-bold">채팅 반응을 다듬어요.</h2>
+                <p className="mt-2 break-keep text-sm leading-6 text-muted-foreground">다음 입력부터 시청자에게 새 답변이 자연스럽게 나갑니다.</p>
+              </div>
+              <CommandVariableHelpButton />
             </div>
             <div className="grid gap-4 md:grid-cols-2">
               <label className="grid gap-2 text-sm font-semibold">

@@ -605,12 +605,11 @@ export function AutomationsPage() {
         name: localProgramName,
       });
       if (data.token) {
-        const command = `토큰: ${data.token}`;
-        setLocalProgramToken(command);
-        await navigator.clipboard?.writeText(command).catch(() => undefined);
-        toast.success('로컬 프로그램 연결 정보가 생성되어 복사되었습니다.');
+        setLocalProgramToken(data.token);
+        await navigator.clipboard?.writeText(data.token).catch(() => undefined);
+        toast.success('로컬 프로그램 토큰이 생성되어 복사되었습니다.');
       } else {
-        setLocalProgramToken(`토큰: ${data.tokenMasked || '이미 발급됨'}`);
+        setLocalProgramToken(data.tokenMasked || '이미 발급됨');
         toast.info('이미 발급된 로컬 프로그램 토큰이 있습니다. 토큰을 잃어버렸다면 재발급해 주세요.');
       }
       await load();
@@ -627,9 +626,8 @@ export function AutomationsPage() {
       const data = await jsonRequest<{ token: string }>('/api/automations/local-agents/rotate', 'POST', {
         name: localProgramName,
       });
-      const command = `토큰: ${data.token}`;
-      setLocalProgramToken(command);
-      await navigator.clipboard?.writeText(command).catch(() => undefined);
+      setLocalProgramToken(data.token);
+      await navigator.clipboard?.writeText(data.token).catch(() => undefined);
       toast.success('로컬 프로그램 토큰을 재발급하고 복사했습니다.');
       await load();
     } catch (error) {

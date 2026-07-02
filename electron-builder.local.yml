@@ -3,7 +3,7 @@ productName: AruBot Local Program
 copyright: Copyright © 2026 AruBot
 asar: true
 npmRebuild: false
-compression: maximum
+compression: normal
 directories:
   app: dist/local-program-app
   output: dist/local-program

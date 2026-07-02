@@ -9989,8 +9989,13 @@ async function queueAutomationJob(ownerUserId, job) {
   return queued;
 }
 
-function collectViewerPointIdentityKeys(ownerUserId, platforms = []) {
+function makeArubotViewerUuid(value) {
+  return `aru_${crypto.createHash('sha256').update(String(value || '')).digest('hex').slice(0, 24)}`;
+}
+
+function collectPlatformPointIdentityKeys(account) {
   const keys = new Set();
+  const provider = String(account?.provider || '').trim().toLowerCase();
   const add = (value, provider = '') => {
     const text = String(value || '').trim();
     if (!text) return;
@@ -10004,24 +10009,37 @@ function collectViewerPointIdentityKeys(ownerUserId, platforms = []) {
     }
   };
 
+  add(account?.platform_user_id || account?.platformUserId, provider);
+  add(account?.channel_id || account?.channelId, provider);
+  add(account?.channel_handle || account?.handle, provider);
+  const metadata = account?.metadata || {};
+  const raw = metadata.raw || {};
+  add(raw.userId, provider);
+  add(raw.channelId, provider);
+  add(raw.id, provider);
+  add(raw.channel?.channelId, provider);
+  add(raw.channel?.id, provider);
+  add(raw.profile?.userId, provider);
+  add(raw.profile?.channelId, provider);
+  const publicProfile = metadata.publicProfile || {};
+  add(publicProfile.userId, provider);
+  add(publicProfile.channelId, provider);
+
+  return Array.from(keys);
+}
+
+function collectViewerPointIdentityKeys(ownerUserId, platforms = []) {
+  const keys = new Set();
+  const add = (value) => {
+    const text = String(value || '').trim();
+    if (text) keys.add(text);
+  };
+  const accounts = Array.isArray(platforms) ? platforms : [];
+
   add(ownerUserId);
-  for (const account of Array.isArray(platforms) ? platforms : []) {
-    const provider = account.provider;
-    add(account.platform_user_id, provider);
-    add(account.channel_id, provider);
-    add(account.channel_handle, provider);
-    const metadata = account.metadata || {};
-    const raw = metadata.raw || {};
-    add(raw.userId, provider);
-    add(raw.channelId, provider);
-    add(raw.id, provider);
-    add(raw.channel?.channelId, provider);
-    add(raw.channel?.id, provider);
-    add(raw.profile?.userId, provider);
-    add(raw.profile?.channelId, provider);
-    const publicProfile = metadata.publicProfile || {};
-    add(publicProfile.userId, provider);
-    add(publicProfile.channelId, provider);
+  add(makeArubotViewerUuid(ownerUserId));
+  for (const account of accounts) {
+    for (const key of collectPlatformPointIdentityKeys(account)) add(key);
   }
   return Array.from(keys);
 }
@@ -10320,6 +10338,10 @@ app.get('/api/viewer/points', async (req, res) => {
     return res.json({
       userId: ownerUserId,
       platforms,
+      viewerIdentity: {
+        arubotUuid: makeArubotViewerUuid(ownerUserId),
+        identityKeys,
+      },
       balances: normalizedBalances,
       totalPoints: normalizedBalances.reduce((sum, balance) => sum + Number(balance.points || 0), 0),
     });
@@ -11574,9 +11596,10 @@ async function enrichChannelPointRows(rows, settings = {}) {
     return {
       ...row,
       userId,
-      arubotUuid: identity.arubotUuid || userId,
+      arubotUuid: identity.arubotUuid || null,
       appUserId: identity.appUserId || null,
       platformAccounts: identity.platformAccounts || [],
+      identityKeys,
       pointBlocked: identityKeys.some((key) => excludedSet.has(String(key))),
     };
   });

@@ -18,6 +18,7 @@ import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { CommandVariableHelpButton } from '@/features/admin/command-variable-help';
 import {
   createDefaultRouletteItems,
   normalizeEditableRouletteItems,
@@ -46,6 +47,7 @@ type ActionDialogFrameProps = ActionDialogButtonProps & {
   pending?: boolean;
   onSubmit: (close: () => void) => void;
   onOpen?: () => void;
+  headerAction?: React.ReactNode;
   testId?: string;
 };
 
@@ -90,6 +92,7 @@ function ActionDialogFrame({
   pending = false,
   onSubmit,
   onOpen,
+  headerAction,
   testId,
   variant = 'secondary',
   label = badge,
@@ -145,11 +148,14 @@ function ActionDialogFrame({
                   {description}
                 </Dialog.Description>
               </div>
-              <Dialog.Close asChild>
-                <Button type="button" variant="outline" size="icon" aria-label="닫기" className="shrink-0 bg-card/75">
-                  <X className="h-[1em] w-[1em]" />
-                </Button>
-              </Dialog.Close>
+              <div className="flex shrink-0 items-center gap-2">
+                {headerAction}
+                <Dialog.Close asChild>
+                  <Button type="button" variant="outline" size="icon" aria-label="닫기" className="bg-card/75">
+                    <X className="h-[1em] w-[1em]" />
+                  </Button>
+                </Dialog.Close>
+              </div>
             </div>
           </div>
 
@@ -259,6 +265,7 @@ export function CommandCreateDialog({ variant = 'secondary', label = '명령어 
       className={className}
       trailingChevron={trailingChevron}
       testId="command-create-trigger"
+      headerAction={<CommandVariableHelpButton />}
     >
       <div className="grid gap-[clamp(1rem,2vw,1.35rem)] md:grid-cols-[repeat(2,minmax(0,1fr))]">
         <Field label="표시 이름">
@@ -276,22 +283,24 @@ export function CommandCreateDialog({ variant = 'secondary', label = '명령어 
           min="min-h-[clamp(4.75rem,9svh,6.25rem)]"
         />
       </Field>
-      <div className="grid gap-[clamp(1rem,2vw,1.35rem)] md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(var(--control-height),0.42fr)] md:items-end">
+      <div className="grid gap-[clamp(1rem,2vw,1.35rem)] md:grid-cols-[repeat(2,minmax(0,1fr))]">
         <Field label="사용 포인트">
           <Input value={pointsCost} onChange={(event) => setPointsCost(event.target.value)} inputMode="numeric" />
         </Field>
         <Field label="쿨다운(초)">
           <Input value={cooldownSec} onChange={(event) => setCooldownSec(event.target.value)} inputMode="numeric" />
         </Field>
-        <SwitchRow checked={enabled} onCheckedChange={setEnabled} label="바로 사용" />
+        <div className="flex justify-end md:col-span-2">
+          <SwitchRow checked={enabled} onCheckedChange={setEnabled} label="바로 사용" className="w-full sm:w-[min(100%,18rem)]" />
+        </div>
       </div>
     </ActionDialogFrame>
   );
 }
 
-function SwitchRow({ checked, onCheckedChange, label }: { checked: boolean; onCheckedChange: (value: boolean) => void; label: string }) {
+function SwitchRow({ checked, onCheckedChange, label, className }: { checked: boolean; onCheckedChange: (value: boolean) => void; label: string; className?: string }) {
   return (
-    <div className="flex min-h-[var(--control-height)] min-w-0 items-center justify-between gap-3 rounded-[var(--radius-control)] border bg-background/70 px-[clamp(0.85rem,1.6vw,1.1rem)]">
+    <div className={cn('flex min-h-[var(--control-height)] min-w-0 items-center justify-between gap-3 rounded-[var(--radius-control)] border bg-background/70 px-[clamp(0.85rem,1.6vw,1.1rem)]', className)}>
       <span className="min-w-0 truncate text-sm font-semibold">{label}</span>
       <Switch.Root
         checked={checked}
