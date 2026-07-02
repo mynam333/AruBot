@@ -2301,6 +2301,28 @@ export async function getPlatformTokens(provider, userId) {
   });
 }
 
+export async function listPlatformTokenUsers(provider) {
+  const p = normalizeProvider(provider);
+  if (!p || !process.env.SUPABASE_DB_URL) return [];
+  await ensurePlatformIdentityTables();
+  return withPgClient(async (pg) => {
+    const { rows } = await pg.query(
+      `select user_id, platform_user_id, expires_at, scope
+         from platform_tokens
+        where provider = $1
+          and access_token is not null
+        order by updated_at desc`,
+      [p]
+    );
+    return (rows || []).map((row) => ({
+      userId: row.user_id,
+      platformUserId: row.platform_user_id,
+      expiresAt: row.expires_at,
+      scope: row.scope
+    }));
+  });
+}
+
 export async function deletePlatformTokens(provider, userId) {
   const p = normalizeProvider(provider);
   if (!p || !userId) return;

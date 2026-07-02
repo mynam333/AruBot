@@ -8,7 +8,7 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
-import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, getSessionUserId, getAnyTokens, listChannelPoints, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, getChannelPoints, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, deletePlatformTokens, deletePlatformAccount, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps } from './supabase.js';
+import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, getSessionUserId, getAnyTokens, listChannelPoints, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, getChannelPoints, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, deletePlatformTokens, deletePlatformAccount, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps } from './supabase.js';
 import { createPlatformProfileService } from './platform-profiles.js';
 import { WebSocketServer, WebSocket } from 'ws';
 
@@ -1987,18 +1987,29 @@ async function sendChatByPost(sid, chatPost, message, opts = {}) {
   let sessionKey = chatPost?.sessionKey || null;
   let token = chatPost?.accessToken || null;
   if (!sessionKey) {
-    const entry = sessionStore.get(sid) || await ensureSession(sid);
-    sessionKey = entry?.sessionKey || null;
+    try {
+      const entry = sessionStore.get(sid) || await ensureSession(sid);
+      sessionKey = entry?.sessionKey || null;
+    } catch { }
   }
   if (!token) token = await getValidAccessToken(sid);
-  if (!sessionKey || !token) throw new Error('missing chat credentials');
+  if (!token) throw new Error('missing chat credentials');
 
   const url = `${OPENAPI_BASE}/open/v1/chats/send`;
-  const r = await axios.post(url, { message: text.slice(0, 100) }, {
-    params: { sessionKey },
+  const request = {
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     timeout: opts.timeout || 5000
-  });
+  };
+  let r;
+  try {
+    r = await axios.post(url, { message: text.slice(0, 100) }, request);
+  } catch (e) {
+    if (!sessionKey) throw e;
+    r = await axios.post(url, { message: text.slice(0, 100) }, {
+      ...request,
+      params: { sessionKey }
+    });
+  }
   return r?.data?.content || r?.data || {};
 }
 
@@ -6604,41 +6615,77 @@ async function findUserFollowedAtForSid(sid, userId) {
   const now = Date.now();
   if (cached && (now - cached.ts) < 10 * 60 * 1000) return cached.date;
   const uids = await getChannelUidsForSid(sid);
-  if (!uids.length) return null;
-  const channelId = uids[0];
+  if (uids.length) {
+    const channelId = uids[0];
+    try {
+      const accessToken = await getValidAccessToken(sid);
+      // Best-effort: paginate followers list to find the user
+      const size = 50;
+      for (let page = 1; page <= 10000; page++) {
+        let data;
+        try {
+          const r = await axios.get(`${OPENAPI_BASE}/open/v1/channels/followers`, {
+            params: { page, size },
+            headers: { Authorization: `Bearer ${accessToken}` },
+          });
+          data = r?.data?.content || r?.data || {};
+        } catch {
+          // Fallback to service API
+          const r2 = await axios.get(`https://api.chzzk.naver.com/service/v1/channels/${encodeURIComponent(channelId)}/followers`, {
+            params: { page, size },
+          });
+          data = r2?.data?.content || r2?.data || {};
+        }
+        const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data?.followers) ? data.followers : []);
+        if (!Array.isArray(list) || list.length === 0) break;
+        for (const item of list) {
+          const fid = String(item?.channelId || item?.user?.userId || '');
+          if (fid && fid === String(userId)) {
+            const dt = item?.createdDate || item?.createdAt || item?.timestamp || null;
+            const iso = dt ? new Date(dt).toISOString().slice(0, 10) : '';
+            userFollowedAtCache.set(key, { ts: now, date: iso });
+            return iso;
+          }
+        }
+        if (list.length < size) break;
+      }
+    } catch (e) { console.error(e) }
+  }
   try {
-    const accessToken = await getValidAccessToken(sid);
-    // Best-effort: paginate followers list to find the user
-    const size = 50;
-    for (let page = 1; page <= 10000; page++) {
-      let data;
-      try {
-        const r = await axios.get(`${OPENAPI_BASE}/open/v1/channels/followers`, {
+    const ownerUserId = ownerUserIdFromSid(sid);
+    if (ownerUserId) {
+      const accessToken = await getValidCimeAccessToken(ownerUserId);
+      const size = 100;
+      const maxPages = Math.max(1, Number(process.env.CIME_FOLLOWER_SCAN_PAGES || 1000));
+      for (let page = 0; page < maxPages; page++) {
+        const r = await axios.get(`${CIME_OPENAPI_BASE}/open/v1/channels/followers`, {
           params: { page, size },
           headers: { Authorization: `Bearer ${accessToken}` },
+          timeout: DEFAULT_TIMEOUT,
         });
-        data = r?.data?.content || r?.data || {};
-      } catch {
-        // Fallback to service API
-        const r2 = await axios.get(`https://api.chzzk.naver.com/service/v1/channels/${encodeURIComponent(channelId)}/followers`, {
-          params: { page, size },
-        });
-        data = r2?.data?.content || r2?.data || {};
-      }
-      const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data?.followers) ? data.followers : []);
-      if (!Array.isArray(list) || list.length === 0) break;
-      for (const item of list) {
-        const fid = String(item?.channelId || item?.user?.userId || '');
-        if (fid && fid === String(userId)) {
-          const dt = item?.createdDate || item?.createdAt || item?.timestamp || null;
-          const iso = dt ? new Date(dt).toISOString().slice(0, 10) : '';
-          userFollowedAtCache.set(key, { ts: now, date: iso });
-          return iso;
+        const content = unwrapOpenApiContent(r);
+        const list = Array.isArray(content?.data) ? content.data : (Array.isArray(content) ? content : []);
+        if (!list.length) break;
+        for (const item of list) {
+          const fid = String(item?.channelId || item?.followerChannelId || '').trim();
+          if (fid && fid === String(userId)) {
+            const dt = item?.createdDate || item?.createdAt || null;
+            const iso = dt ? new Date(dt).toISOString().slice(0, 10) : '';
+            userFollowedAtCache.set(key, { ts: now, date: iso });
+            return iso;
+          }
         }
+        if (list.length < size) break;
       }
-      if (list.length < size) break;
     }
-  } catch (e) { console.error(e) }
+  } catch (e) {
+    const status = Number(e?.response?.status || 0);
+    if (status === 401 || status === 403) {
+      console.warn('[CIME] Follower lookup requires READ:CHANNEL scope. Reconnect the CIME account to refresh OAuth permissions.');
+      return null;
+    }
+  }
+  userFollowedAtCache.set(key, { ts: now, date: '' });
   return null;
 }
 
@@ -7218,6 +7265,10 @@ const CIME_CLIENT_SECRET = process.env.CIME_CLIENT_SECRET;
 const CIME_REDIRECT_URI = process.env.CIME_REDIRECT_URI || `http://localhost:${PORT}/api/auth/cime/callback`;
 const CIME_OPENAPI_BASE = process.env.CIME_OPENAPI_BASE || 'https://ci.me/api/openapi';
 const CIME_AUTH_URL = process.env.CIME_AUTH_URL || 'https://ci.me/auth/openapi/account-interlock';
+const CIME_AUTH_SCOPE = String(
+  process.env.CIME_AUTH_SCOPE ||
+  'READ:CHANNEL READ:LIVE_CHAT WRITE:LIVE_CHAT READ:DONATION READ:SUBSCRIPTION'
+).trim();
 const CIME_APP_API_BASE = process.env.CIME_APP_API_BASE || 'https://ci.me/api/app';
 const CIME_UNOFFICIAL_PROFILE_URL_TEMPLATE = process.env.CIME_UNOFFICIAL_PROFILE_URL_TEMPLATE || '';
 const PLATFORM_PROFILE_TIMEOUT_MS = Number(process.env.PLATFORM_PROFILE_TIMEOUT_MS || 2500);
@@ -10109,6 +10160,7 @@ app.get('/api/auth/cime/login', (req, res) => {
     authUrl.searchParams.set('clientId', CIME_CLIENT_ID);
     authUrl.searchParams.set('redirectUri', CIME_REDIRECT_URI);
     authUrl.searchParams.set('state', state);
+    if (CIME_AUTH_SCOPE) authUrl.searchParams.set('scope', CIME_AUTH_SCOPE);
     return res.redirect(authUrl.toString());
   } catch (e) {
     console.error('[CIME] Login redirect error', e?.message || e);
@@ -10194,6 +10246,9 @@ app.get('/api/auth/cime/callback', async (req, res) => {
     const sidToken = getCookieSid(req) || ('rt_' + crypto.randomBytes(32).toString('hex'));
     await upsertSession(sidToken, userId, 30);
     if (!getCookieSid(req)) setCookieSid(res, sidToken);
+    ensureCimeSession(userId).catch((err) => {
+      console.warn('[CIME] Failed to start event session after OAuth callback:', err?.response?.data || err?.message || err);
+    });
 
     return res.redirect(getAuthRedirectUrl(req, { auth: 'success', platform: 'cime', reason: null }));
   } catch (e) {
@@ -11440,8 +11495,8 @@ const BOT_VARIABLES = [
   { key: '{attendance.totalDays}', label: '누적 출석일', description: '출석 메시지에서 사용할 수 있는 전체 출석일입니다.', group: '출석', providers: ['chzzk', 'cime'] },
   { key: '{attendance.points}', label: '출석 포인트', description: '출석 체크로 지급되는 포인트입니다.', group: '출석', providers: ['chzzk', 'cime'] },
   { key: '{attendance.date}', label: '출석 날짜', description: '방송 세션 기준 출석 날짜입니다.', group: '출석', providers: ['chzzk', 'cime'] },
-  { key: '{user.followedAt}', label: '팔로우 시작일', description: '플랫폼에서 팔로우 날짜를 제공하는 경우 시청자가 팔로우를 시작한 날짜입니다.', group: '시청자', providers: ['chzzk'], caveat: '씨미는 현재 확인된 API에서 개별 팔로우 시작일을 제공하지 않습니다.' },
-  { key: '{user.followedDays}', label: '팔로우 일수', description: '팔로우한 날을 1일째로 계산한 팔로우 일수입니다.', group: '시청자', providers: ['chzzk'], caveat: '씨미는 현재 확인된 API에서 개별 팔로우 시작일을 제공하지 않습니다.' },
+  { key: '{user.followedAt}', label: '팔로우 시작일', description: '플랫폼에서 팔로우 날짜를 제공하는 경우 시청자가 팔로우를 시작한 날짜입니다.', group: '시청자', providers: ['chzzk', 'cime'] },
+  { key: '{user.followedDays}', label: '팔로우 일수', description: '팔로우한 날을 1일째로 계산한 팔로우 일수입니다.', group: '시청자', providers: ['chzzk', 'cime'] },
   { key: '{user.subscriptionMonths}', label: '구독 개월', description: '구독 이벤트나 구독 목록에서 확인 가능한 시청자의 구독 개월 수입니다.', group: '시청자', providers: ['chzzk', 'cime'], caveat: '씨미는 구독 이벤트를 수신한 시청자부터 채워집니다.' },
   { key: '{live.title}', label: '방송 제목', description: '현재 방송 제목입니다.', group: '방송', providers: ['chzzk', 'cime'] },
   { key: '{live.category}', label: '방송 카테고리', description: '현재 방송 카테고리입니다.', group: '방송', providers: ['chzzk', 'cime'] },
@@ -12050,8 +12105,7 @@ app.post('/api/chzzk/chat/send', async (req, res) => {
       return res.status(400).json({ error: 'message must be <= 100 characters' });
     }
 
-    // Ensure we have a live session with a sessionKey
-    // Auto-detect channel (same as events endpoint) to establish the session
+    // Start the event session in the background; chat send itself only needs the access token.
     let channelId;
     try {
       const accessToken = await getValidAccessToken(sid);
@@ -12064,15 +12118,11 @@ app.post('/api/chzzk/chat/send', async (req, res) => {
       // If we cannot detect channel, we can still attempt ensureSession without it
     }
 
-    const entry = await ensureSession(sid, channelId ? String(channelId) : undefined);
-    if (!entry || !entry.sessionKey) {
-      return res.status(409).json({ error: 'No active sessionKey' });
-    }
+    ensureSession(sid, channelId ? String(channelId) : undefined).catch(() => { });
 
     const accessToken = await getValidAccessToken(sid);
     const url = `${OPENAPI_BASE}/open/v1/chats/send`;
     const r = await axios.post(url, { message }, {
-      params: { sessionKey: entry.sessionKey },
       headers: {
         Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json'
@@ -12162,6 +12212,7 @@ app.get('/api/auth/chzzk/callback', async (req, res) => {
 
     // Resolve CHZZK userId using freshly obtained accessToken
     let pid = null;
+    let loginChannelId = null;
     try {
       const me = await axios.get(`${OPENAPI_BASE}/open/v1/users/me`, {
         headers: { Authorization: `Bearer ${accessToken}` }
@@ -12169,6 +12220,7 @@ app.get('/api/auth/chzzk/callback', async (req, res) => {
       const content = me?.data?.content || me?.data || {};
       if (content?.channelId) {
         const platformUserId = String(content.channelId);
+        loginChannelId = platformUserId;
         let accountUserId = preferredUserId || platformUserId;
         try {
           const profile = await platformProfiles.enrichChzzkProfile({
@@ -12220,8 +12272,10 @@ app.get('/api/auth/chzzk/callback', async (req, res) => {
             headers: { Authorization: `Bearer ${accessToken}` }
           });
           const content2 = me2?.data?.content || me2?.data || {};
-          if (content2?.userId) {
-            const platformUserId = String(content2.userId);
+          const retryChannelId = content2?.channelId || content2?.userId;
+          if (retryChannelId) {
+            const platformUserId = String(retryChannelId);
+            loginChannelId = platformUserId;
             const accountUserId = preferredUserId || platformUserId;
             if (oldSid) { try { await migrateSidToUserPid(oldSid, accountUserId); } catch { } }
             pid = `user:${accountUserId}`;
@@ -12250,6 +12304,11 @@ app.get('/api/auth/chzzk/callback', async (req, res) => {
       tokenType: tokenType || 'Bearer',
       expiresAt: computeExpiresAt(expiresIn || 86400)
     });
+    if (pid && !pid.startsWith('sid:')) {
+      ensureSession(pid, loginChannelId || undefined).catch((err) => {
+        console.warn('[CHZZK] Failed to start event session after OAuth callback:', err?.response?.data || err?.message || err);
+      });
+    }
 
     // Redirect back to app with success flag
     return res.redirect(getAuthRedirectUrl(req, { auth: 'success', platform: 'chzzk', reason: null }));
@@ -14302,7 +14361,7 @@ async function ensureSession(sid, channelId) {
   sessionCreatePromises.set(sid, createPromise);
   try {
     const created = await createPromise;
-    // Do not subscribe here; wait for SYSTEM 'connected' event to set sessionKey first
+    await ensureSubscribed(created, sid, channelId);
     return created;
   } finally {
     sessionCreatePromises.delete(sid);
@@ -14312,11 +14371,13 @@ async function ensureSession(sid, channelId) {
 async function ensureSubscribed(entry, sid, channelId) {
   // Subscriptions are per user session in CHZZK docs; channelId is not required for subscribe endpoints.
   if (entry.subscribed.has('ALL')) return;
+  if (entry.subscribing) return entry.subscribing;
+  entry.subscribing = (async () => {
   // Ensure sessionKey is available (SYSTEM connected processed)
   if (!entry.sessionKey) {
-    // wait briefly up to 3s
+    // wait briefly for the SYSTEM connected message
     const start = Date.now();
-    while (!entry.sessionKey && Date.now() - start < 3000) {
+    while (!entry.sessionKey && Date.now() - start < 8000) {
       await new Promise(r => setTimeout(r, 50));
     }
   }
@@ -14326,6 +14387,12 @@ async function ensureSubscribed(entry, sid, channelId) {
   await subscribeEvent('donation', entry.sessionKey, undefined, accessToken);
   await subscribeEvent('subscription', entry.sessionKey, undefined, accessToken);
   entry.subscribed.add('ALL');
+  })();
+  try {
+    return await entry.subscribing;
+  } finally {
+    entry.subscribing = null;
+  }
 }
 
 function pushEvent(entry, ev) {
@@ -14456,11 +14523,8 @@ async function sendCimeChat(ownerUserId, message) {
   return unwrapOpenApiContent(r);
 }
 
-async function isCimeLiveAllowed(ownerUserId, sid, channelId) {
+async function refreshCimeLiveStatus(ownerUserId, sid, channelId) {
   try {
-    const settings = await getBotSettings(sid) || {};
-    const onlyWhenLive = !!settings.onlyWhenLive;
-    if (!onlyWhenLive) return true;
     const cached = liveStatusCache.get(sid);
     const now = Date.now();
     if (cached && cached.provider === 'cime' && (now - cached.ts) < 60 * 1000) return !!cached.live;
@@ -14488,6 +14552,12 @@ async function isCimeLiveAllowed(ownerUserId, sid, channelId) {
   } catch {
     return false;
   }
+}
+
+async function isCimeLiveAllowed(ownerUserId, sid, channelId) {
+  const settings = await getBotSettings(sid) || {};
+  const live = await refreshCimeLiveStatus(ownerUserId, sid, channelId);
+  return !settings.onlyWhenLive || live;
 }
 
 async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username, args, response, vdReAll }) {
@@ -14567,11 +14637,9 @@ async function processCimeChatAutomation(entry, ev) {
     const text = String(ev.message || '').trim();
     if (!text) return;
 
-    const allowed = await isCimeLiveAllowed(ownerUserId, sid, entry.channelId);
-    if (!allowed) return;
-
     const settings = await getBotSettings(sid) || {};
-    const currentlyLive = !!(liveStatusCache.get(sid)?.live);
+    const currentlyLive = await refreshCimeLiveStatus(ownerUserId, sid, entry.channelId);
+    if (settings.onlyWhenLive && !currentlyLive) return;
     const resolvedUserId = String(ev.userId || ev.user || 'unknown_user');
     const resolvedUsername = String(ev.user || 'Unknown');
     const isOwner = entry.channelId && String(resolvedUserId) === String(entry.channelId);
@@ -15211,7 +15279,28 @@ async function bootstrapEnsureSessions() {
   } catch { }
 }
 
-setTimeout(() => { bootstrapEnsureSessions().catch(() => { }); }, 0);
+async function bootstrapEnsureCimeSessions() {
+  try {
+    const users = await listPlatformTokenUsers('cime');
+    if (!Array.isArray(users) || users.length === 0) return;
+    console.log(`[bootstrap] Ensuring CIME sessions for ${users.length} account(s)`);
+    for (const user of users) {
+      const ownerUserId = String(user?.userId || '').trim();
+      if (!ownerUserId) continue;
+      try { await ensureCimeSession(ownerUserId); } catch (e) {
+        console.warn('[bootstrap] CIME session skipped:', ownerUserId, e?.response?.data || e?.message || e);
+      }
+      await new Promise(r => setTimeout(r, 150));
+    }
+  } catch (e) {
+    console.warn('[bootstrap] CIME session bootstrap failed:', e?.message || e);
+  }
+}
+
+setTimeout(() => {
+  bootstrapEnsureSessions().catch(() => { });
+  bootstrapEnsureCimeSessions().catch(() => { });
+}, 0);
 
 // =============================
 //

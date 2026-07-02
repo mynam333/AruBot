@@ -1,7 +1,7 @@
 'use client';
 
-import { Coins, Loader2, RefreshCw, Save, Settings, ShieldOff, Trash2, X } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState, useTransition } from 'react';
+import { Coins, Loader2, RefreshCw, Save, Search, Settings, ShieldOff, SlidersHorizontal, Trash2, X } from 'lucide-react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useState, useTransition } from 'react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button, LinkButton } from '@/components/ui/button';
@@ -46,6 +46,8 @@ type DonationSettingsResponse = {
   };
 };
 
+type PointsSortKey = 'points-desc' | 'points-asc' | 'name-asc' | 'name-desc' | 'connected-first' | 'blocked-first';
+
 const POINTS_PAGE_SIZE = 25;
 
 function rowUserId(row: PointRow) {
@@ -54,6 +56,46 @@ function rowUserId(row: PointRow) {
 
 function formatPoints(value: number) {
   return `${Number(value || 0).toLocaleString('ko-KR')}P`;
+}
+
+function rowDisplayName(row: PointRow) {
+  return String(row.username || rowUserId(row) || '');
+}
+
+function platformAccountCount(row: PointRow) {
+  return Array.isArray(row.platformAccounts) ? row.platformAccounts.length : 0;
+}
+
+function rowSearchText(row: PointRow) {
+  const accounts = row.platformAccounts || [];
+  return [
+    row.username,
+    row.user_id,
+    row.userId,
+    row.arubotUuid,
+    row.appUserId,
+    ...accounts.flatMap((account) => [
+      account.provider,
+      account.platformUserId,
+      account.channelId,
+      account.nickname,
+      account.handle,
+    ]),
+  ].map((value) => String(value || '').toLowerCase()).join(' ');
+}
+
+function sortPointRows(rows: PointRow[], sortBy: PointsSortKey) {
+  return [...rows].sort((a, b) => {
+    const aPoints = Number(a.points || 0);
+    const bPoints = Number(b.points || 0);
+    const nameCompare = rowDisplayName(a).localeCompare(rowDisplayName(b), 'ko-KR', { numeric: true, sensitivity: 'base' });
+    if (sortBy === 'points-asc') return aPoints - bPoints || nameCompare;
+    if (sortBy === 'name-asc') return nameCompare || bPoints - aPoints;
+    if (sortBy === 'name-desc') return -nameCompare || bPoints - aPoints;
+    if (sortBy === 'connected-first') return platformAccountCount(b) - platformAccountCount(a) || bPoints - aPoints || nameCompare;
+    if (sortBy === 'blocked-first') return Number(b.pointBlocked === true) - Number(a.pointBlocked === true) || bPoints - aPoints || nameCompare;
+    return bPoints - aPoints || nameCompare;
+  });
 }
 
 async function postJson(path: string, body: unknown) {
@@ -78,22 +120,38 @@ export function PointsPage() {
   const [excludeText, setExcludeText] = useState('');
   const [busyId, setBusyId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
+  const [query, setQuery] = useState('');
+  const [sortBy, setSortBy] = useState<PointsSortKey>('points-desc');
   const [isPending, startTransition] = useTransition();
+  const deferredQuery = useDeferredValue(query);
 
   const totalPoints = useMemo(
     () => rows.reduce((sum, row) => sum + Number(row.points || 0), 0),
     [rows],
   );
-  const totalPages = Math.max(1, Math.ceil(rows.length / POINTS_PAGE_SIZE));
+  const filteredRows = useMemo(() => {
+    const term = deferredQuery.trim().toLowerCase();
+    const filtered = term ? rows.filter((row) => rowSearchText(row).includes(term)) : rows;
+    return sortPointRows(filtered, sortBy);
+  }, [deferredQuery, rows, sortBy]);
+  const filteredPoints = useMemo(
+    () => filteredRows.reduce((sum, row) => sum + Number(row.points || 0), 0),
+    [filteredRows],
+  );
+  const totalPages = Math.max(1, Math.ceil(filteredRows.length / POINTS_PAGE_SIZE));
   const visibleRows = useMemo(() => {
     const currentPage = Math.min(page, totalPages);
     const start = (currentPage - 1) * POINTS_PAGE_SIZE;
-    return rows.slice(start, start + POINTS_PAGE_SIZE);
-  }, [page, rows, totalPages]);
+    return filteredRows.slice(start, start + POINTS_PAGE_SIZE);
+  }, [filteredRows, page, totalPages]);
 
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
   }, [page, totalPages]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [deferredQuery, sortBy]);
 
   const load = useCallback(() => {
     startTransition(async () => {
@@ -242,8 +300,51 @@ export function PointsPage() {
           <CardTitle>포인트 목록</CardTitle>
           <CardDescription>활발한 시청자를 찾고, 이벤트 보상 포인트를 바로 더하거나 조정할 수 있습니다.</CardDescription>
         </CardHeader>
-        <CardContent>
-          {rows.length ? (
+        <CardContent className="grid gap-4">
+          <div className="grid gap-3 rounded-[var(--radius-panel)] border bg-background/62 p-[clamp(0.875rem,1.8vw,1.2rem)] lg:grid-cols-[minmax(0,1fr)_minmax(14rem,0.28fr)_auto] lg:items-center">
+            <label className="relative min-w-0">
+              <span className="sr-only">시청자 검색</span>
+              <Search className="pointer-events-none absolute left-[clamp(0.85rem,1.6vw,1.05rem)] top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="닉네임, 플랫폼 ID, 아루봇 UUID로 검색"
+                className="pl-[clamp(2.4rem,4vw,2.8rem)]"
+              />
+            </label>
+            <label className="grid min-w-0 gap-1.5 text-xs font-bold text-muted-foreground">
+              정렬
+              <select
+                value={sortBy}
+                onChange={(event) => setSortBy(event.target.value as PointsSortKey)}
+                className="box-border min-h-[var(--control-height)] w-full min-w-0 rounded-[var(--radius-control)] border bg-background/80 px-[clamp(0.85rem,1.6vw,1.1rem)] text-sm font-semibold text-foreground outline-none transition focus:border-primary/45 focus:ring-2 focus:ring-ring"
+              >
+                <option value="points-desc">포인트 많은 순</option>
+                <option value="points-asc">포인트 적은 순</option>
+                <option value="name-asc">이름 가나다 순</option>
+                <option value="name-desc">이름 역순</option>
+                <option value="connected-first">연결 계정 우선</option>
+                <option value="blocked-first">적립 제외 우선</option>
+              </select>
+            </label>
+            <div className="flex flex-wrap items-center gap-2 text-xs font-bold text-muted-foreground lg:justify-end">
+              <Badge tone="sky">{filteredRows.length.toLocaleString('ko-KR')}명 표시</Badge>
+              <Badge tone="mint">{formatPoints(filteredPoints)}</Badge>
+              {query ? (
+                <Button type="button" variant="ghost" size="sm" onClick={() => setQuery('')}>
+                  <X className="h-4 w-4" />
+                  검색 지우기
+                </Button>
+              ) : (
+                <span className="inline-flex items-center gap-1 rounded-full border bg-card/70 px-2.5 py-1">
+                  <SlidersHorizontal className="h-3.5 w-3.5" />
+                  전체 목록
+                </span>
+              )}
+            </div>
+          </div>
+
+          {rows.length > 0 && filteredRows.length > 0 ? (
             <div className="overflow-x-auto rounded-[var(--radius-control)] border">
               <table className="min-w-full text-left text-sm">
                 <thead className="bg-muted/70 text-xs text-muted-foreground">
@@ -332,12 +433,16 @@ export function PointsPage() {
                 </tbody>
               </table>
             </div>
+          ) : rows.length ? (
+            <div className="rounded-[var(--radius-control)] border border-dashed bg-background/55 p-[clamp(1.25rem,2.6vw,1.75rem)] text-center text-sm text-muted-foreground">
+              검색 조건에 맞는 시청자가 없습니다.
+            </div>
           ) : (
             <div className="rounded-[var(--radius-control)] border border-dashed bg-background/55 p-[clamp(1.25rem,2.6vw,1.75rem)] text-center text-sm text-muted-foreground">
               아직 포인트가 쌓인 시청자가 없습니다.
             </div>
           )}
-          <Pagination page={page} totalPages={totalPages} onPageChange={setPage} className="mt-4" />
+          <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
         </CardContent>
       </Card>
 
