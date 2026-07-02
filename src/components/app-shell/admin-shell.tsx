@@ -2,13 +2,12 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Cable, Menu, Settings, X } from 'lucide-react';
+import { Cable, Menu, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { adminNav } from '@/shared/config/navigation';
 import { cn } from '@/shared/lib/utils';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
 import { Button, LinkButton } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { Tooltip } from '@/components/ui/tooltip';
 
 function getActiveLabel(pathname: string) {
@@ -92,20 +91,8 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
     <div className="min-h-screen pb-20 xl:pb-0">
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-[var(--shell-sidebar)] border-r bg-card/90 p-[var(--page-gutter)] backdrop-blur-xl xl:block">
         <Brand />
-        <div className="mt-5">
+        <div className="mt-5 max-h-[calc(100vh-7rem)] overflow-y-auto pr-1">
           <NavList />
-        </div>
-        <div className="absolute bottom-[var(--page-gutter)] left-[var(--page-gutter)] right-[var(--page-gutter)] rounded-[var(--radius-card)] border bg-[linear-gradient(135deg,hsl(var(--accent-sky)/0.42),hsl(var(--card)))] p-[clamp(1rem,1.8vw,1.25rem)] shadow-subtle">
-          <div className="flex items-center justify-between gap-3">
-            <Badge tone="sky">시작하기</Badge>
-            <Cable className="h-4 w-4 text-primary" aria-hidden />
-          </div>
-          <p className="mt-3 text-xs leading-5 text-muted-foreground">
-            CHZZK 또는 CIME 계정을 연결하면 명령어, 포인트, 룰렛, 영상 후원을 바로 사용할 수 있습니다.
-          </p>
-          <LinkButton href="/connection" variant="soft" size="sm" className="mt-4 w-full justify-center">
-            플랫폼 연결
-          </LinkButton>
         </div>
       </aside>
 
@@ -125,13 +112,6 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
               <Cable className="h-4 w-4" />
               플랫폼 연결
             </LinkButton>
-            <Tooltip content="서비스 설정">
-              <Button asChild variant="outline" size="icon" aria-label="서비스 설정">
-                <Link href="/settings" prefetch={false}>
-                  <Settings className="h-4 w-4" />
-                </Link>
-              </Button>
-            </Tooltip>
             <ThemeToggle />
           </div>
         </div>

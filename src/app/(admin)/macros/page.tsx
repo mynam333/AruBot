@@ -7,7 +7,6 @@ export default function Page() {
     <AdminFeaturePage
       config={adminFeatureMap.macros}
       actionSlot={<MacroCreateDialog />}
-      resourceActionSlot={<MacroCreateDialog variant="outline" />}
     />
   );
 }

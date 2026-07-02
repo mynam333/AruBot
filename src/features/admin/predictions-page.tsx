@@ -270,18 +270,18 @@ export function PredictionsPage() {
                 className="min-h-[12rem] resize-y rounded-[var(--radius-control)] border bg-background/80 p-[clamp(0.75rem,1.4vw,1rem)] text-sm leading-6 outline-none transition placeholder:text-muted-foreground focus:border-primary/45 focus:ring-2 focus:ring-ring"
               />
             </label>
-            <div className="grid gap-3 md:grid-cols-3">
-              <label className="grid gap-2 text-sm font-semibold">
+            <div className="grid gap-3 rounded-[var(--radius-card)] border bg-background/62 p-3 sm:grid-cols-3">
+              <label className="grid min-w-0 gap-2 text-sm font-semibold">
                 최소 포인트
-                <Input value={minBet} onChange={(event) => setMinBet(event.target.value)} inputMode="numeric" />
+                <Input value={minBet} onChange={(event) => setMinBet(event.target.value)} inputMode="numeric" className="min-h-[var(--control-height-sm)] text-center font-semibold" />
               </label>
-              <label className="grid gap-2 text-sm font-semibold">
+              <label className="grid min-w-0 gap-2 text-sm font-semibold">
                 최대 포인트
-                <Input value={maxBet} onChange={(event) => setMaxBet(event.target.value)} inputMode="numeric" />
+                <Input value={maxBet} onChange={(event) => setMaxBet(event.target.value)} inputMode="numeric" className="min-h-[var(--control-height-sm)] text-center font-semibold" />
               </label>
-              <label className="grid gap-2 text-sm font-semibold">
-                자동 마감
-                <Input value={durationMinutes} onChange={(event) => setDurationMinutes(event.target.value)} inputMode="numeric" placeholder="분 단위" />
+              <label className="grid min-w-0 gap-2 text-sm font-semibold">
+                자동 마감(분)
+                <Input value={durationMinutes} onChange={(event) => setDurationMinutes(event.target.value)} inputMode="numeric" placeholder="비움" className="min-h-[var(--control-height-sm)] text-center font-semibold" />
               </label>
             </div>
             <Button type="button" onClick={create} disabled={isPending}>
@@ -363,9 +363,16 @@ export function PredictionsPage() {
             <CardDescription>브라우저 소스에 주소를 넣으면 현재 예측 현황이 방송 화면에 표시돼요.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3">
-            <div className="rounded-[var(--radius-card)] border bg-background/70 p-3 text-sm break-all text-muted-foreground">
+            <button
+              type="button"
+              onClick={copyOverlay}
+              disabled={!overlayUrl}
+              className="group rounded-[var(--radius-card)] border bg-background/70 p-3 text-left text-sm break-all text-muted-foreground transition hover:border-primary/35 hover:bg-pastel-sky/35 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <span className="block blur-sm transition group-hover:blur-0 group-focus-visible:blur-0">
               {overlayUrl || '채널 연결 후 오버레이 주소가 표시됩니다.'}
-            </div>
+              </span>
+            </button>
             <Button type="button" variant="outline" onClick={copyOverlay} disabled={!overlayUrl}>
               <Copy className="h-4 w-4" />
               주소 복사

@@ -7,7 +7,6 @@ import { AlertCircle, Cable, CheckCircle2, ExternalLink, RefreshCw, ShieldCheck,
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Tooltip } from '@/components/ui/tooltip';
 import { apiUrl, readJson } from '@/shared/api/http';
 import { cn } from '@/shared/lib/utils';
 
@@ -15,6 +14,7 @@ type ProviderId = 'chzzk' | 'cime';
 
 type PlatformAccount = {
   provider?: string;
+  platform_user_id?: string;
   channel_id?: string;
   channel_name?: string;
   channel_handle?: string;
@@ -44,7 +44,6 @@ const providerConfigs = [
     loginPath: '/api/auth/chzzk/login',
     iconPath: '/brands/chzzk.svg',
     revokePath: '/api/auth/chzzk/revoke',
-    revokeLabel: '연결 해제',
     color: 'mint',
     description: '채팅 명령어, 포인트, 룰렛, 영상 후원 기능을 CHZZK 채널과 연결합니다.',
   },
@@ -54,7 +53,6 @@ const providerConfigs = [
     loginPath: '/api/auth/cime/login',
     iconPath: '/brands/cime.svg',
     revokePath: '/api/auth/cime/revoke',
-    revokeLabel: '연결 해제',
     color: 'sky',
     description: 'CIME 채팅과 후원 흐름을 같은 AruBot 계정으로 동기화합니다.',
   },
@@ -107,7 +105,7 @@ export function ConnectionPage() {
   const searchParams = useSearchParams();
   const [platforms, setPlatforms] = useState<PlatformAccount[]>([]);
   const [loading, setLoading] = useState(true);
-  const [busyProvider, setBusyProvider] = useState<ProviderId | null>(null);
+  const [busyAccount, setBusyAccount] = useState<string | null>(null);
   const [syncingProvider, setSyncingProvider] = useState<ProviderId | 'all' | null>(null);
 
   const refresh = useCallback(() => {
@@ -145,24 +143,28 @@ export function ConnectionPage() {
     );
   }, [platforms]);
 
-  const revoke = async (provider: ProviderId) => {
+  const revoke = async (provider: ProviderId, account: PlatformAccount) => {
     const config = providerConfigs.find((item) => item.id === provider);
     if (!config) return;
-    setBusyProvider(provider);
+    const platformUserId = account.platform_user_id || account.channel_id || '';
+    const busyKey = `${provider}:${platformUserId || 'account'}`;
+    setBusyAccount(busyKey);
     try {
       const response = await fetch(apiUrl(config.revokePath), {
         method: 'POST',
         credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ platformUserId }),
       });
       const data = await response.json().catch(() => null);
       if (!response.ok) throw new Error(`${provider} revoke failed`);
       if (Array.isArray(data?.platforms)) setPlatforms(data.platforms);
-      toast.success(`${config.label} 연결 상태를 갱신했습니다.`);
+      toast.success(`${account.channel_name || config.label} 연결을 해제했습니다.`);
       refresh();
     } catch {
       toast.error(`${config.label} 연결 해제에 실패했습니다.`);
     } finally {
-      setBusyProvider(null);
+      setBusyAccount(null);
     }
   };
 
@@ -249,8 +251,10 @@ export function ConnectionPage() {
               <CardContent>
                 <div className="grid gap-2">
                   {accounts.length ? (
-                    accounts.map((account) => (
-                      <div key={`${account.provider}-${account.channel_id}`} className="flex items-center justify-between gap-3 rounded-[var(--radius-control)] border bg-background/75 p-[clamp(0.75rem,1.4vw,1rem)]">
+                    accounts.map((account) => {
+                      const accountKey = `${config.id}:${account.platform_user_id || account.channel_id || account.channel_name || 'account'}`;
+                      return (
+                      <div key={accountKey} className="flex items-center justify-between gap-3 rounded-[var(--radius-control)] border bg-background/75 p-[clamp(0.75rem,1.4vw,1rem)]">
                         <div className="flex min-w-0 items-center gap-3">
                           <AccountAvatar account={account} label={config.label} color={config.color} iconPath={config.iconPath} />
                           <div className="min-w-0">
@@ -278,7 +282,7 @@ export function ConnectionPage() {
                             ) : null}
                           </div>
                         </div>
-                        <div className="flex shrink-0 items-center gap-2">
+                        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
                           {compactCount(account.metadata?.publicProfile?.followerCount) ? (
                             <Badge tone="neutral">{compactCount(account.metadata?.publicProfile?.followerCount)} 팔로워</Badge>
                           ) : null}
@@ -286,9 +290,19 @@ export function ConnectionPage() {
                             <Badge tone="neutral">{compactCount(account.metadata?.publicProfile?.subscriberCount)} 구독자</Badge>
                           ) : null}
                           <CheckCircle2 className="h-4 w-4 text-primary" />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => revoke(config.id, account)}
+                            disabled={busyAccount === accountKey}
+                          >
+                            <Unlink className="h-4 w-4" />
+                            {busyAccount === accountKey ? '처리 중' : '연결 해제'}
+                          </Button>
                         </div>
                       </div>
-                    ))
+                    );})
                   ) : (
                     <div className="rounded-[var(--radius-control)] border bg-background/75 p-[clamp(1rem,1.8vw,1.25rem)] text-sm leading-6 text-muted-foreground">
                       아직 연결된 {config.label} 채널이 없습니다. 로그인하면 현재 계정에 플랫폼 정보가 연결됩니다.
@@ -305,30 +319,14 @@ export function ConnectionPage() {
                         className="h-6 w-6 shrink-0 rounded-[calc(var(--radius-control)*0.35)] object-contain"
                         draggable={false}
                       />
-                      {connected ? '다시 연결' : `${config.label}로 로그인`}
+                      {connected ? '추가 연결' : `${config.label}로 로그인`}
                       <ExternalLink className="h-4 w-4" />
                     </a>
                   </Button>
-                  <Tooltip content="서버의 최신 연결 상태를 다시 불러옵니다.">
-                    <Button type="button" variant="outline" size="icon" onClick={refresh} disabled={loading} aria-label={`${config.label} 연결 상태 새로고침`}>
-                      <RefreshCw className="h-4 w-4" />
-                    </Button>
-                  </Tooltip>
                   {connected ? (
                     <Button type="button" variant="outline" onClick={() => syncProfile(config.id)} disabled={syncingProvider === config.id}>
                       <RefreshCw className={syncingProvider === config.id ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
                       프로필 동기화
-                    </Button>
-                  ) : null}
-                  {connected ? (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => revoke(config.id)}
-                      disabled={busyProvider === config.id}
-                    >
-                      <Unlink className="h-4 w-4" />
-                      {busyProvider === config.id ? '처리 중' : config.revokeLabel}
                     </Button>
                   ) : null}
                 </div>

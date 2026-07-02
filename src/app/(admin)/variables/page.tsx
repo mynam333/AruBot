@@ -1,6 +1,5 @@
-import { AdminFeaturePage } from '@/features/admin/admin-page';
-import { adminFeatureMap } from '@/shared/config/navigation';
+import { VariablesPage } from '@/features/admin/variables-page';
 
 export default function Page() {
-  return <AdminFeaturePage config={adminFeatureMap.variables} />;
+  return <VariablesPage />;
 }

@@ -17,15 +17,8 @@ import {
   Vote,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
-import { Button, LinkButton } from '@/components/ui/button';
+import { LinkButton } from '@/components/ui/button';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
-import { apiUrl } from '@/shared/api/http';
-import { cn } from '@/shared/lib/utils';
-
-const platformButtons = [
-  { label: 'CHZZK으로 시작', href: '/api/auth/chzzk/login', icon: '/brands/chzzk.svg' },
-  { label: 'CIME로 시작', href: '/api/auth/cime/login', icon: '/brands/cime.svg' },
-] as const;
 
 const highlights = [
   { title: '채팅 명령어', body: '자주 쓰는 안내와 참여 명령어를 방송 흐름에 맞춰 자동으로 응답합니다.', icon: MessageSquare, tone: 'sky' },
@@ -41,21 +34,6 @@ const flows = [
   { title: '시청자는 참여를 이어가게', body: '어느 플랫폼에서 봐도 같은 계정의 포인트로 참여 경험을 유지합니다.', icon: BadgeCheck },
   { title: 'OBS에는 필요한 화면만', body: '예측, 룰렛, 영상 후원 화면을 브라우저 소스로 바로 연결합니다.', icon: GalleryVerticalEnd },
 ] as const;
-
-function PlatformLoginButtons({ compact = false }: { compact?: boolean }) {
-  return (
-    <div className={cn('flex flex-wrap gap-2', compact && 'justify-center')}>
-      {platformButtons.map((item) => (
-        <Button key={item.href} asChild variant="outline" size={compact ? 'default' : 'lg'} className="bg-card/80">
-          <a href={apiUrl(item.href)}>
-            <img src={item.icon} alt="" aria-hidden="true" className="h-5 w-5 shrink-0 rounded-[calc(var(--radius-control)*0.35)] object-contain" />
-            {item.label}
-          </a>
-        </Button>
-      ))}
-    </div>
-  );
-}
 
 export function LandingPage() {
   return (
@@ -95,16 +73,13 @@ export function LandingPage() {
                 <ArrowRight className="h-4 w-4" />
               </LinkButton>
               <LinkButton href="/viewer/me" variant="soft" size="lg">
-                내 포인트 보기
+                시청자로 시작
                 <Coins className="h-4 w-4" />
               </LinkButton>
               <LinkButton href="/downloads/local-program" variant="outline" size="lg">
                 로컬 프로그램
                 <Download className="h-4 w-4" />
               </LinkButton>
-            </div>
-            <div className="mt-5">
-              <PlatformLoginButtons />
             </div>
           </div>
 
@@ -149,13 +124,13 @@ export function LandingPage() {
                   </div>
                 </div>
                 <div className="grid gap-2">
-                  {['CHZZK 채팅 참여', 'CIME 후원 반응', 'OBS 예측 오버레이'].map((label, index) => (
+                  {['채팅 참여', '후원 반응', 'OBS 예측 오버레이'].map((label, index) => (
                     <div key={label} className="grid grid-cols-[minmax(0,1fr)_36%] items-center gap-3">
                       <span className="truncate text-sm text-muted-foreground">{label}</span>
                       <span className="relative h-[clamp(0.55rem,1vw,0.7rem)] overflow-hidden rounded-full bg-muted">
                         <span
                           className="absolute inset-y-0 left-0 rounded-full bg-[linear-gradient(90deg,hsl(var(--primary)),hsl(var(--accent)))] landing-bar"
-                          style={{ width: `${62 + index * 13}%`, animationDelay: `${index * 130}ms` }}
+                          style={{ width: '100%', animationDelay: `${index * 130}ms` }}
                         />
                       </span>
                     </div>
@@ -195,7 +170,7 @@ export function LandingPage() {
                   <h3 className="mt-5 text-lg font-semibold">{item.title}</h3>
                   <p className="mt-2 break-keep text-sm leading-7 text-muted-foreground">{item.body}</p>
                   <div className="mt-5 h-[max(0.08rem,0.12vw)] overflow-hidden rounded-full bg-muted">
-                    <div className="h-full w-2/3 bg-[linear-gradient(90deg,hsl(var(--primary)),hsl(var(--accent)))] landing-bar" />
+                    <div className="h-full w-full bg-[linear-gradient(90deg,hsl(var(--primary)),hsl(var(--accent)))] landing-bar" />
                   </div>
                 </article>
               );
@@ -248,9 +223,6 @@ export function LandingPage() {
               로컬 프로그램 다운로드
               <Download className="h-4 w-4" />
             </LinkButton>
-          </div>
-          <div className="mt-5">
-            <PlatformLoginButtons compact />
           </div>
         </div>
       </section>

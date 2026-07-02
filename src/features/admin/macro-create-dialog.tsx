@@ -204,9 +204,9 @@ export function MacroCreateDialog({
                 checked={enabled}
                 onCheckedChange={setEnabled}
                 aria-label="자동 알림 사용 여부"
-                className="relative h-[var(--control-height-sm)] w-[clamp(4rem,9vw,5.5rem)] rounded-full border bg-muted transition data-[state=checked]:border-primary/35 data-[state=checked]:bg-primary/75"
+                className="relative h-[1.75rem] w-[3.25rem] rounded-full border bg-muted transition data-[state=checked]:border-primary/35 data-[state=checked]:bg-primary/75"
               >
-                <Switch.Thumb className="block aspect-square h-[calc(var(--control-height-sm)-0.45rem)] translate-x-[0.2rem] rounded-full bg-card shadow-subtle transition data-[state=checked]:translate-x-[calc(clamp(4rem,9vw,5.5rem)-var(--control-height-sm)+0.25rem)]" />
+                <Switch.Thumb className="block h-[1.35rem] w-[1.35rem] translate-x-[0.2rem] rounded-full bg-card shadow-subtle transition data-[state=checked]:translate-x-[1.55rem]" />
               </Switch.Root>
             </div>
           </div>

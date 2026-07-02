@@ -97,23 +97,20 @@ export function ViewerTokenPanel({
             <Badge tone={data?.token ? 'mint' : 'amber'}>{data?.token ? '주소 준비됨' : '준비 중'}</Badge>
             {data?.sid ? <Badge tone="cyan">연결 채널 확인됨</Badge> : null}
           </div>
-          <div className="grid gap-3 lg:grid-cols-2">
-            <div className="rounded-2xl border bg-background/60 p-3">
-              <div className="text-xs font-bold text-muted-foreground">보안 키</div>
-              <div className="mt-2 break-all text-sm font-semibold">{data?.token || '-'}</div>
-              <Button className="mt-3" type="button" variant="outline" size="sm" onClick={() => copy(data?.token || '', '보안 키')} disabled={!data?.token}>
-                <Copy className="h-3.5 w-3.5" />
-                복사
-              </Button>
-            </div>
-            <div className="rounded-2xl border bg-background/60 p-3">
+          <div className="grid gap-3">
+            <button
+              type="button"
+              onClick={() => fullUrl && copy(fullUrl, 'OBS 주소')}
+              disabled={!fullUrl}
+              className="group rounded-2xl border bg-background/60 p-3 text-left transition hover:border-primary/35 hover:bg-pastel-sky/35 disabled:cursor-not-allowed disabled:opacity-60"
+            >
               <div className="text-xs font-bold text-muted-foreground">OBS 브라우저 소스 주소</div>
-              <div className="mt-2 break-all text-sm font-semibold">{fullUrl || '-'}</div>
-              <Button className="mt-3" type="button" variant="outline" size="sm" onClick={() => copy(fullUrl, 'OBS 주소')} disabled={!fullUrl}>
+              <div className="mt-2 break-all text-sm font-semibold blur-sm transition group-hover:blur-0 group-focus-visible:blur-0">{fullUrl || '-'}</div>
+              <div className="mt-3 inline-flex min-h-[var(--control-height-sm)] items-center gap-2 rounded-[var(--radius-control)] border bg-card px-3 text-xs font-bold">
                 <Copy className="h-3.5 w-3.5" />
-                복사
-              </Button>
-            </div>
+                클릭해서 복사
+              </div>
+            </button>
           </div>
         </div>
       </CardContent>

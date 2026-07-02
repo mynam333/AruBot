@@ -1,0 +1,2555 @@
+'use client';
+
+import {
+  Activity,
+  BadgeCheck,
+  Bot,
+  Braces,
+  CalendarClock,
+  CheckCircle2,
+  Code2,
+  Coins,
+  Copy,
+  Download,
+  GitBranch,
+  Layers3,
+  Loader2,
+  MessageSquare,
+  MousePointer2,
+  Move,
+  Network,
+  Play,
+  Plus,
+  Radio,
+  RefreshCw,
+  Save,
+  Search,
+  Shuffle,
+  Sparkles,
+  Trash2,
+  Type,
+  Redo2,
+  Undo2,
+  Upload,
+  Volume2,
+  Workflow,
+  ZoomIn,
+  ZoomOut,
+} from 'lucide-react';
+import {
+  Background,
+  Controls,
+  Handle,
+  MiniMap,
+  Position,
+  ReactFlow,
+  type Connection,
+  type Edge as FlowEdge,
+  type Node as FlowNode,
+  type NodeProps,
+  type OnConnect,
+  type OnEdgesChange,
+  type OnNodesChange,
+  type OnSelectionChangeParams,
+  type ReactFlowInstance,
+} from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
+import { toast } from 'sonner';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { cn, compactDateTime } from '@/shared/lib/utils';
+import { apiUrl, readJson } from '@/shared/api/http';
+
+type NodeType =
+  | 'start'
+  | 'end'
+  | 'chat'
+  | 'wait'
+  | 'condition'
+  | 'setVariable'
+  | 'readVariable'
+  | 'action'
+  | 'loop'
+  | 'random'
+  | 'pointsGet'
+  | 'pointsAdjust'
+  | 'pointsEnough'
+  | 'pointsRanking'
+  | 'pointsExcluded'
+  | 'rouletteList'
+  | 'rouletteRun'
+  | 'rouletteCompare'
+  | 'rouletteDisplay'
+  | 'attendanceGet'
+  | 'cooldown'
+  | 'join'
+  | 'approval'
+  | 'timer'
+  | 'chatVote'
+  | 'highlight'
+  | 'overlay'
+  | 'overlayUpdate'
+  | 'overlayHide'
+  | 'tts'
+  | 'sound'
+  | 'obs'
+  | 'http'
+  | 'websocket'
+  | 'udp'
+  | 'tits'
+  | 'vtube'
+  | 'log';
+
+type BlueprintNode = {
+  id: string;
+  type: NodeType;
+  name: string;
+  position: { x: number; y: number };
+  enabled?: boolean;
+  config: Record<string, unknown>;
+};
+
+type BlueprintEdge = {
+  id: string;
+  source: string;
+  sourcePort: string;
+  target: string;
+  targetPort: string;
+};
+
+type Blueprint = {
+  id?: string;
+  name: string;
+  slug?: string;
+  enabled?: boolean;
+  description?: string;
+  currentVersionId?: string | null;
+  updatedAt?: string | null;
+  version?: {
+    id?: string;
+    version?: number;
+    published?: boolean;
+    nodes?: BlueprintNode[];
+    edges?: BlueprintEdge[];
+    viewport?: Viewport;
+  } | null;
+};
+
+type BlueprintRun = {
+  id: string;
+  status?: string;
+  triggerSource?: string;
+  startedAt?: string;
+  finishedAt?: string | null;
+  error?: string | null;
+};
+
+type BlueprintVersion = {
+  id: string;
+  version?: number;
+  published?: boolean;
+  createdAt?: string | null;
+};
+
+type BlueprintRunStep = {
+  id: string;
+  nodeId?: string;
+  nodeType?: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  status?: string;
+  output?: Record<string, unknown>;
+  durationMs?: number | null;
+  error?: string | null;
+};
+
+type Viewport = { x: number; y: number; zoom: number };
+type BlueprintClipboard = {
+  schema: 'arubot.blueprint.selection';
+  version: 1;
+  nodes: BlueprintNode[];
+  edges: BlueprintEdge[];
+};
+type BlueprintExport = {
+  schema: 'arubot.blueprint';
+  version: 1;
+  exportedAt: string;
+  blueprint: Pick<Blueprint, 'name' | 'slug' | 'description' | 'enabled'> & {
+    version: {
+      nodes: BlueprintNode[];
+      edges: BlueprintEdge[];
+      viewport: Viewport;
+    };
+  };
+};
+
+type BlueprintNodeFlowData = {
+  node: BlueprintNode;
+  active: boolean;
+  latestStep?: BlueprintRunStep;
+};
+type BlueprintFlowNode = FlowNode<BlueprintNodeFlowData, 'blueprintNode'>;
+type BlueprintFlowEdge = FlowEdge<{ sourcePort: string; targetPort: string }>;
+
+const FLOW_UNIT = 16;
+const NODE_SIZE = { width: 16.5, height: 8.2 };
+const NODE_WIDTH = NODE_SIZE.width * FLOW_UNIT;
+const NODE_MIN_HEIGHT = NODE_SIZE.height * FLOW_UNIT;
+const DEFAULT_VIEWPORT: Viewport = { x: 80, y: 80, zoom: 1 };
+const SELECTION_CLIPBOARD_SCHEMA = 'arubot.blueprint.selection';
+const BLUEPRINT_EXPORT_SCHEMA = 'arubot.blueprint';
+const AUTOSAVE_KEY = 'arubot:action-blueprint:draft:v1';
+
+const nodeCatalog: Array<{
+  type: NodeType;
+  title: string;
+  body: string;
+  group: string;
+  icon: typeof Workflow;
+  tone: 'mint' | 'sky' | 'lemon' | 'coral' | 'violet' | 'neutral' | 'rose';
+  config: Record<string, unknown>;
+}> = [
+  { type: 'start', title: '시작', body: '기본 진입점', group: '필수', icon: Play, tone: 'mint', config: {} },
+  { type: 'end', title: '종료', body: '실행 종료', group: '필수', icon: BadgeCheck, tone: 'coral', config: { status: 'success', message: '완료' } },
+  { type: 'chat', title: '채팅 전송', body: '트리거 플랫폼 우선 전송', group: '기본', icon: MessageSquare, tone: 'sky', config: { message: '{user.username}님, 실행되었습니다.' } },
+  { type: 'wait', title: '대기', body: '초/밀리초 지연', group: '기본', icon: CalendarClock, tone: 'neutral', config: { seconds: 1 } },
+  { type: 'condition', title: '조건문', body: '변수와 값을 비교', group: '기본', icon: GitBranch, tone: 'lemon', config: { left: '{user.points}', operator: 'gte', right: '1000' } },
+  { type: 'setVariable', title: '임시 변수', body: '생성/수정/계산', group: '기본', icon: Braces, tone: 'violet', config: { key: 'bonusPoint', mode: 'set', value: '100' } },
+  { type: 'readVariable', title: '변수 읽기', body: '컨텍스트 값을 출력', group: '기본', icon: Type, tone: 'violet', config: { path: '{user.name}' } },
+  { type: 'action', title: '특수 변수 실행', body: '다른 액션 호출', group: '기본', icon: Workflow, tone: 'violet', config: { actionId: '' } },
+  { type: 'loop', title: 'N회 반복', body: '반복 중 true, 완료 후 false', group: '흐름', icon: RefreshCw, tone: 'sky', config: { count: 3, gapMs: 250 } },
+  { type: 'random', title: '랜덤 분기', body: '가중치 기반 분기', group: '흐름', icon: Shuffle, tone: 'lemon', config: { options: [{ id: 'a', label: 'A', weight: 1 }, { id: 'b', label: 'B', weight: 1 }] } },
+  { type: 'pointsGet', title: '포인트 조회', body: '현재 포인트 확인', group: '포인트', icon: Coins, tone: 'mint', config: { userId: '{user.userId}' } },
+  { type: 'pointsAdjust', title: '포인트 지급/차감', body: '계산식으로 변경', group: '포인트', icon: Coins, tone: 'mint', config: { userId: '{user.userId}', delta: '100' } },
+  { type: 'pointsEnough', title: '포인트 충분 여부', body: 'true/false 분기', group: '포인트', icon: Coins, tone: 'lemon', config: { userId: '{user.userId}', required: '1000' } },
+  { type: 'pointsRanking', title: '포인트 랭킹', body: '상위 시청자 조회', group: '포인트', icon: Coins, tone: 'mint', config: { limit: 10 } },
+  { type: 'pointsExcluded', title: '적립 제외 확인', body: '제외 UUID true/false', group: '포인트', icon: Coins, tone: 'lemon', config: { userId: '{user.userId}' } },
+  { type: 'rouletteList', title: '룰렛 목록', body: '실행 가능한 룰렛 조회', group: '룰렛', icon: Sparkles, tone: 'lemon', config: {} },
+  { type: 'rouletteRun', title: '룰렛 실행', body: '결과를 다음 노드로 전달', group: '룰렛', icon: Sparkles, tone: 'lemon', config: { name: '' } },
+  { type: 'rouletteCompare', title: '룰렛 결과 비교', body: '결과값 조건 분기', group: '룰렛', icon: Sparkles, tone: 'lemon', config: { left: '{node.rouletteRun.result.label}', operator: 'eq', right: '' } },
+  { type: 'rouletteDisplay', title: '룰렛 결과 표시', body: '결과를 오버레이/큐로 전달', group: '룰렛', icon: Sparkles, tone: 'sky', config: { text: '{roulette.result.label}', durationMs: 4000 } },
+  { type: 'attendanceGet', title: '출석 조회', body: '누적 출석일 확인', group: '참여', icon: CheckCircle2, tone: 'mint', config: { userId: '{user.userId}' } },
+  { type: 'cooldown', title: '쿨다운 확인', body: '사용자별 제한 분기', group: '흐름', icon: CalendarClock, tone: 'lemon', config: { key: '{user.userId}', seconds: 30 } },
+  { type: 'join', title: '흐름 합류', body: '여러 입력을 하나로', group: '흐름', icon: GitBranch, tone: 'neutral', config: {} },
+  { type: 'approval', title: '관리자 확인', body: '승인 작업 생성', group: '흐름', icon: CheckCircle2, tone: 'rose', config: { message: '이 액션을 실행할까요?' } },
+  { type: 'timer', title: '타이머 예약', body: '지정 시간 뒤 실행', group: '흐름', icon: CalendarClock, tone: 'sky', config: { seconds: 10 } },
+  { type: 'chatVote', title: '채팅 투표 대기', body: '채팅 투표 결과 수집', group: '참여', icon: MessageSquare, tone: 'sky', config: { seconds: 30, options: '1,2' } },
+  { type: 'highlight', title: '하이라이트 마커', body: '기억할 순간 기록', group: '참여', icon: BadgeCheck, tone: 'neutral', config: { label: '하이라이트' } },
+  { type: 'overlay', title: '오버레이 표시', body: '텍스트/진행바/카운트다운', group: '연출', icon: Layers3, tone: 'sky', config: { text: '{user.name}님 당첨!', durationMs: 4000, animation: 'pop' } },
+  { type: 'overlayUpdate', title: '오버레이 수정', body: '표시 내용/진행률 수정', group: '연출', icon: Layers3, tone: 'sky', config: { overlayId: '{node.overlay.overlayId}', text: '', progress: '' } },
+  { type: 'overlayHide', title: '오버레이 숨김', body: '표시 중인 오버레이 닫기', group: '연출', icon: Layers3, tone: 'neutral', config: { overlayId: '{node.overlay.overlayId}' } },
+  { type: 'tts', title: 'TTS', body: '말할 내용 입력', group: '연출', icon: Volume2, tone: 'coral', config: { text: '{user.name}님 축하합니다!', voice: '', rate: 1, pitch: 1 } },
+  { type: 'sound', title: '사운드', body: '서버/로컬 사운드 재생', group: '연출', icon: Volume2, tone: 'coral', config: { fileId: '', volume: 1 } },
+  { type: 'obs', title: 'OBS', body: '장면/소스/필터 제어', group: '연동', icon: Radio, tone: 'mint', config: { action: 'scene.switch', sceneName: '' } },
+  { type: 'http', title: 'HTTP 요청', body: '외부 API 호출', group: '연동', icon: Network, tone: 'neutral', config: { method: 'POST', url: '', body: '{}' } },
+  { type: 'websocket', title: 'WebSocket', body: '메시지 전송', group: '연동', icon: Network, tone: 'neutral', config: { url: '', message: '{}', timeoutMs: 8000 } },
+  { type: 'udp', title: 'UDP', body: '로컬 프로그램 전용', group: '연동', icon: Network, tone: 'neutral', config: { host: '127.0.0.1', port: 0, message: '' } },
+  { type: 'tits', title: 'T.I.T.S', body: '트리거 실행', group: '로컬', icon: Activity, tone: 'rose', config: { triggerId: '', strength: 1, durationMs: 1000 } },
+  { type: 'vtube', title: 'VTube Studio', body: '핫키/파라미터 실행', group: '로컬', icon: Bot, tone: 'rose', config: { hotkeyId: '', parameter: '', value: '' } },
+  { type: 'log', title: '로그', body: '실행 기록에 남김', group: '기본', icon: Code2, tone: 'neutral', config: { message: '로그: {flow.bonusPoint}' } },
+];
+
+const operators = [
+  ['eq', '같음'],
+  ['neq', '다름'],
+  ['contains', '포함'],
+  ['regex', '정규식'],
+  ['gt', '초과'],
+  ['gte', '이상'],
+  ['lt', '미만'],
+  ['lte', '이하'],
+  ['empty', '비어 있음'],
+  ['exists', '존재함'],
+] as const;
+
+const blueprintTemplates: Array<{
+  id: string;
+  title: string;
+  body: string;
+  tone: 'mint' | 'sky' | 'lemon' | 'coral' | 'violet' | 'neutral' | 'rose';
+  nodes: Array<{ type: NodeType; name?: string; position: { x: number; y: number }; config?: Record<string, unknown> }>;
+  edges: Array<{ source: number; sourcePort?: string; target: number; targetPort?: string }>;
+}> = [
+  {
+    id: 'points-roulette-overlay',
+    title: '포인트 룰렛 연출',
+    body: '포인트가 충분하면 차감 후 룰렛을 돌리고 결과를 오버레이로 보여줍니다.',
+    tone: 'lemon',
+    nodes: [
+      { type: 'pointsEnough', name: '포인트 확인', position: { x: 0, y: 0 }, config: { userId: '{user.userId}', required: '1000' } },
+      { type: 'pointsAdjust', name: '포인트 차감', position: { x: 22, y: -2 }, config: { userId: '{user.userId}', delta: '-1000' } },
+      { type: 'rouletteRun', name: '룰렛 실행', position: { x: 44, y: -2 }, config: { name: '' } },
+      { type: 'rouletteDisplay', name: '룰렛 결과 표시', position: { x: 66, y: -2 }, config: { text: '{node.rouletteRun.result.label}', durationMs: 4500 } },
+      { type: 'chat', name: '포인트 부족 안내', position: { x: 22, y: 10 }, config: { message: '{user.username}님, 포인트가 부족합니다.' } },
+    ],
+    edges: [
+      { source: 0, sourcePort: 'true', target: 1 },
+      { source: 1, target: 2 },
+      { source: 2, target: 3 },
+      { source: 0, sourcePort: 'false', target: 4 },
+    ],
+  },
+  {
+    id: 'chat-highlight-tts',
+    title: '채팅 하이라이트',
+    body: '조건을 만족한 채팅을 하이라이트로 남기고 TTS로 읽습니다.',
+    tone: 'sky',
+    nodes: [
+      { type: 'condition', name: '키워드 확인', position: { x: 0, y: 0 }, config: { left: '{trigger.message}', operator: 'contains', right: '축하' } },
+      { type: 'highlight', name: '하이라이트 저장', position: { x: 22, y: -2 }, config: { label: '{user.username} 채팅' } },
+      { type: 'tts', name: 'TTS 읽기', position: { x: 44, y: -2 }, config: { text: '{user.username}님이 말했어요. {trigger.message}', voice: '', rate: 1, pitch: 1 } },
+    ],
+    edges: [
+      { source: 0, sourcePort: 'true', target: 1 },
+      { source: 1, target: 2 },
+    ],
+  },
+  {
+    id: 'attendance-bonus',
+    title: '출석 보너스',
+    body: '출석일을 확인하고 누적 출석자에게 보너스 포인트와 메시지를 지급합니다.',
+    tone: 'mint',
+    nodes: [
+      { type: 'attendanceGet', name: '출석 조회', position: { x: 0, y: 0 }, config: { userId: '{user.userId}' } },
+      { type: 'condition', name: '누적 7일 확인', position: { x: 22, y: 0 }, config: { left: '{node.attendanceGet.totalDays}', operator: 'gte', right: '7' } },
+      { type: 'pointsAdjust', name: '보너스 지급', position: { x: 44, y: -2 }, config: { userId: '{user.userId}', delta: '500' } },
+      { type: 'chat', name: '보너스 안내', position: { x: 66, y: -2 }, config: { message: '{user.username}님, 누적 출석 보너스 500포인트를 받았습니다.' } },
+    ],
+    edges: [
+      { source: 0, target: 1 },
+      { source: 1, sourcePort: 'true', target: 2 },
+      { source: 2, target: 3 },
+    ],
+  },
+  {
+    id: 'random-reaction',
+    title: '랜덤 리액션',
+    body: '랜덤 분기로 채팅, 사운드, 오버레이 반응을 섞어 보여줍니다.',
+    tone: 'violet',
+    nodes: [
+      { type: 'random', name: '반응 선택', position: { x: 0, y: 0 }, config: { options: [{ id: 'chat', label: '채팅', weight: 2 }, { id: 'sound', label: '사운드', weight: 1 }, { id: 'overlay', label: '오버레이', weight: 1 }] } },
+      { type: 'chat', name: '채팅 반응', position: { x: 24, y: -8 }, config: { message: '{user.username}님 반가워요!' } },
+      { type: 'sound', name: '사운드 재생', position: { x: 24, y: 2 }, config: { fileId: '', volume: 1 } },
+      { type: 'overlay', name: '오버레이 반응', position: { x: 24, y: 12 }, config: { text: '{user.username}님 등장!', durationMs: 3500, animation: 'pop' } },
+    ],
+    edges: [
+      { source: 0, sourcePort: 'option:chat', target: 1 },
+      { source: 0, sourcePort: 'option:sound', target: 2 },
+      { source: 0, sourcePort: 'option:overlay', target: 3 },
+    ],
+  },
+];
+
+function createId(prefix: string) {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(16).slice(2, 8)}`;
+}
+
+function createNode(type: NodeType, position: { x: number; y: number }): BlueprintNode {
+  const spec = nodeCatalog.find((item) => item.type === type) || nodeCatalog[0];
+  return {
+    id: createId(type),
+    type,
+    name: spec.title,
+    position,
+    enabled: true,
+    config: JSON.parse(JSON.stringify(spec.config)),
+  };
+}
+
+function defaultNodes(): BlueprintNode[] {
+  return [
+    createNode('start', { x: 0, y: 3 }),
+    createNode('chat', { x: 24, y: 1 }),
+    createNode('end', { x: 48, y: 3 }),
+  ];
+}
+
+function defaultEdges(nodes: BlueprintNode[]): BlueprintEdge[] {
+  return [
+    { id: createId('edge'), source: nodes[0].id, sourcePort: 'out', target: nodes[1].id, targetPort: 'in' },
+    { id: createId('edge'), source: nodes[1].id, sourcePort: 'out', target: nodes[2].id, targetPort: 'in' },
+  ];
+}
+
+function inputPorts(node: BlueprintNode) {
+  return node.type === 'start' ? [] : ['in'];
+}
+
+function outputPorts(node: BlueprintNode) {
+  if (node.type === 'end') return [];
+  if (node.type === 'condition' || node.type === 'pointsEnough' || node.type === 'pointsExcluded' || node.type === 'rouletteCompare' || node.type === 'cooldown' || node.type === 'loop') return ['true', 'false'];
+  if (node.type === 'random') {
+    const options = Array.isArray(node.config.options) ? node.config.options as Array<{ id?: string }> : [];
+    return options.length ? options.map((option, index) => `option:${option.id || index}`) : ['option:a', 'option:b'];
+  }
+  return ['out'];
+}
+
+function isBlank(value: unknown) {
+  return value == null || String(value).trim() === '';
+}
+
+function requiredConfigErrors(node: BlueprintNode) {
+  const errors: string[] = [];
+  const cfg = node.config || {};
+  const label = node.name || node.type;
+  const need = (key: string, field: string) => {
+    if (isBlank(cfg[key])) errors.push(`${label}: ${field} 값이 필요합니다.`);
+  };
+  if (node.type === 'chat') need('message', '메시지');
+  if (node.type === 'condition' || node.type === 'rouletteCompare') {
+    need('left', '좌변');
+    need('operator', '연산자');
+    if (!['exists', 'empty'].includes(String(cfg.operator || 'eq'))) need('right', '우변');
+  }
+  if (node.type === 'setVariable') need('key', '변수 이름');
+  if (node.type === 'random') {
+    const options = Array.isArray(cfg.options) ? cfg.options as Array<{ id?: unknown; weight?: unknown }> : [];
+    if (options.length < 2) errors.push(`${label}: 랜덤 분기는 선택지가 2개 이상 필요합니다.`);
+    const ids = options.map((option, index) => String(option.id || index).trim());
+    if (new Set(ids).size !== ids.length) errors.push(`${label}: 분기 포트 ID가 중복되었습니다.`);
+    if (!options.some((option) => Number(option.weight ?? 1) > 0)) errors.push(`${label}: 가중치가 1 이상인 선택지가 필요합니다.`);
+  }
+  if (node.type === 'action') need('actionId', '실행할 액션 ID');
+  if (node.type === 'pointsAdjust') need('delta', '변경 포인트');
+  if (node.type === 'pointsEnough') need('required', '필요 포인트');
+  if (node.type === 'rouletteRun') need('name', '룰렛 이름 또는 ID');
+  if (node.type === 'rouletteDisplay' || node.type === 'overlay') need('text', '표시 내용');
+  if (node.type === 'tts') need('text', '말할 내용');
+  if (node.type === 'http') need('url', 'URL');
+  if (node.type === 'websocket') {
+    need('url', 'URL');
+    need('message', '메시지');
+  }
+  if (node.type === 'udp') {
+    need('host', '호스트');
+    need('port', '포트');
+    need('message', '메시지');
+  }
+  if (node.type === 'tits') need('triggerId', '트리거');
+  if (node.type === 'vtube' && isBlank(cfg.hotkeyId) && isBlank(cfg.parameter)) {
+    errors.push(`${label}: 핫키 또는 파라미터 중 하나가 필요합니다.`);
+  }
+  return errors;
+}
+
+function hasCycle(nodes: BlueprintNode[], edges: BlueprintEdge[]) {
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const graph = new Map([...nodeIds].map((id) => [id, [] as string[]]));
+  edges.forEach((edge) => {
+    if (nodeIds.has(edge.source) && nodeIds.has(edge.target)) graph.get(edge.source)?.push(edge.target);
+  });
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const visit = (id: string): boolean => {
+    if (visiting.has(id)) return true;
+    if (visited.has(id)) return false;
+    visiting.add(id);
+    for (const next of graph.get(id) || []) {
+      if (visit(next)) return true;
+    }
+    visiting.delete(id);
+    visited.add(id);
+    return false;
+  };
+  return [...nodeIds].some((id) => visit(id));
+}
+
+function validateBlueprint(nodes: BlueprintNode[], edges: BlueprintEdge[]) {
+  const errors: string[] = [];
+  const startCount = nodes.filter((node) => node.type === 'start').length;
+  if (startCount !== 1) errors.push('시작 노드는 반드시 1개여야 합니다.');
+  const seenNodeIds = new Set<string>();
+  nodes.forEach((node) => {
+    if (!node.id) errors.push('ID가 없는 노드가 있습니다.');
+    if (seenNodeIds.has(node.id)) errors.push(`중복된 노드 ID가 있습니다: ${node.id}`);
+    seenNodeIds.add(node.id);
+    errors.push(...requiredConfigErrors(node));
+  });
+
+  const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+  const outputKeys = new Set<string>();
+  edges.forEach((edge) => {
+    const source = nodeMap.get(edge.source);
+    const target = nodeMap.get(edge.target);
+    if (!source || !target) {
+      errors.push('존재하지 않는 노드 연결이 있습니다.');
+      return;
+    }
+    if (!outputPorts(source).includes(edge.sourcePort || 'out')) {
+      errors.push(`${source.name}: 존재하지 않는 출력 포트가 연결되어 있습니다.`);
+    }
+    if (!inputPorts(target).includes(edge.targetPort || 'in')) {
+      errors.push(`${target.name}: 존재하지 않는 입력 포트가 연결되어 있습니다.`);
+    }
+    const key = `${edge.source}:${edge.sourcePort || 'out'}`;
+    if (outputKeys.has(key)) errors.push('하나의 출력 포트에서 여러 연결이 나갈 수 없습니다.');
+    outputKeys.add(key);
+  });
+  if (nodes.length && hasCycle(nodes, edges)) errors.push('순환 연결은 실행할 수 없습니다. 반복은 N회 반복 노드를 사용하세요.');
+  return Array.from(new Set(errors));
+}
+
+function isDefaultStarterBlueprint(nodes: BlueprintNode[], edges: BlueprintEdge[]) {
+  if (nodes.length !== 3 || edges.length !== 2) return false;
+  const start = nodes.find((node) => node.type === 'start');
+  const chat = nodes.find((node) => node.type === 'chat');
+  const end = nodes.find((node) => node.type === 'end');
+  if (!start || !chat || !end) return false;
+  return edges.some((edge) => edge.source === start.id && edge.target === chat.id)
+    && edges.some((edge) => edge.source === chat.id && edge.target === end.id);
+}
+
+function portLabel(port: string) {
+  if (port === 'in') return '입력';
+  if (port === 'out') return '다음';
+  if (port === 'true') return 'true';
+  if (port === 'false') return 'false';
+  return port.replace(/^option:/, '');
+}
+
+function nodeSpec(type: NodeType) {
+  return nodeCatalog.find((item) => item.type === type) || nodeCatalog[0];
+}
+
+function toneClass(tone: (typeof nodeCatalog)[number]['tone']) {
+  return {
+    mint: {
+      strip: 'from-emerald-300 via-teal-300 to-cyan-300 dark:from-emerald-500 dark:via-teal-500 dark:to-cyan-500',
+      icon: 'bg-pastel-mint/85 text-teal-800 ring-teal-500/18 dark:bg-teal-400/18 dark:text-teal-100',
+      soft: 'bg-pastel-mint/55 text-teal-900 dark:bg-teal-400/12 dark:text-teal-100',
+    },
+    sky: {
+      strip: 'from-sky-300 via-cyan-300 to-teal-200 dark:from-sky-500 dark:via-cyan-500 dark:to-teal-500',
+      icon: 'bg-pastel-sky/85 text-sky-800 ring-sky-500/18 dark:bg-sky-400/18 dark:text-sky-100',
+      soft: 'bg-pastel-sky/55 text-sky-900 dark:bg-sky-400/12 dark:text-sky-100',
+    },
+    lemon: {
+      strip: 'from-amber-200 via-yellow-200 to-lime-200 dark:from-amber-500 dark:via-yellow-500 dark:to-lime-500',
+      icon: 'bg-pastel-lemon/90 text-amber-900 ring-amber-500/18 dark:bg-amber-400/18 dark:text-amber-100',
+      soft: 'bg-pastel-lemon/60 text-amber-950 dark:bg-amber-400/12 dark:text-amber-100',
+    },
+    coral: {
+      strip: 'from-rose-300 via-orange-200 to-amber-200 dark:from-rose-500 dark:via-orange-500 dark:to-amber-500',
+      icon: 'bg-pastel-coral/85 text-rose-800 ring-rose-500/18 dark:bg-rose-400/18 dark:text-rose-100',
+      soft: 'bg-pastel-coral/58 text-rose-900 dark:bg-rose-400/12 dark:text-rose-100',
+    },
+    violet: {
+      strip: 'from-violet-300 via-fuchsia-200 to-sky-200 dark:from-violet-500 dark:via-fuchsia-500 dark:to-sky-500',
+      icon: 'bg-violet-100 text-violet-800 ring-violet-500/18 dark:bg-violet-400/18 dark:text-violet-100',
+      soft: 'bg-violet-100/70 text-violet-900 dark:bg-violet-400/12 dark:text-violet-100',
+    },
+    rose: {
+      strip: 'from-pink-300 via-rose-200 to-orange-200 dark:from-pink-500 dark:via-rose-500 dark:to-orange-500',
+      icon: 'bg-rose-100 text-rose-800 ring-rose-500/18 dark:bg-rose-400/18 dark:text-rose-100',
+      soft: 'bg-rose-100/70 text-rose-900 dark:bg-rose-400/12 dark:text-rose-100',
+    },
+    neutral: {
+      strip: 'from-slate-300 via-zinc-200 to-stone-200 dark:from-slate-500 dark:via-zinc-500 dark:to-stone-500',
+      icon: 'bg-muted text-muted-foreground ring-border',
+      soft: 'bg-muted/75 text-muted-foreground',
+    },
+  }[tone];
+}
+
+function nodePreview(node: BlueprintNode) {
+  if (node.type === 'condition' || node.type === 'rouletteCompare') return `${String(node.config.left || '')} ${String(node.config.operator || '')} ${String(node.config.right || '')}`.trim();
+  if (node.type === 'chat') return String(node.config.message || '').slice(0, 54);
+  if (node.type === 'tts') return String(node.config.text || '').slice(0, 54);
+  if (node.type === 'wait') return `${String(node.config.seconds || 0)}초 대기`;
+  if (node.type === 'loop') return `${String(node.config.count || 1)}회 반복`;
+  if (node.type === 'http') return `${String(node.config.method || 'GET')} ${String(node.config.url || 'URL 미설정')}`;
+  if (node.type === 'pointsAdjust') return `${String(node.config.delta || 0)} 포인트`;
+  if (node.type === 'rouletteRun') return String(node.config.name || '룰렛 미선택');
+  return node.type;
+}
+
+function normalizeBlueprint(payload?: Blueprint | null) {
+  if (!payload) {
+    const nodes = defaultNodes();
+    return {
+      name: '새 실행 액션',
+      description: '',
+      enabled: true,
+      version: { nodes, edges: defaultEdges(nodes), viewport: DEFAULT_VIEWPORT, published: false },
+    } satisfies Blueprint;
+  }
+  return {
+    ...payload,
+    version: {
+      ...(payload.version || {}),
+      nodes: payload.version?.nodes?.length ? payload.version.nodes : defaultNodes(),
+      edges: payload.version?.edges || [],
+      viewport: payload.version?.viewport || DEFAULT_VIEWPORT,
+    },
+  };
+}
+
+function cloneJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function isKnownNodeType(type: unknown): type is NodeType {
+  return nodeCatalog.some((item) => item.type === type);
+}
+
+function normalizePosition(position: unknown, fallback: { x: number; y: number }) {
+  const source = position && typeof position === 'object' ? position as { x?: unknown; y?: unknown } : {};
+  const x = Number(source.x);
+  const y = Number(source.y);
+  return {
+    x: Number.isFinite(x) ? x : fallback.x,
+    y: Number.isFinite(y) ? y : fallback.y,
+  };
+}
+
+function normalizeViewport(viewport: unknown): Viewport {
+  const source = viewport && typeof viewport === 'object' ? viewport as { x?: unknown; y?: unknown; zoom?: unknown } : {};
+  const x = Number(source.x);
+  const y = Number(source.y);
+  const zoom = Number(source.zoom);
+  return {
+    x: Number.isFinite(x) ? x : DEFAULT_VIEWPORT.x,
+    y: Number.isFinite(y) ? y : DEFAULT_VIEWPORT.y,
+    zoom: Number.isFinite(zoom) ? Math.max(0.45, Math.min(1.8, zoom)) : DEFAULT_VIEWPORT.zoom,
+  };
+}
+
+function normalizeImportedNodes(rawNodes: unknown, fallbackToDefault = true) {
+  if (!Array.isArray(rawNodes)) return fallbackToDefault ? defaultNodes() : [];
+  const nodes = rawNodes.flatMap((raw, index) => {
+    if (!raw || typeof raw !== 'object') return [];
+    const source = raw as Partial<BlueprintNode>;
+    if (!isKnownNodeType(source.type)) return [];
+    return [{
+      id: String(source.id || createId(source.type)),
+      type: source.type,
+      name: String(source.name || nodeSpec(source.type).title),
+      position: normalizePosition(source.position, { x: index * 22, y: 3 }),
+      enabled: source.enabled !== false,
+      config: source.config && typeof source.config === 'object' ? cloneJson(source.config) : cloneJson(nodeSpec(source.type).config),
+    } satisfies BlueprintNode];
+  });
+  return nodes.length ? nodes : fallbackToDefault ? defaultNodes() : [];
+}
+
+function normalizeImportedEdges(rawEdges: unknown, nodes: BlueprintNode[]) {
+  if (!Array.isArray(rawEdges)) return [];
+  const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+  return rawEdges.flatMap((raw) => {
+    if (!raw || typeof raw !== 'object') return [];
+    const source = raw as Partial<BlueprintEdge>;
+    const sourceNode = nodeMap.get(String(source.source || ''));
+    const targetNode = nodeMap.get(String(source.target || ''));
+    const sourcePort = String(source.sourcePort || 'out');
+    const targetPort = String(source.targetPort || 'in');
+    if (!sourceNode || !targetNode) return [];
+    if (!outputPorts(sourceNode).includes(sourcePort) || !inputPorts(targetNode).includes(targetPort)) return [];
+    return [{
+      id: String(source.id || createId('edge')),
+      source: sourceNode.id,
+      sourcePort,
+      target: targetNode.id,
+      targetPort,
+    } satisfies BlueprintEdge];
+  });
+}
+
+function normalizeImportedBlueprint(payload: unknown): Blueprint | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const root = payload as { schema?: unknown; blueprint?: unknown; version?: unknown; name?: unknown; description?: unknown; enabled?: unknown; slug?: unknown };
+  const imported = root.schema === BLUEPRINT_EXPORT_SCHEMA && root.blueprint && typeof root.blueprint === 'object'
+    ? root.blueprint as typeof root
+    : root.blueprint && typeof root.blueprint === 'object'
+      ? root.blueprint as typeof root
+      : root;
+  const version = imported.version && typeof imported.version === 'object' ? imported.version as { nodes?: unknown; edges?: unknown; viewport?: unknown } : {};
+  const nodes = normalizeImportedNodes(version.nodes);
+  const edges = normalizeImportedEdges(version.edges, nodes);
+  const name = String(imported.name || '가져온 블루프린트').trim() || '가져온 블루프린트';
+  return {
+    name: `${name} 복사`,
+    slug: '',
+    description: typeof imported.description === 'string' ? imported.description : '',
+    enabled: imported.enabled !== false,
+    version: {
+      nodes,
+      edges,
+      viewport: normalizeViewport(version.viewport),
+      published: false,
+    },
+  };
+}
+
+function safeJsonFilename(name: string) {
+  const normalized = name.trim().replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, '-').slice(0, 80);
+  return `${normalized || 'arubot-blueprint'}.json`;
+}
+
+function buildBlueprintExport(blueprint: Blueprint, nodes: BlueprintNode[], edges: BlueprintEdge[], viewport: Viewport): BlueprintExport {
+  return {
+    schema: BLUEPRINT_EXPORT_SCHEMA,
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    blueprint: {
+      name: blueprint.name,
+      slug: blueprint.slug || '',
+      description: blueprint.description || '',
+      enabled: blueprint.enabled !== false,
+      version: {
+        nodes: cloneJson(nodes),
+        edges: cloneJson(edges),
+        viewport,
+      },
+    },
+  };
+}
+
+function serializeBlueprintSnapshot(blueprint: Blueprint) {
+  return JSON.stringify({
+    name: blueprint.name,
+    slug: blueprint.slug || '',
+    description: blueprint.description || '',
+    enabled: blueprint.enabled !== false,
+    version: {
+      nodes: blueprint.version?.nodes || [],
+      edges: blueprint.version?.edges || [],
+      viewport: blueprint.version?.viewport || DEFAULT_VIEWPORT,
+    },
+  });
+}
+
+function restoreBlueprintSnapshot(snapshot: string): Blueprint {
+  const parsed = JSON.parse(snapshot) as Blueprint;
+  const nodes = normalizeImportedNodes(parsed.version?.nodes);
+  return normalizeBlueprint({
+    name: String(parsed.name || '새 실행 액션'),
+    slug: parsed.slug || '',
+    description: parsed.description || '',
+    enabled: parsed.enabled !== false,
+    version: {
+      nodes,
+      edges: normalizeImportedEdges(parsed.version?.edges, nodes),
+      viewport: normalizeViewport(parsed.version?.viewport),
+      published: false,
+    },
+  });
+}
+
+async function jsonRequest<T>(path: string, method: string, body?: unknown): Promise<T> {
+  const response = await fetch(apiUrl(path), {
+    method,
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: body == null ? undefined : JSON.stringify(body),
+  });
+  const data = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(data?.error || 'request_failed');
+  return data as T;
+}
+
+function portTop(index: number, total: number) {
+  return 2.4 + index * (Math.max(1, NODE_SIZE.height - 4.6) / Math.max(1, total - 1 || 1));
+}
+
+function portPointPx(node: BlueprintNode, kind: 'input' | 'output', port: string, index = 0, total = 1) {
+  return {
+    x: node.position.x * FLOW_UNIT + (kind === 'input' ? 0 : NODE_WIDTH),
+    y: node.position.y * FLOW_UNIT + portTop(index, total) * FLOW_UNIT,
+    port,
+  };
+}
+
+function BlueprintCanvasNode({ data, selected }: NodeProps<BlueprintFlowNode>) {
+  const { node, active, latestStep } = data;
+  const spec = nodeSpec(node.type);
+  const Icon = spec.icon;
+  const ins = inputPorts(node);
+  const outs = outputPorts(node);
+  const tone = toneClass(spec.tone);
+  const statusTone = latestStep?.status === 'failed' ? 'bg-destructive' : active ? 'bg-primary' : latestStep?.status === 'done' ? 'bg-emerald-500' : node.enabled === false ? 'bg-muted-foreground' : 'bg-primary/65';
+  return (
+    <div
+      className={cn(
+        'group/blueprint-node relative select-none overflow-hidden rounded-[calc(var(--radius-card)*0.92)] border bg-card/96 shadow-subtle backdrop-blur-xl transition duration-200',
+        'hover:-translate-y-0.5 hover:border-primary/35 hover:shadow-lift',
+        selected && 'border-primary/55 ring-2 ring-primary/35 shadow-lift',
+        active && 'scale-[1.025] border-primary/65 bg-pastel-sky/75 ring-4 ring-primary/18 shadow-lift',
+        latestStep?.status === 'done' && 'border-primary/45',
+        latestStep?.status === 'failed' && 'border-destructive/70 ring-2 ring-destructive/30',
+        node.enabled === false && 'opacity-55',
+      )}
+      style={{ width: `${NODE_WIDTH}px`, minHeight: `${NODE_MIN_HEIGHT}px` }}
+    >
+      <div className={cn('h-[max(0.25rem,0.26vw)] bg-[linear-gradient(90deg,var(--tw-gradient-stops))]', tone.strip)} />
+      <div className="grid gap-3 p-[clamp(0.75rem,1.1vw,0.875rem)]">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <span className={cn('grid aspect-square w-[2.15rem] shrink-0 place-items-center rounded-[calc(var(--radius-control)*0.82)] ring-1', tone.icon)}>
+              <Icon className="h-4 w-4" />
+            </span>
+            <span className="min-w-0">
+              <span className="block truncate text-[0.78rem] font-extrabold leading-tight text-foreground">{node.name}</span>
+              <span className="mt-0.5 block truncate text-[0.66rem] font-semibold text-muted-foreground">{spec.group} · {spec.title}</span>
+            </span>
+          </div>
+          <span className={cn('mt-1 h-2.5 w-2.5 shrink-0 rounded-full shadow-[0_0_0_0.25rem_hsl(var(--background)/0.88)]', statusTone)} />
+        </div>
+        <div className={cn('rounded-[calc(var(--radius-control)*0.82)] px-2.5 py-2 text-[0.69rem] font-semibold leading-5', tone.soft)}>
+          <span className="line-clamp-2">{nodePreview(node) || spec.body}</span>
+        </div>
+        {latestStep ? (
+          <div className="flex items-center justify-between gap-2 rounded-full border bg-background/72 px-2.5 py-1 text-[0.66rem] font-bold text-muted-foreground">
+            <span>{latestStep.status || 'done'}</span>
+            <span>{latestStep.durationMs ?? 0}ms</span>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between gap-2 text-[0.66rem] font-semibold text-muted-foreground">
+            <span className="truncate">{spec.body}</span>
+            <span>{outs.length ? `${outs.length}개 출력` : '마지막'}</span>
+          </div>
+        )}
+      </div>
+      {ins.map((port, index) => (
+        <Handle
+          key={port}
+          id={port}
+          type="target"
+          position={Position.Left}
+          title={`입력: ${portLabel(port)}`}
+          className="!grid !h-6 !w-6 !touch-manipulation !place-items-center !rounded-full !border-[max(0.125rem,0.16vw)] !border-card !bg-primary !shadow-subtle transition hover:!scale-110 md:!h-4 md:!w-4"
+          style={{ top: `${portTop(index, ins.length)}rem`, left: '-0.72rem' }}
+        />
+      ))}
+      {outs.map((port, index) => (
+        <Handle
+          key={port}
+          id={port}
+          type="source"
+          position={Position.Right}
+          title={`출력: ${portLabel(port)}`}
+          className={cn(
+            '!grid !h-6 !w-6 !touch-manipulation !place-items-center !rounded-full !border-[max(0.125rem,0.16vw)] !border-card !shadow-subtle transition hover:!scale-110 md:!h-4 md:!w-4',
+            port === 'false' ? '!bg-destructive' : port === 'true' ? '!bg-emerald-500' : '!bg-sky-500',
+          )}
+          style={{ top: `${portTop(index, outs.length)}rem`, right: '-0.72rem' }}
+        />
+      ))}
+    </div>
+  );
+}
+
+const flowNodeTypes = { blueprintNode: BlueprintCanvasNode };
+
+function BlueprintFlowEdgesOverlay({
+  nodes,
+  edges,
+  selectedEdgeId,
+  viewport,
+  onSelect,
+}: {
+  nodes: BlueprintNode[];
+  edges: BlueprintEdge[];
+  selectedEdgeId: string | null;
+  viewport: Viewport;
+  onSelect: (edgeId: string) => void;
+}) {
+  const nodeMap = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
+  return (
+    <svg
+      className="pointer-events-none absolute inset-0 z-[2] h-full w-full overflow-visible"
+      style={{ transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`, transformOrigin: '0 0' }}
+    >
+      <defs>
+        <filter id="blueprint-edge-glow" x="-20%" y="-20%" width="140%" height="140%">
+          <feGaussianBlur stdDeviation="3" result="blur" />
+          <feMerge>
+            <feMergeNode in="blur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+      </defs>
+      {edges.map((edge) => {
+        const source = nodeMap.get(edge.source);
+        const target = nodeMap.get(edge.target);
+        if (!source || !target) return null;
+        const sourcePorts = outputPorts(source);
+        const targetPorts = inputPorts(target);
+        const start = portPointPx(source, 'output', edge.sourcePort, Math.max(0, sourcePorts.indexOf(edge.sourcePort)), sourcePorts.length);
+        const end = portPointPx(target, 'input', edge.targetPort, Math.max(0, targetPorts.indexOf(edge.targetPort)), targetPorts.length);
+        const c1 = start.x + Math.max(80, Math.abs(end.x - start.x) * 0.45);
+        const c2 = end.x - Math.max(80, Math.abs(end.x - start.x) * 0.45);
+        const selected = selectedEdgeId === edge.id;
+        const stroke = selected ? 'hsl(var(--primary))' : edge.sourcePort === 'false' ? 'hsl(var(--destructive))' : edge.sourcePort === 'true' ? 'hsl(158 64% 46%)' : 'hsl(202 82% 52%)';
+        const path = `M ${start.x} ${start.y} C ${c1} ${start.y}, ${c2} ${end.y}, ${end.x} ${end.y}`;
+        return (
+          <g key={edge.id}>
+            <path
+              d={path}
+              fill="none"
+              stroke="hsl(var(--foreground) / 0.08)"
+              strokeWidth={selected ? 9 : 7}
+              strokeLinecap="round"
+            />
+            <path
+              d={path}
+              fill="none"
+              stroke={stroke}
+              strokeWidth={selected ? 4 : 2.75}
+              strokeLinecap="round"
+              strokeDasharray={edge.sourcePort.startsWith('option:') ? '7 7' : undefined}
+              filter={selected ? 'url(#blueprint-edge-glow)' : undefined}
+              className="pointer-events-auto cursor-pointer transition"
+              style={{ pointerEvents: 'stroke' }}
+              onPointerDown={(event) => {
+                event.stopPropagation();
+                onSelect(edge.id);
+              }}
+            />
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+export function ActionBlueprintPage() {
+  const flowWrapperRef = useRef<HTMLDivElement | null>(null);
+  const flowInstanceRef = useRef<ReactFlowInstance<BlueprintFlowNode, BlueprintFlowEdge> | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
+  const historyPastRef = useRef<string[]>([]);
+  const historyFutureRef = useRef<string[]>([]);
+  const lastSnapshotRef = useRef('');
+  const persistedSnapshotRef = useRef('');
+  const historyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const applyingHistoryRef = useRef(false);
+  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const playTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [blueprints, setBlueprints] = useState<Blueprint[]>([]);
+  const [blueprint, setBlueprint] = useState<Blueprint>(() => normalizeBlueprint(null));
+  const [runs, setRuns] = useState<BlueprintRun[]>([]);
+  const [versions, setVersions] = useState<BlueprintVersion[]>([]);
+  const [runSteps, setRunSteps] = useState<BlueprintRunStep[]>([]);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  const [paletteQuery, setPaletteQuery] = useState('');
+  const [clipboard, setClipboard] = useState<BlueprintClipboard | null>(null);
+  const [pasteCount, setPasteCount] = useState(0);
+  const [historyCount, setHistoryCount] = useState({ past: 0, future: 0 });
+  const [draftStatus, setDraftStatus] = useState<'idle' | 'saved' | 'restored'>('idle');
+  const [activeRunNodeId, setActiveRunNodeId] = useState<string | null>(null);
+  const [simulator, setSimulator] = useState({
+    platform: 'chzzk',
+    username: '테스트 시청자',
+    userId: 'test_viewer',
+    points: '3000',
+    message: '!테스트',
+    rouletteResult: '당첨',
+    donationAmount: '1000',
+  });
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [isPending, startTransition] = useTransition();
+
+  const nodes = useMemo(() => blueprint.version?.nodes || [], [blueprint.version?.nodes]);
+  const edges = useMemo(() => blueprint.version?.edges || [], [blueprint.version?.edges]);
+  const viewport = blueprint.version?.viewport || DEFAULT_VIEWPORT;
+  const [liveViewport, setLiveViewport] = useState<Viewport>(viewport);
+  const selectedNode = selectedIds.length === 1 ? nodes.find((node) => node.id === selectedIds[0]) || null : null;
+  const validationErrors = useMemo(() => {
+    return validateBlueprint(nodes, edges);
+  }, [edges, nodes]);
+  const latestStepByNodeId = useMemo(() => {
+    const map = new Map<string, BlueprintRunStep>();
+    for (let index = runSteps.length - 1; index >= 0; index -= 1) {
+      const step = runSteps[index];
+      if (step.nodeId && !map.has(step.nodeId)) map.set(step.nodeId, step);
+    }
+    return map;
+  }, [runSteps]);
+  const flowNodes = useMemo<BlueprintFlowNode[]>(() => {
+    return nodes.map((node) => ({
+      id: node.id,
+      type: 'blueprintNode',
+      position: { x: node.position.x * FLOW_UNIT, y: node.position.y * FLOW_UNIT },
+      initialWidth: NODE_WIDTH,
+      initialHeight: NODE_MIN_HEIGHT,
+      width: NODE_WIDTH,
+      height: NODE_MIN_HEIGHT,
+      selected: selectedIds.includes(node.id),
+      draggable: node.type !== 'start',
+      data: {
+        node,
+        active: activeRunNodeId === node.id,
+        latestStep: latestStepByNodeId.get(node.id),
+      },
+    }));
+  }, [activeRunNodeId, latestStepByNodeId, nodes, selectedIds]);
+  const flowEdges = useMemo<BlueprintFlowEdge[]>(() => {
+    return edges.map((edge) => ({
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      sourceHandle: edge.sourcePort || 'out',
+      targetHandle: edge.targetPort || 'in',
+      type: 'smoothstep',
+      selected: selectedEdgeId === edge.id,
+      data: { sourcePort: edge.sourcePort || 'out', targetPort: edge.targetPort || 'in' },
+      style: {
+        stroke: selectedEdgeId === edge.id
+          ? 'hsl(var(--primary))'
+          : edge.sourcePort === 'false'
+            ? 'hsl(var(--accent-coral))'
+            : edge.sourcePort === 'true'
+              ? 'hsl(var(--accent-mint))'
+              : 'hsl(var(--muted-foreground))',
+        strokeWidth: selectedEdgeId === edge.id ? 4 : 2.5,
+      },
+    }));
+  }, [edges, selectedEdgeId]);
+
+  const filteredCatalog = useMemo(() => {
+    const term = paletteQuery.trim().toLowerCase();
+    return nodeCatalog.filter((item) => !term || `${item.title} ${item.body} ${item.group}`.toLowerCase().includes(term));
+  }, [paletteQuery]);
+  const catalogGroups = useMemo(() => {
+    const groups = new Map<string, typeof filteredCatalog>();
+    filteredCatalog.forEach((item) => {
+      groups.set(item.group, [...(groups.get(item.group) || []), item]);
+    });
+    return [...groups.entries()];
+  }, [filteredCatalog]);
+  const zoomLabel = Math.round((liveViewport.zoom || 1) * 100);
+
+  const updateBlueprint = useCallback((updater: (current: Blueprint) => Blueprint) => {
+    setBlueprint((current) => updater({
+      ...current,
+      version: {
+        ...(current.version || {}),
+        nodes: current.version?.nodes || [],
+        edges: current.version?.edges || [],
+        viewport: current.version?.viewport || DEFAULT_VIEWPORT,
+      },
+    }));
+  }, []);
+
+  const syncFlowViewport = useCallback((nextViewport: Viewport) => {
+    setLiveViewport(nextViewport);
+    void flowInstanceRef.current?.setViewport(nextViewport);
+  }, []);
+
+  const load = useCallback(() => {
+    startTransition(async () => {
+      const data = await readJson<{ blueprints?: Blueprint[] }>('/api/action-blueprints');
+      const list = data?.blueprints || [];
+      setBlueprints(list);
+      if (list.length) {
+        const nextBlueprint = normalizeBlueprint(list[0]);
+        setBlueprint(nextBlueprint);
+        syncFlowViewport(nextBlueprint.version?.viewport || DEFAULT_VIEWPORT);
+        historyPastRef.current = [];
+        historyFutureRef.current = [];
+        lastSnapshotRef.current = serializeBlueprintSnapshot(nextBlueprint);
+        persistedSnapshotRef.current = serializeBlueprintSnapshot(nextBlueprint);
+        setHistoryCount({ past: 0, future: 0 });
+        const [runData, versionData] = await Promise.all([
+          readJson<{ runs?: BlueprintRun[] }>(`/api/action-blueprints/${encodeURIComponent(list[0].id || '')}/runs`),
+          readJson<{ versions?: BlueprintVersion[] }>(`/api/action-blueprints/${encodeURIComponent(list[0].id || '')}/versions`),
+        ]);
+        setRuns(runData?.runs || []);
+        setVersions(versionData?.versions || []);
+      }
+    });
+  }, [syncFlowViewport]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  useEffect(() => {
+    const snapshot = serializeBlueprintSnapshot(blueprint);
+    if (!lastSnapshotRef.current || applyingHistoryRef.current) {
+      lastSnapshotRef.current = snapshot;
+      applyingHistoryRef.current = false;
+      return;
+    }
+    if (snapshot === lastSnapshotRef.current) return;
+    if (historyTimerRef.current) clearTimeout(historyTimerRef.current);
+    historyTimerRef.current = setTimeout(() => {
+      historyPastRef.current = [...historyPastRef.current.slice(-59), lastSnapshotRef.current];
+      historyFutureRef.current = [];
+      lastSnapshotRef.current = snapshot;
+      setHistoryCount({ past: historyPastRef.current.length, future: 0 });
+    }, 450);
+    return () => {
+      if (historyTimerRef.current) clearTimeout(historyTimerRef.current);
+    };
+  }, [blueprint]);
+
+  useEffect(() => {
+    if (!historyPastRef.current.length && draftStatus !== 'restored') return;
+    const payload = buildBlueprintExport(blueprint, nodes, edges, viewport);
+    if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
+    autosaveTimerRef.current = setTimeout(() => {
+      try {
+        localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(payload));
+        setDraftStatus('saved');
+      } catch {
+        setDraftStatus('idle');
+      }
+    }, 900);
+    return () => {
+      if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
+    };
+  }, [blueprint, draftStatus, edges, nodes, viewport]);
+
+  useEffect(() => () => {
+    if (historyTimerRef.current) clearTimeout(historyTimerRef.current);
+    if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
+    if (playTimerRef.current) clearTimeout(playTimerRef.current);
+  }, []);
+
+  const addNode = (type: NodeType) => {
+    const rect = flowWrapperRef.current?.getBoundingClientRect();
+    const center = rect
+      ? flowInstanceRef.current?.screenToFlowPosition({ x: rect.left + rect.width * 0.5, y: rect.top + rect.height * 0.5 }) || { x: 320, y: 220 }
+      : { x: 320, y: 220 };
+    const position = { x: center.x / FLOW_UNIT, y: center.y / FLOW_UNIT };
+    const node = createNode(type, position);
+    if (type === 'start' && nodes.some((item) => item.type === 'start')) {
+      toast.info('시작 노드는 블루프린트마다 1개만 사용할 수 있습니다.');
+      return;
+    }
+    updateBlueprint((current) => ({
+      ...current,
+      version: { ...current.version, nodes: [...(current.version?.nodes || []), node] },
+    }));
+    setSelectedIds([node.id]);
+  };
+
+  const removeSelection = () => {
+    if (!selectedIds.length && !selectedEdgeId) return;
+    const startSelected = nodes.some((node) => selectedIds.includes(node.id) && node.type === 'start');
+    if (startSelected) {
+      toast.info('시작 노드는 삭제할 수 없습니다.');
+      return;
+    }
+    updateBlueprint((current) => ({
+      ...current,
+      version: {
+        ...current.version,
+        nodes: (current.version?.nodes || []).filter((node) => !selectedIds.includes(node.id)),
+        edges: (current.version?.edges || []).filter((edge) => !selectedEdgeId || edge.id !== selectedEdgeId).filter((edge) => !selectedIds.includes(edge.source) && !selectedIds.includes(edge.target)),
+      },
+    }));
+    setSelectedIds([]);
+    setSelectedEdgeId(null);
+  };
+
+  const onNodesChange = useCallback<OnNodesChange<BlueprintFlowNode>>((changes) => {
+    const positionChanges = changes.flatMap((change) => (
+      change.type === 'position' && change.position ? [{ id: change.id, position: change.position }] : []
+    ));
+    if (!positionChanges.length) return;
+    const nextPositions = new Map(positionChanges.map((change) => [change.id, change.position!]));
+    updateBlueprint((current) => ({
+      ...current,
+      version: {
+        ...current.version,
+        nodes: (current.version?.nodes || []).map((node) => {
+          const next = nextPositions.get(node.id);
+          return next ? { ...node, position: { x: next.x / FLOW_UNIT, y: next.y / FLOW_UNIT } } : node;
+        }),
+      },
+    }));
+  }, [updateBlueprint]);
+
+  const onEdgesChange = useCallback<OnEdgesChange<BlueprintFlowEdge>>((changes) => {
+    const selected = changes.find((change) => change.type === 'select' && change.selected);
+    if (selected?.type === 'select') {
+      setSelectedEdgeId(selected.id);
+      setSelectedIds([]);
+    }
+  }, []);
+
+  const onConnect = useCallback<OnConnect>((connection: Connection) => {
+    const sourceId = String(connection.source || '');
+    const targetId = String(connection.target || '');
+    const sourcePort = String(connection.sourceHandle || 'out');
+    const targetPort = String(connection.targetHandle || 'in');
+    if (!sourceId || !targetId || sourceId === targetId) {
+      toast.error('연결할 수 없는 포트입니다.');
+      return;
+    }
+    const sourceNode = nodes.find((node) => node.id === sourceId);
+    const targetNode = nodes.find((node) => node.id === targetId);
+    if (!sourceNode || !targetNode || !outputPorts(sourceNode).includes(sourcePort) || !inputPorts(targetNode).includes(targetPort)) {
+      toast.error('연결할 수 없는 포트입니다.');
+      return;
+    }
+    updateBlueprint((current) => {
+      const nextEdges = (current.version?.edges || []).filter((edge) => !(edge.source === sourceId && edge.sourcePort === sourcePort));
+      return {
+        ...current,
+        version: {
+          ...current.version,
+          edges: [...nextEdges, { id: createId('edge'), source: sourceId, sourcePort, target: targetId, targetPort }],
+        },
+      };
+    });
+    setSelectedIds([]);
+    setSelectedEdgeId(null);
+  }, [nodes, updateBlueprint]);
+
+  const onSelectionChange = useCallback((params: OnSelectionChangeParams<BlueprintFlowNode, BlueprintFlowEdge>) => {
+    setSelectedIds(params.nodes.map((node) => node.id));
+    setSelectedEdgeId(params.edges[0]?.id || null);
+  }, []);
+
+  const onMoveEnd = useCallback((_event: MouseEvent | TouchEvent | null, nextViewport: Viewport) => {
+    updateBlueprint((current) => ({ ...current, version: { ...current.version, viewport: nextViewport } }));
+  }, [updateBlueprint]);
+
+  const onInit = useCallback((instance: ReactFlowInstance<BlueprintFlowNode, BlueprintFlowEdge>) => {
+    flowInstanceRef.current = instance;
+    syncFlowViewport(viewport);
+  }, [syncFlowViewport, viewport]);
+
+  const updateNodeConfig = (key: string, value: unknown) => {
+    if (!selectedNode) return;
+    updateBlueprint((current) => ({
+      ...current,
+      version: {
+        ...current.version,
+        nodes: (current.version?.nodes || []).map((node) => node.id === selectedNode.id ? { ...node, config: { ...node.config, [key]: value } } : node),
+      },
+    }));
+  };
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const data = await jsonRequest<{ blueprint: Blueprint; validationErrors?: string[] }>('/api/action-blueprints', 'POST', {
+        id: blueprint.id,
+        name: blueprint.name,
+        slug: blueprint.slug,
+        description: blueprint.description,
+        enabled: blueprint.enabled !== false,
+        nodes,
+        edges,
+        viewport,
+      });
+      const nextBlueprint = normalizeBlueprint(data.blueprint);
+      setBlueprint(nextBlueprint);
+      persistedSnapshotRef.current = serializeBlueprintSnapshot(nextBlueprint);
+      lastSnapshotRef.current = serializeBlueprintSnapshot(nextBlueprint);
+      setBlueprints((current) => [data.blueprint, ...current.filter((item) => item.id !== data.blueprint.id)]);
+      const versionData = data.blueprint.id ? await readJson<{ versions?: BlueprintVersion[] }>(`/api/action-blueprints/${encodeURIComponent(data.blueprint.id)}/versions`) : null;
+      setVersions(versionData?.versions || []);
+      toast.success(data.validationErrors?.length ? '저장했습니다. 게시 전 확인할 항목이 있습니다.' : '블루프린트를 저장했습니다.');
+      return data.blueprint;
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '저장하지 못했습니다.');
+      return null;
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const publish = async () => {
+    if (validationErrors.length) {
+      toast.error('검증 항목을 먼저 해결한 뒤 게시할 수 있습니다.');
+      return;
+    }
+    const currentSnapshot = serializeBlueprintSnapshot(blueprint);
+    const saved = blueprint.id && persistedSnapshotRef.current === currentSnapshot ? blueprint : await save();
+    const id = saved?.id;
+    if (!id) return;
+    try {
+      const data = await jsonRequest<{ blueprint: Blueprint }>(`/api/action-blueprints/${encodeURIComponent(id)}/publish`, 'POST');
+      const nextBlueprint = normalizeBlueprint(data.blueprint);
+      setBlueprint(nextBlueprint);
+      persistedSnapshotRef.current = serializeBlueprintSnapshot(nextBlueprint);
+      lastSnapshotRef.current = serializeBlueprintSnapshot(nextBlueprint);
+      setBlueprints((current) => [data.blueprint, ...current.filter((item) => item.id !== data.blueprint.id)]);
+      toast.success('게시했습니다. 이제 특수 변수로 실행할 수 있습니다.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '게시하지 못했습니다.');
+    }
+  };
+
+  const simulatorContext = () => ({
+    user: {
+      userId: simulator.userId || 'test_viewer',
+      username: simulator.username || '테스트 시청자',
+      name: simulator.username || '테스트 시청자',
+      points: Number(simulator.points || 0),
+    },
+    channel: { channelUid: 'simulator-channel' },
+    trigger: {
+      platform: simulator.platform || 'chzzk',
+      message: simulator.message || '!테스트',
+    },
+    platform: simulator.platform || 'chzzk',
+    roulette: { result: { label: simulator.rouletteResult || '당첨' } },
+    donation: { amount: Number(simulator.donationAmount || 0) },
+    attendance: { streak: 3, totalDays: 7, points: 100 },
+    live: { title: '시뮬레이션 방송', category: 'Just Chatting', viewers: 128, live: true },
+  });
+
+  const testRun = async () => {
+    if (validationErrors.length) {
+      toast.error('검증 항목을 먼저 해결한 뒤 테스트할 수 있습니다.');
+      return;
+    }
+    setTesting(true);
+    setActiveRunNodeId(null);
+    try {
+      const currentSnapshot = serializeBlueprintSnapshot(blueprint);
+      const targetBlueprint = blueprint.id && persistedSnapshotRef.current === currentSnapshot ? blueprint : await save();
+      if (!targetBlueprint?.id) return;
+      const data = await jsonRequest<{ ok?: boolean; error?: string; run?: BlueprintRun; executed?: string[] }>(`/api/action-blueprints/${encodeURIComponent(targetBlueprint.id)}/test`, 'POST', {
+        context: simulatorContext(),
+      });
+      toast[data.ok ? 'success' : 'error'](data.ok ? `테스트 실행 완료: ${data.executed?.length || 0}개 노드` : data.error || '테스트 실패');
+      const runData = await readJson<{ runs?: BlueprintRun[] }>(`/api/action-blueprints/${encodeURIComponent(targetBlueprint.id)}/runs`);
+      setRuns(runData?.runs || []);
+      if (data.run?.id) {
+        const stepData = await readJson<{ steps?: BlueprintRunStep[] }>(`/api/action-blueprints/runs/${encodeURIComponent(data.run.id)}/steps`);
+        setRunSteps(stepData?.steps || []);
+        replayRunSteps(stepData?.steps || []);
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '테스트를 실행하지 못했습니다.');
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const deleteBlueprint = async () => {
+    if (!blueprint.id || !window.confirm(`"${blueprint.name}" 블루프린트를 삭제할까요?`)) return;
+    try {
+      await jsonRequest(`/api/action-blueprints/${encodeURIComponent(blueprint.id)}`, 'DELETE');
+      toast.success('블루프린트를 삭제했습니다.');
+      const remaining = blueprints.filter((item) => item.id !== blueprint.id);
+      const nextBlueprint = normalizeBlueprint(remaining[0] || null);
+      setBlueprints(remaining);
+      setBlueprint(nextBlueprint);
+      syncFlowViewport(nextBlueprint.version?.viewport || DEFAULT_VIEWPORT);
+      persistedSnapshotRef.current = serializeBlueprintSnapshot(nextBlueprint);
+      lastSnapshotRef.current = serializeBlueprintSnapshot(nextBlueprint);
+      setRuns([]);
+      setVersions([]);
+      setRunSteps([]);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '삭제하지 못했습니다.');
+    }
+  };
+
+  const duplicateSelection = () => {
+    if (!selectedIds.length) return;
+    const selectedNodes = nodes.filter((node) => selectedIds.includes(node.id) && node.type !== 'start');
+    if (!selectedNodes.length) return;
+    const idMap = new Map(selectedNodes.map((node) => [node.id, createId(node.type)]));
+    const clones = selectedNodes.map((node) => ({
+      ...node,
+      id: idMap.get(node.id) || createId(node.type),
+      name: `${node.name} 복사`,
+      position: { x: node.position.x + 2, y: node.position.y + 2 },
+      config: JSON.parse(JSON.stringify(node.config || {})),
+    }));
+    const cloneEdges = edges
+      .filter((edge) => idMap.has(edge.source) && idMap.has(edge.target))
+      .map((edge) => ({ ...edge, id: createId('edge'), source: idMap.get(edge.source) || edge.source, target: idMap.get(edge.target) || edge.target }));
+    updateBlueprint((current) => ({
+      ...current,
+      version: {
+        ...current.version,
+        nodes: [...(current.version?.nodes || []), ...clones],
+        edges: [...(current.version?.edges || []), ...cloneEdges],
+      },
+    }));
+    setSelectedIds(clones.map((node) => node.id));
+  };
+
+  const autoLayout = () => {
+    const levels = new Map<string, number>();
+    const start = nodes.find((node) => node.type === 'start') || nodes[0];
+    if (start) levels.set(start.id, 0);
+    for (let pass = 0; pass < nodes.length; pass += 1) {
+      edges.forEach((edge) => {
+        const sourceLevel = levels.get(edge.source);
+        if (sourceLevel != null) levels.set(edge.target, Math.max(levels.get(edge.target) ?? 0, sourceLevel + 1));
+      });
+    }
+    const grouped = new Map<number, BlueprintNode[]>();
+    nodes.forEach((node) => {
+      const level = levels.get(node.id) ?? 0;
+      grouped.set(level, [...(grouped.get(level) || []), node]);
+    });
+    updateBlueprint((current) => ({
+      ...current,
+      version: {
+        ...current.version,
+        nodes: (current.version?.nodes || []).map((node) => {
+          const level = levels.get(node.id) ?? 0;
+          const siblings = grouped.get(level) || [];
+          const index = siblings.findIndex((item) => item.id === node.id);
+          return { ...node, position: { x: level * 24, y: 3 + index * 11 } };
+        }),
+        viewport: DEFAULT_VIEWPORT,
+      },
+    }));
+  };
+
+  const fitViewportToNodes = (targetNodes = nodes) => {
+    const visibleNodes = targetNodes.length ? targetNodes : nodes;
+    if (!visibleNodes.length) return;
+    void flowInstanceRef.current?.fitView({
+      nodes: visibleNodes.map((node) => ({ id: node.id })),
+      padding: 0.22,
+      duration: 220,
+      minZoom: 0.45,
+      maxZoom: 1.8,
+    });
+  };
+
+  const focusSelection = () => {
+    const selectedNodes = nodes.filter((node) => selectedIds.includes(node.id));
+    fitViewportToNodes(selectedNodes.length ? selectedNodes : nodes);
+  };
+
+  const restoreVersion = async (versionId: string) => {
+    if (!blueprint.id) return;
+    try {
+      const data = await jsonRequest<{ blueprint: Blueprint }>(`/api/action-blueprints/${encodeURIComponent(blueprint.id)}/versions/${encodeURIComponent(versionId)}/restore`, 'POST');
+      const nextBlueprint = normalizeBlueprint(data.blueprint);
+      setBlueprint(nextBlueprint);
+      syncFlowViewport(nextBlueprint.version?.viewport || DEFAULT_VIEWPORT);
+      persistedSnapshotRef.current = serializeBlueprintSnapshot(nextBlueprint);
+      lastSnapshotRef.current = serializeBlueprintSnapshot(nextBlueprint);
+      toast.success('선택한 버전으로 되돌렸습니다.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '버전을 복원하지 못했습니다.');
+    }
+  };
+
+  const loadRunSteps = async (runId: string) => {
+    const data = await readJson<{ steps?: BlueprintRunStep[] }>(`/api/action-blueprints/runs/${encodeURIComponent(runId)}/steps`);
+    setRunSteps(data?.steps || []);
+    replayRunSteps(data?.steps || []);
+  };
+
+  const copyVariable = () => {
+    const token = `\${action::${blueprint.slug || blueprint.id || 'blueprint_id'}}`;
+    navigator.clipboard?.writeText(token).then(() => toast.success('특수 변수를 복사했습니다.')).catch(() => undefined);
+  };
+
+  const newBlueprint = () => {
+    const fresh = normalizeBlueprint(null);
+    setBlueprint(fresh);
+    syncFlowViewport(fresh.version?.viewport || DEFAULT_VIEWPORT);
+    historyPastRef.current = [];
+    historyFutureRef.current = [];
+    lastSnapshotRef.current = serializeBlueprintSnapshot(fresh);
+    persistedSnapshotRef.current = '';
+    setHistoryCount({ past: 0, future: 0 });
+    setSelectedIds([fresh.version?.nodes?.[0]?.id || '']);
+    setRuns([]);
+    setVersions([]);
+    setRunSteps([]);
+  };
+
+  const loadBlueprint = async (item: Blueprint) => {
+    if (!item.id) return;
+    const [data, versionData] = await Promise.all([
+      readJson<{ blueprint?: Blueprint; runs?: BlueprintRun[] }>(`/api/action-blueprints/${encodeURIComponent(item.id)}`),
+      readJson<{ versions?: BlueprintVersion[] }>(`/api/action-blueprints/${encodeURIComponent(item.id)}/versions`),
+    ]);
+    const nextBlueprint = normalizeBlueprint(data?.blueprint || item);
+    setBlueprint(nextBlueprint);
+    syncFlowViewport(nextBlueprint.version?.viewport || DEFAULT_VIEWPORT);
+    historyPastRef.current = [];
+    historyFutureRef.current = [];
+    lastSnapshotRef.current = serializeBlueprintSnapshot(nextBlueprint);
+    persistedSnapshotRef.current = serializeBlueprintSnapshot(nextBlueprint);
+    setHistoryCount({ past: 0, future: 0 });
+    setRuns(data?.runs || []);
+    setVersions(versionData?.versions || []);
+    setRunSteps([]);
+    setSelectedIds([]);
+    setSelectedEdgeId(null);
+  };
+
+  const flushPendingHistory = () => {
+    if (!historyTimerRef.current) return;
+    clearTimeout(historyTimerRef.current);
+    historyTimerRef.current = null;
+    const snapshot = serializeBlueprintSnapshot(blueprint);
+    if (snapshot !== lastSnapshotRef.current) {
+      historyPastRef.current = [...historyPastRef.current.slice(-59), lastSnapshotRef.current];
+      historyFutureRef.current = [];
+      lastSnapshotRef.current = snapshot;
+      setHistoryCount({ past: historyPastRef.current.length, future: 0 });
+    }
+  };
+
+  const undoBlueprint = () => {
+    flushPendingHistory();
+    const target = historyPastRef.current.at(-1);
+    if (!target) return;
+    const current = serializeBlueprintSnapshot(blueprint);
+    historyPastRef.current = historyPastRef.current.slice(0, -1);
+    historyFutureRef.current = [current, ...historyFutureRef.current.slice(0, 59)];
+    lastSnapshotRef.current = target;
+    applyingHistoryRef.current = true;
+    const restored = restoreBlueprintSnapshot(target);
+    setBlueprint(restored);
+    syncFlowViewport(restored.version?.viewport || DEFAULT_VIEWPORT);
+    setSelectedIds([]);
+    setSelectedEdgeId(null);
+    setHistoryCount({ past: historyPastRef.current.length, future: historyFutureRef.current.length });
+  };
+
+  const redoBlueprint = () => {
+    const target = historyFutureRef.current[0];
+    if (!target) return;
+    const current = serializeBlueprintSnapshot(blueprint);
+    historyFutureRef.current = historyFutureRef.current.slice(1);
+    historyPastRef.current = [...historyPastRef.current.slice(-59), current];
+    lastSnapshotRef.current = target;
+    applyingHistoryRef.current = true;
+    const restored = restoreBlueprintSnapshot(target);
+    setBlueprint(restored);
+    syncFlowViewport(restored.version?.viewport || DEFAULT_VIEWPORT);
+    setSelectedIds([]);
+    setSelectedEdgeId(null);
+    setHistoryCount({ past: historyPastRef.current.length, future: historyFutureRef.current.length });
+  };
+
+  const restoreAutosaveDraft = () => {
+    try {
+      const raw = localStorage.getItem(AUTOSAVE_KEY);
+      const imported = raw ? normalizeImportedBlueprint(JSON.parse(raw)) : null;
+      if (!imported) {
+        toast.info('복원할 자동 저장 초안이 없습니다.');
+        return;
+      }
+      const nextBlueprint = { ...imported, name: imported.name.replace(/\s복사$/, '') };
+      setBlueprint(nextBlueprint);
+      syncFlowViewport(nextBlueprint.version?.viewport || DEFAULT_VIEWPORT);
+      historyPastRef.current = [];
+      historyFutureRef.current = [];
+      lastSnapshotRef.current = serializeBlueprintSnapshot(nextBlueprint);
+      persistedSnapshotRef.current = '';
+      setHistoryCount({ past: 0, future: 0 });
+      setSelectedIds(nextBlueprint.version?.nodes?.[0]?.id ? [nextBlueprint.version.nodes[0].id] : []);
+      setSelectedEdgeId(null);
+      setRuns([]);
+      setVersions([]);
+      setRunSteps([]);
+      setDraftStatus('restored');
+      toast.success('자동 저장 초안을 불러왔습니다.');
+    } catch {
+      toast.error('자동 저장 초안을 불러오지 못했습니다.');
+    }
+  };
+
+  const replayRunSteps = (steps = runSteps) => {
+    if (playTimerRef.current) clearTimeout(playTimerRef.current);
+    const ordered = [...steps].sort((a, b) => String(a.startedAt || '').localeCompare(String(b.startedAt || '')));
+    if (!ordered.length) {
+      toast.info('재생할 실행 단계가 없습니다.');
+      return;
+    }
+    let index = 0;
+    const play = () => {
+      const step = ordered[index];
+      setActiveRunNodeId(step?.nodeId || null);
+      index += 1;
+      if (index <= ordered.length) {
+        playTimerRef.current = setTimeout(play, Math.max(260, Math.min(900, Number(step?.durationMs || 360) + 220)));
+      } else {
+        playTimerRef.current = setTimeout(() => setActiveRunNodeId(null), 700);
+      }
+    };
+    play();
+  };
+
+  const insertTemplate = (templateId: string) => {
+    const template = blueprintTemplates.find((item) => item.id === templateId);
+    if (!template) return;
+    const rect = flowWrapperRef.current?.getBoundingClientRect();
+    const center = rect
+      ? flowInstanceRef.current?.screenToFlowPosition({ x: rect.left + rect.width * 0.5, y: rect.top + rect.height * 0.5 }) || { x: 240, y: 180 }
+      : { x: 240, y: 180 };
+    const base = { x: center.x / FLOW_UNIT, y: center.y / FLOW_UNIT };
+    const created = template.nodes.map((item) => ({
+      ...createNode(item.type, { x: base.x + item.position.x, y: base.y + item.position.y }),
+      name: item.name || nodeSpec(item.type).title,
+      config: { ...cloneJson(nodeSpec(item.type).config), ...(item.config ? cloneJson(item.config) : {}) },
+    }));
+    const createdEdges = template.edges.flatMap((edge) => {
+      const source = created[edge.source];
+      const target = created[edge.target];
+      if (!source || !target) return [];
+      const sourcePort = edge.sourcePort || 'out';
+      const targetPort = edge.targetPort || 'in';
+      if (!outputPorts(source).includes(sourcePort) || !inputPorts(target).includes(targetPort)) return [];
+      return [{ id: createId('edge'), source: source.id, sourcePort, target: target.id, targetPort }];
+    });
+    const defaultStarter = isDefaultStarterBlueprint(nodes, edges);
+    if (defaultStarter) {
+      const start = nodes.find((node) => node.type === 'start');
+      const end = nodes.find((node) => node.type === 'end');
+      const first = created[0];
+      if (start && end && first) {
+        const createdOutgoing = new Set(createdEdges.map((edge) => `${edge.source}:${edge.sourcePort}`));
+        const terminalEdges = created.flatMap((node) => {
+          return outputPorts(node)
+            .filter((port) => !createdOutgoing.has(`${node.id}:${port}`))
+            .map((port) => ({ id: createId('edge'), source: node.id, sourcePort: port, target: end.id, targetPort: 'in' }));
+        });
+        updateBlueprint((current) => ({
+          ...current,
+          version: {
+            ...current.version,
+            nodes: [start, ...created, end],
+            edges: [
+              { id: createId('edge'), source: start.id, sourcePort: 'out', target: first.id, targetPort: 'in' },
+              ...createdEdges,
+              ...terminalEdges,
+            ],
+          },
+        }));
+        setSelectedIds(created.map((node) => node.id));
+        setSelectedEdgeId(null);
+        toast.success(`${template.title} 템플릿을 바로 실행 가능한 흐름으로 적용했습니다.`);
+        return;
+      }
+    }
+    const first = created[0];
+    const selectedSource = nodes.find((node) => selectedIds.includes(node.id));
+    const usedOutputs = new Set(edges.map((edge) => `${edge.source}:${edge.sourcePort || 'out'}`));
+    const freePort = selectedSource ? outputPorts(selectedSource).find((port) => !usedOutputs.has(`${selectedSource.id}:${port}`)) : null;
+    const autoConnectEdge = selectedSource && first && freePort
+      ? [{ id: createId('edge'), source: selectedSource.id, sourcePort: freePort, target: first.id, targetPort: 'in' }]
+      : [];
+    updateBlueprint((current) => ({
+      ...current,
+      version: {
+        ...current.version,
+        nodes: [...(current.version?.nodes || []), ...created],
+        edges: [...(current.version?.edges || []), ...autoConnectEdge, ...createdEdges],
+      },
+    }));
+    setSelectedIds(created.map((node) => node.id));
+    setSelectedEdgeId(null);
+    toast.success(autoConnectEdge.length ? `${template.title} 템플릿을 선택한 노드에 연결했습니다.` : `${template.title} 템플릿을 추가했습니다.`);
+  };
+
+  const copySelection = async () => {
+    if (!selectedIds.length) {
+      toast.info('복사할 노드를 선택하세요.');
+      return;
+    }
+    const selectedSet = new Set(selectedIds);
+    const selectedNodes = nodes.filter((node) => selectedSet.has(node.id));
+    if (!selectedNodes.length) return;
+    const selectedEdges = edges.filter((edge) => selectedSet.has(edge.source) && selectedSet.has(edge.target));
+    const payload: BlueprintClipboard = {
+      schema: SELECTION_CLIPBOARD_SCHEMA,
+      version: 1,
+      nodes: cloneJson(selectedNodes),
+      edges: cloneJson(selectedEdges),
+    };
+    setClipboard(payload);
+    try {
+      await navigator.clipboard?.writeText(JSON.stringify(payload));
+    } catch {
+      // Browser clipboard access can be blocked; the in-memory clipboard still works.
+    }
+    toast.success(`${selectedNodes.length}개 노드를 복사했습니다.`);
+  };
+
+  const readClipboardSelection = async () => {
+    try {
+      const text = await navigator.clipboard?.readText();
+      if (text) {
+        const parsed = JSON.parse(text) as Partial<BlueprintClipboard>;
+        if (parsed.schema === SELECTION_CLIPBOARD_SCHEMA && Array.isArray(parsed.nodes)) return parsed as BlueprintClipboard;
+      }
+    } catch {
+      // Fall back to the local clipboard state.
+    }
+    return clipboard;
+  };
+
+  const pasteSelection = async () => {
+    const payload = await readClipboardSelection();
+    if (!payload?.nodes?.length) {
+      toast.info('붙여넣을 블루프린트 노드가 없습니다.');
+      return;
+    }
+    const clipboardNodes = normalizeImportedNodes(payload.nodes, false);
+    const clipboardEdges = normalizeImportedEdges(payload.edges, clipboardNodes);
+    const hasStart = nodes.some((node) => node.type === 'start');
+    const sourceNodes = clipboardNodes.filter((node) => node.type !== 'start' || !hasStart);
+    if (!sourceNodes.length) {
+      toast.info('시작 노드는 이미 존재해서 붙여넣지 않았습니다.');
+      return;
+    }
+    const idMap = new Map(sourceNodes.map((node) => [node.id, createId(node.type)]));
+    const offset = 2 + pasteCount * 1.5;
+    const pastedNodes = sourceNodes.map((node) => ({
+      ...node,
+      id: idMap.get(node.id) || createId(node.type),
+      name: node.type === 'start' ? node.name : `${node.name} 복사`,
+      position: { x: node.position.x + offset, y: node.position.y + offset },
+      config: cloneJson(node.config || {}),
+    }));
+    const pastedEdges = clipboardEdges
+      .filter((edge) => idMap.has(edge.source) && idMap.has(edge.target))
+      .map((edge) => ({
+        ...edge,
+        id: createId('edge'),
+        source: idMap.get(edge.source) || edge.source,
+        target: idMap.get(edge.target) || edge.target,
+      }));
+    updateBlueprint((current) => ({
+      ...current,
+      version: {
+        ...current.version,
+        nodes: [...(current.version?.nodes || []), ...pastedNodes],
+        edges: [...(current.version?.edges || []), ...pastedEdges],
+      },
+    }));
+    setPasteCount((current) => current + 1);
+    setSelectedIds(pastedNodes.map((node) => node.id));
+    setSelectedEdgeId(null);
+    toast.success(`${pastedNodes.length}개 노드를 붙여넣었습니다.`);
+  };
+
+  const exportBlueprintJson = () => {
+    const payload = buildBlueprintExport(blueprint, nodes, edges, viewport);
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = safeJsonFilename(blueprint.name);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    toast.success('블루프린트 JSON을 내보냈습니다.');
+  };
+
+  const importBlueprintJson = async (file: File | null) => {
+    if (!file) return;
+    try {
+      const imported = normalizeImportedBlueprint(JSON.parse(await file.text()));
+      if (!imported) throw new Error('invalid_blueprint_json');
+      setBlueprint(imported);
+      syncFlowViewport(imported.version?.viewport || DEFAULT_VIEWPORT);
+      historyPastRef.current = [];
+      historyFutureRef.current = [];
+      lastSnapshotRef.current = serializeBlueprintSnapshot(imported);
+      persistedSnapshotRef.current = '';
+      setHistoryCount({ past: 0, future: 0 });
+      setSelectedIds(imported.version?.nodes?.[0]?.id ? [imported.version.nodes[0].id] : []);
+      setSelectedEdgeId(null);
+      setRuns([]);
+      setVersions([]);
+      setRunSteps([]);
+      setPasteCount(0);
+      toast.success('JSON 블루프린트를 새 초안으로 불러왔습니다.');
+    } catch {
+      toast.error('블루프린트 JSON을 읽지 못했습니다.');
+    } finally {
+      if (importInputRef.current) importInputRef.current.value = '';
+    }
+  };
+
+  const handleCanvasKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape') {
+      setSelectedIds([]);
+      setSelectedEdgeId(null);
+      return;
+    }
+    if ((event.key === 'Delete' || event.key === 'Backspace') && (selectedIds.length || selectedEdgeId)) {
+      event.preventDefault();
+      removeSelection();
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'd') {
+      event.preventDefault();
+      duplicateSelection();
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' && !event.shiftKey) {
+      event.preventDefault();
+      undoBlueprint();
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && (event.key.toLowerCase() === 'y' || (event.key.toLowerCase() === 'z' && event.shiftKey))) {
+      event.preventDefault();
+      redoBlueprint();
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c') {
+      event.preventDefault();
+      void copySelection();
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'v') {
+      event.preventDefault();
+      void pasteSelection();
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+      event.preventDefault();
+      void save();
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+      event.preventDefault();
+      void testRun();
+    }
+  };
+
+  return (
+    <div className="grid gap-[clamp(1rem,2vw,1.5rem)]">
+      <section className="relative overflow-hidden rounded-[var(--radius-panel)] border bg-[linear-gradient(135deg,hsl(var(--card))_0%,hsl(var(--accent-sky)/0.22)_52%,hsl(var(--accent-mint)/0.18)_100%)] p-[clamp(1rem,2.4vw,1.5rem)] shadow-soft">
+        <div className="absolute inset-x-[6%] top-0 h-[max(0.125rem,0.16vw)] rounded-full bg-[linear-gradient(90deg,hsl(var(--accent-mint)),hsl(var(--accent-sky)),hsl(var(--accent-coral)))] opacity-80" />
+        <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
+          <div className="min-w-0">
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[calc(var(--radius-control)*0.9)] bg-card/75 text-primary shadow-subtle ring-1 ring-primary/15">
+                <Workflow className="h-5 w-5" />
+              </span>
+              <Badge tone="violet">실행 액션</Badge>
+              <Badge tone={blueprint.version?.published ? 'mint' : 'lemon'}>{blueprint.version?.published ? '게시됨' : '초안'}</Badge>
+              <Badge tone={validationErrors.length ? 'amber' : 'neutral'}>{validationErrors.length ? `${validationErrors.length}개 확인 필요` : '검증 통과'}</Badge>
+              <Badge tone={draftStatus === 'restored' ? 'sky' : draftStatus === 'saved' ? 'mint' : 'neutral'}>
+                {draftStatus === 'restored' ? '임시 초안 복원' : draftStatus === 'saved' ? '자동 저장됨' : '편집 중'}
+              </Badge>
+            </div>
+            <h1 className="max-w-[18ch] break-keep text-[clamp(2rem,4vw,3.4rem)] font-extrabold leading-[0.98] tracking-normal">블루프린트 노드로 방송 액션을 설계하세요.</h1>
+            <p className="mt-4 max-w-3xl break-keep text-sm leading-7 text-muted-foreground md:text-base">
+              캔버스를 드래그해 이동하고, 휠로 확대/축소하고, 포트끼리 연결해 채팅·포인트·룰렛·오버레이·로컬 프로그램 액션을 실행합니다.
+            </p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {[
+                ['노드', nodes.length],
+                ['연결', edges.length],
+                ['선택', selectedIds.length + (selectedEdgeId ? 1 : 0)],
+                ['줌', `${zoomLabel}%`],
+              ].map(([label, value]) => (
+                <span key={label} className="inline-flex min-h-[var(--control-height-sm)] items-center gap-2 rounded-full border bg-card/72 px-3 text-xs font-bold text-muted-foreground shadow-subtle backdrop-blur-xl">
+                  <span>{label}</span>
+                  <span className="text-foreground">{value}</span>
+                </span>
+              ))}
+            </div>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2 xl:max-w-[32rem] xl:grid-cols-3">
+            <input
+              ref={importInputRef}
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              onChange={(event) => void importBlueprintJson(event.target.files?.[0] || null)}
+            />
+            <Button type="button" variant="outline" size="sm" onClick={newBlueprint}>
+              <Plus className="h-4 w-4" />
+              새 블루프린트
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={exportBlueprintJson}>
+              <Download className="h-4 w-4" />
+              JSON 내보내기
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={() => importInputRef.current?.click()}>
+              <Upload className="h-4 w-4" />
+              JSON 불러오기
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={restoreAutosaveDraft}>
+              <RefreshCw className="h-4 w-4" />
+              임시 초안
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={deleteBlueprint} disabled={!blueprint.id}>
+              <Trash2 className="h-4 w-4" />
+              블루프린트 삭제
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={copyVariable} disabled={!blueprint.id && !blueprint.slug}>
+              <Copy className="h-4 w-4" />
+              특수 변수
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={testRun} disabled={testing || saving}>
+              {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+              테스트
+            </Button>
+            <Button type="button" variant="secondary" size="sm" onClick={save} disabled={saving}>
+              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+              저장
+            </Button>
+            <Button type="button" size="sm" onClick={publish} disabled={!!validationErrors.length || saving}>
+              <Radio className="h-4 w-4" />
+              게시
+            </Button>
+          </div>
+        </div>
+      </section>
+
+      <section className="grid min-h-[min(78svh,54rem)] gap-4 xl:grid-cols-[minmax(14rem,0.22fr)_minmax(0,1fr)_minmax(18rem,0.3fr)]">
+        <Card className="overflow-hidden border-border/70 bg-card/74 shadow-subtle">
+          <CardHeader className="border-b bg-card/62">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <CardTitle className="text-base">노드 팔레트</CardTitle>
+                <CardDescription className="text-xs leading-5">필요한 블록을 캔버스 중앙에 추가합니다.</CardDescription>
+              </div>
+              <Badge tone="neutral">{filteredCatalog.length}</Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="grid gap-3 p-3">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input value={paletteQuery} onChange={(event) => setPaletteQuery(event.target.value)} placeholder="노드 검색" className="pl-9" />
+            </div>
+            <div className="grid max-h-[18rem] gap-2 overflow-y-auto rounded-[calc(var(--radius-control)*0.95)] border bg-background/48 p-2 md:max-h-none">
+              <div className="px-1 text-[0.68rem] font-extrabold uppercase text-muted-foreground">템플릿</div>
+              {blueprintTemplates.map((template) => (
+                <button
+                  key={template.id}
+                  type="button"
+                  onClick={() => insertTemplate(template.id)}
+                  className="group rounded-[calc(var(--radius-control)*0.9)] border bg-card/80 p-3 text-left transition hover:-translate-y-0.5 hover:border-primary/35 hover:bg-card hover:shadow-subtle"
+                >
+                  <span className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-bold">{template.title}</span>
+                    <Badge tone={template.tone}>묶음</Badge>
+                  </span>
+                  <span className="mt-1 block break-keep text-xs leading-5 text-muted-foreground">{template.body}</span>
+                </button>
+              ))}
+            </div>
+            <div className="max-h-[28rem] overflow-y-auto pr-1 md:max-h-[34rem]">
+              {catalogGroups.map(([group, items]) => (
+                <div key={group} className="mb-3 grid gap-2">
+                  <div className="sticky top-0 z-10 flex items-center justify-between bg-card/90 px-1 py-1 text-[0.68rem] font-extrabold uppercase text-muted-foreground backdrop-blur-xl">
+                    <span>{group}</span>
+                    <span>{items.length}</span>
+                  </div>
+                  {items.map((item) => {
+                    const Icon = item.icon;
+                    const tone = toneClass(item.tone);
+                    return (
+                      <button
+                        key={item.type}
+                        type="button"
+                        onClick={() => addNode(item.type)}
+                        className="group flex w-full items-start gap-3 rounded-[calc(var(--radius-control)*0.9)] border bg-background/64 p-3 text-left transition hover:-translate-y-0.5 hover:border-primary/35 hover:bg-card hover:shadow-subtle"
+                      >
+                        <span className={cn('grid aspect-square w-[2.15rem] shrink-0 place-items-center rounded-[calc(var(--radius-control)*0.82)] ring-1 transition group-hover:scale-105', tone.icon)}>
+                          <Icon className="h-4 w-4" />
+                        </span>
+                        <span className="min-w-0">
+                          <span className="flex min-w-0 items-center gap-2">
+                            <span className="truncate text-sm font-bold">{item.title}</span>
+                            <Badge tone={item.tone} className="px-2 py-0.5 text-[0.65rem]">{item.group}</Badge>
+                          </span>
+                          <span className="mt-1 block break-keep text-xs leading-5 text-muted-foreground">{item.body}</span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ))}
+              {!filteredCatalog.length ? (
+                <div className="rounded-[var(--radius-control)] border border-dashed bg-background/55 p-4 text-sm text-muted-foreground">
+                  검색 결과가 없습니다.
+                </div>
+              ) : null}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="overflow-hidden border-border/70 bg-card/82 shadow-soft">
+          <CardHeader className="border-b bg-[linear-gradient(180deg,hsl(var(--card)/0.96),hsl(var(--card)/0.74))] p-3">
+            <div className="flex flex-col gap-3">
+              <div className="grid gap-2 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)_auto] lg:items-center">
+                <Input value={blueprint.name} onChange={(event) => setBlueprint((current) => ({ ...current, name: event.target.value }))} aria-label="블루프린트 이름" className="font-bold" />
+                <Input value={blueprint.description || ''} onChange={(event) => setBlueprint((current) => ({ ...current, description: event.target.value }))} placeholder="설명" aria-label="블루프린트 설명" />
+                <div className="flex items-center gap-2 overflow-x-auto pb-1 text-xs font-bold text-muted-foreground lg:justify-end lg:overflow-visible lg:pb-0">
+                  <span className="shrink-0 rounded-full border bg-background/70 px-3 py-2">노드 {nodes.length}</span>
+                  <span className="shrink-0 rounded-full border bg-background/70 px-3 py-2">연결 {edges.length}</span>
+                  <span className="shrink-0 rounded-full border bg-background/70 px-3 py-2">줌 {zoomLabel}%</span>
+                </div>
+              </div>
+              <div className="flex gap-2 overflow-x-auto pb-1 [&>button]:shrink-0 lg:flex-wrap lg:overflow-visible lg:pb-0">
+                <Button type="button" variant="outline" size="icon" onClick={() => void flowInstanceRef.current?.zoomIn({ duration: 160 })} aria-label="확대" title="확대">
+                  <ZoomIn className="h-4 w-4" />
+                </Button>
+                <Button type="button" variant="outline" size="icon" onClick={() => void flowInstanceRef.current?.zoomOut({ duration: 160 })} aria-label="축소" title="축소">
+                  <ZoomOut className="h-4 w-4" />
+                </Button>
+                <Button type="button" variant="outline" size="sm" onClick={() => fitViewportToNodes()}>
+                  <Move className="h-4 w-4" />
+                  전체 보기
+                </Button>
+                <Button type="button" variant="outline" size="sm" onClick={focusSelection} disabled={!nodes.length}>
+                  <MousePointer2 className="h-4 w-4" />
+                  선택 보기
+                </Button>
+                <Button type="button" variant="outline" size="sm" onClick={autoLayout}>
+                  <Workflow className="h-4 w-4" />
+                  자동 정렬
+                </Button>
+                <Button type="button" variant="outline" size="sm" onClick={undoBlueprint} disabled={!historyCount.past}>
+                  <Undo2 className="h-4 w-4" />
+                  되돌리기
+                </Button>
+                <Button type="button" variant="outline" size="sm" onClick={redoBlueprint} disabled={!historyCount.future}>
+                  <Redo2 className="h-4 w-4" />
+                  다시 실행
+                </Button>
+                <Button type="button" variant="outline" size="sm" onClick={() => replayRunSteps()} disabled={!runSteps.length}>
+                  <Play className="h-4 w-4" />
+                  실행 재생
+                </Button>
+                <Button type="button" variant="outline" size="sm" onClick={duplicateSelection} disabled={!selectedIds.length}>
+                  <Copy className="h-4 w-4" />
+                  복제
+                </Button>
+                <Button type="button" variant="outline" size="sm" onClick={() => void copySelection()} disabled={!selectedIds.length}>
+                  <Copy className="h-4 w-4" />
+                  복사
+                </Button>
+                <Button type="button" variant="outline" size="sm" onClick={() => void pasteSelection()}>
+                  <Upload className="h-4 w-4" />
+                  붙여넣기
+                </Button>
+                <Button type="button" variant="outline" size="sm" onClick={removeSelection} disabled={!selectedIds.length && !selectedEdgeId}>
+                  <Trash2 className="h-4 w-4" />
+                  선택 삭제
+                </Button>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="p-0">
+            <div
+              ref={flowWrapperRef}
+              tabIndex={0}
+              data-flow-node-count={flowNodes.length}
+              data-flow-edge-count={flowEdges.length}
+              className="relative h-[min(72svh,46rem)] min-h-[32rem] overflow-hidden bg-[radial-gradient(circle_at_18%_18%,hsl(var(--accent-sky)/0.18),transparent_30%),linear-gradient(135deg,hsl(var(--background)),hsl(var(--card)))] outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              onKeyDown={handleCanvasKeyDown}
+            >
+              <div className="absolute left-3 right-3 top-3 z-20 flex items-center gap-2 rounded-full border bg-card/88 px-3 py-2 text-[0.68rem] font-semibold text-muted-foreground shadow-subtle backdrop-blur-xl sm:right-auto sm:text-xs">
+                <Move className="h-3.5 w-3.5" />
+                배경 드래그 · 휠/핀치 확대 · Ctrl 클릭 다중 선택 · 핸들 드래그 연결 · Ctrl+Z/C/V
+              </div>
+              <div className="absolute bottom-3 left-3 z-20 hidden items-center gap-2 rounded-full border bg-card/88 px-3 py-2 text-[0.68rem] font-bold text-muted-foreground shadow-subtle backdrop-blur-xl sm:flex">
+                <span className="h-2 w-2 rounded-full bg-primary" />
+                <span>{selectedIds.length || selectedEdgeId ? `${selectedIds.length + (selectedEdgeId ? 1 : 0)}개 선택` : '선택 없음'}</span>
+                <span className="text-border">/</span>
+                <span>{zoomLabel}%</span>
+              </div>
+              <ReactFlow
+                nodes={flowNodes}
+                edges={[]}
+                defaultNodes={flowNodes}
+                defaultEdges={[]}
+                nodeTypes={flowNodeTypes}
+                defaultViewport={viewport}
+                viewport={liveViewport}
+                minZoom={0.45}
+                maxZoom={1.8}
+                fitView={false}
+                panOnDrag
+                panOnScroll={false}
+                zoomOnScroll
+                zoomOnPinch
+                zoomOnDoubleClick={false}
+                connectOnClick
+                selectionOnDrag
+                multiSelectionKeyCode={['Control', 'Meta']}
+                deleteKeyCode={null}
+                nodesDraggable
+                nodesConnectable
+                elementsSelectable
+                onInit={onInit}
+                onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChange}
+                onConnect={onConnect}
+                onSelectionChange={onSelectionChange}
+                onViewportChange={setLiveViewport}
+                onMoveEnd={onMoveEnd}
+                onError={(code, message) => {
+                  console.warn(`[ReactFlow:${code}] ${message}`);
+                }}
+                onPaneClick={() => {
+                  setSelectedIds([]);
+                  setSelectedEdgeId(null);
+                }}
+                className="arubot-blueprint-flow"
+              >
+                <Background gap={40} color="hsl(var(--border))" />
+                <Controls className="!border !border-border !bg-card/88 !shadow-subtle !backdrop-blur-xl" />
+                <MiniMap
+                  pannable
+                  zoomable
+                  nodeColor="hsl(var(--primary))"
+                  maskColor="hsl(var(--background)/0.62)"
+                  className="!hidden !border !border-border !bg-card/88 !shadow-subtle !backdrop-blur-xl md:!block"
+                />
+              </ReactFlow>
+              <BlueprintFlowEdgesOverlay
+                nodes={nodes}
+                edges={edges}
+                selectedEdgeId={selectedEdgeId}
+                viewport={liveViewport}
+                onSelect={(edgeId) => {
+                  setSelectedEdgeId(edgeId);
+                  setSelectedIds([]);
+                }}
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        <div className="grid h-fit gap-3">
+          <Card className="border-border/70 bg-card/74 shadow-subtle">
+            <CardHeader className="p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <CardTitle className="text-base">검증</CardTitle>
+                  <CardDescription className="text-xs leading-5">게시 전 실행 가능 여부를 확인합니다.</CardDescription>
+                </div>
+                <Badge tone={validationErrors.length ? 'amber' : 'mint'}>{validationErrors.length ? validationErrors.length : 'OK'}</Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="grid gap-2 p-4 pt-0">
+              {validationErrors.length ? validationErrors.map((error) => (
+                <div key={error} className="rounded-[var(--radius-control)] border border-amber-400/35 bg-amber-100/45 px-3 py-2 text-xs font-semibold text-amber-900 dark:bg-amber-400/10 dark:text-amber-100">
+                  {error}
+                </div>
+              )) : (
+                <div className="rounded-[var(--radius-control)] border bg-pastel-mint/50 px-3 py-2 text-xs font-semibold text-foreground dark:bg-primary/12">
+                  검증을 통과했습니다. 저장 후 게시할 수 있습니다.
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="border-border/70 bg-card/74 shadow-subtle">
+            <CardHeader className="p-4">
+              <CardTitle className="text-base">테스트 시뮬레이터</CardTitle>
+              <CardDescription className="text-xs leading-5">테스트 버튼 실행 시 사용할 시청자 상황입니다.</CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-3 p-4 pt-0">
+              <label className="grid gap-2 text-sm font-semibold">
+                플랫폼
+                <select
+                  value={simulator.platform}
+                  onChange={(event) => setSimulator((current) => ({ ...current, platform: event.target.value }))}
+                  className="min-h-[var(--control-height)] rounded-[var(--radius-control)] border bg-background px-3 text-sm"
+                >
+                  <option value="chzzk">치지직</option>
+                  <option value="cime">씨미</option>
+                </select>
+              </label>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <Field label="시청자 이름" value={simulator.username} onChange={(value) => setSimulator((current) => ({ ...current, username: value }))} />
+                <Field label="시청자 UUID" value={simulator.userId} onChange={(value) => setSimulator((current) => ({ ...current, userId: value }))} />
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <Field label="보유 포인트" value={simulator.points} onChange={(value) => setSimulator((current) => ({ ...current, points: value }))} />
+                <Field label="후원 금액" value={simulator.donationAmount} onChange={(value) => setSimulator((current) => ({ ...current, donationAmount: value }))} />
+              </div>
+              <Field label="채팅 메시지" value={simulator.message} onChange={(value) => setSimulator((current) => ({ ...current, message: value }))} />
+              <Field label="룰렛 결과값" value={simulator.rouletteResult} onChange={(value) => setSimulator((current) => ({ ...current, rouletteResult: value }))} />
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" variant="outline" onClick={testRun} disabled={testing || saving}>
+                  {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                  시뮬레이션 실행
+                </Button>
+                <Button type="button" variant="outline" onClick={() => replayRunSteps()} disabled={!runSteps.length}>
+                  <RefreshCw className="h-4 w-4" />
+                  결과 재생
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-border/70 bg-card/82 shadow-subtle">
+            <CardHeader className="p-4">
+              <CardTitle className="text-base">설정 패널</CardTitle>
+              <CardDescription className="text-xs leading-5">{selectedNode ? '모든 입력값에는 변수를 사용할 수 있습니다.' : '노드를 선택하면 설정을 편집할 수 있습니다.'}</CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-3 p-4 pt-0">
+              {selectedNode ? (
+                <>
+                  <label className="grid gap-2 text-sm font-semibold">
+                    노드 이름
+                    <Input value={selectedNode.name} onChange={(event) => updateBlueprint((current) => ({ ...current, version: { ...current.version, nodes: (current.version?.nodes || []).map((node) => node.id === selectedNode.id ? { ...node, name: event.target.value } : node) } }))} />
+                  </label>
+                  <ConfigFields node={selectedNode} onChange={updateNodeConfig} />
+                  <div className="rounded-[var(--radius-control)] border bg-background/70 p-3 text-xs leading-5 text-muted-foreground">
+                    예: <code>{'{user.name}'}</code>, <code>{'{user.points}'}</code>, <code>{'{roulette.result}'}</code>, <code>{'{flow.bonusPoint} * 2'}</code>
+                  </div>
+                </>
+              ) : (
+                <div className="grid place-items-center rounded-[var(--radius-control)] border border-dashed bg-background/50 p-8 text-center text-sm text-muted-foreground">
+                  <MousePointer2 className="mb-3 h-7 w-7 text-primary" />
+                  노드나 연결선을 선택하세요.
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="border-border/70 bg-card/74 shadow-subtle">
+            <CardHeader className="p-4">
+              <CardTitle className="text-base">블루프린트 목록</CardTitle>
+              <CardDescription className="text-xs leading-5">저장된 실행 액션을 불러옵니다.</CardDescription>
+            </CardHeader>
+            <CardContent className="grid max-h-[18rem] gap-2 overflow-y-auto p-4 pt-0">
+              {blueprints.map((item) => (
+                <button key={item.id || item.name} type="button" onClick={() => loadBlueprint(item)} className={cn('rounded-[var(--radius-control)] border bg-background/70 p-3 text-left transition hover:border-primary/35', item.id === blueprint.id && 'border-primary/50 bg-pastel-mint/45')}>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-sm font-bold">{item.name}</span>
+                    <Badge tone={item.version?.published ? 'mint' : 'lemon'}>{item.version?.published ? '게시' : '초안'}</Badge>
+                  </div>
+                  <div className="mt-1 truncate text-xs text-muted-foreground">{item.updatedAt ? compactDateTime(item.updatedAt) : item.slug}</div>
+                </button>
+              ))}
+              {!blueprints.length ? <div className="rounded-[var(--radius-control)] border bg-background/55 p-4 text-sm text-muted-foreground">{isPending ? '불러오는 중입니다.' : '저장된 블루프린트가 없습니다.'}</div> : null}
+            </CardContent>
+          </Card>
+
+          <Card className="border-border/70 bg-card/74 shadow-subtle">
+            <CardHeader className="p-4">
+              <CardTitle className="text-base">버전</CardTitle>
+              <CardDescription className="text-xs leading-5">저장할 때마다 새 버전이 만들어집니다.</CardDescription>
+            </CardHeader>
+            <CardContent className="grid max-h-[14rem] gap-2 overflow-y-auto p-4 pt-0">
+              {versions.map((version) => (
+                <div key={version.id} className="flex items-center justify-between gap-2 rounded-[var(--radius-control)] border bg-background/70 p-3 text-sm">
+                  <div className="min-w-0">
+                    <div className="font-bold">v{version.version || '-'}</div>
+                    <div className="mt-1 truncate text-xs text-muted-foreground">{compactDateTime(version.createdAt)}</div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {version.published ? <Badge tone="mint">게시</Badge> : <Badge tone="neutral">초안</Badge>}
+                    <Button type="button" variant="outline" size="sm" onClick={() => restoreVersion(version.id)}>
+                      복원
+                    </Button>
+                  </div>
+                </div>
+              ))}
+              {!versions.length ? <div className="rounded-[var(--radius-control)] border bg-background/55 p-4 text-sm text-muted-foreground">저장된 버전이 없습니다.</div> : null}
+            </CardContent>
+          </Card>
+
+          <Card className="border-border/70 bg-card/74 shadow-subtle">
+            <CardHeader className="p-4">
+              <CardTitle className="text-base">실행 기록</CardTitle>
+              <CardDescription className="text-xs leading-5">최근 테스트와 실행 결과입니다.</CardDescription>
+            </CardHeader>
+            <CardContent className="grid max-h-[16rem] gap-2 overflow-y-auto p-4 pt-0">
+              {runs.map((run) => (
+                <button key={run.id} type="button" onClick={() => loadRunSteps(run.id)} className="rounded-[var(--radius-control)] border bg-background/70 p-3 text-left text-sm transition hover:border-primary/35">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold">{run.triggerSource || 'manual'}</span>
+                    <Badge tone={run.status === 'done' ? 'mint' : run.status === 'failed' ? 'coral' : 'neutral'}>{run.status || 'running'}</Badge>
+                  </div>
+                  <div className="mt-1 text-xs text-muted-foreground">{compactDateTime(run.startedAt)}</div>
+                  {run.error ? <div className="mt-2 text-xs text-destructive">{run.error}</div> : null}
+                </button>
+              ))}
+              {!runs.length ? <div className="rounded-[var(--radius-control)] border bg-background/55 p-4 text-sm text-muted-foreground">아직 실행 기록이 없습니다.</div> : null}
+            </CardContent>
+          </Card>
+
+          <Card className="border-border/70 bg-card/74 shadow-subtle">
+            <CardHeader className="p-4">
+              <CardTitle className="text-base">실행 단계</CardTitle>
+              <CardDescription className="text-xs leading-5">기록을 선택하면 노드별 결과를 확인합니다.</CardDescription>
+            </CardHeader>
+            <CardContent className="grid max-h-[18rem] gap-2 overflow-y-auto p-4 pt-0">
+              {runSteps.map((step) => (
+                <div key={step.id} className="rounded-[var(--radius-control)] border bg-background/70 p-3 text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-bold">{step.nodeType} · {step.nodeId}</span>
+                    <Badge tone={step.status === 'failed' ? 'coral' : 'mint'}>{step.status || 'done'}</Badge>
+                  </div>
+                  <div className="mt-1 text-muted-foreground">{step.durationMs ?? 0}ms</div>
+                  {step.error ? <div className="mt-2 text-destructive">{step.error}</div> : null}
+                  {step.output ? <pre className="mt-2 max-h-24 overflow-auto rounded-[var(--radius-control)] bg-muted/70 p-2 text-[0.68rem] leading-5">{JSON.stringify(step.output, null, 2)}</pre> : null}
+                </div>
+              ))}
+              {!runSteps.length ? <div className="rounded-[var(--radius-control)] border bg-background/55 p-4 text-sm text-muted-foreground">선택된 실행 단계가 없습니다.</div> : null}
+            </CardContent>
+          </Card>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function ConfigFields({ node, onChange }: { node: BlueprintNode; onChange: (key: string, value: unknown) => void }) {
+  const cfg = node.config || {};
+  if (node.type === 'condition' || node.type === 'rouletteCompare') {
+    return (
+      <div className="grid gap-3">
+        <Field label="좌변" value={String(cfg.left || '')} onChange={(value) => onChange('left', value)} />
+        <label className="grid gap-2 text-sm font-semibold">
+          연산자
+          <select value={String(cfg.operator || 'eq')} onChange={(event) => onChange('operator', event.target.value)} className="min-h-[var(--control-height)] rounded-[var(--radius-control)] border bg-background px-3 text-sm">
+            {operators.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </select>
+        </label>
+        <Field label="우변" value={String(cfg.right || '')} onChange={(value) => onChange('right', value)} />
+      </div>
+    );
+  }
+  if (node.type === 'setVariable') {
+    return (
+      <div className="grid gap-3">
+        <Field label="변수 이름" value={String(cfg.key || '')} onChange={(value) => onChange('key', value)} />
+        <label className="grid gap-2 text-sm font-semibold">
+          연산
+          <select value={String(cfg.mode || 'set')} onChange={(event) => onChange('mode', event.target.value)} className="min-h-[var(--control-height)] rounded-[var(--radius-control)] border bg-background px-3 text-sm">
+            {['set', 'add', 'subtract', 'multiply', 'divide', 'append'].map((value) => <option key={value} value={value}>{value}</option>)}
+          </select>
+        </label>
+        <Field label="값/계산식" value={String(cfg.value || '')} onChange={(value) => onChange('value', value)} />
+      </div>
+    );
+  }
+  if (node.type === 'random') {
+    const options = Array.isArray(cfg.options) ? cfg.options as Array<{ id?: string; label?: string; weight?: number }> : [];
+    return (
+      <div className="grid gap-3">
+        {options.map((option, index) => (
+          <div key={option.id || index} className="grid gap-2 rounded-[var(--radius-control)] border bg-background/70 p-3">
+            <Field label="포트 ID" value={String(option.id || '')} onChange={(value) => onChange('options', options.map((item, i) => i === index ? { ...item, id: value } : item))} />
+            <Field label="라벨" value={String(option.label || '')} onChange={(value) => onChange('options', options.map((item, i) => i === index ? { ...item, label: value } : item))} />
+            <Field label="가중치" value={String(option.weight ?? 1)} onChange={(value) => onChange('options', options.map((item, i) => i === index ? { ...item, weight: Number(value || 0) } : item))} />
+            <Button type="button" variant="outline" size="sm" onClick={() => onChange('options', options.filter((_, i) => i !== index))} disabled={options.length <= 2}>
+              <Trash2 className="h-4 w-4" />
+              분기 삭제
+            </Button>
+          </div>
+        ))}
+        <Button type="button" variant="outline" onClick={() => onChange('options', [...options, { id: `o${options.length + 1}`, label: `분기 ${options.length + 1}`, weight: 1 }])}>
+          <Plus className="h-4 w-4" />
+          분기 추가
+        </Button>
+      </div>
+    );
+  }
+  if (node.type === 'chat') return <LongField label="메시지" value={String(cfg.message || '')} onChange={(value) => onChange('message', value)} />;
+  if (node.type === 'tts') {
+    return (
+      <div className="grid gap-3">
+        <LongField label="말할 내용" value={String(cfg.text || '')} onChange={(value) => onChange('text', value)} />
+        <Field label="목소리" value={String(cfg.voice || '')} onChange={(value) => onChange('voice', value)} />
+        <Field label="속도" value={String(cfg.rate || 1)} onChange={(value) => onChange('rate', value)} />
+        <Field label="높낮이" value={String(cfg.pitch || 1)} onChange={(value) => onChange('pitch', value)} />
+      </div>
+    );
+  }
+  if (node.type === 'overlay') {
+    return (
+      <div className="grid gap-3">
+        <LongField label="표시 내용" value={String(cfg.text || '')} onChange={(value) => onChange('text', value)} />
+        <Field label="표시 시간(ms)" value={String(cfg.durationMs || 4000)} onChange={(value) => onChange('durationMs', value)} />
+        <Field label="애니메이션" value={String(cfg.animation || 'pop')} onChange={(value) => onChange('animation', value)} />
+      </div>
+    );
+  }
+  if (node.type === 'loop') {
+    return (
+      <div className="grid gap-3">
+        <Field label="반복 횟수" value={String(cfg.count || 1)} onChange={(value) => onChange('count', value)} />
+        <Field label="반복 간격(ms)" value={String(cfg.gapMs || 0)} onChange={(value) => onChange('gapMs', value)} />
+      </div>
+    );
+  }
+  if (node.type === 'pointsAdjust') {
+    return (
+      <div className="grid gap-3">
+        <Field label="시청자 UUID" value={String(cfg.userId || '')} onChange={(value) => onChange('userId', value)} />
+        <Field label="변경 포인트" value={String(cfg.delta || '')} onChange={(value) => onChange('delta', value)} />
+      </div>
+    );
+  }
+  if (node.type === 'pointsEnough' || node.type === 'pointsExcluded') {
+    return (
+      <div className="grid gap-3">
+        <Field label="시청자 UUID" value={String(cfg.userId || '')} onChange={(value) => onChange('userId', value)} />
+        {node.type === 'pointsEnough' ? <Field label="필요 포인트" value={String(cfg.required || '')} onChange={(value) => onChange('required', value)} /> : null}
+      </div>
+    );
+  }
+  if (node.type === 'pointsGet' || node.type === 'attendanceGet') return <Field label="시청자 UUID" value={String(cfg.userId || '')} onChange={(value) => onChange('userId', value)} />;
+  if (node.type === 'pointsRanking') return <Field label="조회 인원" value={String(cfg.limit || 10)} onChange={(value) => onChange('limit', value)} />;
+  if (node.type === 'rouletteRun') return <Field label="룰렛 이름 또는 ID" value={String(cfg.name || '')} onChange={(value) => onChange('name', value)} />;
+  if (node.type === 'rouletteDisplay') {
+    return (
+      <div className="grid gap-3">
+        <LongField label="표시 문구" value={String(cfg.text || '')} onChange={(value) => onChange('text', value)} />
+        <Field label="표시 시간(ms)" value={String(cfg.durationMs || 4000)} onChange={(value) => onChange('durationMs', value)} />
+      </div>
+    );
+  }
+  if (node.type === 'action') return <Field label="실행할 액션 ID" value={String(cfg.actionId || '')} onChange={(value) => onChange('actionId', value)} />;
+  if (node.type === 'wait') return <Field label="대기 시간(초)" value={String(cfg.seconds || 0)} onChange={(value) => onChange('seconds', value)} />;
+  if (node.type === 'cooldown') {
+    return (
+      <div className="grid gap-3">
+        <Field label="쿨다운 키" value={String(cfg.key || '')} onChange={(value) => onChange('key', value)} />
+        <Field label="제한 시간(초)" value={String(cfg.seconds || 30)} onChange={(value) => onChange('seconds', value)} />
+      </div>
+    );
+  }
+  if (node.type === 'approval') return <LongField label="승인 메시지" value={String(cfg.message || '')} onChange={(value) => onChange('message', value)} />;
+  if (node.type === 'timer') return <Field label="예약 시간(초)" value={String(cfg.seconds || 10)} onChange={(value) => onChange('seconds', value)} />;
+  if (node.type === 'chatVote') {
+    return (
+      <div className="grid gap-3">
+        <Field label="투표 시간(초)" value={String(cfg.seconds || 30)} onChange={(value) => onChange('seconds', value)} />
+        <Field label="선택지" value={String(cfg.options || '1,2')} onChange={(value) => onChange('options', value)} />
+      </div>
+    );
+  }
+  if (node.type === 'highlight') return <Field label="마커 이름" value={String(cfg.label || '')} onChange={(value) => onChange('label', value)} />;
+  if (node.type === 'overlayUpdate' || node.type === 'overlayHide') {
+    return (
+      <div className="grid gap-3">
+        <Field label="오버레이 ID" value={String(cfg.overlayId || '')} onChange={(value) => onChange('overlayId', value)} />
+        {node.type === 'overlayUpdate' ? (
+          <>
+            <LongField label="새 표시 내용" value={String(cfg.text || '')} onChange={(value) => onChange('text', value)} />
+            <Field label="진행률" value={String(cfg.progress || '')} onChange={(value) => onChange('progress', value)} />
+          </>
+        ) : null}
+      </div>
+    );
+  }
+  if (node.type === 'http') {
+    return (
+      <div className="grid gap-3">
+        <Field label="메서드" value={String(cfg.method || 'POST')} onChange={(value) => onChange('method', value)} />
+        <Field label="URL" value={String(cfg.url || '')} onChange={(value) => onChange('url', value)} />
+        <LongField label="Headers(JSON)" value={typeof cfg.headers === 'object' ? JSON.stringify(cfg.headers, null, 2) : String(cfg.headers || '{}')} onChange={(value) => onChange('headers', value)} />
+        <LongField label="Body" value={String(cfg.body || '{}')} onChange={(value) => onChange('body', value)} />
+        <Field label="타임아웃(ms)" value={String(cfg.timeoutMs || 10000)} onChange={(value) => onChange('timeoutMs', value)} />
+        <label className="flex items-center gap-2 rounded-[var(--radius-control)] border bg-background/70 p-3 text-sm font-semibold">
+          <input type="checkbox" checked={cfg.allowInsecureHttp === true} onChange={(event) => onChange('allowInsecureHttp', event.target.checked)} />
+          HTTP URL 허용
+        </label>
+        <div className="rounded-[var(--radius-control)] border bg-background/70 p-3 text-xs leading-5 text-muted-foreground">
+          외부 HTTPS 웹훅을 권장합니다. localhost, 사설망, 내부 IP 대역은 보안상 로컬 프로그램에서 차단됩니다.
+        </div>
+      </div>
+    );
+  }
+  if (node.type === 'websocket') {
+    return (
+      <div className="grid gap-3">
+        <Field label="URL" value={String(cfg.url || '')} onChange={(value) => onChange('url', value)} />
+        <LongField label="메시지" value={String(cfg.message || '{}')} onChange={(value) => onChange('message', value)} />
+        <Field label="타임아웃(ms)" value={String(cfg.timeoutMs || 8000)} onChange={(value) => onChange('timeoutMs', value)} />
+        <label className="flex items-center gap-2 rounded-[var(--radius-control)] border bg-background/70 p-3 text-sm font-semibold">
+          <input type="checkbox" checked={cfg.allowInsecureWebSocket === true} onChange={(event) => onChange('allowInsecureWebSocket', event.target.checked)} />
+          WS URL 허용
+        </label>
+        <div className="rounded-[var(--radius-control)] border bg-background/70 p-3 text-xs leading-5 text-muted-foreground">
+          외부 WSS 연결을 권장합니다. ws:// 연결은 명시적으로 허용한 경우에만 실행되며, localhost와 사설망 주소는 외부 요청으로 사용되지 않습니다.
+        </div>
+      </div>
+    );
+  }
+  if (node.type === 'udp') {
+    return (
+      <div className="grid gap-3">
+        <Field label="호스트" value={String(cfg.host || '127.0.0.1')} onChange={(value) => onChange('host', value)} />
+        <Field label="포트" value={String(cfg.port || '')} onChange={(value) => onChange('port', value)} />
+        <LongField label="메시지" value={String(cfg.message || '')} onChange={(value) => onChange('message', value)} />
+        <Field label="타임아웃(ms)" value={String(cfg.timeoutMs || 3000)} onChange={(value) => onChange('timeoutMs', value)} />
+      </div>
+    );
+  }
+  if (node.type === 'obs') {
+    return (
+      <div className="grid gap-3">
+        <Field label="연결 ID" value={String(cfg.connectionId || '')} onChange={(value) => onChange('connectionId', value)} />
+        <Field label="동작" value={String(cfg.action || 'scene.switch')} onChange={(value) => onChange('action', value)} />
+        <Field label="장면 이름" value={String(cfg.sceneName || '')} onChange={(value) => onChange('sceneName', value)} />
+        <Field label="소스/필터 이름" value={String(cfg.sourceName || cfg.filterName || '')} onChange={(value) => onChange('sourceName', value)} />
+      </div>
+    );
+  }
+  if (node.type === 'sound') {
+    return (
+      <div className="grid gap-3">
+        <Field label="사운드 파일 ID" value={String(cfg.fileId || '')} onChange={(value) => onChange('fileId', value)} />
+        <Field label="볼륨" value={String(cfg.volume || 1)} onChange={(value) => onChange('volume', value)} />
+      </div>
+    );
+  }
+  if (node.type === 'tits') {
+    return (
+      <div className="grid gap-3">
+        <Field label="트리거 ID" value={String(cfg.triggerId || '')} onChange={(value) => onChange('triggerId', value)} />
+        <Field label="강도" value={String(cfg.strength || 1)} onChange={(value) => onChange('strength', value)} />
+        <Field label="지속 시간(ms)" value={String(cfg.durationMs || 1000)} onChange={(value) => onChange('durationMs', value)} />
+      </div>
+    );
+  }
+  if (node.type === 'vtube') {
+    return (
+      <div className="grid gap-3">
+        <Field label="핫키 ID" value={String(cfg.hotkeyId || '')} onChange={(value) => onChange('hotkeyId', value)} />
+        <Field label="파라미터" value={String(cfg.parameter || '')} onChange={(value) => onChange('parameter', value)} />
+        <Field label="값" value={String(cfg.value || '')} onChange={(value) => onChange('value', value)} />
+      </div>
+    );
+  }
+  if (node.type === 'log') return <LongField label="기록할 메시지" value={String(cfg.message || '')} onChange={(value) => onChange('message', value)} />;
+  return (
+    <div className="grid gap-3">
+      {Object.entries(cfg).map(([key, value]) => (
+        <Field key={key} label={key} value={typeof value === 'object' ? JSON.stringify(value) : String(value ?? '')} onChange={(next) => onChange(key, next)} />
+      ))}
+      {!Object.keys(cfg).length ? <div className="rounded-[var(--radius-control)] border bg-background/70 p-3 text-sm text-muted-foreground">설정할 항목이 없습니다.</div> : null}
+    </div>
+  );
+}
+
+function Field({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  return (
+    <label className="grid min-w-0 gap-2 text-sm font-semibold">
+      {label}
+      <Input value={value} onChange={(event) => onChange(event.target.value)} className="w-full min-w-0" />
+    </label>
+  );
+}
+
+function LongField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  return (
+    <label className="grid min-w-0 gap-2 text-sm font-semibold">
+      {label}
+      <textarea
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="min-h-[7rem] w-full min-w-0 resize-y rounded-[var(--radius-control)] border bg-background/80 px-4 py-3 text-sm leading-7 outline-none transition focus:border-primary/45 focus:ring-2 focus:ring-ring"
+      />
+    </label>
+  );
+}

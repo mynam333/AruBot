@@ -342,6 +342,7 @@ export function DashboardPage() {
                 key={action.href}
                 variant="outline"
                 label={action.label}
+                trailingChevron
                 className="min-h-[var(--control-height-lg)] justify-between bg-card/85 px-[clamp(0.875rem,1.6vw,1.125rem)]"
               />
             );
@@ -352,6 +353,7 @@ export function DashboardPage() {
                 key={action.href}
                 variant="outline"
                 label={action.label}
+                trailingChevron
                 className="min-h-[var(--control-height-lg)] justify-between bg-card/85 px-[clamp(0.875rem,1.6vw,1.125rem)]"
               />
             );

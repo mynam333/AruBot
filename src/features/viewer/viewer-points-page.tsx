@@ -3,20 +3,22 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
-  ArrowRight,
-  BadgeCheck,
   Coins,
   ExternalLink,
-  Link2,
   Loader2,
   MessageSquare,
+  Radio,
   RefreshCw,
+  Search,
   SearchX,
+  SlidersHorizontal,
   Sparkles,
+  UserRoundPlus,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button, LinkButton } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Pagination } from '@/components/ui/pagination';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
 import { Tooltip } from '@/components/ui/tooltip';
 import { apiUrl } from '@/shared/api/http';
@@ -47,6 +49,12 @@ type ViewerBalance = {
   };
 };
 
+type LiveStatus = {
+  live?: boolean;
+  title?: string;
+  viewers?: number;
+};
+
 type ViewerPointsResponse = {
   userId?: string | null;
   platforms?: PlatformAccount[];
@@ -60,10 +68,7 @@ type AccountPlatformsResponse = {
   platforms?: PlatformAccount[];
 };
 
-const providers = [
-  { id: 'chzzk', label: 'CHZZK', loginPath: '/api/auth/chzzk/login', iconPath: '/brands/chzzk.svg' },
-  { id: 'cime', label: 'CIME', loginPath: '/api/auth/cime/login', iconPath: '/brands/cime.svg' },
-] as const;
+const VIEWER_POINTS_PAGE_SIZE = 10;
 
 function providerLabel(provider?: string | null) {
   const value = String(provider || '').toLowerCase();
@@ -81,27 +86,13 @@ function ViewerShell({ children }: { children: React.ReactNode }) {
           <span className="text-sm font-semibold">AruBot</span>
         </Link>
         <div className="flex items-center gap-2">
+          <LinkButton href="/viewer/connect" variant="ghost" className="hidden sm:inline-flex">계정 연결</LinkButton>
           <LinkButton href="/streamer" variant="ghost" className="hidden sm:inline-flex">스트리머 콘솔</LinkButton>
           <ThemeToggle />
         </div>
       </header>
       {children}
     </main>
-  );
-}
-
-function PlatformLoginButtons() {
-  return (
-    <div className="flex flex-wrap gap-2">
-      {providers.map((provider) => (
-        <Button key={provider.id} asChild variant="outline" className="bg-card/80">
-          <a href={apiUrl(provider.loginPath)}>
-            <img src={provider.iconPath} alt="" aria-hidden="true" className="h-5 w-5 shrink-0 rounded-[calc(var(--radius-control)*0.35)] object-contain" />
-            {provider.label}로 로그인
-          </a>
-        </Button>
-      ))}
-    </div>
   );
 }
 
@@ -135,6 +126,13 @@ function BalanceAvatar({ balance }: { balance: ViewerBalance }) {
   );
 }
 
+function stationUrl(balance: ViewerBalance) {
+  const uid = encodeURIComponent(balance.channelUid);
+  const provider = String(balance.provider || '').toLowerCase();
+  if (provider === 'cime') return `https://ci.me/channels/${uid}`;
+  return `https://chzzk.naver.com/${uid}`;
+}
+
 function LoadingState() {
   return (
     <ViewerShell>
@@ -154,6 +152,10 @@ export function ViewerPointsPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [unauthorized, setUnauthorized] = useState(false);
+  const [query, setQuery] = useState('');
+  const [sortBy, setSortBy] = useState<'points' | 'name' | 'live'>('points');
+  const [page, setPage] = useState(1);
+  const [liveByChannel, setLiveByChannel] = useState<Record<string, LiveStatus>>({});
 
   const load = useCallback(async (silent = false) => {
     if (silent) setRefreshing(true);
@@ -196,9 +198,61 @@ export function ViewerPointsPage() {
 
   const platforms = data?.platforms || [];
   const balances = useMemo(() => data?.balances || [], [data?.balances]);
+  const visibleBalances = useMemo(() => {
+    const term = query.trim().toLowerCase();
+    const filtered = term
+      ? balances.filter((balance) => [
+        balance.channelName,
+        balance.channelUid,
+        providerLabel(balance.provider),
+      ].some((value) => String(value || '').toLowerCase().includes(term)))
+      : balances;
+    return [...filtered].sort((a, b) => {
+      if (sortBy === 'name') return String(a.channelName || a.channelUid).localeCompare(String(b.channelName || b.channelUid), 'ko-KR');
+      if (sortBy === 'live') return Number(liveByChannel[b.channelUid]?.live === true) - Number(liveByChannel[a.channelUid]?.live === true) || Number(b.points || 0) - Number(a.points || 0);
+      return Number(b.points || 0) - Number(a.points || 0);
+    });
+  }, [balances, liveByChannel, query, sortBy]);
   const totalPoints = data?.totalPoints || balances.reduce((sum, item) => sum + Number(item.points || 0), 0);
+  const totalPages = Math.max(1, Math.ceil(visibleBalances.length / VIEWER_POINTS_PAGE_SIZE));
+  const paginatedBalances = useMemo(() => {
+    const currentPage = Math.min(page, totalPages);
+    const start = (currentPage - 1) * VIEWER_POINTS_PAGE_SIZE;
+    return visibleBalances.slice(start, start + VIEWER_POINTS_PAGE_SIZE);
+  }, [page, totalPages, visibleBalances]);
   const connectedProviders = new Set(platforms.map((account) => String(account.provider || '').toLowerCase()));
   const hasBothPlatforms = connectedProviders.has('chzzk') && connectedProviders.has('cime');
+
+  useEffect(() => {
+    setPage(1);
+  }, [query, sortBy]);
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+
+  useEffect(() => {
+    if (!balances.length) return;
+    const controller = new AbortController();
+    const channels = balances.map((balance) => balance.channelUid).filter(Boolean).slice(0, 40);
+    Promise.all(channels.map(async (channelUid) => {
+      try {
+        const response = await fetch(apiUrl(`/api/public/${encodeURIComponent(channelUid)}/live`), {
+          signal: controller.signal,
+          cache: 'no-store',
+        });
+        if (!response.ok) return [channelUid, { live: false }] as const;
+        const payload = (await response.json().catch(() => null)) as LiveStatus | null;
+        return [channelUid, payload || { live: false }] as const;
+      } catch {
+        return [channelUid, { live: false }] as const;
+      }
+    })).then((entries) => {
+      if (controller.signal.aborted) return;
+      setLiveByChannel(Object.fromEntries(entries));
+    });
+    return () => controller.abort();
+  }, [balances]);
 
   if (loading) return <LoadingState />;
 
@@ -212,16 +266,17 @@ export function ViewerPointsPage() {
               보는 플랫폼이 달라도 내 포인트는 하나로.
             </h1>
             <p className="mt-5 max-w-2xl break-keep text-sm leading-7 text-muted-foreground md:text-base">
-              CHZZK 또는 CIME으로 로그인하면 방송별 포인트를 확인할 수 있습니다. 두 플랫폼을 모두 연결하면 같은 방송인의 포인트가 합산되어 표시됩니다.
+              먼저 시청 계정을 연결하면 방송별 포인트를 확인할 수 있습니다. 두 플랫폼을 모두 연결하면 같은 방송인의 포인트가 합산되어 표시됩니다.
             </p>
-            <div className="mt-7">
-              <PlatformLoginButtons />
-            </div>
+            <LinkButton href="/viewer/connect" className="mt-7">
+              <UserRoundPlus className="h-4 w-4" />
+              계정 연결하기
+            </LinkButton>
           </div>
           <Card className="bg-card/82">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <Link2 className="h-5 w-5 text-primary" />
+                <UserRoundPlus className="h-5 w-5 text-primary" />
                 계정 연결 방식
               </CardTitle>
               <CardDescription>먼저 로그인한 계정에 나중에 연결한 플랫폼이 묶입니다.</CardDescription>
@@ -229,7 +284,7 @@ export function ViewerPointsPage() {
             <CardContent className="grid gap-3">
               {['방송별 포인트 잔액 확인', '공개 명령어 페이지 바로가기', 'CHZZK와 CIME 포인트 합산'].map((item) => (
                 <div key={item} className="flex items-center gap-3 rounded-[var(--radius-control)] border bg-background/70 p-3 text-sm">
-                  <BadgeCheck className="h-4 w-4 shrink-0 text-primary" />
+                  <Coins className="h-4 w-4 shrink-0 text-primary" />
                   {item}
                 </div>
               ))}
@@ -254,7 +309,14 @@ export function ViewerPointsPage() {
                 연결된 플랫폼 계정을 기준으로 방송별 포인트를 합산했습니다. 방송인의 공개 명령어와 포인트 페이지로 바로 이동할 수 있습니다.
               </p>
               <div className="mt-6 flex flex-wrap gap-2">
-                {platforms.length ? platforms.map((account) => <AccountPill key={`${account.provider}-${account.platform_user_id || account.channel_id}`} account={account} />) : <PlatformLoginButtons />}
+                {platforms.length ? (
+                  platforms.map((account) => <AccountPill key={`${account.provider}-${account.platform_user_id || account.channel_id}`} account={account} />)
+                ) : (
+                  <LinkButton href="/viewer/connect" variant="soft">
+                    <UserRoundPlus className="h-4 w-4" />
+                    계정 연결하기
+                  </LinkButton>
+                )}
               </div>
             </div>
             <Card className="bg-card/80">
@@ -280,8 +342,36 @@ export function ViewerPointsPage() {
 
       <section className="mx-auto mt-5 grid max-w-7xl gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(26%,0.34fr)]">
         <div className="grid gap-3">
-          {balances.length ? (
-            balances.map((balance, index) => (
+          <Card className="bg-card/85">
+            <CardContent className="grid gap-3 p-[clamp(1rem,2vw,1.25rem)] md:grid-cols-[1fr_auto] md:items-center">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="스트리머 이름이나 채널 ID로 검색"
+                  className="min-h-[var(--control-height)] w-full rounded-[var(--radius-control)] border bg-background/80 pl-9 pr-3 text-sm outline-none transition focus:border-primary/45 focus:ring-2 focus:ring-ring"
+                />
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {([
+                  ['points', '포인트순'],
+                  ['live', '라이브 우선'],
+                  ['name', '이름순'],
+                ] as const).map(([value, label]) => (
+                  <Button key={value} type="button" variant={sortBy === value ? 'soft' : 'outline'} size="sm" onClick={() => setSortBy(value)}>
+                    <SlidersHorizontal className="h-4 w-4" />
+                    {label}
+                  </Button>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+
+          {visibleBalances.length ? (
+            paginatedBalances.map((balance, index) => {
+              const live = liveByChannel[balance.channelUid];
+              return (
               <Card key={balance.channelUid} className="animate-fade-up overflow-hidden bg-card/85" style={{ animationDelay: `${index * 45}ms` }}>
                 <CardContent className="p-[clamp(1rem,2vw,1.4rem)]">
                   <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
@@ -291,8 +381,12 @@ export function ViewerPointsPage() {
                         <div className="flex flex-wrap items-center gap-2">
                           <h2 className="truncate text-lg font-semibold">{balance.channelName || balance.channelUid}</h2>
                           {balance.provider ? <Badge tone="neutral">{providerLabel(balance.provider)}</Badge> : null}
+                          <Badge tone={live?.live ? 'rose' : 'neutral'}>
+                            <Radio className="mr-1 h-3 w-3" />
+                            {live?.live ? '라이브 중' : '오프라인'}
+                          </Badge>
                         </div>
-                        <p className="mt-1 truncate text-sm text-muted-foreground">{balance.channelUid}</p>
+                        <p className="mt-1 truncate text-sm text-muted-foreground">{live?.live && live.title ? live.title : balance.channelUid}</p>
                       </div>
                     </div>
                     <div className="flex shrink-0 items-center gap-3 md:text-right">
@@ -321,10 +415,16 @@ export function ViewerPointsPage() {
                       공개 페이지
                       <ExternalLink className="h-4 w-4" />
                     </LinkButton>
+                    <Button asChild variant="ghost">
+                      <a href={stationUrl(balance)} target="_blank" rel="noreferrer">
+                        방송국 바로가기
+                        <ExternalLink className="h-4 w-4" />
+                      </a>
+                    </Button>
                   </div>
                 </CardContent>
               </Card>
-            ))
+            );})
           ) : (
             <Card className="bg-card/85">
               <CardContent className="grid place-items-center p-[clamp(2rem,6vw,4rem)] text-center">
@@ -336,11 +436,15 @@ export function ViewerPointsPage() {
                   방송 채팅에 참여하거나, 다른 플랫폼 계정을 연결하면 확인 가능한 포인트가 이곳에 표시됩니다.
                 </p>
                 <div className="mt-6">
-                  <PlatformLoginButtons />
+                  <LinkButton href="/viewer/connect" variant="soft">
+                    <UserRoundPlus className="h-4 w-4" />
+                    계정 연결 관리
+                  </LinkButton>
                 </div>
               </CardContent>
             </Card>
           )}
+          <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
         </div>
 
         <aside className="grid h-fit gap-4">
@@ -360,15 +464,17 @@ export function ViewerPointsPage() {
           </Card>
           <Card className="bg-card/85">
             <CardHeader>
-              <CardTitle>플랫폼 추가 연결</CardTitle>
-              <CardDescription>다른 플랫폼에서도 같은 시청자로 인식됩니다.</CardDescription>
+              <CardTitle>계정 연결 관리</CardTitle>
+              <CardDescription>플랫폼 로그인과 계정별 연결 해제는 전용 페이지에서 관리합니다.</CardDescription>
             </CardHeader>
-            <CardContent>
-              <PlatformLoginButtons />
-              <Button type="button" variant="outline" className="mt-3 w-full justify-center" onClick={() => load(true)} disabled={refreshing}>
-                <ArrowRight className="h-4 w-4" />
-                연결 상태 다시 확인
-              </Button>
+            <CardContent className="grid gap-3">
+              <div className="rounded-[var(--radius-control)] border bg-background/70 p-3 text-sm leading-6 text-muted-foreground">
+                현재 페이지는 방송별 포인트 확인에 집중합니다. 계정 추가 연결, 연결 해제, 상태 새로고침은 계정 연결 페이지에서 처리할 수 있습니다.
+              </div>
+              <LinkButton href="/viewer/connect" variant="soft" className="w-full justify-center">
+                <UserRoundPlus className="h-4 w-4" />
+                계정 연결 페이지로 이동
+              </LinkButton>
             </CardContent>
           </Card>
         </aside>

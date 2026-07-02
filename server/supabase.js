@@ -2061,6 +2061,84 @@ export async function listPlatformAccounts(userId) {
   });
 }
 
+function makeArubotViewerUuid(value) {
+  return `aru_${crypto.createHash('sha256').update(String(value || '')).digest('hex').slice(0, 24)}`;
+}
+
+export async function listPointViewerIdentitySummaries(userIds) {
+  const ids = Array.from(
+    new Set((Array.isArray(userIds) ? userIds : []).map((id) => String(id || '').trim()).filter(Boolean))
+  );
+  if (!ids.length || !process.env.SUPABASE_DB_URL) return {};
+  await ensurePlatformIdentityTables();
+  return withPgClient(async (pg) => {
+    const direct = await pg.query(
+      `select user_id
+         from platform_accounts
+        where platform_user_id = any($1::text[])
+           or channel_id = any($1::text[])
+           or user_id = any($1::text[])`,
+      [ids]
+    );
+    const appUserIds = Array.from(new Set((direct.rows || []).map((row) => String(row.user_id || '')).filter(Boolean)));
+    const accountsByAppUser = new Map();
+    if (appUserIds.length) {
+      const accounts = await pg.query(
+        `select user_id, provider, platform_user_id, channel_id, channel_name, channel_handle, avatar_url, metadata
+           from platform_accounts
+          where user_id = any($1::text[])
+          order by provider asc, last_login_at desc`,
+        [appUserIds]
+      );
+      for (const row of accounts.rows || []) {
+        const key = String(row.user_id || '');
+        const list = accountsByAppUser.get(key) || [];
+        list.push({
+          provider: row.provider,
+          platformUserId: row.platform_user_id,
+          channelId: row.channel_id,
+          nickname: row.channel_name,
+          handle: row.channel_handle,
+          avatarUrl: row.avatar_url,
+          metadata: normalizeJsonObject(row.metadata),
+        });
+        accountsByAppUser.set(key, list);
+      }
+    }
+
+    const result = {};
+    for (const rawId of ids) {
+      const matchedAppUserId = appUserIds.find((appUserId) => {
+        const accounts = accountsByAppUser.get(appUserId) || [];
+        return appUserId === rawId || accounts.some((account) => (
+          String(account.platformUserId || '') === rawId || String(account.channelId || '') === rawId
+        ));
+      });
+      const identitySeed = matchedAppUserId || rawId;
+      result[rawId] = {
+        arubotUuid: makeArubotViewerUuid(identitySeed),
+        appUserId: matchedAppUserId || null,
+        platformAccounts: matchedAppUserId ? (accountsByAppUser.get(matchedAppUserId) || []) : [],
+        identityKeys: Array.from(new Set([
+          rawId,
+          matchedAppUserId || '',
+          makeArubotViewerUuid(identitySeed),
+          makeArubotViewerUuid(rawId),
+        ].filter(Boolean))),
+      };
+    }
+    return result;
+  });
+}
+
+export async function listPointIdentityKeysForUserId(userId) {
+  const id = String(userId || '').trim();
+  if (!id) return [];
+  const summaries = await listPointViewerIdentitySummaries([id]).catch(() => ({}));
+  const summary = summaries[id];
+  return summary?.identityKeys?.length ? summary.identityKeys : [id, makeArubotViewerUuid(id)];
+}
+
 export async function updatePlatformAccountProfile(provider, userId, platformUserId, profile) {
   const p = normalizeProvider(provider);
   if (!p || !userId || !platformUserId) throw new Error('provider, userId and platformUserId are required');
@@ -2270,6 +2348,74 @@ async function ensureAutomationTables() {
 
       create index if not exists idx_automation_local_agents_owner
         on automation_local_agents(owner_user_id, revoked_at, last_seen_at desc);
+
+      create table if not exists action_blueprints (
+        id text primary key,
+        owner_user_id text not null,
+        name text not null,
+        slug text not null,
+        enabled boolean not null default true,
+        description text,
+        current_version_id text,
+        created_at timestamptz not null default now(),
+        updated_at timestamptz not null default now()
+      );
+
+      create unique index if not exists idx_action_blueprints_owner_slug
+        on action_blueprints(owner_user_id, slug);
+
+      create index if not exists idx_action_blueprints_owner
+        on action_blueprints(owner_user_id, updated_at desc);
+
+      create table if not exists action_blueprint_versions (
+        id text primary key,
+        blueprint_id text not null references action_blueprints(id) on delete cascade,
+        owner_user_id text not null,
+        version integer not null,
+        nodes jsonb not null default '[]'::jsonb,
+        edges jsonb not null default '[]'::jsonb,
+        viewport jsonb not null default '{}'::jsonb,
+        published boolean not null default false,
+        created_at timestamptz not null default now(),
+        created_by text
+      );
+
+      create unique index if not exists idx_action_blueprint_versions_unique
+        on action_blueprint_versions(blueprint_id, version);
+
+      create index if not exists idx_action_blueprint_versions_owner
+        on action_blueprint_versions(owner_user_id, blueprint_id, created_at desc);
+
+      create table if not exists action_blueprint_runs (
+        id text primary key,
+        blueprint_id text not null,
+        version_id text,
+        owner_user_id text not null,
+        trigger_source text,
+        trigger_ref text,
+        context jsonb not null default '{}'::jsonb,
+        status text not null default 'running',
+        started_at timestamptz not null default now(),
+        finished_at timestamptz,
+        error text
+      );
+
+      create index if not exists idx_action_blueprint_runs_owner
+        on action_blueprint_runs(owner_user_id, started_at desc);
+
+      create table if not exists action_blueprint_run_steps (
+        id text primary key,
+        run_id text not null references action_blueprint_runs(id) on delete cascade,
+        node_id text not null,
+        node_type text not null,
+        status text not null,
+        input jsonb not null default '{}'::jsonb,
+        output jsonb not null default '{}'::jsonb,
+        duration_ms integer,
+        error text,
+        started_at timestamptz not null default now(),
+        finished_at timestamptz
+      );
     `);
   });
 }
@@ -2305,6 +2451,490 @@ function normalizeAutomationConnection(row) {
     createdAt: row.created_at || null,
     updatedAt: row.updated_at || null
   };
+}
+
+const memoryBlueprints = new Map();
+const memoryBlueprintVersions = new Map();
+const memoryBlueprintRuns = new Map();
+const memoryBlueprintRunSteps = new Map();
+
+function slugifyBlueprint(value) {
+  const slug = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9가-힣_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
+  return slug || `blueprint-${Date.now().toString(36)}`;
+}
+
+function normalizeBlueprintRow(row, version = null) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    ownerUserId: row.owner_user_id || row.ownerUserId,
+    name: row.name || '새 블루프린트',
+    slug: row.slug || slugifyBlueprint(row.name),
+    enabled: row.enabled !== false,
+    description: row.description || '',
+    currentVersionId: row.current_version_id || row.currentVersionId || null,
+    createdAt: row.created_at || row.createdAt || null,
+    updatedAt: row.updated_at || row.updatedAt || null,
+    version: version ? normalizeBlueprintVersionRow(version) : row.version ? normalizeBlueprintVersionRow(row.version) : null
+  };
+}
+
+function normalizeBlueprintVersionRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    blueprintId: row.blueprint_id || row.blueprintId,
+    ownerUserId: row.owner_user_id || row.ownerUserId,
+    version: Number(row.version || 1),
+    nodes: Array.isArray(row.nodes) ? row.nodes : [],
+    edges: Array.isArray(row.edges) ? row.edges : [],
+    viewport: normalizeJsonObject(row.viewport),
+    published: !!row.published,
+    createdAt: row.created_at || row.createdAt || null,
+    createdBy: row.created_by || row.createdBy || null
+  };
+}
+
+function normalizeBlueprintRunRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    blueprintId: row.blueprint_id || row.blueprintId,
+    versionId: row.version_id || row.versionId || null,
+    ownerUserId: row.owner_user_id || row.ownerUserId,
+    triggerSource: row.trigger_source || row.triggerSource || '',
+    triggerRef: row.trigger_ref || row.triggerRef || '',
+    context: normalizeJsonObject(row.context),
+    status: row.status || 'running',
+    startedAt: row.started_at || row.startedAt || null,
+    finishedAt: row.finished_at || row.finishedAt || null,
+    error: row.error || null
+  };
+}
+
+function normalizeBlueprintRunStepRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    runId: row.run_id || row.runId,
+    nodeId: row.node_id || row.nodeId,
+    nodeType: row.node_type || row.nodeType,
+    status: row.status || 'done',
+    input: normalizeJsonObject(row.input),
+    output: normalizeJsonObject(row.output),
+    durationMs: row.duration_ms ?? row.durationMs ?? null,
+    error: row.error || null,
+    startedAt: row.started_at || row.startedAt || null,
+    finishedAt: row.finished_at || row.finishedAt || null
+  };
+}
+
+function memoryOwnerBlueprints(owner) {
+  return Array.from(memoryBlueprints.values()).filter((item) => item.owner_user_id === owner);
+}
+
+export async function listActionBlueprints(ownerUserId) {
+  const owner = normalizeAutomationOwner(ownerUserId);
+  if (!owner) return [];
+  if (!process.env.SUPABASE_DB_URL) {
+    return memoryOwnerBlueprints(owner)
+      .sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')))
+      .map((blueprint) => normalizeBlueprintRow(blueprint, blueprint.current_version_id ? memoryBlueprintVersions.get(blueprint.current_version_id) : null));
+  }
+  await ensureAutomationTables();
+  return withPgClient(async (pg) => {
+    const { rows } = await pg.query(
+      `select b.*, v.id as v_id, v.blueprint_id as v_blueprint_id, v.owner_user_id as v_owner_user_id,
+              v.version as v_version, v.nodes as v_nodes, v.edges as v_edges, v.viewport as v_viewport,
+              v.published as v_published, v.created_at as v_created_at, v.created_by as v_created_by
+       from action_blueprints b
+       left join action_blueprint_versions v on v.id = b.current_version_id
+       where b.owner_user_id = $1
+       order by b.updated_at desc`,
+      [owner]
+    );
+    return (rows || []).map((row) => normalizeBlueprintRow(row, row.v_id ? {
+      id: row.v_id,
+      blueprint_id: row.v_blueprint_id,
+      owner_user_id: row.v_owner_user_id,
+      version: row.v_version,
+      nodes: row.v_nodes,
+      edges: row.v_edges,
+      viewport: row.v_viewport,
+      published: row.v_published,
+      created_at: row.v_created_at,
+      created_by: row.v_created_by
+    } : null)).filter(Boolean);
+  });
+}
+
+export async function getActionBlueprint(ownerUserId, idOrSlug) {
+  const owner = normalizeAutomationOwner(ownerUserId);
+  const key = String(idOrSlug || '').trim();
+  if (!owner || !key) return null;
+  if (!process.env.SUPABASE_DB_URL) {
+    const blueprint = memoryOwnerBlueprints(owner).find((item) => item.id === key || item.slug === key);
+    if (!blueprint) return null;
+    return normalizeBlueprintRow(blueprint, blueprint.current_version_id ? memoryBlueprintVersions.get(blueprint.current_version_id) : null);
+  }
+  await ensureAutomationTables();
+  return withPgClient(async (pg) => {
+    const { rows } = await pg.query(
+      `select b.*, v.id as v_id, v.blueprint_id as v_blueprint_id, v.owner_user_id as v_owner_user_id,
+              v.version as v_version, v.nodes as v_nodes, v.edges as v_edges, v.viewport as v_viewport,
+              v.published as v_published, v.created_at as v_created_at, v.created_by as v_created_by
+       from action_blueprints b
+       left join action_blueprint_versions v on v.id = b.current_version_id
+       where b.owner_user_id = $1 and (b.id = $2 or b.slug = $2)
+       limit 1`,
+      [owner, key]
+    );
+    const row = rows?.[0];
+    return normalizeBlueprintRow(row, row?.v_id ? {
+      id: row.v_id,
+      blueprint_id: row.v_blueprint_id,
+      owner_user_id: row.v_owner_user_id,
+      version: row.v_version,
+      nodes: row.v_nodes,
+      edges: row.v_edges,
+      viewport: row.v_viewport,
+      published: row.v_published,
+      created_at: row.v_created_at,
+      created_by: row.v_created_by
+    } : null);
+  });
+}
+
+export async function upsertActionBlueprint(ownerUserId, blueprint) {
+  const owner = normalizeAutomationOwner(ownerUserId);
+  if (!owner) throw new Error('ownerUserId is required');
+  const id = String(blueprint?.id || makeId('bp'));
+  const name = String(blueprint?.name || '새 블루프린트').trim().slice(0, 120) || '새 블루프린트';
+  const slug = slugifyBlueprint(blueprint?.slug || name);
+  const enabled = blueprint?.enabled === false ? false : true;
+  const description = String(blueprint?.description || '').slice(0, 500);
+  const nodes = Array.isArray(blueprint?.nodes) ? blueprint.nodes : [];
+  const edges = Array.isArray(blueprint?.edges) ? blueprint.edges : [];
+  const viewport = normalizeJsonObject(blueprint?.viewport, { x: 0, y: 0, zoom: 1 });
+  const now = new Date().toISOString();
+  if (!process.env.SUPABASE_DB_URL) {
+    const existing = memoryBlueprints.get(id);
+    const versionNumber = Math.max(0, ...Array.from(memoryBlueprintVersions.values()).filter((item) => item.blueprint_id === id).map((item) => Number(item.version || 0))) + 1;
+    const versionId = makeId('bpv');
+    const version = { id: versionId, blueprint_id: id, owner_user_id: owner, version: versionNumber, nodes, edges, viewport, published: false, created_at: now, created_by: owner };
+    const row = {
+      id,
+      owner_user_id: owner,
+      name,
+      slug,
+      enabled,
+      description,
+      current_version_id: versionId,
+      created_at: existing?.created_at || now,
+      updated_at: now
+    };
+    memoryBlueprints.set(id, row);
+    memoryBlueprintVersions.set(versionId, version);
+    return normalizeBlueprintRow(row, version);
+  }
+  await ensureAutomationTables();
+  return withPgClient(async (pg) => {
+    await pg.query('begin');
+    try {
+      const existing = await pg.query(`select id from action_blueprints where owner_user_id = $1 and id = $2 limit 1`, [owner, id]);
+      const { rows } = await pg.query(
+        `insert into action_blueprints (id, owner_user_id, name, slug, enabled, description, updated_at)
+         values ($1, $2, $3, $4, $5, $6, now())
+         on conflict (id)
+         do update set name = excluded.name,
+                       slug = excluded.slug,
+                       enabled = excluded.enabled,
+                       description = excluded.description,
+                       updated_at = now()
+         where action_blueprints.owner_user_id = excluded.owner_user_id
+         returning *`,
+        [id, owner, name, slug, enabled, description]
+      );
+      if (!rows?.[0]) throw new Error('blueprint_not_found');
+      const nextVersion = await pg.query(
+        `select coalesce(max(version), 0) + 1 as version from action_blueprint_versions where blueprint_id = $1`,
+        [id]
+      );
+      const versionNumber = Number(nextVersion.rows?.[0]?.version || (existing.rowCount ? 2 : 1));
+      const versionId = makeId('bpv');
+      const versionResult = await pg.query(
+        `insert into action_blueprint_versions
+          (id, blueprint_id, owner_user_id, version, nodes, edges, viewport, published, created_by)
+         values ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, false, $8)
+         returning *`,
+        [versionId, id, owner, versionNumber, JSON.stringify(nodes), JSON.stringify(edges), JSON.stringify(viewport), owner]
+      );
+      const updated = await pg.query(
+        `update action_blueprints set current_version_id = $2, updated_at = now()
+         where owner_user_id = $1 and id = $3 returning *`,
+        [owner, versionId, id]
+      );
+      await pg.query('commit');
+      return normalizeBlueprintRow(updated.rows?.[0], versionResult.rows?.[0]);
+    } catch (error) {
+      try { await pg.query('rollback'); } catch {}
+      throw error;
+    }
+  });
+}
+
+export async function publishActionBlueprint(ownerUserId, id) {
+  const owner = normalizeAutomationOwner(ownerUserId);
+  if (!owner || !id) return null;
+  if (!process.env.SUPABASE_DB_URL) {
+    const blueprint = memoryBlueprints.get(String(id));
+    if (!blueprint || blueprint.owner_user_id !== owner) return null;
+    const version = blueprint.current_version_id ? memoryBlueprintVersions.get(blueprint.current_version_id) : null;
+    if (version) memoryBlueprintVersions.set(version.id, { ...version, published: true });
+    return normalizeBlueprintRow(blueprint, version ? { ...version, published: true } : null);
+  }
+  await ensureAutomationTables();
+  return withPgClient(async (pg) => {
+    await pg.query('begin');
+    try {
+      const { rows } = await pg.query(`select * from action_blueprints where owner_user_id = $1 and id = $2 limit 1`, [owner, String(id)]);
+      const blueprint = rows?.[0];
+      if (!blueprint?.current_version_id) throw new Error('version_not_found');
+      await pg.query(`update action_blueprint_versions set published = true where owner_user_id = $1 and id = $2`, [owner, blueprint.current_version_id]);
+      const version = await pg.query(`select * from action_blueprint_versions where id = $1`, [blueprint.current_version_id]);
+      await pg.query('commit');
+      return normalizeBlueprintRow(blueprint, version.rows?.[0]);
+    } catch (error) {
+      try { await pg.query('rollback'); } catch {}
+      throw error;
+    }
+  });
+}
+
+export async function listActionBlueprintVersions(ownerUserId, blueprintId, limit = 20) {
+  const owner = normalizeAutomationOwner(ownerUserId);
+  if (!owner || !blueprintId) return [];
+  if (!process.env.SUPABASE_DB_URL) {
+    return Array.from(memoryBlueprintVersions.values())
+      .filter((version) => version.owner_user_id === owner && version.blueprint_id === String(blueprintId))
+      .sort((a, b) => Number(b.version || 0) - Number(a.version || 0))
+      .slice(0, Math.max(1, Math.min(100, Number(limit || 20))))
+      .map(normalizeBlueprintVersionRow);
+  }
+  await ensureAutomationTables();
+  return withPgClient(async (pg) => {
+    const { rows } = await pg.query(
+      `select * from action_blueprint_versions
+       where owner_user_id = $1 and blueprint_id = $2
+       order by version desc
+       limit $3`,
+      [owner, String(blueprintId), Math.max(1, Math.min(100, Number(limit || 20)))]
+    );
+    return (rows || []).map(normalizeBlueprintVersionRow).filter(Boolean);
+  });
+}
+
+export async function restoreActionBlueprintVersion(ownerUserId, blueprintId, versionId) {
+  const owner = normalizeAutomationOwner(ownerUserId);
+  if (!owner || !blueprintId || !versionId) return null;
+  if (!process.env.SUPABASE_DB_URL) {
+    const blueprint = memoryBlueprints.get(String(blueprintId));
+    const version = memoryBlueprintVersions.get(String(versionId));
+    if (!blueprint || !version || blueprint.owner_user_id !== owner || version.owner_user_id !== owner || version.blueprint_id !== String(blueprintId)) return null;
+    const now = new Date().toISOString();
+    const next = { ...blueprint, current_version_id: String(versionId), updated_at: now };
+    memoryBlueprints.set(String(blueprintId), next);
+    return normalizeBlueprintRow(next, version);
+  }
+  await ensureAutomationTables();
+  return withPgClient(async (pg) => {
+    await pg.query('begin');
+    try {
+      const versionResult = await pg.query(
+        `select * from action_blueprint_versions
+         where owner_user_id = $1 and blueprint_id = $2 and id = $3
+         limit 1`,
+        [owner, String(blueprintId), String(versionId)]
+      );
+      const version = versionResult.rows?.[0];
+      if (!version) throw new Error('version_not_found');
+      const blueprintResult = await pg.query(
+        `update action_blueprints
+         set current_version_id = $3, updated_at = now()
+         where owner_user_id = $1 and id = $2
+         returning *`,
+        [owner, String(blueprintId), String(versionId)]
+      );
+      await pg.query('commit');
+      return normalizeBlueprintRow(blueprintResult.rows?.[0], version);
+    } catch (error) {
+      try { await pg.query('rollback'); } catch {}
+      throw error;
+    }
+  });
+}
+
+export async function deleteActionBlueprint(ownerUserId, id) {
+  const owner = normalizeAutomationOwner(ownerUserId);
+  if (!owner || !id) return false;
+  if (!process.env.SUPABASE_DB_URL) {
+    const blueprint = memoryBlueprints.get(String(id));
+    if (!blueprint || blueprint.owner_user_id !== owner) return false;
+    memoryBlueprints.delete(String(id));
+    for (const [versionId, version] of memoryBlueprintVersions.entries()) {
+      if (version.blueprint_id === String(id)) memoryBlueprintVersions.delete(versionId);
+    }
+    return true;
+  }
+  await ensureAutomationTables();
+  return withPgClient(async (pg) => {
+    const result = await pg.query(`delete from action_blueprints where owner_user_id = $1 and id = $2`, [owner, String(id)]);
+    return (result.rowCount || 0) > 0;
+  });
+}
+
+export async function insertActionBlueprintRun(ownerUserId, run) {
+  const owner = normalizeAutomationOwner(ownerUserId);
+  if (!owner) throw new Error('ownerUserId is required');
+  const id = String(run?.id || makeId('bpr'));
+  const row = {
+    id,
+    blueprint_id: String(run?.blueprintId || run?.blueprint_id || ''),
+    version_id: run?.versionId || run?.version_id || null,
+    owner_user_id: owner,
+    trigger_source: String(run?.triggerSource || run?.trigger_source || 'manual'),
+    trigger_ref: run?.triggerRef || run?.trigger_ref || null,
+    context: normalizeJsonObject(run?.context),
+    status: String(run?.status || 'running'),
+    started_at: new Date().toISOString(),
+    finished_at: null,
+    error: null
+  };
+  if (!process.env.SUPABASE_DB_URL) {
+    memoryBlueprintRuns.set(id, row);
+    return normalizeBlueprintRunRow(row);
+  }
+  await ensureAutomationTables();
+  return withPgClient(async (pg) => {
+    const { rows } = await pg.query(
+      `insert into action_blueprint_runs
+        (id, blueprint_id, version_id, owner_user_id, trigger_source, trigger_ref, context, status)
+       values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
+       returning *`,
+      [id, row.blueprint_id, row.version_id, owner, row.trigger_source, row.trigger_ref, JSON.stringify(row.context), row.status]
+    );
+    return normalizeBlueprintRunRow(rows?.[0]);
+  });
+}
+
+export async function finishActionBlueprintRun(ownerUserId, runId, { status = 'done', error = null } = {}) {
+  const owner = normalizeAutomationOwner(ownerUserId);
+  if (!owner || !runId) return null;
+  if (!process.env.SUPABASE_DB_URL) {
+    const row = memoryBlueprintRuns.get(String(runId));
+    if (!row || row.owner_user_id !== owner) return null;
+    const next = { ...row, status, error, finished_at: new Date().toISOString() };
+    memoryBlueprintRuns.set(String(runId), next);
+    return normalizeBlueprintRunRow(next);
+  }
+  await ensureAutomationTables();
+  return withPgClient(async (pg) => {
+    const { rows } = await pg.query(
+      `update action_blueprint_runs
+       set status = $3, error = $4, finished_at = now()
+       where owner_user_id = $1 and id = $2
+       returning *`,
+      [owner, String(runId), String(status), error ? String(error).slice(0, 1000) : null]
+    );
+    return normalizeBlueprintRunRow(rows?.[0]);
+  });
+}
+
+export async function insertActionBlueprintRunStep(ownerUserId, step) {
+  const owner = normalizeAutomationOwner(ownerUserId);
+  if (!owner || !step?.runId) return null;
+  const row = {
+    id: String(step?.id || makeId('bps')),
+    run_id: String(step.runId),
+    node_id: String(step.nodeId || ''),
+    node_type: String(step.nodeType || ''),
+    status: String(step.status || 'done'),
+    input: normalizeJsonObject(step.input),
+    output: normalizeJsonObject(step.output),
+    duration_ms: Number.isFinite(Number(step.durationMs)) ? Number(step.durationMs) : null,
+    error: step.error ? String(step.error).slice(0, 1000) : null,
+    started_at: new Date().toISOString(),
+    finished_at: new Date().toISOString()
+  };
+  if (!process.env.SUPABASE_DB_URL) {
+    memoryBlueprintRunSteps.set(row.id, row);
+    return row;
+  }
+  await ensureAutomationTables();
+  return withPgClient(async (pg) => {
+    const { rows } = await pg.query(
+      `insert into action_blueprint_run_steps
+        (id, run_id, node_id, node_type, status, input, output, duration_ms, error, finished_at)
+       values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, now())
+       returning *`,
+      [row.id, row.run_id, row.node_id, row.node_type, row.status, JSON.stringify(row.input), JSON.stringify(row.output), row.duration_ms, row.error]
+    );
+    return rows?.[0] || null;
+  });
+}
+
+export async function listActionBlueprintRuns(ownerUserId, blueprintId, limit = 20) {
+  const owner = normalizeAutomationOwner(ownerUserId);
+  if (!owner) return [];
+  if (!process.env.SUPABASE_DB_URL) {
+    return Array.from(memoryBlueprintRuns.values())
+      .filter((row) => row.owner_user_id === owner && (!blueprintId || row.blueprint_id === String(blueprintId)))
+      .sort((a, b) => String(b.started_at || '').localeCompare(String(a.started_at || '')))
+      .slice(0, Math.max(1, Math.min(100, Number(limit || 20))))
+      .map(normalizeBlueprintRunRow);
+  }
+  await ensureAutomationTables();
+  return withPgClient(async (pg) => {
+    const { rows } = await pg.query(
+      `select * from action_blueprint_runs
+       where owner_user_id = $1 and ($2::text is null or blueprint_id = $2)
+       order by started_at desc
+       limit $3`,
+      [owner, blueprintId ? String(blueprintId) : null, Math.max(1, Math.min(100, Number(limit || 20)))]
+    );
+    return (rows || []).map(normalizeBlueprintRunRow).filter(Boolean);
+  });
+}
+
+export async function listActionBlueprintRunSteps(ownerUserId, runId) {
+  const owner = normalizeAutomationOwner(ownerUserId);
+  if (!owner || !runId) return [];
+  if (!process.env.SUPABASE_DB_URL) {
+    const run = memoryBlueprintRuns.get(String(runId));
+    if (!run || run.owner_user_id !== owner) return [];
+    return Array.from(memoryBlueprintRunSteps.values())
+      .filter((step) => step.run_id === String(runId))
+      .sort((a, b) => String(a.started_at || '').localeCompare(String(b.started_at || '')))
+      .map(normalizeBlueprintRunStepRow)
+      .filter(Boolean);
+  }
+  await ensureAutomationTables();
+  return withPgClient(async (pg) => {
+    const runCheck = await pg.query(`select id from action_blueprint_runs where owner_user_id = $1 and id = $2 limit 1`, [owner, String(runId)]);
+    if (!runCheck.rows?.[0]) return [];
+    const { rows } = await pg.query(
+      `select * from action_blueprint_run_steps
+       where run_id = $1
+       order by started_at asc`,
+      [String(runId)]
+    );
+    return (rows || []).map(normalizeBlueprintRunStepRow).filter(Boolean);
+  });
 }
 
 export async function getAutomationSettings(ownerUserId) {
@@ -2517,6 +3147,53 @@ export async function createAutomationLocalAgent(ownerUserId, name = 'AruBot Loc
     );
     return { token, agent: normalizeAutomationLocalAgent(rows?.[0]) };
   });
+}
+
+export async function getOrCreateAutomationLocalAgent(ownerUserId, name = 'AruBot Local Program', { rotate = false } = {}) {
+  const owner = normalizeAutomationOwner(ownerUserId);
+  if (!owner) throw new Error('ownerUserId is required');
+  if (!process.env.SUPABASE_DB_URL) {
+    return createAutomationLocalAgent(owner, name);
+  }
+  await ensureAutomationTables();
+  if (!rotate) {
+    const existing = await withPgClient(async (pg) => {
+      const { rows } = await pg.query(
+        `select
+           id,
+           owner_user_id,
+           name,
+           case
+             when last_seen_at is not null and last_seen_at > now() - interval '45 seconds' then 'online'
+             else 'offline'
+           end as status,
+           capabilities,
+           last_seen_at,
+           created_at,
+           updated_at,
+           revoked_at
+         from automation_local_agents
+         where owner_user_id = $1 and revoked_at is null
+         order by created_at desc
+         limit 1`,
+        [owner]
+      );
+      return normalizeAutomationLocalAgent(rows?.[0]);
+    });
+    if (existing) {
+      return { token: null, agent: existing, tokenShownOnce: false };
+    }
+  }
+  await withPgClient(async (pg) => {
+    await pg.query(
+      `update automation_local_agents
+       set revoked_at = now(), updated_at = now(), status = 'offline'
+       where owner_user_id = $1 and revoked_at is null`,
+      [owner]
+    );
+  });
+  const result = await createAutomationLocalAgent(owner, name);
+  return { ...result, tokenShownOnce: true };
 }
 
 export async function listAutomationLocalAgents(ownerUserId) {

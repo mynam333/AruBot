@@ -8,6 +8,7 @@ import {
   Loader2,
   MessageSquare,
   PlaySquare,
+  ChevronRight,
   Settings,
   Sparkles,
   X,
@@ -26,6 +27,7 @@ type ActionDialogButtonProps = {
   variant?: DialogButtonVariant;
   label?: string;
   className?: string;
+  trailingChevron?: boolean;
 };
 
 type ActionDialogFrameProps = ActionDialogButtonProps & {
@@ -86,6 +88,7 @@ function ActionDialogFrame({
   variant = 'secondary',
   label = badge,
   className,
+  trailingChevron = false,
 }: ActionDialogFrameProps) {
   const [open, setOpen] = useState(false);
 
@@ -106,8 +109,11 @@ function ActionDialogFrame({
         )}
         data-testid={testId}
       >
-        {icon}
-        {label}
+        <span className="inline-flex min-w-0 items-center gap-2">
+          {icon}
+          <span className="truncate">{label}</span>
+        </span>
+        {trailingChevron ? <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" /> : null}
       </Dialog.Trigger>
 
       <Dialog.Portal>
@@ -190,7 +196,7 @@ function Textarea({
   );
 }
 
-export function CommandCreateDialog({ variant = 'secondary', label = '명령어 만들기', className }: ActionDialogButtonProps) {
+export function CommandCreateDialog({ variant = 'secondary', label = '명령어 만들기', className, trailingChevron }: ActionDialogButtonProps) {
   const [name, setName] = useState('');
   const [command, setCommand] = useState('!');
   const [response, setResponse] = useState('');
@@ -245,6 +251,7 @@ export function CommandCreateDialog({ variant = 'secondary', label = '명령어 
       variant={variant}
       label={label}
       className={className}
+      trailingChevron={trailingChevron}
       testId="command-create-trigger"
     >
       <div className="grid gap-[clamp(1rem,2vw,1.35rem)] md:grid-cols-2">
@@ -283,15 +290,15 @@ function SwitchRow({ checked, onCheckedChange, label }: { checked: boolean; onCh
       <Switch.Root
         checked={checked}
         onCheckedChange={onCheckedChange}
-        className="relative h-[var(--control-height-sm)] w-[clamp(4rem,9vw,5.5rem)] rounded-full border bg-muted transition data-[state=checked]:border-primary/35 data-[state=checked]:bg-primary/75"
+        className="relative h-[1.75rem] w-[3.25rem] rounded-full border bg-muted transition data-[state=checked]:border-primary/35 data-[state=checked]:bg-primary/75"
       >
-        <Switch.Thumb className="block aspect-square h-[calc(var(--control-height-sm)-0.45rem)] translate-x-[0.2rem] rounded-full bg-card shadow-subtle transition data-[state=checked]:translate-x-[calc(clamp(4rem,9vw,5.5rem)-var(--control-height-sm)+0.25rem)]" />
+        <Switch.Thumb className="block h-[1.35rem] w-[1.35rem] translate-x-[0.2rem] rounded-full bg-card shadow-subtle transition data-[state=checked]:translate-x-[1.55rem]" />
       </Switch.Root>
     </div>
   );
 }
 
-export function RouletteCreateDialog({ variant = 'secondary', label = '룰렛 만들기', className }: ActionDialogButtonProps) {
+export function RouletteCreateDialog({ variant = 'secondary', label = '룰렛 만들기', className, trailingChevron }: ActionDialogButtonProps) {
   const [name, setName] = useState('오늘의 룰렛');
   const [command, setCommand] = useState('!룰렛');
   const [itemsText, setItemsText] = useState('당첨\n한 번 더\n꽝');
@@ -324,9 +331,9 @@ export function RouletteCreateDialog({ variant = 'secondary', label = '룰렛 �
           definition: {
             id: `rlt_${Date.now().toString(36)}`,
             name: rouletteName,
-            type: 'items',
-            theme: 'pastel',
-            items,
+              type: 'items',
+              theme: 'pastel',
+              items,
           },
         });
         if (keyword && keyword !== '!') {
@@ -367,6 +374,7 @@ export function RouletteCreateDialog({ variant = 'secondary', label = '룰렛 �
       variant={variant}
       label={label}
       className={className}
+      trailingChevron={trailingChevron}
       testId="roulette-create-trigger"
     >
       <div className="grid gap-[clamp(1rem,2vw,1.35rem)] md:grid-cols-2">
@@ -447,7 +455,7 @@ export function VideoDonationSettingsDialog({ variant = 'secondary', label = '�
       testId="video-donation-settings-trigger"
     >
       <SwitchRow checked={enabled} onCheckedChange={setEnabled} label="영상 후원 받기" />
-      <div className="grid gap-[clamp(1rem,2vw,1.35rem)] md:grid-cols-3">
+      <div className="grid gap-[clamp(1.15rem,2.4vw,1.65rem)] rounded-[var(--radius-card)] border bg-background/62 p-[clamp(1rem,2vw,1.25rem)] md:grid-cols-3">
         <Field label="초당 포인트">
           <Input value={pointsPerSecond} onChange={(event) => setPointsPerSecond(event.target.value)} inputMode="decimal" />
         </Field>

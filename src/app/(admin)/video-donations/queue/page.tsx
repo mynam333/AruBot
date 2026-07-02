@@ -7,7 +7,6 @@ export default function Page() {
     <AdminFeaturePage
       config={adminFeatureMap.videoDonations}
       actionSlot={<VideoDonationSettingsDialog />}
-      resourceActionSlot={<VideoDonationSettingsDialog variant="outline" />}
     />
   );
 }

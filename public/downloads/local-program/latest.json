@@ -5,9 +5,9 @@
   "arch": "x64",
   "fileName": "AruBot-Local-Program-0.1.0-x64.exe",
   "url": "/downloads/local-program/AruBot-Local-Program-0.1.0-x64.exe",
-  "sha256": "58f46ee724fcc1901c44ea80087413a6e04c45f189cb2b7b98e8aaf63dcd35b8",
-  "size": 103978519,
-  "releasedAt": "2026-07-01T16:50:47.797Z",
+  "sha256": "63ae0475e7289c6d91ba496c2301e7a1798ca37198d5303dde03dc5fe80de9c4",
+  "size": 104298646,
+  "releasedAt": "2026-07-01T17:37:06.715Z",
   "notes": [
     "방송 PC 로컬 자동화 큐 처리",
     "T.I.T.S., Toonation, TTS, 사운드 재생 지원",

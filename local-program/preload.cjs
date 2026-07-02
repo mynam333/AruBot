@@ -11,6 +11,12 @@ contextBridge.exposeInMainWorld('aruLocal', {
   openExternal: (url) => ipcRenderer.invoke('external:open', url),
   checkUpdate: () => ipcRenderer.invoke('update:check'),
   installUpdate: () => ipcRenderer.invoke('update:install'),
+  remoteOverview: () => ipcRenderer.invoke('remote:overview'),
+  remoteSaveCommand: (rule) => ipcRenderer.invoke('remote:command:save', rule),
+  remoteDeleteCommand: (id) => ipcRenderer.invoke('remote:command:delete', id),
+  remoteTestRoulette: (roulette) => ipcRenderer.invoke('remote:roulette:test', roulette),
+  remotePopVideoDonation: () => ipcRenderer.invoke('remote:pvd:pop'),
+  remoteControlVideoDonation: (control) => ipcRenderer.invoke('remote:pvd:control', control),
   onState: (callback) => {
     const listener = (_event, state) => callback(state);
     ipcRenderer.on('agent-state', listener);

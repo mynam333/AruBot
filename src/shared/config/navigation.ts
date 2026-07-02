@@ -11,7 +11,9 @@ import {
   Settings,
   Sparkles,
   Timer,
+  UserRound,
   Vote,
+  Workflow,
 } from 'lucide-react';
 
 export const adminNav = [
@@ -22,10 +24,11 @@ export const adminNav = [
   { href: '/points', label: '시청자 포인트', icon: Coins },
   { href: '/predictions', label: '예측 베팅', icon: Vote },
   { href: '/automations', label: '방송 자동화', icon: Orbit },
+  { href: '/actions', label: '실행 액션', icon: Workflow },
   { href: '/video-donations/queue', label: '영상 후원', icon: PlaySquare },
   { href: '/roulette', label: '룰렛', icon: Sparkles },
   { href: '/donations/rules', label: '후원 반응', icon: Gift },
-  { href: '/settings', label: '설정', icon: Settings },
+  { href: '/viewer/me', label: '시청자 페이지', icon: UserRound },
 ];
 
 export const adminFeatureMap = {
@@ -34,7 +37,7 @@ export const adminFeatureMap = {
     description: 'CHZZK와 CIME 채널을 연결하고 방송에서 사용할 봇 기능을 켜세요.',
     endpoint: '/api/auth/session',
     icon: Cable,
-    actions: [{ href: '/settings', label: '설정 열기' }],
+    actions: [],
     tips: ['채널별 계정을 연결해요', '다른 플랫폼을 나중에 추가할 수 있어요', '연결 후 기능 카드가 바로 활성화돼요'],
   },
   commands: {
@@ -74,11 +77,19 @@ export const adminFeatureMap = {
   },
   automations: {
     title: '방송 자동화',
-    description: '후원, 채팅, 포인트 이벤트를 OBS, T.I.T.S., 투네이션, TTS, 제어 버튼과 연결해 방송 연출을 자동으로 실행해요.',
+    description: '채팅, 포인트, 룰렛, 예측 이벤트를 OBS, T.I.T.S., 투네이션 알림, TTS, 제어 버튼과 연결해 방송 연출을 자동으로 실행해요.',
     endpoint: '/api/automations/overview',
     icon: Orbit,
     actions: [{ href: '/automations', label: '자동화 열기' }],
-    tips: ['오라클 직접 연동과 로컬 프로그램 모드를 선택해요', '민감한 키는 로컬에만 저장해요', '사운드는 기본 10MB까지 서버에 보관해요'],
+    tips: ['서버 직접 연동과 로컬 프로그램 모드를 선택해요', '민감한 키는 로컬에만 저장해요', '사운드는 기본 10MB까지 서버에 보관해요'],
+  },
+  actions: {
+    title: '실행 액션',
+    description: '특수 변수로 호출할 수 있는 블루프린트형 실행 흐름을 설계합니다.',
+    endpoint: '/api/automations/overview',
+    icon: Workflow,
+    actions: [{ href: '/variables', label: '특수 변수 보기' }],
+    tips: ['룰렛 결과에서 액션을 호출해요', '채팅과 대기, 조건문을 노드로 연결해요', '방송 자동화와 로컬 프로그램 실행을 이어요'],
   },
   videoDonations: {
     title: '영상 후원',
@@ -122,7 +133,6 @@ export const adminFeatureMap = {
     icon: LifeBuoy,
     actions: [
       { href: '/connection', label: '연결 다시 보기' },
-      { href: '/settings', label: '설정 열기' },
     ],
     tips: ['문제가 있을 때만 열어보면 돼요', '연결 상태를 간단히 확인해요', '설정 화면으로 바로 이동할 수 있어요'],
   },
@@ -147,7 +157,7 @@ export const adminFeatureMap = {
     description: '방송 채팅 참여와 운영 자동화를 한곳에서 관리합니다.',
     endpoint: '/api/bot/stats',
     icon: LifeBuoy,
-    actions: [{ href: '/settings', label: '설정' }],
+    actions: [{ href: '/connection', label: '플랫폼 연결' }],
     tips: ['채팅 반응을 자동화해요', '시청자 참여를 포인트로 이어요', '방송 화면에 참여형 이벤트를 띄워요'],
   },
 };

@@ -8,11 +8,22 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
-import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, getSessionUserId, getAnyTokens, listChannelPoints, listViewerPointBalancesForUserIds, setChannelPoints, incrChannelPoints, getChannelPoints, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, deletePlatformTokens, deletePlatformAccount, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, createAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet } from './supabase.js';
+import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, getSessionUserId, getAnyTokens, listChannelPoints, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, getChannelPoints, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, deletePlatformTokens, deletePlatformAccount, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps } from './supabase.js';
 import { createPlatformProfileService } from './platform-profiles.js';
 import { WebSocketServer, WebSocket } from 'ws';
 
 dotenv.config();
+
+const VERBOSE_LOGS = process.env.ARUBOT_VERBOSE_LOGS === 'true' || process.env.NODE_ENV !== 'production';
+if (!VERBOSE_LOGS) {
+  const originalConsoleLog = console.log.bind(console);
+  console.log = (...args) => {
+    const first = String(args?.[0] || '');
+    if (first.startsWith('[server]') || first.startsWith('[Server] Received') || first.startsWith('[Server] Graceful shutdown')) {
+      originalConsoleLog(...args);
+    }
+  };
+}
 
 const app = express();
 app.set('trust proxy', 1);
@@ -4424,6 +4435,27 @@ app.post('/api/roulette/definitions/delete', async (req, res) => {
   }
 });
 
+app.post('/api/roulette/test', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const sid = await getPartitionId(req, res);
+    if (!sid) return res.status(401).json({ error: 'Login required' });
+    const settings = await getBotSettings(sid) || {};
+    const definitions = getRouletteDefsFromSettings(settings);
+    const id = String(req.body?.id || '').trim();
+    const name = String(req.body?.name || '').trim();
+    const definition = definitions.find((item) => (
+      (id && String(item?.id || '') === id) ||
+      (name && String(item?.name || '').trim().toLowerCase() === name.toLowerCase())
+    ));
+    if (!definition) return res.status(404).json({ error: '룰렛을 찾을 수 없습니다.' });
+    const result = await startRouletteSpin(sid, definition.name, 'arubot_test_viewer', '테스트 시청자', { instant: true, suppressResultChat: true });
+    return res.json({ ok: true, roulette: definition.name, result });
+  } catch (e) {
+    console.error('[roulette:test] error', e?.message || e);
+    return res.status(500).json({ error: '룰렛 테스트를 실행하지 못했습니다.' });
+  }
+});
+
 // Public: list roulette definitions by channel UID (no auth)
 // GET /api/public/:uid/roulette-defs
 app.get('/api/public/:uid/roulette-defs', async (req, res) => {
@@ -4819,6 +4851,26 @@ app.get('/api/health', (req, res) => {
     releaseSha: RELEASE_SHA,
     uptimeSec: Math.round(process.uptime()),
     startedAt: SERVER_STARTED_AT,
+  });
+});
+
+app.get(['/healthz', '/readyz'], (req, res) => {
+  const memory = process.memoryUsage();
+  res.json({
+    ok: true,
+    role: PROCESS_ROLE,
+    releaseSha: RELEASE_SHA,
+    uptimeSec: Math.round(process.uptime()),
+    startedAt: SERVER_STARTED_AT,
+    memory: {
+      heapUsedMb: Math.round(memory.heapUsed / 1024 / 1024),
+      heapTotalMb: Math.round(memory.heapTotal / 1024 / 1024),
+      rssMb: Math.round(memory.rss / 1024 / 1024),
+    },
+    sessions: {
+      live: liveSession?.size || 0,
+      cime: typeof cimeSessionStore !== 'undefined' ? cimeSessionStore.size : 0,
+    },
   });
 });
 
@@ -5225,6 +5277,525 @@ app.get('/api/roulette/logs', async (req, res) => {
   }
 });
 
+function getPathValue(source, pathExpression) {
+  const path = String(pathExpression || '').replace(/^\{|\}$/g, '').trim();
+  if (!path) return undefined;
+  return path.split('.').reduce((value, key) => {
+    if (value == null) return undefined;
+    return value[key];
+  }, source);
+}
+
+function buildBlueprintScope(context = {}, flow = {}, nodeOutputs = {}) {
+  return {
+    ...(context || {}),
+    flow,
+    node: nodeOutputs,
+    user: context.user || {},
+    channel: context.channel || {},
+    trigger: context.trigger || {},
+    roulette: context.roulette || {},
+    donation: context.donation || {},
+    attendance: context.attendance || {},
+    live: context.live || {}
+  };
+}
+
+function renderBlueprintTemplate(value, scope = {}) {
+  if (value == null) return '';
+  return String(value).replace(/\{([a-zA-Z0-9_.-]+)\}/g, (match, pathExpression) => {
+    const resolved = getPathValue(scope, pathExpression);
+    if (resolved == null) return '';
+    if (typeof resolved === 'object') return JSON.stringify(resolved);
+    return String(resolved);
+  });
+}
+
+function renderBlueprintValueDeep(value, scope = {}) {
+  if (typeof value === 'string') return renderBlueprintTemplate(value, scope);
+  if (Array.isArray(value)) return value.map((item) => renderBlueprintValueDeep(item, scope));
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, renderBlueprintValueDeep(item, scope)]));
+  }
+  return value;
+}
+
+function evaluateBlueprintValue(value, scope = {}) {
+  if (typeof value === 'number' || typeof value === 'boolean') return value;
+  if (value == null) return '';
+  const rendered = renderBlueprintTemplate(value, scope).trim();
+  if (/^(true|false)$/i.test(rendered)) return rendered.toLowerCase() === 'true';
+  if (/^-?\d+(\.\d+)?$/.test(rendered)) return Number(rendered);
+  if (/^[\d\s+\-*/().%]+$/.test(rendered) && /[+\-*/%]/.test(rendered)) {
+    try {
+      // Safe after strict whitelist: numbers, spaces, and arithmetic operators only.
+      const result = Function(`"use strict"; return (${rendered});`)();
+      return Number.isFinite(Number(result)) ? Number(result) : rendered;
+    } catch { }
+  }
+  return rendered;
+}
+
+function compareBlueprintValues(left, operator, right) {
+  const op = String(operator || 'eq');
+  if (op === 'exists') return left != null && left !== '';
+  if (op === 'empty') return left == null || left === '';
+  if (op === 'contains') return String(left ?? '').includes(String(right ?? ''));
+  if (op === 'regex') {
+    try { return new RegExp(String(right || '')).test(String(left ?? '')); } catch { return false; }
+  }
+  const ln = Number(left);
+  const rn = Number(right);
+  const bothNumbers = Number.isFinite(ln) && Number.isFinite(rn);
+  if (op === 'gt') return bothNumbers ? ln > rn : String(left) > String(right);
+  if (op === 'gte') return bothNumbers ? ln >= rn : String(left) >= String(right);
+  if (op === 'lt') return bothNumbers ? ln < rn : String(left) < String(right);
+  if (op === 'lte') return bothNumbers ? ln <= rn : String(left) <= String(right);
+  if (op === 'neq') return String(left) !== String(right);
+  return String(left) === String(right);
+}
+
+function blueprintInputPorts(node = {}) {
+  return node.type === 'start' ? [] : ['in'];
+}
+
+function blueprintOutputPorts(node = {}) {
+  const type = String(node?.type || '');
+  if (type === 'end') return [];
+  if (['condition', 'pointsEnough', 'pointsExcluded', 'rouletteCompare', 'cooldown', 'loop'].includes(type)) return ['true', 'false'];
+  if (type === 'random') {
+    const options = Array.isArray(node?.config?.options) ? node.config.options : [];
+    return options.length ? options.map((option, index) => `option:${option?.id || index}`) : ['option:a', 'option:b'];
+  }
+  return ['out'];
+}
+
+function isBlankConfigValue(value) {
+  return value == null || String(value).trim() === '';
+}
+
+function validateBlueprintNodeConfig(node = {}) {
+  const errors = [];
+  const config = node.config || {};
+  const label = node.name || node.type || '노드';
+  const need = (key, field) => {
+    if (isBlankConfigValue(config[key])) errors.push(`${label}: ${field} 값이 필요합니다.`);
+  };
+  if (node.type === 'chat') need('message', '메시지');
+  if (node.type === 'condition' || node.type === 'rouletteCompare') {
+    need('left', '좌변');
+    need('operator', '연산자');
+    if (!['exists', 'empty'].includes(String(config.operator || 'eq'))) need('right', '우변');
+  }
+  if (node.type === 'setVariable') need('key', '변수 이름');
+  if (node.type === 'random') {
+    const options = Array.isArray(config.options) ? config.options : [];
+    if (options.length < 2) errors.push(`${label}: 랜덤 분기는 선택지가 2개 이상 필요합니다.`);
+    const ids = options.map((option, index) => String(option?.id || index).trim());
+    if (new Set(ids).size !== ids.length) errors.push(`${label}: 분기 포트 ID가 중복되었습니다.`);
+    if (!options.some((option) => Number(option?.weight ?? 1) > 0)) errors.push(`${label}: 가중치가 1 이상인 선택지가 필요합니다.`);
+  }
+  if (node.type === 'action') need('actionId', '실행할 액션 ID');
+  if (node.type === 'pointsAdjust') need('delta', '변경 포인트');
+  if (node.type === 'pointsEnough') need('required', '필요 포인트');
+  if (node.type === 'rouletteRun') need('name', '룰렛 이름 또는 ID');
+  if (node.type === 'rouletteDisplay' || node.type === 'overlay') need('text', '표시 내용');
+  if (node.type === 'tts') need('text', '말할 내용');
+  if (node.type === 'http') need('url', 'URL');
+  if (node.type === 'websocket') {
+    need('url', 'URL');
+    need('message', '메시지');
+  }
+  if (node.type === 'udp') {
+    need('host', '호스트');
+    need('port', '포트');
+    need('message', '메시지');
+  }
+  if (node.type === 'tits') need('triggerId', '트리거');
+  if (node.type === 'vtube' && isBlankConfigValue(config.hotkeyId) && isBlankConfigValue(config.parameter)) {
+    errors.push(`${label}: 핫키 또는 파라미터 중 하나가 필요합니다.`);
+  }
+  return errors;
+}
+
+function hasBlueprintCycle(nodes = [], edges = []) {
+  const nodeIds = new Set(nodes.map((node) => String(node.id)));
+  const graph = new Map([...nodeIds].map((id) => [id, []]));
+  for (const edge of edges) {
+    const source = String(edge.source);
+    const target = String(edge.target);
+    if (nodeIds.has(source) && nodeIds.has(target)) graph.get(source).push(target);
+  }
+  const visiting = new Set();
+  const visited = new Set();
+  const visit = (nodeId) => {
+    if (visiting.has(nodeId)) return true;
+    if (visited.has(nodeId)) return false;
+    visiting.add(nodeId);
+    for (const next of graph.get(nodeId) || []) {
+      if (visit(next)) return true;
+    }
+    visiting.delete(nodeId);
+    visited.add(nodeId);
+    return false;
+  };
+  return [...nodeIds].some((nodeId) => visit(nodeId));
+}
+
+function validateBlueprintGraph(nodes = [], edges = []) {
+  const errors = [];
+  const startNodes = nodes.filter((node) => node.type === 'start');
+  if (startNodes.length !== 1) errors.push('시작 노드는 반드시 1개여야 합니다.');
+  const seenNodeIds = new Set();
+  for (const node of nodes) {
+    const nodeId = String(node.id || '');
+    if (!nodeId) errors.push('ID가 없는 노드가 있습니다.');
+    if (seenNodeIds.has(nodeId)) errors.push(`중복된 노드 ID가 있습니다: ${nodeId}`);
+    seenNodeIds.add(nodeId);
+    if (node.type === 'start' && blueprintInputPorts(node).length) errors.push('시작 노드에는 입력 포트가 없어야 합니다.');
+    if (node.type === 'end' && blueprintOutputPorts(node).length) errors.push('종료 노드에는 출력 포트가 없어야 합니다.');
+    errors.push(...validateBlueprintNodeConfig(node));
+  }
+  const nodeIds = new Set(nodes.map((node) => String(node.id)));
+  const nodeById = new Map(nodes.map((node) => [String(node.id), node]));
+  const outputUse = new Set();
+  for (const edge of edges) {
+    const sourceNode = nodeById.get(String(edge.source));
+    const targetNode = nodeById.get(String(edge.target));
+    if (!sourceNode || !targetNode) {
+      errors.push('존재하지 않는 노드를 연결한 선이 있습니다.');
+      continue;
+    }
+    if (!blueprintOutputPorts(sourceNode).includes(String(edge.sourcePort || 'out'))) {
+      errors.push(`${sourceNode.name || sourceNode.type}: 존재하지 않는 출력 포트가 연결되어 있습니다.`);
+    }
+    if (!blueprintInputPorts(targetNode).includes(String(edge.targetPort || 'in'))) {
+      errors.push(`${targetNode.name || targetNode.type}: 존재하지 않는 입력 포트가 연결되어 있습니다.`);
+    }
+    const outputKey = `${edge.source}:${edge.sourcePort || 'out'}`;
+    if (outputUse.has(outputKey)) errors.push('하나의 출력 포트에서 여러 연결이 나갈 수 없습니다.');
+    outputUse.add(outputKey);
+  }
+  if (nodeIds.size && hasBlueprintCycle(nodes, edges)) errors.push('순환 연결은 실행할 수 없습니다. 반복은 N회 반복 노드를 사용하세요.');
+  return Array.from(new Set(errors));
+}
+
+async function resolveBlueprintChannelUid(ownerUserId, context = {}) {
+  const direct = context.channelUid || context.channel?.channelUid || context.channel?.id || context.roulette?.channelUid;
+  if (direct) return String(direct);
+  const settings = await getBotSettings(`user:${ownerUserId}`).catch(() => null) || {};
+  const uids = Array.isArray(settings.channelUids) ? settings.channelUids.map(String).filter(Boolean) : [];
+  return uids[0] || ownerUserId;
+}
+
+async function executeBlueprintChatNode(ownerUserId, sid, node, text, context = {}) {
+  const platform = String(context.platform || context.trigger?.platform || context.chatPost?.platform || '').toLowerCase();
+  if (context.dryRun || context.source === 'manual_test') {
+    return { sent: false, dryRun: true, platform: platform || 'simulator', text };
+  }
+  const chatPost = context.chatPost || null;
+  if (chatPost && (!platform || platform === String(chatPost.platform || '').toLowerCase())) {
+    await sendChatByPost(sid, chatPost, text, { timeout: 5000 });
+    return { sent: true, platform: chatPost.platform || platform || 'trigger' };
+  }
+  if (platform === 'cime') {
+    await sendCimeChat(ownerUserId, text);
+    return { sent: true, platform: 'cime' };
+  }
+  const live = liveStatusCache.get(sid);
+  if (!platform && !live?.live) return { sent: false, reason: 'not_live' };
+  return { sent: false, reason: 'chat_session_unavailable' };
+}
+
+async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}) {
+  const blueprint = await getActionBlueprint(ownerUserId, idOrSlug);
+  if (!blueprint || blueprint.enabled === false) return { ok: false, error: 'blueprint_not_found' };
+  const dryRun = context.dryRun === true || context.source === 'manual_test';
+  const version = blueprint.version || {};
+  if (!version.published && context.source !== 'manual_test') return { ok: false, error: 'blueprint_not_published' };
+  const nodes = Array.isArray(version.nodes) ? version.nodes : [];
+  const edges = Array.isArray(version.edges) ? version.edges : [];
+  const validationErrors = validateBlueprintGraph(nodes, edges);
+  if (validationErrors.length) return { ok: false, error: 'blueprint_invalid', validationErrors };
+
+  const sid = `user:${ownerUserId}`;
+  const run = await insertActionBlueprintRun(ownerUserId, {
+    blueprintId: blueprint.id,
+    versionId: version.id,
+    triggerSource: context.source || 'manual',
+    triggerRef: context.triggerRef || idOrSlug,
+    context,
+    status: 'running'
+  });
+  const nodeMap = new Map(nodes.map((node) => [String(node.id), node]));
+  const edgeFrom = (nodeId, port = 'out') => edges.find((edge) => String(edge.source) === String(nodeId) && String(edge.sourcePort || 'out') === String(port));
+  const flow = {};
+  const nodeOutputs = {};
+  const executed = [];
+
+  async function recordStep(node, status, input, output, startedAt, error = null) {
+    const durationMs = Date.now() - startedAt;
+    await insertActionBlueprintRunStep(ownerUserId, {
+      runId: run.id,
+      nodeId: node.id,
+      nodeType: node.type,
+      status,
+      input,
+      output,
+      durationMs,
+      error
+    }).catch(() => null);
+  }
+
+  async function runNode(nodeId, incoming = {}, depth = 0) {
+    const node = nodeMap.get(String(nodeId));
+    if (!node || node.enabled === false) return null;
+    const startedAt = Date.now();
+    const config = node.config || {};
+    const scope = buildBlueprintScope(context, flow, nodeOutputs);
+    let output = {};
+    let nextPort = 'out';
+    executed.push(node.id);
+    try {
+      if (node.type === 'start') {
+        output = { context };
+      } else if (node.type === 'end') {
+        output = { status: config.status || 'success', message: renderBlueprintTemplate(config.message || '', scope) };
+        await recordStep(node, 'done', incoming, output, startedAt);
+        return output;
+      } else if (node.type === 'chat') {
+        const message = renderBlueprintTemplate(config.message || config.text || '', scope).slice(0, 100);
+        output = await executeBlueprintChatNode(ownerUserId, sid, node, message, context);
+      } else if (node.type === 'wait') {
+        const delayMs = Math.max(0, Number(evaluateBlueprintValue(config.ms || Number(config.seconds || 0) * 1000, scope) || 0));
+        if (!dryRun && delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+        output = { waitedMs: delayMs, dryRun };
+      } else if (node.type === 'condition') {
+        const left = evaluateBlueprintValue(config.left, scope);
+        const right = evaluateBlueprintValue(config.right, scope);
+        const passed = compareBlueprintValues(left, config.operator, right);
+        output = { passed, left, right };
+        nextPort = passed ? 'true' : 'false';
+      } else if (node.type === 'setVariable') {
+        const key = String(config.key || '').replace(/^flow\./, '').trim();
+        if (key) {
+          const previous = flow[key];
+          const value = evaluateBlueprintValue(config.value, scope);
+          const mode = String(config.mode || 'set');
+          if (mode === 'add') flow[key] = Number(previous || 0) + Number(value || 0);
+          else if (mode === 'subtract') flow[key] = Number(previous || 0) - Number(value || 0);
+          else if (mode === 'multiply') flow[key] = Number(previous || 0) * Number(value || 0);
+          else if (mode === 'divide') flow[key] = Number(value || 0) ? Number(previous || 0) / Number(value || 1) : previous;
+          else if (mode === 'append') flow[key] = `${previous || ''}${value}`;
+          else flow[key] = value;
+          output = { key, value: flow[key] };
+        }
+      } else if (node.type === 'readVariable') {
+        const value = evaluateBlueprintValue(config.path || config.value, scope);
+        output = { value };
+      } else if (node.type === 'action') {
+        const actionId = renderBlueprintTemplate(config.actionId || '', scope);
+        const actionStack = Array.isArray(context.actionStack) ? context.actionStack.map(String) : [];
+        const normalizedActionId = String(actionId || '');
+        const currentActionKeys = [blueprint.id, blueprint.slug].map(String).filter(Boolean);
+        output = normalizedActionId && !currentActionKeys.includes(normalizedActionId) && !actionStack.includes(normalizedActionId)
+          ? await executeActionBlueprint(ownerUserId, normalizedActionId, { ...context, source: dryRun ? 'manual_test' : 'blueprint_nested', dryRun, actionStack: [...actionStack, ...currentActionKeys] })
+          : { ok: false, error: 'recursive_action_blocked' };
+      } else if (node.type === 'loop') {
+        const count = Math.max(0, Math.floor(Number(evaluateBlueprintValue(config.count || 1, scope) || 0)));
+        const gapMs = Math.max(0, Math.floor(Number(evaluateBlueprintValue(config.gapMs || 0, scope) || 0)));
+        const trueEdge = edgeFrom(node.id, 'true');
+        for (let index = 0; index < count; index += 1) {
+          flow.loop = { index: index + 1, total: count };
+          if (trueEdge) await runNode(trueEdge.target, { loop: flow.loop }, depth + 1);
+          if (gapMs && !dryRun) await new Promise((resolve) => setTimeout(resolve, gapMs));
+        }
+        output = { count };
+        nextPort = 'false';
+      } else if (node.type === 'random') {
+        const options = Array.isArray(config.options) ? config.options : [];
+        const weighted = options.map((option, index) => ({ ...option, index, weight: Math.max(0, Number(evaluateBlueprintValue(option.weight ?? 1, scope) || 0)) })).filter((option) => option.weight > 0);
+        const total = weighted.reduce((sum, option) => sum + option.weight, 0);
+        let cursor = Math.random() * Math.max(1, total);
+        const picked = weighted.find((option) => (cursor -= option.weight) <= 0) || weighted[0] || { id: 'out', label: '기본', index: 0 };
+        output = { picked };
+        nextPort = `option:${picked.id || picked.index}`;
+      } else if (node.type === 'pointsGet' || node.type === 'pointsEnough' || node.type === 'pointsAdjust') {
+        const channelUid = await resolveBlueprintChannelUid(ownerUserId, context);
+        const userId = renderBlueprintTemplate(config.userId || '{user.userId}', scope) || context.user?.userId;
+        const username = renderBlueprintTemplate(config.username || '{user.username}', scope) || context.user?.username;
+        const simulatedUser = userId && String(userId) === String(context.user?.userId || '');
+        const current = dryRun && simulatedUser
+          ? Number(context.user?.points || context.user?.channelPoints || 0)
+          : userId ? await getChannelPoints(channelUid, userId).catch(() => 0) : 0;
+        if (node.type === 'pointsAdjust' && userId) {
+          const delta = Math.floor(Number(evaluateBlueprintValue(config.delta || 0, scope) || 0));
+          if (!dryRun) await incrChannelPoints(channelUid, userId, username || userId, delta);
+          output = { channelUid, userId, previous: current, delta, points: current + delta, dryRun };
+        } else if (node.type === 'pointsEnough') {
+          const required = Math.max(0, Number(evaluateBlueprintValue(config.required || 0, scope) || 0));
+          const passed = Number(current || 0) >= required;
+          output = { channelUid, userId, points: current, required, passed };
+          nextPort = passed ? 'true' : 'false';
+        } else {
+          output = { channelUid, userId, points: current };
+        }
+      } else if (node.type === 'pointsRanking') {
+        const channelUid = await resolveBlueprintChannelUid(ownerUserId, context);
+        const limit = Math.max(1, Math.min(50, Number(evaluateBlueprintValue(config.limit || 10, scope) || 10)));
+        const rows = await listChannelPoints(channelUid).catch(() => []);
+        output = { channelUid, ranking: (rows || []).slice(0, limit) };
+      } else if (node.type === 'pointsExcluded') {
+        const channelUid = await resolveBlueprintChannelUid(ownerUserId, context);
+        const settings = await getBotSettings(sid).catch(() => null) || {};
+        const userId = renderBlueprintTemplate(config.userId || '{user.userId}', scope) || context.user?.userId;
+        const excluded = !!(userId && await isChannelPointExcluded(settings, userId));
+        output = { channelUid, userId, excluded };
+        nextPort = excluded ? 'true' : 'false';
+      } else if (node.type === 'rouletteRun') {
+        const settings = await getBotSettings(sid).catch(() => null) || {};
+        const defs = getRouletteDefsFromSettings(settings);
+        const name = renderBlueprintTemplate(config.name || '', scope);
+        const def = defs.find((item) => String(item.id || item.name) === name || String(item.name) === name);
+        const picked = def ? chooseRouletteItem(def) : null;
+        output = { roulette: def ? { id: def.id || null, name: def.name } : null, result: picked };
+      } else if (node.type === 'rouletteList') {
+        const settings = await getBotSettings(sid).catch(() => null) || {};
+        const defs = getRouletteDefsFromSettings(settings);
+        output = { roulettes: defs.map((item) => ({ id: item.id || item.name, name: item.name, items: Array.isArray(item.items) ? item.items.length : 0 })) };
+      } else if (node.type === 'rouletteCompare') {
+        const left = evaluateBlueprintValue(config.left || '{roulette.result.label}', scope);
+        const right = evaluateBlueprintValue(config.right || '', scope);
+        const passed = compareBlueprintValues(left, config.operator || 'eq', right);
+        output = { passed, left, right };
+        nextPort = passed ? 'true' : 'false';
+      } else if (node.type === 'attendanceGet') {
+        const userId = renderBlueprintTemplate(config.userId || '{user.userId}', scope) || context.user?.userId;
+        const totalDays = userId ? await getUserAttendanceTotalDays(sid, userId).catch(() => 0) : 0;
+        output = { userId, totalDays };
+      } else if (node.type === 'cooldown') {
+        const key = `${blueprint.id}:${node.id}:${renderBlueprintTemplate(config.key || '{user.userId}', scope)}`;
+        const seconds = Math.max(0, Number(evaluateBlueprintValue(config.seconds || 30, scope) || 30));
+        const now = Date.now();
+        globalThis.__arubotBlueprintCooldowns ||= new Map();
+        const until = globalThis.__arubotBlueprintCooldowns.get(key) || 0;
+        const passed = dryRun ? true : now >= until;
+        if (passed && !dryRun) globalThis.__arubotBlueprintCooldowns.set(key, now + seconds * 1000);
+        output = { key, passed, remainingMs: passed ? 0 : until - now, dryRun };
+        nextPort = passed ? 'true' : 'false';
+      } else if (node.type === 'highlight') {
+        output = { marked: true, label: renderBlueprintTemplate(config.label || '하이라이트', scope), at: new Date().toISOString() };
+      } else if (node.type === 'log') {
+        output = { message: renderBlueprintTemplate(config.message || '', scope), at: new Date().toISOString() };
+      } else if (node.type === 'join') {
+        output = { joined: true, incoming };
+      } else if (node.type === 'approval') {
+        const message = renderBlueprintTemplate(config.message || '승인이 필요합니다.', scope);
+        const job = dryRun ? null : await enqueueAutomationJob(ownerUserId, {
+          connectionId: null,
+          jobType: 'blueprint.approval',
+          payload: { nodeId: node.id, blueprintId: blueprint.id, runId: run.id, message }
+        });
+        output = { queued: !dryRun, jobId: job?.id || null, approvalRequired: true, message, dryRun };
+      } else if (node.type === 'timer') {
+        const delayMs = Math.max(0, Number(evaluateBlueprintValue(config.delayMs || Number(config.seconds || 0) * 1000, scope) || 0));
+        const edge = edgeFrom(node.id, 'out');
+        if (edge && !dryRun) {
+          await enqueueAutomationJob(ownerUserId, {
+            connectionId: null,
+            jobType: 'blueprint.timer',
+            runAfter: new Date(Date.now() + delayMs).toISOString(),
+            payload: { nodeId: node.id, blueprintId: blueprint.id, targetNodeId: edge.target, context }
+          });
+        }
+        output = { queued: !dryRun && !!edge, delayMs, dryRun };
+        await recordStep(node, 'done', incoming, output, startedAt);
+        return output;
+      } else if (['overlay', 'overlayUpdate', 'overlayHide', 'rouletteDisplay', 'tts', 'sound', 'obs', 'http', 'websocket', 'udp', 'tits', 'vtube', 'chatVote'].includes(node.type)) {
+        const payload = renderBlueprintValueDeep(config || {}, scope);
+        const job = dryRun ? null : await enqueueAutomationJob(ownerUserId, {
+          connectionId: config.connectionId || null,
+          jobType: `blueprint.${node.type}`,
+          payload: { nodeId: node.id, blueprintId: blueprint.id, runId: run.id, ...payload }
+        });
+        output = { queued: !dryRun, jobId: job?.id || null, type: node.type, payload, dryRun };
+      } else {
+        output = { skipped: true, type: node.type };
+      }
+      nodeOutputs[node.id] = output;
+      nodeOutputs[node.type] = output;
+      if (node.type === 'action') {
+        const actionKey = renderBlueprintTemplate(config.actionId || '', scope);
+        if (actionKey) {
+          nodeOutputs.action ||= {};
+          nodeOutputs.action[actionKey] = output;
+        }
+      }
+      await recordStep(node, 'done', incoming, output, startedAt);
+      if (node.type === 'loop') {
+        const falseEdge = edgeFrom(node.id, 'false');
+        return falseEdge ? runNode(falseEdge.target, output, depth + 1) : output;
+      }
+      const edge = edgeFrom(node.id, nextPort);
+      return edge ? runNode(edge.target, output, depth + 1) : output;
+    } catch (error) {
+      await recordStep(node, 'failed', incoming, output, startedAt, error?.message || String(error));
+      throw error;
+    }
+  }
+
+  const startNode = nodes.find((node) => node.type === 'start');
+  try {
+    const result = await runNode(startNode.id);
+    const finalRun = await finishActionBlueprintRun(ownerUserId, run.id, { status: 'done' });
+    return { ok: true, run: finalRun, result, executed, flow, nodeOutputs };
+  } catch (error) {
+    const finalRun = await finishActionBlueprintRun(ownerUserId, run.id, { status: 'failed', error: error?.message || String(error) });
+    return { ok: false, run: finalRun, error: error?.message || String(error), executed, flow, nodeOutputs };
+  }
+}
+
+async function executeActionVariableTokens(sid, text, context = {}) {
+  const source = String(text || '');
+  const matches = Array.from(source.matchAll(/\$\{\s*(?:action|automation|blueprint)::([^}]+)\s*\}/ig));
+  if (!matches.length) return [];
+  const ownerUserId = ownerUserIdFromSid(sid);
+  if (!ownerUserId) return [];
+  const jobs = [];
+  for (const match of matches) {
+    const actionId = String(match?.[1] || '').trim();
+    if (!actionId) continue;
+    try {
+      const blueprint = await getActionBlueprint(ownerUserId, actionId).catch(() => null);
+      if (blueprint?.version?.published) {
+        const runResult = await executeActionBlueprint(ownerUserId, actionId, {
+          ...context,
+          source: context.source || 'action_variable',
+          triggerRef: actionId
+        });
+        jobs.push(runResult);
+      } else {
+        const job = await enqueueAutomationJob(ownerUserId, {
+          connectionId: null,
+          jobType: 'action.variable',
+          payload: {
+            actionId,
+            source: context.source || 'roulette',
+            roulette: context.roulette || null,
+            result: context.result || null,
+            user: context.user || null,
+            createdAt: new Date().toISOString(),
+          },
+        });
+        jobs.push(job);
+      }
+    } catch (error) {
+      console.error('[Action Variable] failed to enqueue action job', actionId, error?.message || error);
+    }
+  }
+  return jobs;
+}
+
 async function startRouletteSpin(sid, rouletteName, userId, username, opts = {}) {
   const channelContext = await getChannelContext(sid);
   if (!channelContext) {
@@ -5297,9 +5868,22 @@ async function startRouletteSpin(sid, rouletteName, userId, username, opts = {})
   }
 
   if (picked.value && typeof picked.value === 'string' && picked.value.trim()) {
+    await executeActionVariableTokens(sid, picked.value, {
+      source: 'roulette',
+      roulette: { id: def.id || null, name: def.name },
+      result: { label: picked.label, value: picked.value },
+      user: { userId, username },
+      chatPost: opts?.chatPost || null,
+      platform: opts?.chatPost?.platform || null,
+      channelUid: channelContext.channelId,
+      channel: { channelUid: channelContext.channelId },
+    });
+    const commandValue = picked.value.replace(/\$\{\s*(?:action|automation|blueprint)::([^}]+)\s*\}/ig, '').trim();
     try {
-      console.log(`[Roulette] Executing command from result: ${picked.value} for user: ${username}`);
-      await executeRouletteResultCommand(sid, picked.value.trim(), userId, username, opts?.chatPost || null);
+      if (commandValue) {
+        console.log(`[Roulette] Executing command from result: ${commandValue} for user: ${username}`);
+        await executeRouletteResultCommand(sid, commandValue, userId, username, opts?.chatPost || null);
+      }
     } catch (e) {
       console.error('[Roulette] Failed to execute result command:', e);
     }
@@ -5737,13 +6321,19 @@ async function getLiveInfoForSid(sid) {
       if (content?.channelId) channelUids = [String(content.channelId)];
     } catch { }
   }
-  if (!channelUids.length) return null;
+  if (!channelUids.length) {
+    const cimeInfo = await fetchCimeLiveInfoForSid(sid);
+    if (cimeInfo) liveInfoCache.set(sid, { ts: now, info: cimeInfo });
+    return cimeInfo;
+  }
   try {
     const info = await fetchLiveDetail(channelUids[0]);
     liveInfoCache.set(sid, { ts: now, info });
     return info;
   } catch {
-    return null;
+    const cimeInfo = await fetchCimeLiveInfoForSid(sid);
+    if (cimeInfo) liveInfoCache.set(sid, { ts: now, info: cimeInfo });
+    return cimeInfo;
   }
 }
 
@@ -5895,6 +6485,56 @@ const followersCountCache = new Map(); // sid -> { ts, count }
 const userFollowedAtCache = new Map(); // key `${sid}:${userId}` -> { ts, date }
 const userSubMonthsCache = new Map(); // key `${sid}:${userId}` -> { ts, months }
 
+function ownerUserIdFromSid(sid) {
+  const text = String(sid || '').trim();
+  return text.startsWith('user:') ? text.slice(5) : text;
+}
+
+function readFiniteNumber(...values) {
+  for (const value of values) {
+    const num = Number(value);
+    if (Number.isFinite(num)) return num;
+  }
+  return null;
+}
+
+async function getCimePlatformAccountForSid(sid) {
+  const ownerUserId = ownerUserIdFromSid(sid);
+  if (!ownerUserId) return null;
+  try {
+    const accounts = await listPlatformAccounts(ownerUserId);
+    return (accounts || []).find((account) => String(account.provider || '').toLowerCase() === 'cime') || null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchCimeLiveInfoForSid(sid) {
+  const account = await getCimePlatformAccountForSid(sid);
+  const channelId = account?.channel_id || account?.platform_user_id || null;
+  if (!channelId) return null;
+  try {
+    const r = await axios.get(`${CIME_OPENAPI_BASE}/v1/${encodeURIComponent(channelId)}/live-status`, { timeout: DEFAULT_TIMEOUT });
+    const content = unwrapOpenApiContent(r);
+    const status = String(content?.status || content?.liveStatus || content?.state || '').toLowerCase();
+    const live = content?.live === true || content?.isLive === true || ['open', 'live', 'onair', 'on_air'].includes(status);
+    const title = content?.liveTitle || content?.title || content?.streamTitle || '';
+    const category = content?.categoryName || content?.category || content?.liveCategoryName || '';
+    const viewers = Number(content?.viewerCount || content?.currentViewerCount || content?.concurrentUserCount || 0);
+    const startedCandidate = content?.startedAt || content?.openDate || content?.openTime || content?.liveStartAt || null;
+    const startedAtTs = startedCandidate != null && !Number.isNaN(Number(startedCandidate))
+      ? Number(startedCandidate)
+      : (startedCandidate ? Date.parse(String(startedCandidate)) : null);
+    const startedAt = startedAtTs && Number.isFinite(startedAtTs)
+      ? new Date(startedAtTs + 9 * 60 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 16)
+      : '';
+    const channel = content?.channelName || account?.channel_name || account?.channel_handle || '';
+    return { status, title, category, viewers, startedAt, startedAtTs, channel, live, raw: content, provider: 'cime' };
+  } catch {
+    return null;
+  }
+}
+
 async function getChannelUidsForSid(sid) {
   const settings = await getBotSettings(sid) || {};
   const uids = Array.isArray(settings.channelUids) ? settings.channelUids.map(String).filter(Boolean) : [];
@@ -5928,6 +6568,15 @@ async function getChannelFollowersCountForSid(sid) {
     followersCountCache.set(sid, { ts: now, count });
     return count;
   }
+  try {
+    const cimeAccount = await getCimePlatformAccountForSid(sid);
+    const publicProfile = cimeAccount?.metadata?.publicProfile || {};
+    const cimeCount = readFiniteNumber(publicProfile.followerCount, publicProfile.raw?.followerCount, publicProfile.raw?.followers, publicProfile.raw?.followCount);
+    if (cimeCount != null) {
+      followersCountCache.set(sid, { ts: now, count: cimeCount });
+      return cimeCount;
+    }
+  } catch { }
   return null;
 }
 
@@ -5985,7 +6634,11 @@ async function getUserSubscriptionMonthsForSid(sid, userId) {
   const now = Date.now();
   if (cached && (now - cached.ts) < 10 * 60 * 1000) return cached.months;
   const uids = await getChannelUidsForSid(sid);
-  if (!uids.length) return null;
+  if (!uids.length) {
+    const cimeCached = userSubMonthsCache.get(key);
+    if (cimeCached && (now - cimeCached.ts) < 24 * 60 * 60 * 1000) return cimeCached.months;
+    return null;
+  }
   const channelId = uids[0];
   try {
     const accessToken = await getValidAccessToken(sid);
@@ -6019,6 +6672,8 @@ async function getUserSubscriptionMonthsForSid(sid, userId) {
       if (list.length < size) break;
     }
   } catch { }
+  const cimeCached = userSubMonthsCache.get(key);
+  if (cimeCached && (now - cimeCached.ts) < 24 * 60 * 60 * 1000) return cimeCached.months;
   return null;
 }
 
@@ -6408,6 +7063,23 @@ const liveInfoCache = new Map();
 const ownerInfoCache = new Map();
 // Attendance dedupe cache for current process: key `${sid}:${userId}:${date}` -> true
 const attendanceDedupe = new Set();
+const DEFAULT_ATTENDANCE_MESSAGE = '{user.name}님 출석체크 완료! (연속 {attendance.streak}일, 누적 {attendance.totalDays}일)';
+
+function renderAttendanceMessage(template, context = {}) {
+  const source = String(template || DEFAULT_ATTENDANCE_MESSAGE).trim() || DEFAULT_ATTENDANCE_MESSAGE;
+  const replacements = {
+    '{user.name}': context.username || '',
+    '{user.id}': context.userId || '',
+    '{attendance.streak}': context.streak ?? 0,
+    '{attendance.totalDays}': context.totalDays ?? 0,
+    '{attendance.points}': context.points ?? 0,
+    '{attendance.date}': context.date || ''
+  };
+  return Object.entries(replacements).reduce(
+    (message, [token, value]) => message.split(token).join(String(value)),
+    source
+  ).slice(0, 100);
+}
 // Track active sids seen by the server to enable background live checks
 const activeSids = new Map(); // sid -> lastSeenTs
 
@@ -9302,9 +9974,10 @@ app.post('/api/auth/cime/revoke', async (req, res) => {
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const requestedPlatformUserId = String(req.body?.platformUserId || req.body?.platform_user_id || '').trim();
     const tokens = await getPlatformTokens('cime', ownerUserId);
-    const platformUserId = tokens?.platformUserId || null;
-    if (tokens) {
+    const platformUserId = requestedPlatformUserId || tokens?.platformUserId || null;
+    if (tokens && (!requestedPlatformUserId || String(tokens.platformUserId || '') === requestedPlatformUserId)) {
       for (const [token, tokenTypeHint] of [[tokens.accessToken, 'access_token'], [tokens.refreshToken, 'refresh_token']]) {
         if (!token) continue;
         try {
@@ -9316,7 +9989,7 @@ app.post('/api/auth/cime/revoke', async (req, res) => {
           }, { headers: { 'Content-Type': 'application/json' } });
         } catch { }
       }
-      await deletePlatformTokens('cime', ownerUserId);
+      if (!requestedPlatformUserId) await deletePlatformTokens('cime', ownerUserId);
     }
     try { await deletePlatformAccount('cime', ownerUserId, platformUserId); } catch { }
     const platforms = await listPlatformAccounts(ownerUserId).catch(() => []);
@@ -9525,6 +10198,168 @@ app.get('/api/automations/overview', async (req, res) => {
   }
 });
 
+app.get('/api/action-blueprints', async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const blueprints = await listActionBlueprints(ownerUserId);
+    return res.json({ blueprints });
+  } catch (e) {
+    console.error('[Blueprint] list error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to load blueprints' });
+  }
+});
+
+app.get('/api/action-blueprints/:id/runs', async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const runs = await listActionBlueprintRuns(ownerUserId, req.params.id, req.query?.limit || 20);
+    return res.json({ runs });
+  } catch (e) {
+    console.error('[Blueprint] runs error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to load blueprint runs' });
+  }
+});
+
+app.get('/api/action-blueprints/:id/versions', async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const versions = await listActionBlueprintVersions(ownerUserId, req.params.id, req.query?.limit || 30);
+    return res.json({ versions });
+  } catch (e) {
+    console.error('[Blueprint] versions error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to load blueprint versions' });
+  }
+});
+
+app.get('/api/action-blueprints/runs/:runId/steps', async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const steps = await listActionBlueprintRunSteps(ownerUserId, req.params.runId);
+    return res.json({ steps });
+  } catch (e) {
+    console.error('[Blueprint] run steps error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to load blueprint run steps' });
+  }
+});
+
+app.get('/api/action-blueprints/:id', async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const blueprint = await getActionBlueprint(ownerUserId, req.params.id);
+    if (!blueprint) return res.status(404).json({ error: 'Not found' });
+    const runs = await listActionBlueprintRuns(ownerUserId, blueprint.id, 20).catch(() => []);
+    return res.json({ blueprint, runs });
+  } catch (e) {
+    console.error('[Blueprint] get error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to load blueprint' });
+  }
+});
+
+app.post('/api/action-blueprints', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const body = req.body || {};
+    const nodes = Array.isArray(body.nodes) ? body.nodes : [];
+    const edges = Array.isArray(body.edges) ? body.edges : [];
+    const validationErrors = validateBlueprintGraph(nodes, edges);
+    const blueprint = await upsertActionBlueprint(ownerUserId, {
+      id: body.id,
+      name: body.name,
+      slug: body.slug,
+      enabled: body.enabled,
+      description: body.description,
+      nodes,
+      edges,
+      viewport: body.viewport
+    });
+    return res.json({ blueprint, validationErrors });
+  } catch (e) {
+    console.error('[Blueprint] save error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to save blueprint' });
+  }
+});
+
+app.post('/api/action-blueprints/:id/publish', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const blueprint = await getActionBlueprint(ownerUserId, req.params.id);
+    if (!blueprint) return res.status(404).json({ error: 'Not found' });
+    const validationErrors = validateBlueprintGraph(blueprint.version?.nodes || [], blueprint.version?.edges || []);
+    if (validationErrors.length) return res.status(400).json({ error: 'Blueprint is invalid', validationErrors });
+    const published = await publishActionBlueprint(ownerUserId, blueprint.id);
+    return res.json({ blueprint: published });
+  } catch (e) {
+    console.error('[Blueprint] publish error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to publish blueprint' });
+  }
+});
+
+app.post('/api/action-blueprints/:id/versions/:versionId/restore', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const blueprint = await restoreActionBlueprintVersion(ownerUserId, req.params.id, req.params.versionId);
+    if (!blueprint) return res.status(404).json({ error: 'Not found' });
+    return res.json({ blueprint });
+  } catch (e) {
+    console.error('[Blueprint] restore error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to restore blueprint version' });
+  }
+});
+
+app.delete('/api/action-blueprints/:id', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const ok = await deleteActionBlueprint(ownerUserId, req.params.id);
+    return res.json({ ok });
+  } catch (e) {
+    console.error('[Blueprint] delete error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to delete blueprint' });
+  }
+});
+
+app.post('/api/action-blueprints/:id/test', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const context = req.body?.context && typeof req.body.context === 'object' ? req.body.context : {};
+    const user = context.user && typeof context.user === 'object' ? context.user : {};
+    const channel = context.channel && typeof context.channel === 'object' ? context.channel : {};
+    const trigger = context.trigger && typeof context.trigger === 'object' ? context.trigger : {};
+    const result = await executeActionBlueprint(ownerUserId, req.params.id, {
+      source: 'manual_test',
+      triggerRef: req.params.id,
+      user: {
+        ...(user || {}),
+        userId: user.userId || req.body?.userId || 'test_viewer',
+        username: user.username || user.name || req.body?.username || '테스트 시청자',
+        name: user.name || user.username || req.body?.username || '테스트 시청자',
+        points: user.points ?? req.body?.points ?? 3000
+      },
+      channel: { ...(channel || {}), channelUid: channel.channelUid || req.body?.channelUid || ownerUserId },
+      channelUid: channel.channelUid || req.body?.channelUid || ownerUserId,
+      trigger: { ...(trigger || {}), platform: trigger.platform || req.body?.platform || 'chzzk' },
+      platform: trigger.platform || req.body?.platform || 'chzzk',
+      roulette: context.roulette || req.body?.roulette || {},
+      donation: context.donation || req.body?.donation || {},
+      attendance: context.attendance || req.body?.attendance || {},
+      live: { title: '테스트 방송', viewers: 128, live: true, ...(context.live || {}) },
+    });
+    return res.json(result);
+  } catch (e) {
+    console.error('[Blueprint] test error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to test blueprint' });
+  }
+});
+
 app.put('/api/automations/settings', rateLimiters.userWrite, async (req, res) => {
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
@@ -9555,15 +10390,33 @@ app.post('/api/automations/local-agents/pair', rateLimiters.userWrite, async (re
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
     const name = String(req.body?.name || 'AruBot Local Program').trim().slice(0, 120) || 'AruBot Local Program';
-    const result = await createAutomationLocalAgent(ownerUserId, name);
+    const result = await getOrCreateAutomationLocalAgent(ownerUserId, name, { rotate: false });
+    return res.json({
+      ...result,
+      backendUrl: BACKEND_ORIGIN.replace(/\/$/, ''),
+      tokenMasked: result.token ? null : 'alp_••••••••••••••••••••••••••••••••',
+      tokenShownOnce: !!result.token
+    });
+  } catch (e) {
+    console.error('[Automations] local agent pair error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to create local program token' });
+  }
+});
+
+app.post('/api/automations/local-agents/rotate', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const name = String(req.body?.name || 'AruBot Local Program').trim().slice(0, 120) || 'AruBot Local Program';
+    const result = await getOrCreateAutomationLocalAgent(ownerUserId, name, { rotate: true });
     return res.json({
       ...result,
       backendUrl: BACKEND_ORIGIN.replace(/\/$/, ''),
       tokenShownOnce: true
     });
   } catch (e) {
-    console.error('[Automations] local agent pair error', e?.message || e);
-    return res.status(500).json({ error: 'Failed to create local program token' });
+    console.error('[Automations] local agent rotate error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to regenerate local program token' });
   }
 });
 
@@ -9608,6 +10461,151 @@ app.post('/api/automations/local-agent/jobs/:jobId/complete', requireAutomationL
     return res.json({ job });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to complete automation job' });
+  }
+});
+
+function getLocalRemoteSid(req) {
+  const ownerUserId = req.automationLocalAgent?.ownerUserId;
+  return ownerUserId ? `user:${ownerUserId}` : null;
+}
+
+app.get('/api/local-remote/overview', requireAutomationLocalAgent, async (req, res) => {
+  try {
+    const sid = getLocalRemoteSid(req);
+    if (!sid) return res.status(401).json({ error: 'Invalid local program token' });
+    const settings = await getBotSettings(sid) || {};
+    const rules = await getBotRules(sid).catch(() => []);
+    const rouletteDefs = getRouletteDefsFromSettings(settings);
+    const videoQueue = getVideoQueue(sid);
+    return res.json({
+      rules,
+      rouletteDefs,
+      videoQueue,
+      settings: {
+        botEnabled: settings.botEnabled !== false,
+        videoDonationAcceptEnabled: settings.videoDonationAcceptEnabled === true,
+      },
+    });
+  } catch (e) {
+    console.error('[Local Remote] overview error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to load local remote overview' });
+  }
+});
+
+app.post('/api/local-remote/commands/upsert', requireAutomationLocalAgent, async (req, res) => {
+  try {
+    const sid = getLocalRemoteSid(req);
+    if (!sid) return res.status(401).json({ error: 'Invalid local program token' });
+    const input = req.body?.rule || {};
+    const keywords = Array.isArray(input.keywords) ? input.keywords.map(String).map((item) => item.trim()).filter(Boolean) : [];
+    const responses = Array.isArray(input.responses) ? input.responses.map(String).map((item) => item.trim()).filter(Boolean) : [];
+    if (!keywords.length) return res.status(400).json({ error: '명령어가 필요합니다.' });
+    if (!responses.length) return res.status(400).json({ error: '응답 문구가 필요합니다.' });
+    const rule = {
+      id: String(input.id || `cmd_${Date.now().toString(36)}`),
+      name: String(input.name || keywords[0]).trim(),
+      keywords,
+      responses,
+      enabled: input.enabled !== false,
+      adminOnly: input.adminOnly === true,
+      requiredRoleLevel: Math.max(0, Number(input.requiredRoleLevel ?? 1)),
+      pointsCost: Math.max(0, Number(input.pointsCost || 0)),
+      cooldown: Math.max(1000, Number(input.cooldown || 3000)),
+      lastUsed: Number(input.lastUsed || 0),
+    };
+    await upsertBotRule(sid, rule);
+    return res.json({ rule });
+  } catch (e) {
+    console.error('[Local Remote] command upsert error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to save command' });
+  }
+});
+
+app.post('/api/local-remote/commands/delete', requireAutomationLocalAgent, async (req, res) => {
+  try {
+    const sid = getLocalRemoteSid(req);
+    if (!sid) return res.status(401).json({ error: 'Invalid local program token' });
+    const id = String(req.body?.id || '').trim();
+    if (!id) return res.status(400).json({ error: 'id is required' });
+    await deleteBotRule(sid, id);
+    return res.json({ deleted: true });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to delete command' });
+  }
+});
+
+app.post('/api/local-remote/roulette/test', requireAutomationLocalAgent, async (req, res) => {
+  try {
+    const sid = getLocalRemoteSid(req);
+    if (!sid) return res.status(401).json({ error: 'Invalid local program token' });
+    const settings = await getBotSettings(sid) || {};
+    const definitions = getRouletteDefsFromSettings(settings);
+    const id = String(req.body?.id || '').trim();
+    const name = String(req.body?.name || '').trim();
+    const definition = definitions.find((item) => (
+      (id && String(item?.id || '') === id) ||
+      (name && String(item?.name || '').trim().toLowerCase() === name.toLowerCase())
+    ));
+    if (!definition) return res.status(404).json({ error: '룰렛을 찾을 수 없습니다.' });
+    const result = await startRouletteSpin(sid, definition.name, 'arubot_local_remote', '로컬 리모컨', { instant: true, suppressResultChat: true });
+    return res.json({ result });
+  } catch (e) {
+    console.error('[Local Remote] roulette test error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to test roulette' });
+  }
+});
+
+app.post('/api/local-remote/video-donation/pop', requireAutomationLocalAgent, async (req, res) => {
+  try {
+    const sid = getLocalRemoteSid(req);
+    if (!sid) return res.status(401).json({ error: 'Invalid local program token' });
+    const q = getVideoQueue(sid);
+    const popped = q.shift() || null;
+    if (popped) {
+      broadcastPvdStart(sid);
+      scheduleNextPvdAutoPop(sid);
+    }
+    return res.json({ item: popped, queue: q });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to pop video donation queue' });
+  }
+});
+
+app.post('/api/local-remote/video-donation/control', requireAutomationLocalAgent, async (req, res) => {
+  try {
+    const sid = getLocalRemoteSid(req);
+    if (!sid) return res.status(401).json({ error: 'Invalid local program token' });
+    const q = getVideoQueue(sid);
+    if (!q[0]) return res.json({ ok: true, empty: true });
+    const op = String(req.body?.op || '').toLowerCase();
+    let atSec = Number(req.body?.atSec);
+    if (!Number.isFinite(atSec) || atSec < 0) atSec = getCurrentAtSec(sid);
+    let state = pvdPlaybackState.get(sid);
+    if (!state) { state = createPvdPlaybackState(q[0]); pvdPlaybackState.set(sid, state); }
+    if (op === 'pause') {
+      state.paused = true; state.pausedAtSec = Math.floor(atSec);
+    } else if (op === 'play') {
+      state.paused = false; setPvdPlaybackBaseFromAtSec(state, q[0], atSec); state.pausedAtSec = null;
+    } else if (op === 'seek') {
+      if (state.paused) state.pausedAtSec = Math.floor(atSec);
+      else setPvdPlaybackBaseFromAtSec(state, q[0], atSec);
+    } else {
+      return res.status(400).json({ error: 'invalid op' });
+    }
+    try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
+    scheduleNextPvdAutoPop(sid);
+    const message = { type: 'control', op, atSec: Math.floor(atSec), paused: state.paused === true, serverNow: Date.now() };
+    await broadcastToChannelBySid(sid, 'pvd', message).catch(() => null);
+    const set = pvdSidSockets.get(sid);
+    const payload = JSON.stringify(message);
+    if (set && set.size) {
+      for (const ws of Array.from(set)) {
+        try { if (ws.readyState === 1) ws.send(payload, { compress: false }); } catch { }
+      }
+    }
+    return res.json({ ok: true, message });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to control video donation playback' });
   }
 });
 
@@ -9767,7 +10765,7 @@ app.post('/api/automations/toonation/test', rateLimiters.userWrite, async (req, 
     return res.status(409).json({
       error: 'Toonation alertbox key is stored locally by design.',
       action: 'local_secret_required',
-      message: '투네이션 알림 키는 브라우저 또는 로컬 프로그램에만 저장됩니다. 오라클 직접 모드에서는 서버에 키를 저장하지 않으므로 테스트할 수 없습니다.'
+      message: '투네이션 알림 키는 브라우저 또는 로컬 프로그램에만 저장됩니다. 서버 직접 모드에서는 서버에 키를 저장하지 않으므로 테스트할 수 없습니다.'
     });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to test Toonation connector' });
@@ -10047,6 +11045,36 @@ app.post('/api/bot/settings', async (req, res) => {
   return res.json({ ok: true });
 });
 
+const BOT_VARIABLES = [
+  { key: '{user.name}', label: '시청자 이름', description: '채팅을 보낸 시청자의 표시 이름입니다.', group: '시청자', providers: ['chzzk', 'cime'] },
+  { key: '{user.username}', label: '시청자 이름', description: '시청자 이름과 같은 값입니다.', group: '시청자', providers: ['chzzk', 'cime'] },
+  { key: '{user.nickname}', label: '시청자 닉네임', description: '시청자 이름과 같은 값입니다.', group: '시청자', providers: ['chzzk', 'cime'] },
+  { key: '{user.points}', label: '보유 포인트', description: '현재 채널에서 시청자가 보유한 통합 포인트입니다.', group: '시청자', providers: ['chzzk', 'cime'] },
+  { key: '{user.channelPoints}', label: '채널 포인트', description: '보유 포인트와 같은 값입니다.', group: '시청자', providers: ['chzzk', 'cime'] },
+  { key: '{user.attendanceDays}', label: '누적 출석일', description: '현재 채널에서 기록된 누적 출석일입니다.', group: '시청자', providers: ['chzzk', 'cime'] },
+  { key: '{attendance.streak}', label: '연속 출석일', description: '출석 메시지에서 사용할 수 있는 현재 연속 출석일입니다.', group: '출석', providers: ['chzzk', 'cime'] },
+  { key: '{attendance.totalDays}', label: '누적 출석일', description: '출석 메시지에서 사용할 수 있는 전체 출석일입니다.', group: '출석', providers: ['chzzk', 'cime'] },
+  { key: '{attendance.points}', label: '출석 포인트', description: '출석 체크로 지급되는 포인트입니다.', group: '출석', providers: ['chzzk', 'cime'] },
+  { key: '{attendance.date}', label: '출석 날짜', description: '방송 세션 기준 출석 날짜입니다.', group: '출석', providers: ['chzzk', 'cime'] },
+  { key: '{user.followedAt}', label: '팔로우 시작일', description: '플랫폼에서 팔로우 날짜를 제공하는 경우 시청자가 팔로우를 시작한 날짜입니다.', group: '시청자', providers: ['chzzk'], caveat: '씨미는 현재 확인된 API에서 개별 팔로우 시작일을 제공하지 않습니다.' },
+  { key: '{user.followedDays}', label: '팔로우 일수', description: '팔로우한 날을 1일째로 계산한 팔로우 일수입니다.', group: '시청자', providers: ['chzzk'], caveat: '씨미는 현재 확인된 API에서 개별 팔로우 시작일을 제공하지 않습니다.' },
+  { key: '{user.subscriptionMonths}', label: '구독 개월', description: '구독 이벤트나 구독 목록에서 확인 가능한 시청자의 구독 개월 수입니다.', group: '시청자', providers: ['chzzk', 'cime'], caveat: '씨미는 구독 이벤트를 수신한 시청자부터 채워집니다.' },
+  { key: '{live.title}', label: '방송 제목', description: '현재 방송 제목입니다.', group: '방송', providers: ['chzzk', 'cime'] },
+  { key: '{live.category}', label: '방송 카테고리', description: '현재 방송 카테고리입니다.', group: '방송', providers: ['chzzk', 'cime'] },
+  { key: '{live.viewers}', label: '시청자 수', description: '확인 가능한 현재 시청자 수입니다.', group: '방송', providers: ['chzzk', 'cime'] },
+  { key: '{live.startedAt}', label: '방송 시작 시간', description: '현재 방송 시작 시각입니다.', group: '방송', providers: ['chzzk', 'cime'] },
+  { key: '{live.elapsed}', label: '방송 진행 시간', description: '현재 방송이 진행된 시간입니다.', group: '방송', providers: ['chzzk', 'cime'] },
+  { key: '{live.elapsed_ko}', label: '방송 진행 시간', description: '한국어 형식으로 표시되는 방송 진행 시간입니다.', group: '방송', providers: ['chzzk', 'cime'] },
+  { key: '{live.channel}', label: '방송 채널', description: '현재 방송 채널 이름 또는 식별자입니다.', group: '방송', providers: ['chzzk', 'cime'] },
+  { key: '{channel.followers}', label: '팔로워 수', description: '확인 가능한 현재 채널 팔로워 수입니다.', group: '채널', providers: ['chzzk', 'cime'], caveat: '씨미는 프로필 동기화로 저장된 공개 수치를 사용합니다.' },
+];
+
+app.get('/api/bot/variables', async (req, res) => {
+  const sid = await getPartitionId(req, res);
+  if (!sid) return res.status(401).json({ error: 'Login required' });
+  return res.json({ variables: BOT_VARIABLES });
+});
+
 app.get('/api/bot/stats', async (req, res) => {
   const sid = await getPartitionId(req, res);
   if (!sid) return res.json({ stats: { messagesProcessed: 0, commandsHandled: 0, lastActive: null } });
@@ -10157,6 +11185,41 @@ async function resolveStreamerUidForSid(sid) {
   return null;
 }
 
+function parseChannelPointExcludeSet(settings = {}) {
+  const fromText = typeof settings.channelPointsExcludeUserIdsText === 'string'
+    ? settings.channelPointsExcludeUserIdsText.split(/\r?\n/).map(s => s.trim()).filter(Boolean)
+    : [];
+  const fromArray = Array.isArray(settings.channelPointsExcludeUserIds)
+    ? settings.channelPointsExcludeUserIds.map(String).filter(Boolean)
+    : [];
+  return new Set([...fromText, ...fromArray].map(String));
+}
+
+async function isChannelPointExcluded(settings, userId) {
+  const excludedSet = parseChannelPointExcludeSet(settings);
+  if (!excludedSet.size) return false;
+  const keys = await listPointIdentityKeysForUserId(userId).catch(() => [String(userId || '')]);
+  return keys.some((key) => excludedSet.has(String(key)));
+}
+
+async function enrichChannelPointRows(rows, settings = {}) {
+  const identities = await listPointViewerIdentitySummaries((rows || []).map((row) => row.user_id || row.userId)).catch(() => ({}));
+  const excludedSet = parseChannelPointExcludeSet(settings);
+  return (rows || []).map((row) => {
+    const userId = String(row.user_id || row.userId || '');
+    const identity = identities[userId] || {};
+    const identityKeys = Array.isArray(identity.identityKeys) && identity.identityKeys.length ? identity.identityKeys : [userId];
+    return {
+      ...row,
+      userId,
+      arubotUuid: identity.arubotUuid || userId,
+      appUserId: identity.appUserId || null,
+      platformAccounts: identity.platformAccounts || [],
+      pointBlocked: identityKeys.some((key) => excludedSet.has(String(key))),
+    };
+  });
+}
+
 function parsePredictionBetCommand(text) {
   const parts = String(text || '').trim().split(/\s+/).filter(Boolean);
   const command = String(parts[0] || '').toLowerCase();
@@ -10230,8 +11293,9 @@ app.get('/api/channelpoints', async (req, res) => {
   const uid = await resolveStreamerUidForSid(sid);
   if (!uid) return res.json({ points: [] });
   try {
+    const settings = await getBotSettings(sid) || {};
     const rows = await listChannelPoints(uid);
-    return res.json({ points: rows });
+    return res.json({ points: await enrichChannelPointRows(rows, settings) });
   } catch (e) {
     console.error('[channelpoints:list] error', e?.message || e);
     return res.status(500).json({ error: 'Failed to list channel points' });
@@ -10244,8 +11308,16 @@ app.get('/api/channelpoints/list', async (req, res) => {
   const uid = await resolveStreamerUidForSid(sid);
   if (!uid) return res.json({ points: [] });
   try {
+    const settings = await getBotSettings(sid) || {};
     const rows = await listChannelPoints(uid);
-    return res.json({ points: rows });
+    return res.json({
+      points: await enrichChannelPointRows(rows, settings),
+      settings: {
+        channelPointsPerChat: Math.max(0, Number(settings.channelPointsPerChat ?? 1)),
+        channelPointsPerAttendance: Math.max(0, Number(settings.channelPointsPerAttendance || 0)),
+        channelPointsExcludeUserIdsText: typeof settings.channelPointsExcludeUserIdsText === 'string' ? settings.channelPointsExcludeUserIdsText : '',
+      }
+    });
   } catch (e) {
     console.error('[channelpoints:list] error', e?.message || e);
     return res.status(500).json({ error: 'Failed to list channel points' });
@@ -10549,12 +11621,11 @@ app.get('/api/public/:uid/rules', async (req, res) => {
         const uids = Array.isArray(s.channelUids) ? s.channelUids.map(String) : [];
         if (uids.includes(uid)) {
           const rules = await getBotRules(sid);
-          const simplified = (rules || []).filter(r => r.enabled).map(r => ({
+          const simplified = (rules || []).filter(r => r.enabled && r.adminOnly !== true && r.adminonly !== true).map(r => ({
             id: r.id,
             name: r.name,
             keywords: r.keywords,
             responses: r.responses,
-            adminOnly: !!r.adminOnly,
             cooldown: r.cooldown,
             requiredRoleLevel: r.requiredRoleLevel,
           }));
@@ -10894,9 +11965,10 @@ app.get('/api/auth/chzzk/token', async (req, res) => {
 app.post('/api/auth/chzzk/revoke', async (req, res) => {
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
+    const requestedPlatformUserId = String(req.body?.platformUserId || req.body?.platform_user_id || '').trim();
     const sid = ownerUserId ? `user:${ownerUserId}` : await getPartitionId(req, res);
     const tokens = sid ? await getTokens(sid) : null;
-    if (tokens) {
+    if (tokens && !requestedPlatformUserId) {
       for (const [token, tokenTypeHint] of [[tokens.accessToken, 'access_token'], [tokens.refreshToken, 'refresh_token']]) {
         if (!token) continue;
         try {
@@ -10914,8 +11986,10 @@ app.post('/api/auth/chzzk/revoke', async (req, res) => {
 
     if (ownerUserId) {
       const accounts = await listPlatformAccounts(ownerUserId).catch(() => []);
-      const chzzkAccount = accounts.find((account) => String(account.provider || '').toLowerCase() === 'chzzk');
-      try { await deletePlatformAccount('chzzk', ownerUserId, chzzkAccount?.platform_user_id || null); } catch { }
+      const chzzkAccount = requestedPlatformUserId
+        ? accounts.find((account) => String(account.provider || '').toLowerCase() === 'chzzk' && String(account.platform_user_id || '') === requestedPlatformUserId)
+        : accounts.find((account) => String(account.provider || '').toLowerCase() === 'chzzk');
+      try { await deletePlatformAccount('chzzk', ownerUserId, requestedPlatformUserId || chzzkAccount?.platform_user_id || null); } catch { }
       const platforms = await listPlatformAccounts(ownerUserId).catch(() => []);
       return res.json({ ok: true, platforms });
     }
@@ -10926,8 +12000,6 @@ app.post('/api/auth/chzzk/revoke', async (req, res) => {
     return res.status(500).json({ error: 'Failed to revoke' });
   }
 });
-
-app.get('/api/health', (req, res) => res.json({ ok: true }));
 
 // =============================
 // =============================
@@ -12117,13 +13189,21 @@ async function ensureSession(sid, channelId) {
                   });
                   if (result && result.isNew) {
                     const shouldAnnounce = settings.attendanceAnnounce !== false; // default true
+                    const attendanceBonus = Math.max(0, Number(settings.channelPointsPerAttendance || 0));
                     if (shouldAnnounce) {
                       const accessToken = await getValidAccessToken(sid);
                       if (entry.sessionKey && accessToken) {
                         const url = `${OPENAPI_BASE}/open/v1/chats/send`;
                         let totalDays = 0;
                         try { totalDays = await getUserAttendanceTotalDays(sid, resolvedUserId); } catch { }
-                        const text = `${resolvedUsername}님 출석체크 완료! (연속 ${result.streak}일, 누적 ${totalDays}일)`;
+                        const text = renderAttendanceMessage(settings.attendanceMessage, {
+                          username: resolvedUsername,
+                          userId: resolvedUserId,
+                          streak: result.streak,
+                          totalDays,
+                          points: attendanceBonus,
+                          date: attendDate
+                        });
                         await axios.post(url, { message: text }, {
                           params: { sessionKey: entry.sessionKey },
                           headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }
@@ -12132,7 +13212,7 @@ async function ensureSession(sid, channelId) {
                     }
                     // Attendance bonus channel points
                     try {
-                      const bonus = Math.max(0, Number(settings.channelPointsPerAttendance || 0));
+                      const bonus = attendanceBonus;
                       if (bonus > 0) {
                         // Resolve streamer channel UID
                         let channelUid = null;
@@ -12146,12 +13226,7 @@ async function ensureSession(sid, channelId) {
                           const uids = Array.isArray(settings.channelUids) ? settings.channelUids.map(String).filter(Boolean) : [];
                           if (uids.length) channelUid = uids[0];
                         }
-                        // Channel points exclusion list
-                        const cpExcludedFromText = typeof settings.channelPointsExcludeUserIdsText === 'string'
-                          ? settings.channelPointsExcludeUserIdsText.split(/\r?\n/).map(s => s.trim()).filter(Boolean)
-                          : [];
-                        const cpExcludedSet = new Set(cpExcludedFromText.map(String));
-                        if (channelUid && !cpExcludedSet.has(String(resolvedUserId))) {
+                        if (channelUid && !(await isChannelPointExcluded(settings, resolvedUserId))) {
                           try { await incrChannelPoints(channelUid, resolvedUserId, resolvedUsername, bonus); } catch { }
                         }
                       }
@@ -12181,25 +13256,17 @@ async function ensureSession(sid, channelId) {
                 if (uids.length) channelUid = uids[0];
               }
               if (channelUid) {
-                // Respect channel points exclusion list from settings
-                let cpExcluded = new Set();
-                try {
-                  const settings = await getBotSettings(sid) || {};
-                  const cpExcludedFromText = typeof settings.channelPointsExcludeUserIdsText === 'string'
-                    ? settings.channelPointsExcludeUserIdsText.split(/\r?\n/).map(s => s.trim()).filter(Boolean)
-                    : [];
-                  cpExcluded = new Set(cpExcludedFromText.map(String));
-                } catch { }
                 // Determine per-chat amount from settings (default 1)
                 let perChat = 1;
+                let pointSettings = {};
                 try {
-                  const settings = await getBotSettings(sid) || {};
-                  perChat = Math.max(0, Number(settings.channelPointsPerChat ?? 1));
+                  pointSettings = await getBotSettings(sid) || {};
+                  perChat = Math.max(0, Number(pointSettings.channelPointsPerChat ?? 1));
                 } catch { }
                 // Skip awarding to owner or bot self
                 let ownerUserId = null;
                 try { const owner = await getOwnerInfoForSid(sid); ownerUserId = owner?.userId ? String(owner.userId) : null; } catch { }
-                if (perChat > 0 && resolvedUserId && String(resolvedUserId) !== String(ownerUserId) && !isBotSelf && !cpExcluded.has(String(resolvedUserId))) {
+                if (perChat > 0 && resolvedUserId && String(resolvedUserId) !== String(ownerUserId) && !isBotSelf && !(await isChannelPointExcluded(pointSettings, resolvedUserId))) {
                   try { await incrChannelPoints(channelUid, resolvedUserId, resolvedUsername, perChat); } catch { }
                 }
               }
@@ -12732,7 +13799,9 @@ async function ensureSession(sid, channelId) {
               if (channelUid) {
                 // Use donor's userId (channel id) as the points subject
                 const pointsUserId = donorId || `donor:${donorName}`;
-                try { await incrChannelPoints(channelUid, String(pointsUserId), donorName, award); } catch { }
+                if (!(await isChannelPointExcluded(settings, pointsUserId))) {
+                  try { await incrChannelPoints(channelUid, String(pointsUserId), donorName, award); } catch { }
+                }
               }
             }
           } catch { }
@@ -13016,6 +14085,14 @@ function parseCimeEvent(raw) {
   return null;
 }
 
+function rememberCimeSubscriptionMonths(entry, ev) {
+  const sid = entry?.primarySid || (entry?.ownerUserId ? `user:${entry.ownerUserId}` : '');
+  const userId = String(ev?.userId || '').trim();
+  const months = readFiniteNumber(ev?.months, ev?.raw?.month, ev?.raw?.months, ev?.raw?.subscriptionMonths);
+  if (!sid || !userId || months == null) return;
+  userSubMonthsCache.set(`${sid}:${userId}`, { ts: Date.now(), months });
+}
+
 async function getCimeChannelId(ownerUserId) {
   const tokens = await getPlatformTokens('cime', ownerUserId);
   if (tokens?.platformUserId) return String(tokens.platformUserId);
@@ -13170,22 +14247,27 @@ async function processCimeChatAutomation(entry, ev) {
           if (result?.isNew && settings.attendanceAnnounce !== false) {
             let totalDays = 0;
             try { totalDays = await getUserAttendanceTotalDays(sid, resolvedUserId); } catch { }
-            await sendCimeChat(ownerUserId, `${resolvedUsername}님 출석체크 완료! (연속 ${result.streak}일, 누적 ${totalDays}일)`).catch(() => { });
+            const attendanceBonus = Math.max(0, Number(settings.channelPointsPerAttendance || 0));
+            const text = renderAttendanceMessage(settings.attendanceMessage, {
+              username: resolvedUsername,
+              userId: resolvedUserId,
+              streak: result.streak,
+              totalDays,
+              points: attendanceBonus,
+              date: attendDate
+            });
+            await sendCimeChat(ownerUserId, text).catch(() => { });
           }
           const bonus = Math.max(0, Number(settings.channelPointsPerAttendance || 0));
-          if (bonus > 0 && entry.channelId) {
+          if (bonus > 0 && entry.channelId && !(await isChannelPointExcluded(settings, resolvedUserId))) {
             await incrChannelPoints(entry.channelId, resolvedUserId, resolvedUsername, bonus).catch(() => { });
           }
         }
       } catch { }
 
       try {
-        const cpExcludedFromText = typeof settings.channelPointsExcludeUserIdsText === 'string'
-          ? settings.channelPointsExcludeUserIdsText.split(/\r?\n/).map(s => s.trim()).filter(Boolean)
-          : [];
-        const cpExcludedSet = new Set(cpExcludedFromText.map(String));
         const perChat = Math.max(0, Number(settings.channelPointsPerChat ?? 1));
-        if (entry.channelId && perChat > 0 && !isOwner && !cpExcludedSet.has(resolvedUserId)) {
+        if (entry.channelId && perChat > 0 && !isOwner && !(await isChannelPointExcluded(settings, resolvedUserId))) {
           await incrChannelPoints(entry.channelId, resolvedUserId, resolvedUsername, perChat).catch(() => { });
         }
       } catch { }
@@ -13355,7 +14437,7 @@ async function processCimeDonationAutomation(entry, ev) {
 
     const pointsPerK = Math.max(0, Number(settings?.donation?.pointsPerK ?? 10));
     const award = Math.floor((amount / 1000) * pointsPerK);
-    if (award > 0 && entry.channelId) {
+    if (award > 0 && entry.channelId && !(await isChannelPointExcluded(settings, donorId))) {
       await incrChannelPoints(entry.channelId, donorId, donorName, award).catch(() => { });
     }
 
@@ -13514,6 +14596,8 @@ async function ensureCimeSession(ownerUserId) {
         processCimeChatAutomation(entry, ev).catch(() => { });
       } else if (eventName === 'DONATION') {
         processCimeDonationAutomation(entry, ev).catch(() => { });
+      } else if (eventName === 'SUBSCRIPTION') {
+        rememberCimeSubscriptionMonths(entry, ev);
       }
     });
 

@@ -1,14 +1,20 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const dns = require('dns').promises;
+const net = require('net');
+const dgram = require('dgram');
 const { pathToFileURL } = require('url');
 const { WebSocket } = require('ws');
 
 const APP_NAME = 'AruBot Local Program';
+const LEGACY_UPDATE_MANIFEST_URL = 'https://arubot.vercel.app/downloads/local-program/latest.json';
+const DEFAULT_UPDATE_MANIFEST_URL = 'https://github.com/mynam333/AruBot/releases/latest/download/latest.json';
 const DEFAULT_CONFIG = {
   backendUrl: 'http://127.0.0.1:3001',
-  updateManifestUrl: 'https://arubot.vercel.app/downloads/local-program/latest.json',
+  updateManifestUrl: DEFAULT_UPDATE_MANIFEST_URL,
   token: '',
   titsEndpoint: 'ws://localhost:42069',
   toonationAlertboxKey: '',
@@ -22,6 +28,15 @@ let running = false;
 let pollTimer = null;
 let config = { ...DEFAULT_CONFIG };
 let logs = [];
+let updateState = {
+  status: 'idle',
+  checking: false,
+  latestVersion: null,
+  updateAvailable: false,
+  downloaded: false,
+  progress: null,
+  error: null,
+};
 let stats = {
   claimed: 0,
   completed: 0,
@@ -39,10 +54,80 @@ function emitState() {
   mainWindow.webContents.send('agent-state', getPublicState());
 }
 
+function setUpdateState(patch) {
+  updateState = { ...updateState, ...patch };
+  emitState();
+}
+
 function sendRendererTask(task) {
   if (!mainWindow || mainWindow.isDestroyed()) throw new Error('GUI 창이 준비되지 않았습니다.');
   mainWindow.webContents.send('local-task', task);
   return { accepted: true, taskType: task.type, at: new Date().toISOString() };
+}
+
+function isPrivateIpAddress(value) {
+  const ipVersion = net.isIP(value);
+  if (!ipVersion) return false;
+  if (ipVersion === 4) {
+    const parts = value.split('.').map((part) => Number(part));
+    const [a, b] = parts;
+    return (
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 198 && (b === 18 || b === 19)) ||
+      a >= 224
+    );
+  }
+  const normalized = value.toLowerCase();
+  return normalized === '::' ||
+    normalized === '::1' ||
+    normalized.startsWith('fc') ||
+    normalized.startsWith('fd') ||
+    normalized.startsWith('fe8') ||
+    normalized.startsWith('fe9') ||
+    normalized.startsWith('fea') ||
+    normalized.startsWith('feb') ||
+    normalized.startsWith('::ffff:127.') ||
+    normalized.startsWith('::ffff:10.') ||
+    normalized.startsWith('::ffff:192.168.');
+}
+
+async function assertSafeExternalHttpUrl(rawUrl, options = {}) {
+  const url = new URL(String(rawUrl || ''));
+  if (!['https:', 'http:'].includes(url.protocol)) throw new Error('HTTP 노드는 http/https URL만 사용할 수 있습니다.');
+  if (url.protocol === 'http:' && options.allowInsecureHttp !== true) throw new Error('HTTP 노드는 기본적으로 HTTPS만 허용합니다.');
+  const hostname = url.hostname;
+  const lowerHost = hostname.toLowerCase();
+  if (!options.allowPrivateNetwork && (
+    lowerHost === 'localhost' ||
+    lowerHost.endsWith('.localhost') ||
+    isPrivateIpAddress(hostname)
+  )) {
+    throw new Error('HTTP 노드는 localhost 또는 사설망 주소로 요청할 수 없습니다.');
+  }
+  if (!options.allowPrivateNetwork && !net.isIP(hostname)) {
+    const records = await dns.lookup(hostname, { all: true, verbatim: true });
+    if (!records.length || records.some((record) => isPrivateIpAddress(record.address))) {
+      throw new Error('HTTP 노드 대상 도메인이 사설망 주소로 확인되어 차단했습니다.');
+    }
+  }
+  return url;
+}
+
+function parseMaybeJsonObject(value, fallback = {}) {
+  if (!value) return fallback;
+  if (typeof value === 'object') return value;
+  try {
+    const parsed = JSON.parse(String(value));
+    return parsed && typeof parsed === 'object' ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 function addLog(level, message, details = null) {
@@ -98,6 +183,9 @@ function writeJson(fileName, value) {
 function loadConfig() {
   const persisted = readJson('config.json', {});
   const vault = readJson('vault.json', {});
+  if (!persisted.updateManifestUrl || persisted.updateManifestUrl === LEGACY_UPDATE_MANIFEST_URL) {
+    persisted.updateManifestUrl = DEFAULT_UPDATE_MANIFEST_URL;
+  }
   config = {
     ...DEFAULT_CONFIG,
     ...persisted,
@@ -108,11 +196,12 @@ function loadConfig() {
 }
 
 function saveConfig(next) {
+  const nextUpdateManifestUrl = String(next.updateManifestUrl ?? config.updateManifestUrl ?? DEFAULT_CONFIG.updateManifestUrl).trim();
   config = {
     ...config,
     ...next,
     backendUrl: String(next.backendUrl ?? config.backendUrl ?? '').replace(/\/$/, ''),
-    updateManifestUrl: String(next.updateManifestUrl ?? config.updateManifestUrl ?? DEFAULT_CONFIG.updateManifestUrl).trim(),
+    updateManifestUrl: nextUpdateManifestUrl === LEGACY_UPDATE_MANIFEST_URL ? DEFAULT_UPDATE_MANIFEST_URL : nextUpdateManifestUrl,
     token: String(next.token ?? config.token ?? '').trim(),
     titsEndpoint: String(next.titsEndpoint ?? config.titsEndpoint ?? '').trim() || DEFAULT_CONFIG.titsEndpoint,
     toonationAlertboxKey: String(next.toonationAlertboxKey ?? config.toonationAlertboxKey ?? '').trim(),
@@ -150,6 +239,7 @@ function getPublicState() {
     },
     stats,
     logs,
+    update: updateState,
     encryptionAvailable: safeStorage.isEncryptionAvailable(),
   };
 }
@@ -188,6 +278,95 @@ function resolveDownloadUrl(manifest, manifestUrl) {
   const raw = String(manifest?.url || manifest?.downloadUrl || '').trim();
   if (!raw) throw new Error('업데이트 파일 주소가 manifest에 없습니다.');
   return new URL(raw, manifestUrl).toString();
+}
+
+function getUpdaterFeedUrl() {
+  const manifestUrl = resolveManifestUrl();
+  const url = new URL(manifestUrl);
+  url.pathname = url.pathname.replace(/\/[^/]*$/, '');
+  url.search = '';
+  url.hash = '';
+  return url.toString().replace(/\/$/, '');
+}
+
+function configureAutoUpdater() {
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = false;
+  autoUpdater.allowPrerelease = false;
+  autoUpdater.disableWebInstaller = false;
+  autoUpdater.setFeedURL({ provider: 'generic', url: getUpdaterFeedUrl() });
+}
+
+function checkForUpdatesWithElectronUpdater() {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      autoUpdater.off('update-available', onAvailable);
+      autoUpdater.off('update-not-available', onNotAvailable);
+      autoUpdater.off('error', onError);
+    };
+    const finish = (value, error = null) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error) reject(error);
+      else resolve(value);
+    };
+    const onAvailable = (info) => finish({
+      currentVersion: app.getVersion(),
+      latestVersion: String(info?.version || ''),
+      updateAvailable: true,
+      electronUpdater: true,
+      info,
+    });
+    const onNotAvailable = (info) => finish({
+      currentVersion: app.getVersion(),
+      latestVersion: String(info?.version || app.getVersion()),
+      updateAvailable: false,
+      electronUpdater: true,
+      info,
+    });
+    const onError = (error) => finish(null, error);
+    autoUpdater.once('update-available', onAvailable);
+    autoUpdater.once('update-not-available', onNotAvailable);
+    autoUpdater.once('error', onError);
+    configureAutoUpdater();
+    autoUpdater.checkForUpdates().catch((error) => finish(null, error));
+  });
+}
+
+function downloadUpdateWithElectronUpdater() {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      autoUpdater.off('update-downloaded', onDownloaded);
+      autoUpdater.off('download-progress', onProgress);
+      autoUpdater.off('error', onError);
+    };
+    const finish = (value, error = null) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error) reject(error);
+      else resolve(value);
+    };
+    const onProgress = (progress) => {
+      setUpdateState({
+        status: 'downloading',
+        progress: {
+          percent: Number(progress?.percent || 0),
+          transferred: Number(progress?.transferred || 0),
+          total: Number(progress?.total || 0),
+        },
+      });
+    };
+    const onDownloaded = (info) => finish(info || {});
+    const onError = (error) => finish(null, error);
+    autoUpdater.on('download-progress', onProgress);
+    autoUpdater.once('update-downloaded', onDownloaded);
+    autoUpdater.once('error', onError);
+    autoUpdater.downloadUpdate().catch((error) => finish(null, error));
+  });
 }
 
 async function fetchUpdateManifest() {
@@ -356,18 +535,18 @@ async function processJob(job) {
       message: '투네이션 키가 로컬 vault에 저장되어 있습니다.',
     };
   }
-  if (type === 'tts.speak') {
+  if (type === 'tts.speak' || type === 'blueprint.tts') {
     const text = String(payload.text || '').trim();
     if (!text) throw new Error('읽을 문구가 없습니다.');
     return sendRendererTask({
       type: 'tts.speak',
-      text: text.slice(0, 500),
+      text: text.slice(0, 1000),
       voice: String(payload.voice || ''),
       rate: Math.max(0.5, Math.min(2, Number(payload.rate || 1))),
       pitch: Math.max(0.5, Math.min(2, Number(payload.pitch || 1))),
     });
   }
-  if (type === 'sound.play') {
+  if (type === 'sound.play' || type === 'blueprint.sound') {
     const fileId = path.basename(String(payload.fileId || payload.name || ''));
     if (!fileId) throw new Error('재생할 사운드 파일이 없습니다.');
     let fullPath = '';
@@ -388,6 +567,104 @@ async function processJob(job) {
       fileUrl: pathToFileURL(fullPath).href,
       fileName: fileId,
       volume: Math.max(0, Math.min(1, Number(payload.volume ?? 1))),
+    });
+  }
+  if (type === 'blueprint.tits') {
+    const triggerId = String(payload.triggerId || payload.triggerID || '').trim();
+    const triggerName = String(payload.triggerName || '').trim();
+    if (!triggerId && !triggerName) throw new Error('실행할 T.I.T.S 트리거가 없습니다.');
+    return await sendTitsRequest('TITSTriggerActivateRequest', {
+      triggerID: triggerId,
+      triggerName,
+    });
+  }
+  if (type === 'blueprint.http') {
+    const url = await assertSafeExternalHttpUrl(payload.url, {
+      allowInsecureHttp: payload.allowInsecureHttp === true,
+      allowPrivateNetwork: false,
+    });
+    const method = String(payload.method || 'POST').toUpperCase();
+    if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) throw new Error('지원하지 않는 HTTP 메서드입니다.');
+    const headers = parseMaybeJsonObject(payload.headers, {});
+    const bodyText = typeof payload.body === 'string' ? payload.body : payload.body == null ? '' : JSON.stringify(payload.body);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), Math.max(1000, Math.min(30000, Number(payload.timeoutMs || 10000))));
+    try {
+      const response = await fetch(url.href, {
+        method,
+        headers: {
+          'user-agent': `${APP_NAME}/${app.getVersion()}`,
+          ...Object.fromEntries(Object.entries(headers).map(([key, value]) => [key, String(value)])),
+        },
+        body: ['GET', 'HEAD'].includes(method) ? undefined : bodyText,
+        signal: controller.signal,
+      });
+      const text = await response.text();
+      return {
+        ok: response.ok,
+        status: response.status,
+        statusText: response.statusText,
+        bodyPreview: text.slice(0, 2000),
+      };
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  if (type === 'blueprint.websocket') {
+    const target = payload.url || payload.connectionUrl || payload.endpoint;
+    const message = typeof payload.message === 'string' ? payload.message : JSON.stringify(payload.message || {});
+    const url = new URL(String(target || ''));
+    if (!['wss:', 'ws:'].includes(url.protocol)) throw new Error('WebSocket 노드는 ws/wss URL만 사용할 수 있습니다.');
+    if (url.protocol === 'ws:' && payload.allowInsecureWebSocket !== true) throw new Error('WebSocket 노드는 기본적으로 WSS만 허용합니다.');
+    await assertSafeExternalHttpUrl(`${url.protocol === 'wss:' ? 'https:' : 'http:'}//${url.host}`, {
+      allowInsecureHttp: payload.allowInsecureWebSocket === true,
+      allowPrivateNetwork: false,
+    });
+    return await new Promise((resolve, reject) => {
+      const ws = new WebSocket(url.href);
+      const timeout = setTimeout(() => {
+        try { ws.close(); } catch { }
+        reject(new Error('WebSocket 전송 시간이 초과되었습니다.'));
+      }, Math.max(1000, Math.min(30000, Number(payload.timeoutMs || 8000))));
+      ws.once('open', () => {
+        ws.send(message, (error) => {
+          clearTimeout(timeout);
+          try { ws.close(); } catch { }
+          if (error) reject(error);
+          else resolve({ ok: true, sentBytes: Buffer.byteLength(message) });
+        });
+      });
+      ws.once('error', (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      });
+    });
+  }
+  if (type === 'blueprint.udp') {
+    const host = String(payload.host || '127.0.0.1').trim();
+    const port = Number(payload.port || 0);
+    const message = typeof payload.message === 'string' ? payload.message : JSON.stringify(payload.message || {});
+    if (!host) throw new Error('UDP 호스트가 필요합니다.');
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('UDP 포트가 올바르지 않습니다.');
+    const family = net.isIP(host) === 6 ? 'udp6' : 'udp4';
+    const buffer = Buffer.from(message);
+    return await new Promise((resolve, reject) => {
+      const socket = dgram.createSocket(family);
+      const timeout = setTimeout(() => {
+        try { socket.close(); } catch { }
+        reject(new Error('UDP 전송 시간이 초과되었습니다.'));
+      }, Math.max(1000, Math.min(10000, Number(payload.timeoutMs || 3000))));
+      socket.once('error', (error) => {
+        clearTimeout(timeout);
+        try { socket.close(); } catch { }
+        reject(error);
+      });
+      socket.send(buffer, port, host, (error) => {
+        clearTimeout(timeout);
+        try { socket.close(); } catch { }
+        if (error) reject(error);
+        else resolve({ ok: true, host, port, bytes: buffer.length });
+      });
     });
   }
   if (type === 'control.trigger') {
@@ -519,6 +796,43 @@ ipcMain.handle('tits:discover', async () => {
   addLog('success', `T.I.T.S. 목록 동기화 완료: 아이템 ${discovery.items.length}개, 트리거 ${discovery.triggers.length}개`);
   return discovery;
 });
+ipcMain.handle('remote:overview', async () => apiFetch('/api/local-remote/overview'));
+ipcMain.handle('remote:command:save', async (_event, rule) => {
+  const result = await apiFetch('/api/local-remote/commands/upsert', {
+    method: 'POST',
+    body: JSON.stringify({ rule }),
+  });
+  addLog('success', `리모컨에서 명령어를 저장했습니다: ${result?.rule?.name || ''}`);
+  return result;
+});
+ipcMain.handle('remote:command:delete', async (_event, id) => {
+  const result = await apiFetch('/api/local-remote/commands/delete', {
+    method: 'POST',
+    body: JSON.stringify({ id }),
+  });
+  addLog('success', '리모컨에서 명령어를 삭제했습니다.');
+  return result;
+});
+ipcMain.handle('remote:roulette:test', async (_event, roulette) => {
+  const result = await apiFetch('/api/local-remote/roulette/test', {
+    method: 'POST',
+    body: JSON.stringify(roulette || {}),
+  });
+  addLog('success', `리모컨에서 룰렛 테스트를 실행했습니다: ${result?.result?.result?.label || ''}`);
+  return result;
+});
+ipcMain.handle('remote:pvd:pop', async () => {
+  const result = await apiFetch('/api/local-remote/video-donation/pop', {
+    method: 'POST',
+    body: JSON.stringify({ cause: 'local_remote' }),
+  });
+  addLog('success', '리모컨에서 영상후원 다음 항목으로 넘겼습니다.');
+  return result;
+});
+ipcMain.handle('remote:pvd:control', async (_event, control) => apiFetch('/api/local-remote/video-donation/control', {
+  method: 'POST',
+  body: JSON.stringify(control || {}),
+}));
 ipcMain.handle('folder:chooseSound', async () => {
   const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
   if (result.canceled || !result.filePaths?.[0]) return null;
@@ -535,13 +849,62 @@ ipcMain.handle('external:open', async (_event, url) => {
   return true;
 });
 ipcMain.handle('update:check', async () => {
-  const update = await fetchUpdateManifest();
-  addLog(update.updateAvailable ? 'info' : 'success', update.updateAvailable ? `새 버전 ${update.latestVersion}을 찾았습니다.` : '최신 버전을 사용 중입니다.');
-  return update;
+  setUpdateState({ status: 'checking', checking: true, error: null, progress: null });
+  try {
+    const manifestUpdate = await fetchUpdateManifest();
+    if (app.isPackaged) {
+      try {
+        const updaterResult = await checkForUpdatesWithElectronUpdater();
+        const latestVersion = updaterResult.latestVersion || manifestUpdate.latestVersion;
+        const result = { ...manifestUpdate, ...updaterResult, latestVersion };
+        setUpdateState({
+          status: result.updateAvailable ? 'available' : 'idle',
+          checking: false,
+          latestVersion,
+          updateAvailable: result.updateAvailable,
+          downloaded: false,
+          error: null,
+        });
+        addLog(result.updateAvailable ? 'info' : 'success', result.updateAvailable ? `새 버전 ${latestVersion}을 찾았습니다.` : '최신 버전을 사용 중입니다.');
+        return result;
+      } catch (error) {
+        addLog('error', '인앱 업데이트 확인 실패. manifest 방식으로 확인합니다.', error.message || String(error));
+      }
+    }
+    setUpdateState({
+      status: manifestUpdate.updateAvailable ? 'available' : 'idle',
+      checking: false,
+      latestVersion: manifestUpdate.latestVersion,
+      updateAvailable: manifestUpdate.updateAvailable,
+      downloaded: false,
+      error: null,
+    });
+    addLog(manifestUpdate.updateAvailable ? 'info' : 'success', manifestUpdate.updateAvailable ? `새 버전 ${manifestUpdate.latestVersion}을 찾았습니다.` : '최신 버전을 사용 중입니다.');
+    return manifestUpdate;
+  } catch (error) {
+    setUpdateState({ status: 'error', checking: false, error: error.message || String(error) });
+    throw error;
+  }
 });
 ipcMain.handle('update:install', async () => {
   const update = await fetchUpdateManifest();
   if (!update.updateAvailable) return { ...update, opened: false };
+  if (app.isPackaged) {
+    setUpdateState({ status: 'downloading', checking: false, updateAvailable: true, latestVersion: update.latestVersion, error: null, progress: null });
+    try {
+      await checkForUpdatesWithElectronUpdater();
+      const info = await downloadUpdateWithElectronUpdater();
+      setUpdateState({ status: 'installing', downloaded: true, progress: null });
+      addLog('success', '업데이트 다운로드가 끝났습니다. 프로그램을 재시작하며 설치합니다.');
+      setTimeout(() => {
+        autoUpdater.quitAndInstall(false, true);
+      }, 700);
+      return { ...update, electronUpdater: true, opened: false, installing: true, info };
+    } catch (error) {
+      setUpdateState({ status: 'error', error: error.message || String(error), progress: null });
+      addLog('error', '인앱 업데이트 설치 준비 실패. 설치 파일 실행 방식으로 전환합니다.', error.message || String(error));
+    }
+  }
   addLog('info', `업데이트 ${update.latestVersion} 다운로드를 시작합니다.`);
   const installerPath = await downloadInstaller(update);
   const openResult = await shell.openPath(installerPath);

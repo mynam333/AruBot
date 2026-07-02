@@ -17,12 +17,34 @@
           </div>
         </div>
         <nav class="nav">
-          <a class="active" href="#connect">연결</a>
-          <a href="#tits">T.I.T.S.</a>
-          <a href="#toonation">Toonation</a>
-          <a href="#sound">사운드</a>
-          <a href="#updates">업데이트</a>
-          <a href="#logs">실행 기록</a>
+          <button class="nav-item active" type="button" data-page="connect">
+            <span>연결</span>
+            <small>토큰과 실행 상태</small>
+          </button>
+          <button class="nav-item" type="button" data-page="remote">
+            <span>리모컨</span>
+            <small>웹 기능 빠른 제어</small>
+          </button>
+          <button class="nav-item" type="button" data-page="tits">
+            <span>T.I.T.S.</span>
+            <small>아이템과 트리거</small>
+          </button>
+          <button class="nav-item" type="button" data-page="toonation">
+            <span>Toonation</span>
+            <small>후원 알림 키</small>
+          </button>
+          <button class="nav-item" type="button" data-page="sound">
+            <span>사운드</span>
+            <small>로컬 폴더</small>
+          </button>
+          <button class="nav-item" type="button" data-page="updates">
+            <span>업데이트</span>
+            <small>최신 버전 유지</small>
+          </button>
+          <button class="nav-item" type="button" data-page="logs">
+            <span>실행 기록</span>
+            <small>최근 작업 로그</small>
+          </button>
         </nav>
         <div class="side-card">
           <span class="chip mint">Local Vault</span>
@@ -33,8 +55,8 @@
       <main class="main">
         <header class="topbar">
           <div>
-            <h1>방송 도구를 안전하게 연결하세요.</h1>
-            <p>Oracle 백엔드의 큐를 받아 방송 PC의 OBS, T.I.T.S., Toonation, TTS, 사운드 폴더를 실행합니다.</p>
+            <h1 id="pageTitle">방송 도구를 안전하게 연결하세요.</h1>
+            <p id="pageDescription">아루봇 백엔드의 큐를 받아 방송 PC의 T.I.T.S., Toonation, TTS, 사운드 폴더와 로컬 자동화 작업을 실행합니다.</p>
           </div>
           <div class="status-card" id="statusCard">
             <span class="status-dot"></span>
@@ -60,7 +82,9 @@
           </article>
         </section>
 
-        <section class="panel" id="connect">
+        <section class="page active" id="page-connect" data-page="connect">
+          <div class="page-grid connect-grid">
+        <article class="panel" id="connect">
           <div class="panel-head">
             <div>
               <span class="chip sky">연결 설정</span>
@@ -97,10 +121,78 @@
             <button class="button primary" id="saveConfigButton">설정 저장</button>
             <button class="button ghost" id="openDashboardButton">웹 대시보드 열기</button>
           </div>
+        </article>
+        <aside class="panel support-panel">
+          <span class="chip mint">시작 순서</span>
+          <h2>웹 콘솔에서 토큰을 발급한 뒤 연결하세요.</h2>
+          <div class="step-list">
+            <div><strong>1</strong><span>아루봇 웹의 방송 자동화 페이지에서 로컬 프로그램 토큰을 발급합니다.</span></div>
+            <div><strong>2</strong><span>백엔드 주소와 토큰을 붙여넣고 설정을 저장합니다.</span></div>
+            <div><strong>3</strong><span>시작 버튼을 누르면 방송 PC가 자동화 큐를 처리합니다.</span></div>
+          </div>
+        </aside>
+          </div>
         </section>
 
-        <section class="two-col">
-          <article class="panel" id="tits">
+        <section class="page" id="page-remote" data-page="remote">
+          <div class="page-grid remote-grid">
+            <article class="panel feature-panel">
+              <div class="panel-head compact">
+                <div>
+                  <span class="chip mint">리모컨</span>
+                  <h2>방송 중 빠른 제어</h2>
+                </div>
+                <button class="button secondary" id="remoteRefreshButton">새로고침</button>
+              </div>
+              <div class="mini-list">
+                <div><strong id="remoteCommandCount">0</strong><span>명령어</span></div>
+                <div><strong id="remoteRouletteCount">0</strong><span>룰렛</span></div>
+              </div>
+              <div class="remote-section">
+                <h3>명령어 수정</h3>
+                <select id="remoteCommandSelect"></select>
+                <div class="form-grid">
+                  <label>표시 이름<input id="remoteCommandName" /></label>
+                  <label>채팅 명령어<input id="remoteCommandKeyword" placeholder="!명령어" /></label>
+                  <label>사용 포인트<input id="remoteCommandPoints" inputmode="numeric" /></label>
+                  <label>쿨다운(초)<input id="remoteCommandCooldown" inputmode="numeric" /></label>
+                </div>
+                <label>응답 문구<textarea id="remoteCommandResponse" rows="4"></textarea></label>
+                <label class="check-row"><input id="remoteCommandEnabled" type="checkbox" /> 바로 사용</label>
+                <div class="actions">
+                  <button class="button primary" id="remoteSaveCommandButton">명령어 저장</button>
+                  <button class="button ghost" id="remoteDeleteCommandButton">삭제</button>
+                </div>
+              </div>
+            </article>
+            <aside class="panel support-panel">
+              <span class="chip sky">룰렛 · 영상후원</span>
+              <h2>테스트와 재생 제어를 로컬에서 처리합니다.</h2>
+              <div class="remote-section">
+                <h3>룰렛 테스트</h3>
+                <select id="remoteRouletteSelect"></select>
+                <div class="actions">
+                  <button class="button primary" id="remoteTestRouletteButton">테스트 실행</button>
+                </div>
+                <div class="folder-path" id="remoteRouletteResult">아직 테스트 결과 없음</div>
+              </div>
+              <div class="remote-section">
+                <h3>포인트 영상후원</h3>
+                <div class="folder-path" id="remotePvdNow">현재 재생 항목 없음</div>
+                <div class="actions">
+                  <button class="button secondary" id="remotePvdPlayButton">재생</button>
+                  <button class="button secondary" id="remotePvdPauseButton">일시정지</button>
+                  <button class="button primary" id="remotePvdNextButton">다음 영상</button>
+                </div>
+              </div>
+              <p class="hint">리모컨은 로컬 프로그램 토큰 권한으로만 동작합니다. 웹 로그인 쿠키는 사용하지 않습니다.</p>
+            </aside>
+          </div>
+        </section>
+
+        <section class="page" id="page-tits" data-page="tits">
+          <div class="page-grid tool-grid">
+          <article class="panel feature-panel" id="tits">
             <div class="panel-head compact">
               <div>
                 <span class="chip coral">T.I.T.S.</span>
@@ -123,8 +215,21 @@
               </div>
             </div>
           </article>
+          <aside class="panel support-panel coral-soft">
+            <span class="chip coral">자동 동기화 준비</span>
+            <h2>방송 PC의 T.I.T.S. API를 켠 뒤 목록을 불러오세요.</h2>
+            <p class="hint">동기화된 아이템과 트리거는 웹 자동화 액션 빌더에서 드롭다운으로 선택할 수 있습니다.</p>
+            <div class="mini-list vertical">
+              <div><strong>42069</strong><span>기본 WebSocket 포트</span></div>
+              <div><strong>로컬</strong><span>민감한 방송 PC 도구는 이 앱에서 실행</span></div>
+            </div>
+          </aside>
+          </div>
+        </section>
 
-          <article class="panel" id="toonation">
+        <section class="page" id="page-toonation" data-page="toonation">
+          <div class="page-grid tool-grid">
+          <article class="panel feature-panel" id="toonation">
             <div class="panel-head compact">
               <div>
                 <span class="chip lemon">Toonation</span>
@@ -138,9 +243,17 @@
             </label>
             <p class="hint">키는 서버로 보내지 않고 이 컴퓨터에만 저장됩니다.</p>
           </article>
+          <aside class="panel support-panel lemon-soft">
+            <span class="chip lemon">Local Vault</span>
+            <h2>후원 알림 키는 방송 PC에만 보관합니다.</h2>
+            <p class="hint">웹 콘솔에는 민감한 키를 저장하지 않고, 로컬 프로그램이 큐 작업을 받을 때 필요한 작업만 실행합니다.</p>
+          </aside>
+          </div>
         </section>
 
-        <section class="panel" id="sound">
+        <section class="page" id="page-sound" data-page="sound">
+          <div class="page-grid tool-grid">
+        <article class="panel feature-panel" id="sound">
           <div class="panel-head compact">
             <div>
               <span class="chip mint">사운드 폴더</span>
@@ -152,9 +265,18 @@
             </div>
           </div>
           <div class="folder-path" id="soundFolderText">선택된 폴더 없음</div>
+        </article>
+        <aside class="panel support-panel">
+          <span class="chip mint">대용량 사운드</span>
+          <h2>10MB를 넘는 사운드는 내 PC에서 바로 재생하세요.</h2>
+          <p class="hint">폴더를 지정하면 자동화 액션의 파일 이름과 같은 로컬 파일을 우선 재생합니다. 없으면 서버 저장소의 파일을 임시 폴더에 내려받아 재생합니다.</p>
+        </aside>
+          </div>
         </section>
 
-        <section class="panel" id="updates">
+        <section class="page" id="page-updates" data-page="updates">
+          <div class="page-grid tool-grid">
+        <article class="panel feature-panel" id="updates">
           <div class="panel-head compact">
             <div>
               <span class="chip sky">업데이트</span>
@@ -175,10 +297,18 @@
               <span id="latestVersionText">확인 전</span>
             </div>
           </div>
-          <p class="hint" id="updateStatusText">새 버전이 있으면 설치 파일을 내려받아 실행합니다. 설치가 끝나면 프로그램을 다시 열어주세요.</p>
+          <p class="hint" id="updateStatusText">새 버전이 있으면 프로그램 안에서 다운로드하고 재시작하며 설치합니다. 자동 업데이트를 사용할 수 없는 환경에서는 설치 파일 실행 방식으로 전환합니다.</p>
+        </article>
+        <aside class="panel support-panel sky-soft">
+          <span class="chip sky">GitHub Releases</span>
+          <h2>최신 manifest와 설치 정보를 확인합니다.</h2>
+          <p class="hint">업데이트 버튼은 GitHub Release의 최신 manifest를 확인하고, 가능한 경우 앱 내부에서 업데이트를 내려받아 재시작 설치합니다.</p>
+        </aside>
+          </div>
         </section>
 
-        <section class="panel" id="logs">
+        <section class="page" id="page-logs" data-page="logs">
+        <article class="panel log-panel" id="logs">
           <div class="panel-head compact">
             <div>
               <span class="chip sky">실행 기록</span>
@@ -186,6 +316,7 @@
             </div>
           </div>
           <div class="logs" id="logList"></div>
+        </article>
         </section>
       </main>
     </div>

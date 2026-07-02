@@ -101,7 +101,7 @@ GitHub Actions 자동 배포:
 - `.github/workflows/local-program-release.yml`은 `local-program/**`, Electron 빌드 설정, manifest 스크립트, 패키지 파일이 변경되어 `main` 또는 `master`에 push되면 실행됩니다.
 - Actions는 Windows에서 `npm run local:release:external`을 실행해 `.exe`와 `latest.json`을 생성합니다.
 - 릴리스 태그는 `local-v{자동 생성 버전}` 형식입니다. Actions에서는 `package.json`의 major/minor와 `GITHUB_RUN_NUMBER`를 조합해 예: `0.1.42` 같은 로컬 프로그램 전용 버전을 만듭니다.
-- GitHub Release에는 `.exe`와 `latest.json`이 함께 업로드되고, 릴리스 본문에는 이전 로컬 프로그램 릴리스 이후의 변경 커밋과 변경 파일이 자동으로 적힙니다.
+- GitHub Release에는 `.exe`, `.exe.blockmap`, `latest.yml`, `latest.json`이 함께 업로드되고, 릴리스 본문에는 이전 로컬 프로그램 릴리스 이후의 변경 커밋과 변경 파일이 자동으로 적힙니다.
 - Vercel 환경 변수는 `LOCAL_PROGRAM_MANIFEST_URL=https://github.com/OWNER/REPO/releases/latest/download/latest.json`처럼 설정하면 최신 GitHub Release manifest를 동적으로 읽습니다.
 
 Next.js 개발 서버는 기본적으로 `http://localhost:3000`에서 실행됩니다. 로컬 프론트엔드는 `NEXT_PUBLIC_API_BASE`가 비어 있으면 `http://127.0.0.1:3001` Express API를 사용합니다.

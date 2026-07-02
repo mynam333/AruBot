@@ -1,6 +1,5 @@
-import { AdminFeaturePage } from '@/features/admin/admin-page';
-import { adminFeatureMap } from '@/shared/config/navigation';
+import { PointsPage } from '@/features/admin/points-page';
 
 export default function Page() {
-  return <AdminFeaturePage config={adminFeatureMap.points} />;
+  return <PointsPage />;
 }

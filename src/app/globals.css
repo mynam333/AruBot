@@ -304,6 +304,82 @@ nextjs-portal {
     padding-box;
 }
 
+.arubot-blueprint-flow {
+  --xy-node-border-default: transparent;
+  --xy-node-boxshadow-default: none;
+  --xy-edge-stroke-default: transparent;
+  --xy-edge-stroke-selected-default: transparent;
+  --xy-connectionline-stroke-default: hsl(var(--primary));
+  --xy-selection-background-color-default: hsl(var(--primary) / 0.08);
+  --xy-selection-border-default: max(0.0625rem, 0.08vw) solid hsl(var(--primary) / 0.45);
+  background:
+    radial-gradient(circle at 16% 12%, hsl(var(--accent-mint) / 0.28), transparent 30%),
+    radial-gradient(circle at 88% 20%, hsl(var(--accent-coral) / 0.18), transparent 28%),
+    linear-gradient(135deg, hsl(var(--background)), hsl(var(--card)));
+}
+
+.arubot-blueprint-flow .react-flow__pane {
+  cursor: grab;
+}
+
+.arubot-blueprint-flow .react-flow__pane:active {
+  cursor: grabbing;
+}
+
+.arubot-blueprint-flow .react-flow__node {
+  border-radius: calc(var(--radius-card) * 0.92);
+  outline: none;
+}
+
+.arubot-blueprint-flow .react-flow__node:focus-visible {
+  box-shadow: 0 0 0 max(0.1875rem, 0.22vw) hsl(var(--ring) / 0.32);
+}
+
+.arubot-blueprint-flow .react-flow__handle {
+  opacity: 0.92;
+}
+
+.arubot-blueprint-flow .react-flow__handle:hover,
+.arubot-blueprint-flow .react-flow__handle.connectingfrom,
+.arubot-blueprint-flow .react-flow__handle.connectingto {
+  opacity: 1;
+  box-shadow:
+    0 0 0 max(0.25rem, 0.3vw) hsl(var(--primary) / 0.16),
+    0 0.65rem 1.5rem hsl(var(--foreground) / 0.14) !important;
+}
+
+.arubot-blueprint-flow .react-flow__connection-path {
+  stroke: hsl(var(--primary));
+  stroke-width: max(0.18rem, 0.24vw);
+  stroke-linecap: round;
+}
+
+.arubot-blueprint-flow .react-flow__controls {
+  overflow: hidden;
+  border-radius: var(--radius-control);
+}
+
+.arubot-blueprint-flow .react-flow__controls-button {
+  width: var(--control-height-sm);
+  height: var(--control-height-sm);
+  border-bottom: max(0.0625rem, 0.08vw) solid hsl(var(--border));
+  background: hsl(var(--card) / 0.92);
+  color: hsl(var(--foreground));
+}
+
+.arubot-blueprint-flow .react-flow__controls-button:hover {
+  background: hsl(var(--muted) / 0.88);
+}
+
+.arubot-blueprint-flow .react-flow__minimap {
+  border-radius: var(--radius-control);
+  overflow: hidden;
+}
+
+.arubot-blueprint-flow .react-flow__attribution {
+  display: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;

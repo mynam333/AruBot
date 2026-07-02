@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { ChevronRight, Coins, ListChecks, Radio, Sparkles } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
-import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { DataView } from '@/components/ui/data-view';
 import { cn } from '@/shared/lib/utils';
 import { readPublicChannelData, readPublicChannelHub, type PublicChannelKind } from '@/shared/api/public';
@@ -36,6 +36,57 @@ function isLive(data: unknown) {
   if (!data || typeof data !== 'object') return false;
   const object = data as Record<string, unknown>;
   return object.live === true || object.isLive === true || object.status === 'live';
+}
+
+function PublicCommands({ data }: { data: unknown }) {
+  const rows = pickRows(data).filter((row) => row.adminOnly !== true);
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <CardTitle>채팅에서 사용할 수 있는 명령어</CardTitle>
+            <CardDescription>명령어를 그대로 채팅창에 입력하면 봇이 응답합니다.</CardDescription>
+          </div>
+          <Badge tone={rows.length ? 'mint' : 'neutral'}>{rows.length}개</Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="grid gap-3">
+        {rows.length ? rows.map((row, index) => {
+          const keywords = Array.isArray(row.keywords) ? row.keywords.map(String).filter(Boolean) : [];
+          const responses = Array.isArray(row.responses) ? row.responses.map(String).filter(Boolean) : [];
+          return (
+            <div key={String(row.id || keywords[0] || index)} className="rounded-[var(--radius-card)] border bg-background/70 p-[clamp(1rem,2vw,1.25rem)]">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="text-base font-semibold">{String(row.name || keywords[0] || '명령어')}</div>
+                  <div className="mt-2 flex max-w-full gap-1.5 overflow-x-auto pb-1">
+                    {keywords.length ? keywords.map((keyword) => (
+                      <code key={keyword} className="shrink-0 rounded-full bg-muted px-2.5 py-1 text-xs font-bold text-foreground">{keyword}</code>
+                    )) : <Badge tone="neutral">명령어 없음</Badge>}
+                  </div>
+                </div>
+                {Number(row.cooldown || 0) > 0 ? <Badge tone="sky">쿨다운 {Math.round(Number(row.cooldown || 0) / 1000)}초</Badge> : null}
+              </div>
+              {responses.length ? (
+                <div className="mt-4 grid gap-2">
+                  {responses.slice(0, 3).map((response) => (
+                    <div key={response} className="max-w-full overflow-x-auto rounded-[var(--radius-control)] bg-card/80 p-3">
+                      <p className="w-max max-w-[42rem] whitespace-pre-wrap break-words text-sm leading-6 text-muted-foreground">{response}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          );
+        }) : (
+          <div className="rounded-[var(--radius-control)] border bg-background/55 p-[clamp(1.25rem,2.6vw,1.75rem)] text-sm text-muted-foreground">
+            아직 공개된 명령어가 없습니다.
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
 }
 
 function PublicShell({
@@ -123,12 +174,16 @@ export async function PublicChannelPage({ channelUid, kind }: { channelUid: stri
           </div>
         </CardHeader>
       </Card>
-      <DataView
-        title="공개 목록"
-        description="시청자가 사용할 수 있는 항목만 표시합니다."
-        data={data}
-        empty="아직 공개된 항목이 없어요."
-      />
+      {kind === 'commands' ? (
+        <PublicCommands data={data} />
+      ) : (
+        <DataView
+          title="공개 목록"
+          description="시청자가 사용할 수 있는 항목만 표시합니다."
+          data={data}
+          empty="아직 공개된 항목이 없어요."
+        />
+      )}
     </PublicShell>
   );
 }

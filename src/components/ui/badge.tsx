@@ -22,7 +22,7 @@ export function Badge({
     sky: 'border-sky-500/25 bg-pastel-sky/60 text-sky-900 dark:text-sky-100',
   };
   return (
-    <span className={cn('inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold tracking-normal', tones[tone], className)}>
+    <span className={cn('inline-flex shrink-0 items-center whitespace-nowrap rounded-full border px-2.5 py-1 text-xs font-semibold leading-none tracking-normal', tones[tone], className)}>
       {children}
     </span>
   );

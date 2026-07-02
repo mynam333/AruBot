@@ -4,14 +4,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ComponentType } from 'react';
 import { toast } from 'sonner';
 import {
-  Bot,
   Cable,
   CheckCircle2,
   Copy,
   Database,
   Download,
+  Eye,
+  EyeOff,
   HardDrive,
-  Headphones,
   Loader2,
   MonitorUp,
   MousePointerClick,
@@ -59,6 +59,7 @@ type AutomationConnection = {
   executionMode: ExecutionMode;
   endpoint?: string;
   config?: Record<string, unknown>;
+  capabilities?: Record<string, unknown>;
   discoveryCache?: {
     items?: Array<{ id: string; name: string; encodedImage?: string | null }>;
     triggers?: Array<{ id: string; name: string }>;
@@ -86,6 +87,29 @@ type Overview = {
   supportedConnectors: string[];
   disabledConnectors: string[];
 };
+
+type ConnectionDraft = {
+  name: string;
+  endpoint: string;
+  enabled: boolean;
+};
+
+function connectionTypeLabel(type: string) {
+  const labels: Record<string, string> = {
+    stream_deck_touch_portal: 'HTTP 버튼',
+    tits: 'T.I.T.S.',
+    toonation_alertbox: 'Toonation',
+    tts: 'TTS',
+    obs: 'OBS',
+    vtube_studio: 'VTube Studio',
+    http: 'HTTP',
+    websocket: 'WebSocket',
+    udp: 'UDP',
+    sound: '사운드',
+    overlay: '오버레이',
+  };
+  return labels[type] || type;
+}
 
 const LOCAL_SECRET_KEY = 'arubot.automation.localSecrets.v1';
 
@@ -175,6 +199,9 @@ export function AutomationsPage() {
   const [controlUrl, setControlUrl] = useState('');
   const [localProgramName, setLocalProgramName] = useState('방송 PC');
   const [localProgramToken, setLocalProgramToken] = useState('');
+  const [localProgramSecret, setLocalProgramSecret] = useState('');
+  const [showLocalProgramSecret, setShowLocalProgramSecret] = useState(false);
+  const [connectionDrafts, setConnectionDrafts] = useState<Record<string, ConnectionDraft>>({});
   const [busyAction, setBusyAction] = useState<string | null>(null);
 
   const connections = overview?.connections || [];
@@ -195,6 +222,14 @@ export function AutomationsPage() {
       setTtsPitch(String(data.settings.tts?.pitch || 1));
       const savedTits = data.connections.find((item) => item.type === 'tits');
       if (savedTits?.endpoint) setTitsEndpoint(savedTits.endpoint);
+      setConnectionDrafts(Object.fromEntries(data.connections.map((item) => [
+        item.id,
+        {
+          name: item.name || '',
+          endpoint: item.endpoint || '',
+          enabled: item.enabled !== false,
+        },
+      ])));
     }
     const local = readLocalSecrets() as Record<string, string>;
     setToonationKey(local.toonationAlertboxKey || '');
@@ -335,16 +370,88 @@ export function AutomationsPage() {
   const createLocalProgramToken = async () => {
     setBusyAction('local-program');
     try {
-      const data = await jsonRequest<{ token: string; backendUrl: string }>('/api/automations/local-agents/pair', 'POST', {
+      const data = await jsonRequest<{ token?: string | null; tokenMasked?: string | null; backendUrl: string }>('/api/automations/local-agents/pair', 'POST', {
+        name: localProgramName,
+      });
+      if (data.token) {
+        const command = `백엔드 주소: ${data.backendUrl}\n토큰: ${data.token}`;
+        setLocalProgramToken(command);
+        setLocalProgramSecret(data.token);
+        setShowLocalProgramSecret(false);
+        await navigator.clipboard?.writeText(command).catch(() => undefined);
+        toast.success('로컬 프로그램 연결 정보가 생성되어 복사되었습니다.');
+      } else {
+        setLocalProgramToken(`백엔드 주소: ${data.backendUrl}\n토큰: ${data.tokenMasked || '이미 발급됨'}`);
+        setLocalProgramSecret('');
+        setShowLocalProgramSecret(false);
+        toast.info('이미 발급된 로컬 프로그램 토큰이 있습니다. 토큰을 잃어버렸다면 재발급해 주세요.');
+      }
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '로컬 프로그램 토큰을 만들지 못했습니다.');
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const rotateLocalProgramToken = async () => {
+    setBusyAction('local-program-rotate');
+    try {
+      const data = await jsonRequest<{ token: string; backendUrl: string }>('/api/automations/local-agents/rotate', 'POST', {
         name: localProgramName,
       });
       const command = `백엔드 주소: ${data.backendUrl}\n토큰: ${data.token}`;
       setLocalProgramToken(command);
+      setLocalProgramSecret(data.token);
+      setShowLocalProgramSecret(false);
       await navigator.clipboard?.writeText(command).catch(() => undefined);
-      toast.success('로컬 프로그램 연결 정보가 생성되어 복사되었습니다.');
+      toast.success('로컬 프로그램 토큰을 재발급하고 복사했습니다. 기존 토큰은 더 이상 사용할 수 없습니다.');
       await load();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : '로컬 프로그램 토큰을 만들지 못했습니다.');
+      toast.error(error instanceof Error ? error.message : '로컬 프로그램 토큰을 재발급하지 못했습니다.');
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const saveConnection = async (connection: AutomationConnection) => {
+    const draft = connectionDrafts[connection.id];
+    if (!draft) return;
+    setBusyAction(`connection-save:${connection.id}`);
+    try {
+      await jsonRequest('/api/automations/connections', 'POST', {
+        id: connection.id,
+        type: connection.type,
+        name: draft.name,
+        enabled: draft.enabled,
+        executionMode: connection.executionMode,
+        endpoint: draft.endpoint,
+        config: connection.config || {},
+        capabilities: connection.capabilities || {},
+        discoveryCache: connection.discoveryCache || {},
+      });
+      toast.success('연결 항목을 수정했습니다.');
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '연결 항목을 수정하지 못했습니다.');
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const removeConnection = async (connection: AutomationConnection) => {
+    if (!window.confirm(`${connection.name || '연결 항목'}을 삭제할까요?`)) return;
+    setBusyAction(`connection-delete:${connection.id}`);
+    try {
+      const response = await fetch(apiUrl(`/api/automations/connections/${encodeURIComponent(connection.id)}`), {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      if (!response.ok) throw new Error('delete_failed');
+      toast.success('연결 항목을 삭제했습니다.');
+      await load();
+    } catch {
+      toast.error('연결 항목을 삭제하지 못했습니다.');
     } finally {
       setBusyAction(null);
     }
@@ -401,14 +508,14 @@ export function AutomationsPage() {
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <Badge tone="mint">방송 자동화</Badge>
-              <Badge tone="sky">Postgres Queue</Badge>
+              <Badge tone="sky">Queue</Badge>
               <Badge tone="lemon">Local Secret</Badge>
             </div>
             <h1 className="mt-4 max-w-3xl break-keep text-3xl font-semibold leading-tight md:text-5xl">
               방송 도구를 한 번의 액션으로 자연스럽게 이어주세요.
             </h1>
             <p className="mt-4 max-w-2xl text-sm leading-7 text-muted-foreground md:text-base">
-              T.I.T.S., 투네이션 후원 알림, TTS, 사운드, Stream Deck과 Touch Portal 제어를 아루봇 자동화 흐름으로 연결합니다.
+              T.I.T.S., 투네이션 알림, TTS, 사운드, Stream Deck과 Touch Portal 제어를 아루봇 자동화 흐름으로 연결합니다.
             </p>
           </div>
           <Card className="bg-card/75">
@@ -438,8 +545,8 @@ export function AutomationsPage() {
       <section className="grid gap-4 xl:grid-cols-2">
         <SegmentedButton
           active={mode === 'oracle_direct'}
-          title="오라클 직접 연동 모드"
-          description="Oracle 백엔드가 접근 가능한 HTTPS/WebSocket/UDP 대상에 직접 요청합니다. 공개 API와 서버형 Webhook에 적합합니다."
+          title="서버 직접 연동 모드"
+          description="아루봇 서버가 접근 가능한 HTTPS/WebSocket/UDP 대상에 직접 요청합니다. 공개 API와 서버형 Webhook에 적합합니다."
           icon={RadioTower}
           onClick={() => setMode('oracle_direct')}
         />
@@ -480,7 +587,7 @@ export function AutomationsPage() {
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <div className="text-sm font-bold">로컬 프로그램 연결</div>
-                  <div className="mt-1 text-xs text-muted-foreground">GUI 프로그램에 입력할 백엔드 주소와 1회용 토큰을 발급합니다.</div>
+                  <div className="mt-1 text-xs text-muted-foreground">GUI 프로그램에 입력할 백엔드 주소와 유저별 고정 토큰을 관리합니다. 토큰은 기본적으로 숨겨집니다.</div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <LinkButton href="/downloads/local-program" variant="outline" size="sm">
@@ -496,13 +603,30 @@ export function AutomationsPage() {
                 <Input value={localProgramName} onChange={(event) => setLocalProgramName(event.target.value)} placeholder="방송 PC" />
                 <Button type="button" variant="outline" onClick={createLocalProgramToken} disabled={busyAction === 'local-program'}>
                   {busyAction === 'local-program' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Copy className="h-4 w-4" />}
-                  토큰 발급
+                  토큰 확인
+                </Button>
+                <Button type="button" variant="destructive" onClick={rotateLocalProgramToken} disabled={busyAction === 'local-program-rotate'}>
+                  {busyAction === 'local-program-rotate' ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                  재발급
                 </Button>
               </div>
               {localProgramToken ? (
-                <code className="block whitespace-pre-wrap rounded-[var(--radius-control)] bg-muted p-3 text-xs leading-5 text-muted-foreground">
-                  {localProgramToken}
-                </code>
+                <div className="grid gap-2 rounded-[var(--radius-control)] bg-muted p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold text-muted-foreground">연결 정보</span>
+                    {localProgramSecret ? (
+                      <Button type="button" variant="ghost" size="sm" onClick={() => setShowLocalProgramSecret((value) => !value)}>
+                        {showLocalProgramSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        {showLocalProgramSecret ? '숨기기' : '보기'}
+                      </Button>
+                    ) : null}
+                  </div>
+                  <code className="block whitespace-pre-wrap text-xs leading-5 text-muted-foreground">
+                    {localProgramSecret && !showLocalProgramSecret
+                      ? localProgramToken.replace(localProgramSecret, 'alp_••••••••••••••••••••••••••••••••')
+                      : localProgramToken}
+                  </code>
+                </div>
               ) : null}
               <div className="grid gap-2">
                 {(overview?.localAgents || []).map((agent) => (
@@ -544,7 +668,7 @@ export function AutomationsPage() {
               <Sparkles className="h-5 w-5 text-primary" />
               투네이션과 TTS
             </CardTitle>
-            <CardDescription>투네이션 Alertbox 키는 이 브라우저나 로컬 프로그램에만 저장합니다.</CardDescription>
+            <CardDescription>투네이션 Alertbox 키는 이 브라우저나 로컬 프로그램에만 저장합니다. TTS는 채팅 이벤트 안내용으로 사용합니다.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-4">
             <label className="grid gap-2 text-sm font-semibold">
@@ -559,7 +683,7 @@ export function AutomationsPage() {
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <div className="text-sm font-bold">TTS</div>
-                  <div className="mt-1 text-xs text-muted-foreground">후원, 룰렛, 예측 결과를 음성으로 읽어줍니다.</div>
+                  <div className="mt-1 text-xs text-muted-foreground">채팅 이벤트, 룰렛, 예측 결과를 음성으로 읽어줍니다.</div>
                 </div>
                 <button
                   type="button"
@@ -672,45 +796,57 @@ export function AutomationsPage() {
               </div>
             ) : null}
             <div className="grid gap-2">
-              {connections.filter((item) => item.type === 'stream_deck_touch_portal').map((item) => (
-                <div key={item.id} className="flex items-center justify-between rounded-[var(--radius-control)] border bg-background/70 p-3">
-                  <span className="text-sm font-semibold">{item.name}</span>
-                  <Badge tone="sky">HTTP 버튼</Badge>
+              {connections.map((item) => (
+                <div key={item.id} className="grid gap-3 rounded-[var(--radius-control)] border bg-background/70 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge tone="sky">{connectionTypeLabel(item.type)}</Badge>
+                      <Badge tone={item.executionMode === 'local_program' ? 'mint' : 'lemon'}>{item.executionMode === 'local_program' ? '로컬 프로그램' : '직접 실행'}</Badge>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <Button type="button" variant="ghost" size="icon" onClick={() => saveConnection(item)} aria-label="연결 저장">
+                        {busyAction === `connection-save:${item.id}` ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                      </Button>
+                      <Button type="button" variant="ghost" size="icon" onClick={() => removeConnection(item)} aria-label="연결 삭제">
+                        {busyAction === `connection-delete:${item.id}` ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                      </Button>
+                    </div>
+                  </div>
+                  <Input
+                    value={connectionDrafts[item.id]?.name ?? item.name}
+                    onChange={(event) => setConnectionDrafts((current) => ({
+                      ...current,
+                      [item.id]: { name: event.target.value, endpoint: current[item.id]?.endpoint ?? item.endpoint ?? '', enabled: current[item.id]?.enabled ?? item.enabled },
+                    }))}
+                    aria-label="연결 이름"
+                  />
+                  <Input
+                    value={connectionDrafts[item.id]?.endpoint ?? item.endpoint ?? ''}
+                    onChange={(event) => setConnectionDrafts((current) => ({
+                      ...current,
+                      [item.id]: { name: current[item.id]?.name ?? item.name, endpoint: event.target.value, enabled: current[item.id]?.enabled ?? item.enabled },
+                    }))}
+                    aria-label="연결 엔드포인트"
+                  />
+                  <button
+                    type="button"
+                    className={cn('w-fit rounded-full border px-3 py-1 text-xs font-bold transition', (connectionDrafts[item.id]?.enabled ?? item.enabled) ? 'bg-pastel-mint text-teal-900' : 'bg-muted text-muted-foreground')}
+                    onClick={() => setConnectionDrafts((current) => ({
+                      ...current,
+                      [item.id]: { name: current[item.id]?.name ?? item.name, endpoint: current[item.id]?.endpoint ?? item.endpoint ?? '', enabled: !(current[item.id]?.enabled ?? item.enabled) },
+                    }))}
+                  >
+                    {(connectionDrafts[item.id]?.enabled ?? item.enabled) ? '사용 중' : '꺼짐'}
+                  </button>
                 </div>
               ))}
+              {!connections.length ? (
+                <div className="rounded-[var(--radius-control)] border bg-background/70 p-4 text-sm text-muted-foreground">아직 생성한 자동화 연결이 없습니다.</div>
+              ) : null}
             </div>
           </CardContent>
         </Card>
       </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Bot className="h-5 w-5 text-primary" />
-            지원 정책
-          </CardTitle>
-          <CardDescription>SOOP, SSAPI, Twip은 현재 제품 범위에서 제외했습니다. Toonation, T.I.T.S., TTS, 제어 버튼은 실제 사용 흐름에 맞춰 제공합니다.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-3 md:grid-cols-3">
-            <div className="rounded-[var(--radius-card)] border bg-background/70 p-4">
-              <Headphones className="mb-3 h-5 w-5 text-primary" />
-              <div className="text-sm font-bold">음성 안내</div>
-              <p className="mt-2 text-xs leading-5 text-muted-foreground">브라우저 TTS와 로컬 TTS를 나눠 후원 메시지와 방송 이벤트를 읽어줍니다.</p>
-            </div>
-            <div className="rounded-[var(--radius-card)] border bg-background/70 p-4">
-              <Database className="mb-3 h-5 w-5 text-primary" />
-              <div className="text-sm font-bold">저비용 큐</div>
-              <p className="mt-2 text-xs leading-5 text-muted-foreground">추가 Redis 비용 없이 Postgres 큐로 로컬 프로그램 실행 요청을 보관합니다.</p>
-            </div>
-            <div className="rounded-[var(--radius-card)] border bg-background/70 p-4">
-              <ShieldCheck className="mb-3 h-5 w-5 text-primary" />
-              <div className="text-sm font-bold">민감정보 보호</div>
-              <p className="mt-2 text-xs leading-5 text-muted-foreground">후원 알림 키와 로컬 토큰은 사용자의 브라우저나 로컬 프로그램에서 관리합니다.</p>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
 
       {loading ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-background/45 backdrop-blur-sm">

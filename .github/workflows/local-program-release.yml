@@ -67,7 +67,9 @@ jobs:
         shell: bash
         run: |
           test -f "dist/local-program/AruBot-Local-Program-${LOCAL_PROGRAM_VERSION}-x64.exe"
+          test -f "dist/local-program/AruBot-Local-Program-${LOCAL_PROGRAM_VERSION}-x64.exe.blockmap"
           test -f "dist/local-program/latest.json"
+          test -f "dist/local-program/latest.yml"
           test -f "dist/local-program/RELEASE_NOTES.md"
 
       - name: Publish GitHub release
@@ -78,7 +80,9 @@ jobs:
           body_path: dist/local-program/RELEASE_NOTES.md
           files: |
             dist/local-program/AruBot-Local-Program-${{ env.LOCAL_PROGRAM_VERSION }}-x64.exe
+            dist/local-program/AruBot-Local-Program-${{ env.LOCAL_PROGRAM_VERSION }}-x64.exe.blockmap
             dist/local-program/latest.json
+            dist/local-program/latest.yml
           fail_on_unmatched_files: true
           overwrite_files: true
           make_latest: true

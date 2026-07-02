@@ -63,11 +63,13 @@ const notes = [
   '## 포함된 파일',
   '',
   `- \`AruBot-Local-Program-${localProgramVersion}-x64.exe\``,
+  `- \`AruBot-Local-Program-${localProgramVersion}-x64.exe.blockmap\``,
+  '- `latest.yml`',
   '- `latest.json`',
   '',
   '## 업데이트 방식',
   '',
-  '`latest.json`에는 이 릴리스의 설치 파일 URL, 버전, SHA-256, 파일 크기가 포함됩니다. 로컬 프로그램은 이 manifest를 읽고 설치 파일을 내려받은 뒤 해시를 검증합니다.',
+  '`latest.json`에는 다운로드 페이지와 수동 fallback용 정보가 들어 있고, `latest.yml`과 blockmap은 프로그램 내부 자동 업데이트에 사용됩니다.',
   '',
 ].join('\n');
 
