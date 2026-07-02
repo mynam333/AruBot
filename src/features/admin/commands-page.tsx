@@ -231,7 +231,7 @@ export function CommandsPage() {
                 <Badge tone="mint">{rules.length}개</Badge>
               </div>
               <CardTitle>시청자가 바로 쓰는 명령어</CardTitle>
-              <CardDescription>채팅 키워드, 답변, 포인트 차감, 쿨다운을 한곳에서 관리합니다.</CardDescription>
+              <CardDescription>자주 묻는 안내부터 포인트 참여까지, 채팅 한 줄로 바로 반응하게 만들어요.</CardDescription>
             </div>
             <div className="flex flex-wrap gap-2">
               <CommandCreateDialog />
@@ -263,7 +263,7 @@ export function CommandsPage() {
                 <Badge tone="lemon">{Number(attendancePoints || 0).toLocaleString('ko-KR')}P 지급</Badge>
               </div>
               <p className="mt-2 max-w-3xl break-keep text-sm leading-6 text-muted-foreground">
-                방송 중 첫 채팅을 출석으로 기록하고, 원하는 안내 메시지와 출석 포인트를 함께 적용합니다.
+                첫 인사를 놓치지 않고 반갑게 맞이하고, 꾸준히 찾아오는 시청자에게 포인트로 작은 즐거움을 더해요.
               </p>
             </div>
           </div>
@@ -277,7 +277,7 @@ export function CommandsPage() {
       <div className="grid gap-3">
         {visibleRules.map((rule) => (
           <Card key={rule.id} className="overflow-hidden">
-            <CardContent className="grid gap-4 p-[clamp(1rem,2vw,1.35rem)] lg:grid-cols-[1.1fr_1.5fr_auto] lg:items-center">
+            <CardContent className="grid gap-4 p-[clamp(1rem,2vw,1.35rem)] lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1.5fr)_minmax(var(--control-height),0.42fr)] lg:items-center">
               <div className="min-w-0">
                 <div className="flex max-w-full items-center gap-2 overflow-x-auto pb-1">
                   <Badge tone={rule.enabled === false ? 'neutral' : 'mint'}>{rule.enabled === false ? '꺼짐' : '사용 중'}</Badge>
@@ -286,7 +286,7 @@ export function CommandsPage() {
                 <div className="mt-2 truncate text-base font-bold">{rule.name || rule.keywords?.[0] || '이름 없는 명령어'}</div>
                 <div className="mt-1 text-xs text-muted-foreground">포인트 {Number(rule.pointsCost || 0).toLocaleString('ko-KR')} · 쿨다운 {Math.round((rule.cooldown || 0) / 1000)}초</div>
               </div>
-              <div className="min-w-0 max-w-full overflow-x-auto rounded-[var(--radius-control)] bg-background/45 p-3">
+              <div className="min-w-0 max-w-full overflow-x-auto rounded-[var(--radius-control)] bg-background/45 p-[clamp(0.75rem,1.4vw,1rem)]">
                 <p className="w-max max-w-[42rem] whitespace-pre-wrap break-words text-sm leading-6 text-muted-foreground">{rule.responses?.join('\n') || '응답 문구가 없습니다.'}</p>
               </div>
               <div className="flex flex-wrap justify-end gap-2">
@@ -317,8 +317,8 @@ export function CommandsPage() {
           <div className="grid max-h-[min(92svh,48rem)] w-full max-w-2xl gap-5 overflow-y-auto rounded-[var(--radius-panel)] border bg-card p-[clamp(1rem,2.4vw,1.5rem)] shadow-lift">
             <div>
               <Badge tone="sky">명령어 수정</Badge>
-              <h2 className="mt-3 text-xl font-bold">명령어 내용을 바꿉니다.</h2>
-              <p className="mt-2 text-sm text-muted-foreground">저장하면 방송 채팅에서 바로 새 설정이 적용됩니다.</p>
+              <h2 className="mt-3 text-xl font-bold">채팅 반응을 다듬어요.</h2>
+              <p className="mt-2 text-sm text-muted-foreground">다음 입력부터 시청자에게 새 답변이 자연스럽게 나갑니다.</p>
             </div>
             <div className="grid gap-4 md:grid-cols-2">
               <label className="grid gap-2 text-sm font-semibold">
@@ -335,10 +335,10 @@ export function CommandsPage() {
               <textarea
                 value={form.response}
                 onChange={(event) => setForm({ ...form, response: event.target.value })}
-                className="min-h-[clamp(7rem,18svh,11rem)] w-full resize-y rounded-[var(--radius-control)] border bg-background/80 px-4 py-3 text-sm leading-7 outline-none focus:border-primary/45 focus:ring-2 focus:ring-ring"
+                className="box-border min-h-[clamp(7rem,18svh,11rem)] w-full min-w-0 max-w-full resize-y rounded-[var(--radius-control)] border bg-background/80 px-[clamp(0.85rem,1.6vw,1.1rem)] py-[clamp(0.85rem,1.6vw,1.1rem)] text-sm leading-7 outline-none focus:border-primary/45 focus:ring-2 focus:ring-ring"
               />
             </label>
-            <div className="grid gap-4 md:grid-cols-[1fr_1fr_auto] md:items-end">
+            <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(var(--control-height),0.42fr)] md:items-end">
               <label className="grid gap-2 text-sm font-semibold">
                 사용 포인트
                 <Input value={form.pointsCost} onChange={(event) => setForm({ ...form, pointsCost: event.target.value })} inputMode="numeric" />
@@ -378,7 +378,7 @@ export function CommandsPage() {
               </Button>
             </div>
             <div className="grid min-h-0 gap-4 overflow-y-auto p-[clamp(1rem,2.4vw,1.5rem)]">
-              <div className="grid gap-4 md:grid-cols-[1fr_auto] md:items-end">
+              <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(var(--control-height),0.42fr)] md:items-end">
                 <label className="grid gap-2 text-sm font-semibold">
                   출석 포인트
                   <Input value={attendancePoints} onChange={(event) => setAttendancePoints(event.target.value)} inputMode="numeric" />
@@ -392,7 +392,7 @@ export function CommandsPage() {
                 <textarea
                   value={attendanceMessage}
                   onChange={(event) => setAttendanceMessage(event.target.value)}
-                  className="min-h-[clamp(8rem,20svh,12rem)] w-full resize-y rounded-[var(--radius-control)] border bg-background/80 px-4 py-3 text-sm leading-7 outline-none focus:border-primary/45 focus:ring-2 focus:ring-ring"
+                  className="box-border min-h-[clamp(8rem,20svh,12rem)] w-full min-w-0 max-w-full resize-y rounded-[var(--radius-control)] border bg-background/80 px-[clamp(0.85rem,1.6vw,1.1rem)] py-[clamp(0.85rem,1.6vw,1.1rem)] text-sm leading-7 outline-none focus:border-primary/45 focus:ring-2 focus:ring-ring"
                 />
               </label>
               <div className="rounded-[var(--radius-control)] border bg-background/70 p-3 text-sm leading-6 text-muted-foreground">

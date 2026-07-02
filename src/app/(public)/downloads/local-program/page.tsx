@@ -68,11 +68,11 @@ export default async function LocalProgramDownloadPage() {
           <div className="animate-fade-up">
             <Badge tone="mint">방송 PC 자동화 프로그램</Badge>
             <h1 className="mt-5 max-w-4xl break-keep text-[clamp(2.4rem,6.4vw,5.4rem)] font-semibold leading-[1.03] tracking-normal">
-              OBS와 로컬 방송 도구를 아루봇에 연결하세요.
+              방송 PC 연출을 아루봇 버튼처럼 실행하세요.
             </h1>
             <p className="mt-6 max-w-2xl break-keep text-base leading-8 text-muted-foreground md:text-lg">
-              AruBot Local Program은 방송 PC에서 T.I.T.S., Toonation, TTS, 사운드 파일, 제어 버튼을 실행합니다.
-              민감한 키와 대용량 파일은 내 컴퓨터에 두고, 웹 콘솔에서는 필요한 액션만 편하게 보낼 수 있습니다.
+              AruBot Local Program은 T.I.T.S., 후원 알림, TTS, 사운드 효과를 방송 PC에서 바로 실행합니다.
+              채팅과 후원 순간에 맞춰 로컬 연출이 반응하니 방송 흐름이 더 자연스러워집니다.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               {manifest ? (
@@ -117,9 +117,9 @@ export default async function LocalProgramDownloadPage() {
             </div>
             <div className="mt-5 grid gap-3">
               {[
-                { icon: RefreshCw, title: '프로그램 안에서 업데이트 확인', body: '새 버전이 있으면 버튼으로 설치 파일을 받아 실행합니다.' },
-                { icon: ShieldCheck, title: '로컬 보관', body: '토큰과 후원 알림 키는 방송 PC 사용자 데이터 영역에 저장됩니다.' },
-                { icon: CheckCircle2, title: '방송 도구 실행', body: 'TTS, 사운드, T.I.T.S. 작업을 웹 콘솔 액션과 연결합니다.' },
+                { icon: RefreshCw, title: '방송 전 빠른 업데이트', body: '새 버전이 있으면 프로그램 안에서 바로 받아 준비할 수 있습니다.' },
+                { icon: ShieldCheck, title: '방송 PC 중심 실행', body: '후원 알림과 사운드 효과가 내 방송 PC에서 즉시 반응합니다.' },
+                { icon: CheckCircle2, title: '연출 버튼처럼 사용', body: 'TTS, 사운드, T.I.T.S.를 방송 액션에 연결해 한 번에 실행합니다.' },
               ].map((item) => {
                 const Icon = item.icon;
                 return (

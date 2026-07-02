@@ -97,7 +97,7 @@ export function ResourceDashboard({
           </div>
         </CardHeader>
         <CardContent>
-          <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-center">
+          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,0.32fr)] md:items-center">
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input

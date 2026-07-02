@@ -23,15 +23,15 @@
           </button>
           <button class="nav-item" type="button" data-page="remote">
             <span>리모컨</span>
-            <small>웹 기능 빠른 제어</small>
+            <small>방송 중 빠른 실행</small>
           </button>
           <button class="nav-item" type="button" data-page="tits">
             <span>T.I.T.S.</span>
             <small>아이템과 트리거</small>
           </button>
-          <button class="nav-item" type="button" data-page="toonation">
-            <span>Toonation</span>
-            <small>후원 알림 키</small>
+          <button class="nav-item" type="button" data-page="vtube">
+            <span>VTube Studio</span>
+            <small>모델 핫키와 표정</small>
           </button>
           <button class="nav-item" type="button" data-page="sound">
             <span>사운드</span>
@@ -46,17 +46,13 @@
             <small>최근 작업 로그</small>
           </button>
         </nav>
-        <div class="side-card">
-          <span class="chip mint">Local Vault</span>
-          <p>토큰과 후원 알림 키는 이 컴퓨터의 사용자 데이터 영역에 저장됩니다.</p>
-        </div>
       </aside>
 
       <main class="main">
         <header class="topbar">
           <div>
             <h1 id="pageTitle">방송 도구를 안전하게 연결하세요.</h1>
-            <p id="pageDescription">아루봇 백엔드의 큐를 받아 방송 PC의 T.I.T.S., Toonation, TTS, 사운드 폴더와 로컬 자동화 작업을 실행합니다.</p>
+            <p id="pageDescription">아루봇과 실시간으로 연결해 방송 PC의 T.I.T.S., VTube Studio, TTS, 사운드 효과를 바로 실행합니다.</p>
           </div>
           <div class="status-card" id="statusCard">
             <span class="status-dot"></span>
@@ -88,7 +84,7 @@
           <div class="panel-head">
             <div>
               <span class="chip sky">연결 설정</span>
-              <h2>백엔드와 로컬 프로그램 연결</h2>
+              <h2>아루봇과 로컬 프로그램 연결</h2>
             </div>
             <div class="actions">
               <button class="button secondary" id="stopButton">중지</button>
@@ -97,20 +93,8 @@
           </div>
           <div class="form-grid">
             <label>
-              백엔드 주소
-              <input id="backendUrl" placeholder="https://api.example.com" />
-            </label>
-            <label>
-              업데이트 정보 주소
-              <input id="updateManifestUrl" placeholder="https://arubot.vercel.app/downloads/local-program/latest.json" />
-            </label>
-            <label>
               로컬 프로그램 토큰
               <input id="token" type="password" placeholder="웹 대시보드에서 발급한 토큰" />
-            </label>
-            <label>
-              폴링 간격(ms)
-              <input id="pollIntervalMs" inputmode="numeric" placeholder="1800" />
             </label>
             <label class="check-row">
               <input id="autoStart" type="checkbox" />
@@ -124,11 +108,11 @@
         </article>
         <aside class="panel support-panel">
           <span class="chip mint">시작 순서</span>
-          <h2>웹 콘솔에서 토큰을 발급한 뒤 연결하세요.</h2>
+            <h2>방송 PC를 한 번만 연결해두세요.</h2>
           <div class="step-list">
-            <div><strong>1</strong><span>아루봇 웹의 방송 자동화 페이지에서 로컬 프로그램 토큰을 발급합니다.</span></div>
-            <div><strong>2</strong><span>백엔드 주소와 토큰을 붙여넣고 설정을 저장합니다.</span></div>
-            <div><strong>3</strong><span>시작 버튼을 누르면 방송 PC가 자동화 큐를 처리합니다.</span></div>
+            <div><strong>1</strong><span>아루봇 웹에서 방송 PC 연결 토큰을 만듭니다.</span></div>
+            <div><strong>2</strong><span>토큰을 붙여넣고 내 방송 도구를 준비합니다.</span></div>
+            <div><strong>3</strong><span>시작하면 채팅과 후원 순간에 맞춰 로컬 연출이 실행됩니다.</span></div>
           </div>
         </aside>
           </div>
@@ -167,7 +151,7 @@
             </article>
             <aside class="panel support-panel">
               <span class="chip sky">룰렛 · 영상후원</span>
-              <h2>테스트와 재생 제어를 로컬에서 처리합니다.</h2>
+          <h2>방송 중 필요한 테스트와 재생을 바로 누릅니다.</h2>
               <div class="remote-section">
                 <h3>룰렛 테스트</h3>
                 <select id="remoteRouletteSelect"></select>
@@ -198,7 +182,7 @@
                 <span class="chip coral">T.I.T.S.</span>
                 <h2>아이템과 트리거</h2>
               </div>
-              <button class="button secondary" id="discoverTitsButton">목록 동기화</button>
+              <button class="button secondary" id="discoverTitsButton">목록 불러오기</button>
             </div>
             <label>
               WebSocket 주소
@@ -216,9 +200,9 @@
             </div>
           </article>
           <aside class="panel support-panel coral-soft">
-            <span class="chip coral">자동 동기화 준비</span>
-            <h2>방송 PC의 T.I.T.S. API를 켠 뒤 목록을 불러오세요.</h2>
-            <p class="hint">동기화된 아이템과 트리거는 웹 자동화 액션 빌더에서 드롭다운으로 선택할 수 있습니다.</p>
+              <span class="chip coral">아이템 불러오기</span>
+            <h2>T.I.T.S. 아이템과 트리거를 방송에서 바로 고르세요.</h2>
+            <p class="hint">목록을 불러오면 웹에서 연출을 만들 때 원하는 아이템과 트리거를 바로 선택할 수 있습니다.</p>
             <div class="mini-list vertical">
               <div><strong>42069</strong><span>기본 WebSocket 포트</span></div>
               <div><strong>로컬</strong><span>민감한 방송 PC 도구는 이 앱에서 실행</span></div>
@@ -227,26 +211,42 @@
           </div>
         </section>
 
-        <section class="page" id="page-toonation" data-page="toonation">
+        <section class="page" id="page-vtube" data-page="vtube">
           <div class="page-grid tool-grid">
-          <article class="panel feature-panel" id="toonation">
+          <article class="panel feature-panel" id="vtube">
             <div class="panel-head compact">
               <div>
-                <span class="chip lemon">Toonation</span>
-                <h2>후원 알림 키</h2>
+                <span class="chip lemon">VTube Studio</span>
+                <h2>모델 반응과 핫키</h2>
               </div>
-              <span class="chip muted" id="toonationState">미설정</span>
+              <span class="chip muted" id="vtubeState">미인증</span>
             </div>
             <label>
-              Alertbox 키
-              <input id="toonationAlertboxKey" type="password" placeholder="toon.at/widget/alertbox/ 뒤의 키" />
+              WebSocket 주소
+              <input id="vtubeEndpoint" placeholder="ws://localhost:8001" />
             </label>
-            <p class="hint">키는 서버로 보내지 않고 이 컴퓨터에만 저장됩니다.</p>
+            <div class="actions">
+              <button class="button secondary" id="authenticateVtubeButton">인증 요청</button>
+              <button class="button primary" id="discoverVtubeButton">목록 동기화</button>
+            </div>
+            <div class="mini-list">
+              <div><strong id="vtubeModelCount">0</strong><span>모델</span></div>
+              <div><strong id="vtubeHotkeyCount">0</strong><span>핫키</span></div>
+            </div>
+            <div class="remote-section">
+              <h3>핫키 테스트</h3>
+              <select id="vtubeHotkeySelect"></select>
+              <button class="button secondary" id="triggerVtubeHotkeyButton">선택한 핫키 실행</button>
+            </div>
           </article>
           <aside class="panel support-panel lemon-soft">
-            <span class="chip lemon">Local Vault</span>
-            <h2>후원 알림 키는 방송 PC에만 보관합니다.</h2>
-            <p class="hint">웹 콘솔에는 민감한 키를 저장하지 않고, 로컬 프로그램이 큐 작업을 받을 때 필요한 작업만 실행합니다.</p>
+            <span class="chip lemon">방송 PC 전용</span>
+            <h2>표정, 모델 전환, 아이템 반응을 채팅과 연결하세요.</h2>
+            <p class="hint">VTube Studio 설정에서 Plugin API access를 켠 뒤 인증을 허용하면, 아루봇이 핫키 목록을 불러와 자동화 액션에서 사용할 수 있습니다.</p>
+            <div class="mini-list vertical">
+              <div><strong>8001</strong><span>VTube Studio 기본 WebSocket 포트</span></div>
+              <div><strong>승인</strong><span>첫 연결 시 VTube Studio 화면에서 한 번 허용</span></div>
+            </div>
           </aside>
           </div>
         </section>
@@ -300,9 +300,9 @@
           <p class="hint" id="updateStatusText">새 버전이 있으면 프로그램 안에서 다운로드하고 재시작하며 설치합니다. 자동 업데이트를 사용할 수 없는 환경에서는 설치 파일 실행 방식으로 전환합니다.</p>
         </article>
         <aside class="panel support-panel sky-soft">
-          <span class="chip sky">GitHub Releases</span>
-          <h2>최신 manifest와 설치 정보를 확인합니다.</h2>
-          <p class="hint">업데이트 버튼은 GitHub Release의 최신 manifest를 확인하고, 가능한 경우 앱 내부에서 업데이트를 내려받아 재시작 설치합니다.</p>
+          <span class="chip sky">자동 업데이트</span>
+          <h2>방송 전에 최신 버전만 가볍게 확인하세요.</h2>
+          <p class="hint">새 버전이 있으면 프로그램 안에서 바로 받아 설치할 수 있습니다.</p>
         </aside>
           </div>
         </section>

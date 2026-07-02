@@ -45,7 +45,7 @@ const providerConfigs = [
     iconPath: '/brands/chzzk.svg',
     revokePath: '/api/auth/chzzk/revoke',
     color: 'mint',
-    description: '채팅 명령어, 포인트, 룰렛, 영상 후원 기능을 CHZZK 채널과 연결합니다.',
+    description: 'CHZZK 시청자가 채팅 명령어, 포인트, 룰렛에 자연스럽게 참여하게 합니다.',
   },
   {
     id: 'cime' as const,
@@ -54,7 +54,7 @@ const providerConfigs = [
     iconPath: '/brands/cime.svg',
     revokePath: '/api/auth/cime/revoke',
     color: 'sky',
-    description: 'CIME 채팅과 후원 흐름을 같은 AruBot 계정으로 동기화합니다.',
+    description: 'CIME 시청자도 같은 방송 경험 안에서 채팅과 후원을 이어가게 합니다.',
   },
 ] as const;
 
@@ -184,10 +184,10 @@ export function ConnectionPage() {
       if (failedCount) {
         toast.warning(`프로필 일부를 가져오지 못했습니다. 연결은 유지됩니다.`);
       } else {
-        toast.success('플랫폼 프로필을 최신 정보로 동기화했습니다.');
+        toast.success('플랫폼 프로필을 최신 정보로 가져왔습니다.');
       }
     } catch {
-      toast.error('프로필 동기화에 실패했습니다.');
+      toast.error('프로필 정보를 새로 가져오지 못했습니다.');
     } finally {
       setSyncingProvider(null);
     }
@@ -202,19 +202,19 @@ export function ConnectionPage() {
           <div>
             <Badge tone="mint">계정 연결</Badge>
             <h1 className="mt-4 max-w-3xl break-keep text-3xl font-semibold leading-tight md:text-5xl">
-              원하는 플랫폼으로 시작하고 하나의 계정으로 관리하세요.
+              어느 플랫폼에서 와도 같은 방송 경험으로.
             </h1>
             <p className="mt-4 max-w-2xl text-sm leading-7 text-muted-foreground md:text-base">
-              CHZZK와 CIME 중 원하는 플랫폼으로 로그인한 뒤, 다른 플랫폼을 추가 연결하면 채널 정보와 봇 설정을 같은 사용자 정보로 이어갑니다.
+              CHZZK와 CIME 시청자가 같은 명령어, 포인트, 이벤트 흐름으로 참여할 수 있게 채널을 이어주세요.
             </p>
           </div>
           <Card className="bg-card/75">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <ShieldCheck className="h-5 w-5 text-primary" />
-                연결 요약
+                참여 채널
               </CardTitle>
-              <CardDescription>현재 계정에 묶인 방송 채널입니다.</CardDescription>
+              <CardDescription>시청자가 AruBot으로 만날 수 있는 방송 채널입니다.</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="text-3xl font-semibold">{connectedCount}</div>
@@ -222,7 +222,7 @@ export function ConnectionPage() {
               {connectedCount ? (
                 <Button type="button" variant="outline" size="sm" className="mt-4 w-full" onClick={() => syncProfile()} disabled={syncingProvider === 'all'}>
                   <RefreshCw className={syncingProvider === 'all' ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
-                  전체 프로필 동기화
+                  최신 채널 정보 보기
                 </Button>
               ) : null}
             </CardContent>
@@ -305,7 +305,7 @@ export function ConnectionPage() {
                     );})
                   ) : (
                     <div className="rounded-[var(--radius-control)] border bg-background/75 p-[clamp(1rem,1.8vw,1.25rem)] text-sm leading-6 text-muted-foreground">
-                      아직 연결된 {config.label} 채널이 없습니다. 로그인하면 현재 계정에 플랫폼 정보가 연결됩니다.
+                      아직 연결된 {config.label} 채널이 없습니다. 로그인하면 이 플랫폼의 시청자도 같은 참여 흐름으로 들어올 수 있습니다.
                     </div>
                   )}
                 </div>
@@ -326,7 +326,7 @@ export function ConnectionPage() {
                   {connected ? (
                     <Button type="button" variant="outline" onClick={() => syncProfile(config.id)} disabled={syncingProvider === config.id}>
                       <RefreshCw className={syncingProvider === config.id ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
-                      프로필 동기화
+                      최신 정보 보기
                     </Button>
                   ) : null}
                 </div>
@@ -339,18 +339,18 @@ export function ConnectionPage() {
       <section className="rounded-[var(--radius-card)] border bg-card/85 p-[clamp(1.25rem,2.2vw,1.5rem)] shadow-subtle">
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
-            <h2 className="text-lg font-semibold">연결 후 바로 사용할 수 있는 기능</h2>
+            <h2 className="text-lg font-semibold">연결하면 참여가 바로 열립니다</h2>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              플랫폼이 연결되면 명령어, 포인트, 룰렛, 후원 반응, OBS 영상 후원을 채널 기준으로 관리할 수 있습니다.
+              시청자는 익숙한 플랫폼에서 들어오고, 방송에서는 명령어와 포인트, 룰렛, 후원 반응이 같은 흐름으로 움직입니다.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
             <Badge tone="sky">
               <Cable className="mr-1 h-3.5 w-3.5" />
-              플랫폼 동기화
+              플랫폼 참여
             </Badge>
-            <Badge tone="mint">채널별 설정</Badge>
-            <Badge tone="lemon">OBS 연동</Badge>
+            <Badge tone="mint">통합 포인트</Badge>
+            <Badge tone="lemon">방송 화면 참여</Badge>
           </div>
         </div>
       </section>

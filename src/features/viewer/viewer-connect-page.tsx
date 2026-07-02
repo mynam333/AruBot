@@ -47,7 +47,7 @@ const providers = [
     revokePath: '/api/auth/chzzk/revoke',
     iconPath: '/brands/chzzk.svg',
     tone: 'mint' as const,
-    description: 'CHZZK에서 쌓은 포인트와 방송 참여 기록을 AruBot 계정에 연결합니다.',
+    description: 'CHZZK에서 즐긴 채팅 참여와 포인트를 내 AruBot 시청 경험으로 이어갑니다.',
   },
   {
     id: 'cime' as const,
@@ -56,7 +56,7 @@ const providers = [
     revokePath: '/api/auth/cime/revoke',
     iconPath: '/brands/cime.svg',
     tone: 'sky' as const,
-    description: 'CIME 채팅과 후원 반응을 같은 시청자 계정으로 이어서 확인합니다.',
+    description: 'CIME에서 쌓은 참여 흔적도 같은 시청자 경험으로 자연스럽게 이어집니다.',
   },
 ] as const;
 
@@ -187,8 +187,8 @@ export function ViewerConnectPage() {
           <div className="mx-auto grid aspect-square w-[clamp(4rem,9vw,6rem)] place-items-center rounded-[var(--radius-panel)] bg-muted">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
           </div>
-          <h1 className="mt-6 text-2xl font-semibold">계정 연결 상태를 확인하는 중입니다</h1>
-          <p className="mt-3 text-sm leading-7 text-muted-foreground">연결된 CHZZK와 CIME 계정을 불러오고 있습니다.</p>
+          <h1 className="mt-6 text-2xl font-semibold">시청 경험을 불러오는 중입니다</h1>
+          <p className="mt-3 text-sm leading-7 text-muted-foreground">내가 연결한 플랫폼과 참여 기록을 준비하고 있어요.</p>
         </section>
       </ViewerShell>
     );
@@ -202,10 +202,10 @@ export function ViewerConnectPage() {
             <div>
               <Badge tone={platforms.length ? 'mint' : 'sky'}>{platforms.length ? '계정 연결됨' : '계정 연결'}</Badge>
               <h1 className="mt-5 max-w-4xl break-keep text-[clamp(2.15rem,5.5vw,4.5rem)] font-semibold leading-tight">
-                시청 계정을 연결하고 포인트를 하나로 모으세요.
+                어디서 보든 내 참여가 이어지게.
               </h1>
               <p className="mt-4 max-w-2xl break-keep text-sm leading-7 text-muted-foreground md:text-base">
-                처음 로그인한 플랫폼으로 AruBot 계정이 만들어지고, 추가 연결한 플랫폼은 같은 시청자 정보 아래에 묶입니다.
+                CHZZK와 CIME 중 어디에서 보더라도 같은 시청자로 포인트와 참여 경험을 이어가세요.
               </p>
               <div className="mt-6 flex flex-wrap gap-2">
                 {providers.map((provider) => {
@@ -226,9 +226,9 @@ export function ViewerConnectPage() {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <ShieldCheck className="h-5 w-5 text-primary" />
-                  연결 요약
+                  내 시청 계정
                 </CardTitle>
-                <CardDescription>현재 AruBot 계정에 연결된 시청 계정입니다.</CardDescription>
+                <CardDescription>연결할수록 참여할 수 있는 방송 경험이 넓어집니다.</CardDescription>
               </CardHeader>
               <CardContent className="grid gap-3">
                 <div className="text-[clamp(2.4rem,6vw,4rem)] font-semibold leading-none">{platforms.length}</div>
@@ -238,7 +238,7 @@ export function ViewerConnectPage() {
                 </div>
                 <Button type="button" variant="outline" className="mt-2 w-full justify-center bg-background/70" onClick={() => load(true)} disabled={refreshing}>
                   <RefreshCw className={cn('h-4 w-4', refreshing && 'animate-spin')} />
-                  연결 상태 새로고침
+                  최신 상태 보기
                 </Button>
                 <LinkButton href="/viewer/me" variant="soft" className="w-full justify-center">
                   <WalletCards className="h-4 w-4" />
@@ -304,7 +304,7 @@ export function ViewerConnectPage() {
                   })
                 ) : (
                   <div className="rounded-[var(--radius-control)] border bg-background/75 p-[clamp(1rem,1.8vw,1.25rem)] text-sm leading-6 text-muted-foreground">
-                    아직 연결된 {provider.label} 계정이 없습니다. 로그인하면 현재 AruBot 시청자 계정에 연결됩니다.
+                    아직 연결된 {provider.label} 계정이 없습니다. 로그인하면 이 플랫폼에서 쌓은 참여도 함께 볼 수 있습니다.
                   </div>
                 )}
                 <Button asChild variant={connected ? 'secondary' : 'default'} className="w-fit">
@@ -323,9 +323,9 @@ export function ViewerConnectPage() {
       <section className="mx-auto mt-5 max-w-7xl rounded-[var(--radius-card)] border bg-card/85 p-[clamp(1.25rem,2.2vw,1.5rem)] shadow-subtle">
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
-            <h2 className="text-lg font-semibold">연결하면 바로 이어지는 경험</h2>
+            <h2 className="text-lg font-semibold">한 번 연결하면 참여가 이어집니다</h2>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              방송별 포인트 확인, 공개 명령어 페이지 이동, 플랫폼별 참여 기록 합산을 한 계정에서 사용할 수 있습니다.
+              포인트를 확인하고, 방송별 명령어와 룰렛으로 바로 이동하며, 플랫폼이 달라도 같은 시청자로 참여할 수 있습니다.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">

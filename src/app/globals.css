@@ -373,7 +373,21 @@ nextjs-portal {
 
 .arubot-blueprint-flow .react-flow__minimap {
   border-radius: var(--radius-control);
+  background: hsl(var(--card) / 0.92) !important;
   overflow: hidden;
+}
+
+.arubot-blueprint-flow .react-flow__minimap svg {
+  background: hsl(var(--card) / 0.92) !important;
+}
+
+.arubot-blueprint-flow .react-flow__minimap-mask {
+  fill: hsl(var(--background) / 0.62);
+}
+
+.arubot-blueprint-flow .react-flow__minimap-node {
+  fill: hsl(var(--primary)) !important;
+  stroke: hsl(var(--border)) !important;
 }
 
 .arubot-blueprint-flow .react-flow__attribution {

@@ -106,7 +106,7 @@ export function MacroCreateDialog({
       <Dialog.Trigger
         type="button"
         className={cn(
-          'inline-flex min-h-[var(--control-height)] items-center justify-center gap-2 whitespace-nowrap rounded-[var(--radius-control)] px-[clamp(0.875rem,1.6vw,1.125rem)] text-sm font-semibold tracking-normal transition duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50',
+          'inline-flex min-h-[var(--control-height)] max-w-full min-w-0 items-center justify-center gap-2 whitespace-nowrap rounded-[var(--radius-control)] px-[clamp(0.875rem,1.6vw,1.125rem)] text-sm font-semibold tracking-normal transition duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50',
           triggerVariants[variant],
         )}
         data-testid="macro-create-trigger"
@@ -149,7 +149,7 @@ export function MacroCreateDialog({
           </div>
 
           <div className="arubot-modal-scroll grid min-h-0 gap-[clamp(1rem,2vw,1.35rem)] overflow-y-auto p-[clamp(1.25rem,3vw,2rem)]">
-            <label className="grid gap-[clamp(0.5rem,1vw,0.75rem)] text-sm font-semibold">
+            <label className="grid min-w-0 gap-[clamp(0.5rem,1vw,0.75rem)] text-sm font-semibold">
               알림 문구
               <div className="relative">
                 <MessageSquareText className="pointer-events-none absolute left-[clamp(0.75rem,1.4vw,1rem)] top-[clamp(0.875rem,1.6vw,1.125rem)] h-[1.1em] w-[1.1em] text-muted-foreground" />
@@ -157,14 +157,14 @@ export function MacroCreateDialog({
                   value={message}
                   onChange={(event) => setMessage(event.target.value.slice(0, 1000))}
                   placeholder="예: !투표로 예측에 참여하고 포인트를 확인해 보세요."
-                  className="min-h-[clamp(6.75rem,14svh,9.5rem)] w-full resize-y rounded-[var(--radius-control)] border bg-background/80 py-[clamp(0.85rem,1.6vw,1.1rem)] pl-[clamp(2.45rem,4vw,3rem)] pr-[clamp(0.85rem,1.6vw,1.1rem)] text-sm leading-7 outline-none transition placeholder:text-muted-foreground focus:border-primary/45 focus:ring-2 focus:ring-ring"
+                  className="box-border min-h-[clamp(6.75rem,14svh,9.5rem)] w-full min-w-0 max-w-full resize-y rounded-[var(--radius-control)] border bg-background/80 py-[clamp(0.85rem,1.6vw,1.1rem)] pl-[clamp(2.45rem,4vw,3rem)] pr-[clamp(0.85rem,1.6vw,1.1rem)] text-sm leading-7 outline-none transition placeholder:text-muted-foreground focus:border-primary/45 focus:ring-2 focus:ring-ring"
                 />
               </div>
               <span className="text-xs font-medium text-muted-foreground">{messageLength.toLocaleString('ko-KR')} / 1,000자</span>
             </label>
 
-            <div className="grid gap-[clamp(0.875rem,1.7vw,1.125rem)] md:grid-cols-[1fr_auto] md:items-end">
-              <label className="grid gap-[clamp(0.5rem,1vw,0.75rem)] text-sm font-semibold">
+            <div className="grid gap-[clamp(0.875rem,1.7vw,1.125rem)] md:grid-cols-[minmax(0,1fr)_minmax(0,0.72fr)] md:items-end">
+              <label className="grid min-w-0 gap-[clamp(0.5rem,1vw,0.75rem)] text-sm font-semibold">
                 반복 간격
                 <div className="relative">
                   <Timer className="pointer-events-none absolute left-[clamp(0.75rem,1.4vw,1rem)] top-1/2 h-[1.1em] w-[1.1em] -translate-y-1/2 text-muted-foreground" />

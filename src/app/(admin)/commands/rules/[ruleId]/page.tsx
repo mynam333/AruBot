@@ -8,7 +8,7 @@ export default async function Page({ params }: { params: Promise<{ ruleId: strin
       eyebrow="명령어 상세"
       config={{
         title: `규칙 ${ruleId}`,
-        description: '명령어 규칙의 응답, 포인트, 확률, 최근 사용 정보를 확인합니다.',
+        description: '이 명령어가 채팅에서 어떤 답변과 포인트 반응으로 이어지는지 살펴봅니다.',
         endpoint: '/api/bot/rules',
         icon: MessageSquare,
         actions: [

@@ -71,6 +71,16 @@ function prepareAppStage() {
       ws: packageJson.dependencies.ws,
     },
   }, null, 2)}\n`, 'utf8');
+  const runtimeEnv = {
+    ARUBOT_LOCAL_BACKEND_URL: process.env.ARUBOT_LOCAL_BACKEND_URL || process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_BACKEND_URL || '',
+    ARUBOT_LOCAL_DASHBOARD_URL: process.env.ARUBOT_LOCAL_DASHBOARD_URL || process.env.NEXT_PUBLIC_APP_URL || process.env.NEXT_PUBLIC_SITE_URL || '',
+    ARUBOT_LOCAL_UPDATE_MANIFEST_URL: process.env.ARUBOT_LOCAL_UPDATE_MANIFEST_URL || '',
+  };
+  fs.writeFileSync(
+    path.join(appStageDir, 'runtime-env.cjs'),
+    `module.exports = ${JSON.stringify(runtimeEnv, null, 2)};\n`,
+    'utf8',
+  );
   run('npm', ['install', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: appStageDir });
 }
 

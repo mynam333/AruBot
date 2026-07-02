@@ -1,13 +1,11 @@
 const $ = (selector) => document.querySelector(selector);
 
 const fields = {
-  backendUrl: $('#backendUrl'),
-  updateManifestUrl: $('#updateManifestUrl'),
   token: $('#token'),
-  pollIntervalMs: $('#pollIntervalMs'),
   autoStart: $('#autoStart'),
   titsEndpoint: $('#titsEndpoint'),
-  toonationAlertboxKey: $('#toonationAlertboxKey'),
+  vtubeEndpoint: $('#vtubeEndpoint'),
+  vtubeHotkeySelect: $('#vtubeHotkeySelect'),
   remoteCommandSelect: $('#remoteCommandSelect'),
   remoteCommandName: $('#remoteCommandName'),
   remoteCommandKeyword: $('#remoteCommandKeyword'),
@@ -21,19 +19,19 @@ const fields = {
 const pageMeta = {
   connect: {
     title: '방송 도구를 안전하게 연결하세요.',
-    description: '아루봇 백엔드의 큐를 받아 방송 PC의 T.I.T.S., Toonation, TTS, 사운드 폴더와 로컬 자동화 작업을 실행합니다.',
+    description: '아루봇과 실시간으로 연결해 방송 PC의 T.I.T.S., VTube Studio, TTS, 사운드 효과를 바로 실행합니다.',
   },
   remote: {
-    title: '방송 중 필요한 기능을 로컬에서 바로 제어하세요.',
-    description: '명령어 수정, 룰렛 테스트, 포인트 영상후원 제어를 웹 콘솔을 열지 않고 간단히 실행합니다.',
+    title: '방송 중 필요한 버튼을 가까이에 두세요.',
+    description: '명령어, 룰렛 테스트, 포인트 영상후원을 방송 PC에서 바로 누르고 흐름을 이어갑니다.',
   },
   tits: {
-    title: 'T.I.T.S. 아이템과 트리거를 동기화하세요.',
-    description: '방송 PC의 T.I.T.S. WebSocket API에서 아이템과 트리거 목록을 불러와 자동화 액션에서 바로 선택할 수 있게 합니다.',
+    title: 'T.I.T.S. 아이템과 트리거를 바로 불러오세요.',
+    description: 'T.I.T.S. 아이템과 트리거를 불러와 방송 중 원하는 연출을 바로 고를 수 있게 합니다.',
   },
-  toonation: {
-    title: 'Toonation 후원 알림을 로컬에서 안전하게 연결하세요.',
-    description: 'Alertbox 키는 이 컴퓨터에만 저장하고, 후원 알림 기반 자동화는 로컬 프로그램이 필요한 작업만 실행합니다.',
+  vtube: {
+    title: 'VTube Studio 모델 반응을 방송 흐름에 맞추세요.',
+    description: '표정, 모델 전환, 아이템 핫키를 불러와 채팅과 후원 순간에 자연스럽게 실행합니다.',
   },
   sound: {
     title: '사운드 파일은 방송 PC에서 빠르게 재생하세요.',
@@ -44,14 +42,15 @@ const pageMeta = {
     description: 'GitHub Releases의 최신 manifest를 확인하고, 가능한 환경에서는 프로그램 안에서 업데이트를 내려받아 설치합니다.',
   },
   logs: {
-    title: '최근 실행 기록을 확인하세요.',
-    description: '자동화 큐 처리, TTS, 사운드 재생, 업데이트 확인 등 로컬 프로그램에서 발생한 주요 작업을 보여줍니다.',
+    title: '방송 중 실행된 반응을 살펴보세요.',
+    description: 'TTS, 사운드, 룰렛 테스트처럼 방송 PC에서 실행된 최근 반응을 모아 보여줍니다.',
   },
 };
 
 let latestState = null;
 let latestUpdate = null;
 let remoteState = { rules: [], rouletteDefs: [], videoQueue: [] };
+let vtubeDiscovery = { models: [], hotkeys: [] };
 const localTaskLogs = [];
 
 function setActivePage(page) {
@@ -140,16 +139,13 @@ function renderState(state) {
     $('#updateStatusText').textContent = `업데이트 확인에 실패했습니다. ${update.error}`;
   }
   $('#encryptionState').textContent = state.encryptionAvailable ? 'OS 보호' : '기본 보호';
-  $('#toonationState').textContent = cfg.hasToonationKey ? '저장됨' : '미설정';
+  $('#vtubeState').textContent = cfg.hasVtubeAuthToken ? '인증됨' : '미인증';
   $('#soundFolderText').textContent = cfg.soundFolder || '선택된 폴더 없음';
 
-  fields.backendUrl.value = cfg.backendUrl || '';
-  fields.updateManifestUrl.value = cfg.updateManifestUrl || '';
   if (!fields.token.dataset.dirty) fields.token.placeholder = cfg.hasToken ? cfg.token : '웹 대시보드에서 발급한 토큰';
-  fields.pollIntervalMs.value = String(cfg.pollIntervalMs || 1800);
   fields.autoStart.checked = !!cfg.autoStart;
   fields.titsEndpoint.value = cfg.titsEndpoint || 'ws://localhost:42069';
-  if (!fields.toonationAlertboxKey.dataset.dirty) fields.toonationAlertboxKey.placeholder = cfg.hasToonationKey ? cfg.toonationAlertboxKey : 'toon.at/widget/alertbox/ 뒤의 키';
+  fields.vtubeEndpoint.value = cfg.vtubeEndpoint || 'ws://localhost:8001';
 
   renderLogs(state.logs);
 }
@@ -196,14 +192,23 @@ async function loadRemote() {
 
 function collectConfig() {
   return {
-    backendUrl: fields.backendUrl.value,
-    updateManifestUrl: fields.updateManifestUrl.value,
     token: fields.token.value || undefined,
-    pollIntervalMs: Number(fields.pollIntervalMs.value || 1800),
     autoStart: fields.autoStart.checked,
     titsEndpoint: fields.titsEndpoint.value,
-    toonationAlertboxKey: fields.toonationAlertboxKey.value || undefined,
+    vtubeEndpoint: fields.vtubeEndpoint.value,
   };
+}
+
+function renderVtubeDiscovery(discovery) {
+  vtubeDiscovery = {
+    models: Array.isArray(discovery?.models) ? discovery.models : [],
+    hotkeys: Array.isArray(discovery?.hotkeys) ? discovery.hotkeys : [],
+  };
+  $('#vtubeModelCount').textContent = String(vtubeDiscovery.models.length);
+  $('#vtubeHotkeyCount').textContent = String(vtubeDiscovery.hotkeys.length);
+  fields.vtubeHotkeySelect.innerHTML = vtubeDiscovery.hotkeys.length
+    ? vtubeDiscovery.hotkeys.map((hotkey) => `<option value="${escapeHtml(hotkey.id || hotkey.name || '')}">${escapeHtml(hotkey.name || hotkey.id || '핫키')}</option>`).join('')
+    : '<option value="">핫키 없음</option>';
 }
 
 async function run(action) {
@@ -216,10 +221,6 @@ async function run(action) {
 
 fields.token.addEventListener('input', () => {
   fields.token.dataset.dirty = '1';
-});
-
-fields.toonationAlertboxKey.addEventListener('input', () => {
-  fields.toonationAlertboxKey.dataset.dirty = '1';
 });
 
 document.querySelectorAll('.nav-item').forEach((button) => {
@@ -236,8 +237,6 @@ $('#saveConfigButton').addEventListener('click', () => run(async () => {
   const next = await window.aruLocal.saveConfig(collectConfig());
   fields.token.value = '';
   fields.token.dataset.dirty = '';
-  fields.toonationAlertboxKey.value = '';
-  fields.toonationAlertboxKey.dataset.dirty = '';
   renderState(next);
 }));
 
@@ -257,6 +256,28 @@ $('#discoverTitsButton').addEventListener('click', () => run(async () => {
   $('#titsTriggerCount').textContent = String(discovery.triggers?.length || 0);
 }));
 
+$('#authenticateVtubeButton').addEventListener('click', () => run(async () => {
+  await window.aruLocal.saveConfig(collectConfig());
+  const result = await window.aruLocal.authenticateVtube();
+  $('#vtubeState').textContent = result.authenticated ? '인증됨' : '미인증';
+  pushLocalLog('success', result.reused ? 'VTube Studio 인증을 확인했습니다.' : 'VTube Studio 인증을 완료했습니다.');
+}));
+
+$('#discoverVtubeButton').addEventListener('click', () => run(async () => {
+  await window.aruLocal.saveConfig(collectConfig());
+  const discovery = await window.aruLocal.discoverVtube();
+  renderVtubeDiscovery(discovery);
+  $('#vtubeState').textContent = '인증됨';
+}));
+
+$('#triggerVtubeHotkeyButton').addEventListener('click', () => run(async () => {
+  const hotkeyId = fields.vtubeHotkeySelect.value;
+  if (!hotkeyId) return;
+  await window.aruLocal.saveConfig(collectConfig());
+  await window.aruLocal.triggerVtubeHotkey({ hotkeyId });
+  pushLocalLog('success', 'VTube Studio 핫키를 실행했습니다.');
+}));
+
 $('#chooseSoundFolderButton').addEventListener('click', () => run(async () => {
   const folder = await window.aruLocal.chooseSoundFolder();
   if (folder) $('#soundFolderText').textContent = folder;
@@ -267,8 +288,7 @@ $('#openSoundFolderButton').addEventListener('click', () => run(async () => {
 }));
 
 $('#openDashboardButton').addEventListener('click', () => run(async () => {
-  const base = fields.backendUrl.value || latestState?.config?.backendUrl || '';
-  await window.aruLocal.openExternal(base.replace(/\/$/, '') || 'http://127.0.0.1:3001');
+  await window.aruLocal.openDashboard();
 }));
 
 $('#checkUpdateButton').addEventListener('click', () => run(async () => {
@@ -280,7 +300,7 @@ $('#checkUpdateButton').addEventListener('click', () => run(async () => {
     $('#latestVersionText').textContent = latestUpdate.latestVersion || '확인 실패';
     $('#installUpdateButton').disabled = !latestUpdate.updateAvailable;
     $('#updateStatusText').textContent = latestUpdate.updateAvailable
-      ? `새 버전 ${latestUpdate.latestVersion}을 사용할 수 있습니다. 버튼을 누르면 프로그램 안에서 다운로드하고 설치합니다.`
+      ? `새 버전 ${latestUpdate.latestVersion}이 준비됐습니다. 방송 전에 바로 업데이트할 수 있어요.`
       : '최신 버전을 사용 중입니다.';
   } finally {
     $('#checkUpdateButton').disabled = false;

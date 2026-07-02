@@ -7,11 +7,11 @@ import { cn } from '@/shared/lib/utils';
 import { readPublicChannelData, readPublicChannelHub, type PublicChannelKind } from '@/shared/api/public';
 
 const meta = {
-  commands: { title: '명령어', description: '채팅에서 바로 사용할 수 있는 명령어를 확인해요.', icon: ListChecks, tone: 'sky' },
-  points: { title: '포인트', description: '시청자 포인트와 랭킹을 확인해요.', icon: Coins, tone: 'mint' },
-  roulette: { title: '룰렛', description: '참여 가능한 룰렛과 보상을 확인해요.', icon: Sparkles, tone: 'lemon' },
-  rouletteLogs: { title: '룰렛 결과', description: '최근 룰렛 결과를 확인해요.', icon: Sparkles, tone: 'coral' },
-  live: { title: '라이브', description: '현재 방송 상태를 확인해요.', icon: Radio, tone: 'coral' },
+  commands: { title: '명령어', description: '채팅에 바로 입력해 참여할 수 있는 말들을 모았어요.', icon: ListChecks, tone: 'sky' },
+  points: { title: '포인트', description: '내 참여가 얼마나 쌓였는지 보고 다음 이벤트를 준비해요.', icon: Coins, tone: 'mint' },
+  roulette: { title: '룰렛', description: '지금 참여할 수 있는 룰렛과 당첨 항목을 살펴봐요.', icon: Sparkles, tone: 'lemon' },
+  rouletteLogs: { title: '룰렛 결과', description: '방금 나온 당첨 순간을 다시 확인해요.', icon: Sparkles, tone: 'coral' },
+  live: { title: '라이브', description: '지금 방송 중인지 바로 확인해요.', icon: Radio, tone: 'coral' },
 } as const;
 
 const tabs = [
@@ -46,7 +46,7 @@ function PublicCommands({ data }: { data: unknown }) {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <CardTitle>채팅에서 사용할 수 있는 명령어</CardTitle>
-            <CardDescription>명령어를 그대로 채팅창에 입력하면 봇이 응답합니다.</CardDescription>
+              <CardDescription>마음에 드는 명령어를 채팅창에 그대로 입력해 보세요.</CardDescription>
           </div>
           <Badge tone={rows.length ? 'mint' : 'neutral'}>{rows.length}개</Badge>
         </div>
@@ -116,9 +116,9 @@ function PublicShell({
                 </span>
                 AruBot
               </Link>
-              <h1 className="break-keep text-3xl font-semibold leading-tight md:text-4xl">방송 참여 정보를 한눈에 확인해요</h1>
+              <h1 className="break-keep text-3xl font-semibold leading-tight md:text-4xl">이 방송에서 바로 참여해요</h1>
               <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                명령어, 포인트, 룰렛, 라이브 상태를 모바일에서도 편하게 볼 수 있어요.
+                명령어, 포인트, 룰렛, 라이브 정보를 모바일에서도 빠르게 열어볼 수 있어요.
               </p>
             </div>
             <nav className="flex flex-wrap gap-2 text-sm font-semibold">
@@ -179,7 +179,7 @@ export async function PublicChannelPage({ channelUid, kind }: { channelUid: stri
       ) : (
         <DataView
           title="공개 목록"
-          description="시청자가 사용할 수 있는 항목만 표시합니다."
+          description="지금 방송에서 열려 있는 참여 항목입니다."
           data={data}
           empty="아직 공개된 항목이 없어요."
         />
@@ -191,9 +191,9 @@ export async function PublicChannelPage({ channelUid, kind }: { channelUid: stri
 export async function PublicChannelHub({ channelUid }: { channelUid: string }) {
   const data = await readPublicChannelHub(channelUid);
   const cards = [
-    { href: 'commands', title: '명령어', body: '채팅에서 바로 쓸 수 있는 안내를 확인해요.', count: pickRows(data.commands).length, icon: ListChecks, tone: 'sky' },
-    { href: 'points', title: '포인트', body: '참여로 쌓은 포인트와 랭킹을 확인해요.', count: pickRows(data.points).length, icon: Coins, tone: 'mint' },
-    { href: 'roulette', title: '룰렛', body: '참여 가능한 룰렛과 보상을 살펴봐요.', count: pickRows(data.roulette).length, icon: Sparkles, tone: 'lemon' },
+    { href: 'commands', title: '명령어', body: '채팅에 입력할 수 있는 말을 바로 찾아요.', count: pickRows(data.commands).length, icon: ListChecks, tone: 'sky' },
+    { href: 'points', title: '포인트', body: '내 참여가 얼마나 쌓였는지 살펴봐요.', count: pickRows(data.points).length, icon: Coins, tone: 'mint' },
+    { href: 'roulette', title: '룰렛', body: '참여 가능한 룰렛과 당첨 항목을 봐요.', count: pickRows(data.roulette).length, icon: Sparkles, tone: 'lemon' },
     { href: 'live', title: '라이브', body: isLive(data.live) ? '지금 방송 중이에요.' : '방송 정보가 준비되면 표시돼요.', count: isLive(data.live) ? 1 : 0, icon: Radio, tone: 'coral' },
   ] as const;
 

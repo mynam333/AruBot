@@ -82,7 +82,7 @@ const featureCards = [
   {
     href: '/video-donations/queue',
     title: '영상 후원',
-    body: '신청 영상은 큐로 정리하고 OBS 뷰어에서 안정적으로 재생합니다.',
+    body: '신청된 영상이 순서대로 이어져 방송 화면에 깔끔하게 재생됩니다.',
     action: '후원 큐 열기',
     icon: PlaySquare,
     tone: 'coral',
@@ -90,7 +90,7 @@ const featureCards = [
   {
     href: '/roulette',
     title: '룰렛',
-    body: '시청자 참여와 후원을 방송 이벤트로 전환하는 룰렛을 운영합니다.',
+    body: '시청자 참여와 후원이 긴장감 있는 당첨 순간으로 바뀝니다.',
     action: '룰렛 관리',
     icon: Sparkles,
     tone: 'lemon',
@@ -98,7 +98,7 @@ const featureCards = [
   {
     href: '/donations/rules',
     title: '후원 반응',
-    body: '후원 조건에 맞는 채팅, 효과, 연동 액션을 자동으로 실행합니다.',
+    body: '후원 순간에 맞춘 채팅과 화면 반응으로 감사 표현이 더 또렷해집니다.',
     action: '반응 설정',
     icon: HeartHandshake,
     tone: 'coral',
@@ -114,11 +114,11 @@ const featureCards = [
 ] as const;
 
 const quickActions = [
-  { href: '/connection', label: '플랫폼 연결', icon: Cable, help: 'CHZZK와 CIME 계정을 연결하고 동기화 상태를 확인합니다.' },
-  { href: 'dialog:command', label: '명령어 만들기', icon: MessageSquare, help: '방송에서 바로 사용할 자동 응답을 추가합니다.' },
-  { href: '/video-donations/viewer', label: '포인트 영상후원', icon: PlaySquare, help: '영상 후원 뷰어 주소를 열어 OBS에 등록합니다.' },
-  { href: 'dialog:roulette', label: '룰렛 만들기', icon: Sparkles, help: '포인트나 후원과 연결할 룰렛을 준비합니다.' },
-  { href: '/settings', label: '서비스 설정', icon: Settings, help: '공개 페이지와 기본 동작을 조정합니다.' },
+  { href: '/connection', label: '플랫폼 연결', icon: Cable, help: 'CHZZK와 CIME 시청자가 같은 방송 경험으로 들어오게 합니다.' },
+  { href: 'dialog:command', label: '명령어 만들기', icon: MessageSquare, help: '채팅에서 바로 반응하는 참여 문구를 추가합니다.' },
+  { href: '/video-donations/viewer', label: '포인트 영상후원', icon: PlaySquare, help: '신청 영상이 방송 화면에 자연스럽게 이어지게 합니다.' },
+  { href: 'dialog:roulette', label: '룰렛 만들기', icon: Sparkles, help: '포인트와 후원이 당첨의 재미로 바뀌게 합니다.' },
+  { href: '/settings', label: '방송 스타일', icon: Settings, help: 'AruBot의 말투와 공개 화면을 내 방송 분위기에 맞춥니다.' },
 ] as const;
 
 function pickRows(data: unknown) {
@@ -237,10 +237,10 @@ export function DashboardPage() {
           <div className="animate-fade-up">
             <Badge tone="mint">방송 관리 콘솔</Badge>
             <h1 className="mt-4 max-w-3xl break-keep text-3xl font-semibold leading-tight tracking-normal md:text-5xl">
-              채팅 참여를 더 쉽게 만들고<br />방송 운영은 더 가볍게.
+              채팅 참여를 더 쉽게 만들고<br />방송 진행은 더 가볍게.
             </h1>
             <p className="mt-4 max-w-2xl text-sm leading-7 text-muted-foreground md:text-base">
-              CHZZK와 CIME 계정을 연결하고 명령어, 포인트, 룰렛, 영상 후원을 한 흐름으로 관리하세요.
+              CHZZK와 CIME 시청자가 같은 방식으로 참여하고, 명령어와 포인트 이벤트가 방송 흐름에 자연스럽게 붙습니다.
             </p>
             <div className="mt-6 flex flex-wrap gap-2">
               {providers.map((provider) => {
@@ -271,7 +271,7 @@ export function DashboardPage() {
                 <CardTitle>연결된 채널</CardTitle>
                 <Badge tone={accounts.length ? 'mint' : 'amber'}>{accounts.length ? '사용 가능' : '연결 필요'}</Badge>
               </div>
-              <CardDescription>플랫폼 연결 후 채팅봇 기능을 채널별로 사용할 수 있습니다.</CardDescription>
+              <CardDescription>연결된 채널마다 시청자 참여 기능이 바로 열립니다.</CardDescription>
             </CardHeader>
             <CardContent>
               {accounts.length ? (
@@ -301,7 +301,7 @@ export function DashboardPage() {
                 </div>
               ) : (
                 <div className="rounded-[var(--radius-control)] border bg-background/75 p-[clamp(1rem,1.8vw,1.25rem)] text-sm leading-6 text-muted-foreground">
-                  CHZZK 또는 CIME로 로그인하면 계정이 하나의 사용자 정보로 묶이고, 연결된 채널을 여기에서 확인할 수 있습니다.
+                  CHZZK 또는 CIME로 시작하면 다른 플랫폼 시청자도 같은 참여 흐름으로 맞이할 수 있습니다.
                 </div>
               )}
               <LinkButton href="/connection" variant="soft" className="mt-4 w-full justify-center">

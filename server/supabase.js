@@ -3400,6 +3400,19 @@ export async function findSidByRouletteToken(token) {
       .eq('settings->>rouletteViewerToken', String(token))
       .limit(1)
       .maybeSingle();
+    if (!error && data?.sid) return String(data.sid);
+  } catch {
+    // Fall through to roulette session lookup.
+  }
+  try {
+    await ensureRouletteSessions();
+    const { data, error } = await supabase
+      .from('roulette_sessions')
+      .select('sid')
+      .eq('token', String(token))
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
     if (error || !data) return null;
     return data.sid ? String(data.sid) : null;
   } catch {

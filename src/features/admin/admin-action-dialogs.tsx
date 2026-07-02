@@ -18,6 +18,12 @@ import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import {
+  createDefaultRouletteItems,
+  normalizeEditableRouletteItems,
+  RouletteItemsEditor,
+  type EditableRouletteItem,
+} from '@/features/admin/roulette-item-editor';
 import { apiUrl } from '@/shared/api/http';
 import { cn } from '@/shared/lib/utils';
 
@@ -103,7 +109,7 @@ function ActionDialogFrame({
       <Dialog.Trigger
         type="button"
         className={cn(
-          'inline-flex min-h-[var(--control-height)] items-center justify-center gap-2 whitespace-nowrap rounded-[var(--radius-control)] px-[clamp(0.875rem,1.6vw,1.125rem)] text-sm font-semibold tracking-normal transition duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50',
+          'inline-flex min-h-[var(--control-height)] max-w-full min-w-0 items-center justify-center gap-2 whitespace-nowrap rounded-[var(--radius-control)] px-[clamp(0.875rem,1.6vw,1.125rem)] text-sm font-semibold tracking-normal transition duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50',
           triggerVariants[variant],
           className,
         )}
@@ -169,7 +175,7 @@ function ActionDialogFrame({
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return <label className="grid gap-[clamp(0.5rem,1vw,0.75rem)] text-sm font-semibold">{label}{children}</label>;
+  return <label className="grid min-w-0 gap-[clamp(0.5rem,1vw,0.75rem)] text-sm font-semibold">{label}{children}</label>;
 }
 
 function Textarea({
@@ -189,7 +195,7 @@ function Textarea({
       onChange={(event) => onChange(event.target.value)}
       placeholder={placeholder}
       className={cn(
-        'w-full resize-y rounded-[var(--radius-control)] border bg-background/80 px-[clamp(0.85rem,1.6vw,1.1rem)] py-[clamp(0.85rem,1.6vw,1.1rem)] text-sm leading-7 outline-none transition placeholder:text-muted-foreground focus:border-primary/45 focus:ring-2 focus:ring-ring',
+        'box-border w-full min-w-0 max-w-full resize-y rounded-[var(--radius-control)] border bg-background/80 px-[clamp(0.85rem,1.6vw,1.1rem)] py-[clamp(0.85rem,1.6vw,1.1rem)] text-sm leading-7 outline-none transition placeholder:text-muted-foreground focus:border-primary/45 focus:ring-2 focus:ring-ring',
         min,
       )}
     />
@@ -244,7 +250,7 @@ export function CommandCreateDialog({ variant = 'secondary', label = '명령어 
       icon={<MessageSquare className="h-[1em] w-[1em]" />}
       badge="채팅 명령어"
       title="방송에서 바로 쓰는 명령어를 만들어요."
-      description="시청자가 입력할 명령어와 봇이 보낼 답변을 정합니다. 포인트 차감과 쿨다운도 함께 설정할 수 있어요."
+      description="시청자가 채팅에 입력할 말과 봇이 돌려줄 반응을 만듭니다. 포인트로 참여하는 명령어도 함께 준비할 수 있어요."
       submitLabel="명령어 추가"
       pending={isPending}
       onSubmit={submit}
@@ -254,7 +260,7 @@ export function CommandCreateDialog({ variant = 'secondary', label = '명령어 
       trailingChevron={trailingChevron}
       testId="command-create-trigger"
     >
-      <div className="grid gap-[clamp(1rem,2vw,1.35rem)] md:grid-cols-2">
+      <div className="grid gap-[clamp(1rem,2vw,1.35rem)] md:grid-cols-[repeat(2,minmax(0,1fr))]">
         <Field label="표시 이름">
           <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="예: 투표 안내" />
         </Field>
@@ -270,7 +276,7 @@ export function CommandCreateDialog({ variant = 'secondary', label = '명령어 
           min="min-h-[clamp(4.75rem,9svh,6.25rem)]"
         />
       </Field>
-      <div className="grid gap-[clamp(1rem,2vw,1.35rem)] md:grid-cols-[1fr_1fr_auto] md:items-end">
+      <div className="grid gap-[clamp(1rem,2vw,1.35rem)] md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(var(--control-height),0.42fr)] md:items-end">
         <Field label="사용 포인트">
           <Input value={pointsCost} onChange={(event) => setPointsCost(event.target.value)} inputMode="numeric" />
         </Field>
@@ -285,8 +291,8 @@ export function CommandCreateDialog({ variant = 'secondary', label = '명령어 
 
 function SwitchRow({ checked, onCheckedChange, label }: { checked: boolean; onCheckedChange: (value: boolean) => void; label: string }) {
   return (
-    <div className="flex min-h-[var(--control-height)] items-center justify-between gap-3 rounded-[var(--radius-control)] border bg-background/70 px-[clamp(0.85rem,1.6vw,1.1rem)]">
-      <span className="text-sm font-semibold">{label}</span>
+    <div className="flex min-h-[var(--control-height)] min-w-0 items-center justify-between gap-3 rounded-[var(--radius-control)] border bg-background/70 px-[clamp(0.85rem,1.6vw,1.1rem)]">
+      <span className="min-w-0 truncate text-sm font-semibold">{label}</span>
       <Switch.Root
         checked={checked}
         onCheckedChange={onCheckedChange}
@@ -301,39 +307,26 @@ function SwitchRow({ checked, onCheckedChange, label }: { checked: boolean; onCh
 export function RouletteCreateDialog({ variant = 'secondary', label = '룰렛 만들기', className, trailingChevron }: ActionDialogButtonProps) {
   const [name, setName] = useState('오늘의 룰렛');
   const [command, setCommand] = useState('!룰렛');
-  const [itemsText, setItemsText] = useState('당첨\n한 번 더\n꽝');
+  const [items, setItems] = useState<EditableRouletteItem[]>(() => createDefaultRouletteItems());
   const [pointsCost, setPointsCost] = useState('0');
   const [isPending, startTransition] = useTransition();
 
-  const items = useMemo(() => (
-    itemsText
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line) => {
-        const [labelPart, valuePart, weightPart] = line.split('|').map((part) => part?.trim() || '');
-        return {
-          label: labelPart,
-          value: valuePart || null,
-          weight: Math.max(1, Number(weightPart || 1)),
-        };
-      })
-  ), [itemsText]);
+  const normalizedItems = useMemo(() => normalizeEditableRouletteItems(items), [items]);
 
   const submit = (close: () => void) => {
     const rouletteName = name.trim();
     const keyword = normalizeCommand(command);
     if (!rouletteName) return toast.warning('룰렛 이름을 입력해 주세요.');
-    if (items.length < 2) return toast.warning('룰렛 항목은 2개 이상 필요합니다.');
+    if (normalizedItems.length < 2) return toast.warning('룰렛 항목은 2개 이상 필요합니다.');
     startTransition(async () => {
       try {
         await postJson('/api/roulette/definitions/upsert', {
           definition: {
             id: `rlt_${Date.now().toString(36)}`,
             name: rouletteName,
-              type: 'items',
-              theme: 'pastel',
-              items,
+            type: 'items',
+            theme: 'pastel',
+            items: normalizedItems,
           },
         });
         if (keyword && keyword !== '!') {
@@ -367,7 +360,7 @@ export function RouletteCreateDialog({ variant = 'secondary', label = '룰렛 �
       icon={<Sparkles className="h-[1em] w-[1em]" />}
       badge="룰렛"
       title="시청자가 바로 돌릴 수 있는 룰렛을 만들어요."
-      description="룰렛 항목과 실행 명령어를 한 번에 준비합니다. 각 줄은 항목명 또는 항목명 | 실행문구 | 가중치 형식으로 입력할 수 있어요."
+      description="항목 이름, 가중치, 실행 액션을 나눠 입력해 방송 이벤트 룰렛을 준비합니다."
       submitLabel="룰렛 추가"
       pending={isPending}
       onSubmit={submit}
@@ -377,7 +370,7 @@ export function RouletteCreateDialog({ variant = 'secondary', label = '룰렛 �
       trailingChevron={trailingChevron}
       testId="roulette-create-trigger"
     >
-      <div className="grid gap-[clamp(1rem,2vw,1.35rem)] md:grid-cols-2">
+      <div className="grid gap-[clamp(1rem,2vw,1.35rem)] md:grid-cols-[repeat(2,minmax(0,1fr))]">
         <Field label="룰렛 이름">
           <Input value={name} onChange={(event) => setName(event.target.value)} />
         </Field>
@@ -385,15 +378,16 @@ export function RouletteCreateDialog({ variant = 'secondary', label = '룰렛 �
           <Input value={command} onChange={(event) => setCommand(event.target.value)} />
         </Field>
       </div>
-      <Field label="룰렛 항목">
-        <Textarea value={itemsText} onChange={setItemsText} placeholder={'당첨\n꽝\n한 번 더'} min="min-h-[clamp(8rem,18svh,12rem)]" />
-      </Field>
-      <div className="grid gap-[clamp(1rem,2vw,1.35rem)] md:grid-cols-2">
+      <div className="grid gap-[clamp(0.5rem,1vw,0.75rem)] text-sm font-semibold">
+        <div>룰렛 항목</div>
+        <RouletteItemsEditor items={items} onChange={setItems} />
+      </div>
+      <div className="grid gap-[clamp(1rem,2vw,1.35rem)] md:grid-cols-[repeat(2,minmax(0,1fr))]">
         <Field label="실행 비용">
           <Input value={pointsCost} onChange={(event) => setPointsCost(event.target.value)} inputMode="numeric" />
         </Field>
         <div className="rounded-[var(--radius-control)] border bg-background/70 p-[clamp(0.85rem,1.6vw,1.1rem)] text-sm leading-6 text-muted-foreground">
-          현재 항목 {items.length}개가 준비되었습니다. 가중치를 생략하면 같은 확률로 추첨됩니다.
+          현재 항목 {normalizedItems.length}개가 준비되었습니다. 같은 가중치를 입력하면 같은 확률로 추첨됩니다.
         </div>
       </div>
     </ActionDialogFrame>
@@ -444,7 +438,7 @@ export function VideoDonationSettingsDialog({ variant = 'secondary', label = '�
       icon={<PlaySquare className="h-[1em] w-[1em]" />}
       badge="영상 후원"
       title="영상 후원 접수 방식을 설정해요."
-      description="시청자가 포인트로 영상을 신청할 때 필요한 비용, 재생 길이, 대기열 제한을 정합니다."
+      description="시청자가 포인트로 영상을 신청하고 방송 화면에 자연스럽게 이어지도록 비용과 길이를 정합니다."
       submitLabel="설정 저장"
       pending={isPending}
       onSubmit={submit}
@@ -455,7 +449,7 @@ export function VideoDonationSettingsDialog({ variant = 'secondary', label = '�
       testId="video-donation-settings-trigger"
     >
       <SwitchRow checked={enabled} onCheckedChange={setEnabled} label="영상 후원 받기" />
-      <div className="grid gap-[clamp(1.15rem,2.4vw,1.65rem)] rounded-[var(--radius-card)] border bg-background/62 p-[clamp(1rem,2vw,1.25rem)] md:grid-cols-3">
+      <div className="grid min-w-0 gap-[clamp(1.15rem,2.4vw,1.65rem)] rounded-[var(--radius-card)] border bg-background/62 p-[clamp(1rem,2vw,1.25rem)] md:grid-cols-[repeat(3,minmax(0,1fr))]">
         <Field label="초당 포인트">
           <Input value={pointsPerSecond} onChange={(event) => setPointsPerSecond(event.target.value)} inputMode="decimal" />
         </Field>
@@ -503,7 +497,7 @@ export function DonationSettingsDialog({ variant = 'secondary', label = '후원 
       icon={<Settings className="h-[1em] w-[1em]" />}
       badge="후원 설정"
       title="후원 포인트 적립 기준을 정해요."
-      description="후원 금액에 따라 시청자에게 지급할 포인트를 설정합니다."
+      description="후원한 마음이 다음 참여 포인트로 이어지도록 금액별 적립 기준을 정합니다."
       submitLabel="설정 저장"
       pending={isPending}
       onSubmit={submit}
@@ -560,7 +554,7 @@ export function DonationRuleCreateDialog({ variant = 'secondary', label = '반�
       icon={<Gift className="h-[1em] w-[1em]" />}
       badge="후원 반응"
       title="후원 조건에 맞는 반응을 만들어요."
-      description="특정 금액 이상이거나 메시지에 특정 문구가 포함될 때 보낼 반응을 설정합니다."
+      description="특정 금액이나 메시지가 들어왔을 때 채팅과 연출이 더 특별하게 반응하게 합니다."
       submitLabel="반응 추가"
       pending={isPending}
       onSubmit={submit}
@@ -569,7 +563,7 @@ export function DonationRuleCreateDialog({ variant = 'secondary', label = '반�
       className={className}
       testId="donation-rule-create-trigger"
     >
-      <div className="grid gap-[clamp(1rem,2vw,1.35rem)] md:grid-cols-2">
+      <div className="grid gap-[clamp(1rem,2vw,1.35rem)] md:grid-cols-[repeat(2,minmax(0,1fr))]">
         <Field label="반응 이름">
           <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="예: 큰손 감사 인사" />
         </Field>
@@ -578,7 +572,7 @@ export function DonationRuleCreateDialog({ variant = 'secondary', label = '반�
         </Field>
       </div>
       <Field label="메시지 포함 조건">
-        <Input value={messageIncludes} onChange={(event) => setMessageIncludes(event.target.value)} placeholder="비워두면 금액만 확인합니다." />
+        <Input value={messageIncludes} onChange={(event) => setMessageIncludes(event.target.value)} placeholder="특정 문구가 없으면 금액만 볼게요." />
       </Field>
       <Field label="반응 문구">
         <Textarea value={response} onChange={setResponse} placeholder="예: 후원 감사합니다! 방송에서 바로 확인할게요." />

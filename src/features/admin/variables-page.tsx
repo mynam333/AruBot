@@ -74,7 +74,7 @@ export function VariablesPage() {
             <Card key={group}>
               <CardHeader>
                 <CardTitle>{group}</CardTitle>
-                <CardDescription>{items.length}개의 변수를 사용할 수 있습니다.</CardDescription>
+                <CardDescription>채팅 문구에 넣으면 {items.length}가지 상황을 자동으로 채워줘요.</CardDescription>
               </CardHeader>
               <CardContent className="grid gap-3">
                 {items.map((item) => (

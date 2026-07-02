@@ -21,18 +21,18 @@ import { LinkButton } from '@/components/ui/button';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
 
 const highlights = [
-  { title: '채팅 명령어', body: '자주 쓰는 안내와 참여 명령어를 방송 흐름에 맞춰 자동으로 응답합니다.', icon: MessageSquare, tone: 'sky' },
-  { title: '통합 포인트', body: 'CHZZK와 CIME 시청 기록을 한 계정으로 묶어 포인트를 이어갑니다.', icon: Coins, tone: 'mint' },
-  { title: '예측 투표', body: '!투표 명령어와 OBS 오버레이로 방송의 순간을 함께 선택하게 만듭니다.', icon: Vote, tone: 'lemon' },
-  { title: '영상 후원', body: '신청된 영상은 큐로 정리하고 방송 화면에서는 안정적으로 재생합니다.', icon: PlaySquare, tone: 'coral' },
-  { title: '룰렛 이벤트', body: '포인트와 후원을 자연스럽게 방송 이벤트로 연결합니다.', icon: Sparkles, tone: 'mint' },
-  { title: '후원 반응', body: '후원 조건에 맞는 채팅 응답과 보상을 자동으로 실행합니다.', icon: HeartHandshake, tone: 'coral' },
+  { title: '채팅 명령어', body: '반복 안내는 봇에게 맡기고, 채팅은 더 빠르게 방송의 흐름을 따라갑니다.', icon: MessageSquare, tone: 'sky' },
+  { title: '통합 포인트', body: 'CHZZK와 CIME 어디서 봐도 같은 시청자로 포인트를 쌓고 참여합니다.', icon: Coins, tone: 'mint' },
+  { title: '예측 투표', body: '!투표 한마디로 결과를 함께 고르고, 화면에서는 실시간 분위기가 살아납니다.', icon: Vote, tone: 'lemon' },
+  { title: '영상 후원', body: '시청자가 보낸 영상은 순서대로 이어지고, 방송 화면에는 깔끔하게 재생됩니다.', icon: PlaySquare, tone: 'coral' },
+  { title: '룰렛 이벤트', body: '포인트와 후원이 당첨의 긴장감으로 바뀌어 채팅 참여가 더 즐거워집니다.', icon: Sparkles, tone: 'mint' },
+  { title: '후원 반응', body: '후원 순간에 맞춘 채팅 반응과 연출로 고마운 장면을 더 선명하게 남깁니다.', icon: HeartHandshake, tone: 'coral' },
 ] as const;
 
 const flows = [
-  { title: '방송인은 설정을 가볍게', body: '플랫폼 연결 후 명령어, 포인트, 룰렛, 영상 후원을 한 콘솔에서 관리합니다.', icon: Radio },
-  { title: '시청자는 참여를 이어가게', body: '어느 플랫폼에서 봐도 같은 계정의 포인트로 참여 경험을 유지합니다.', icon: BadgeCheck },
-  { title: 'OBS에는 필요한 화면만', body: '예측, 룰렛, 영상 후원 화면을 브라우저 소스로 바로 연결합니다.', icon: GalleryVerticalEnd },
+  { title: '방송인은 진행에 집중', body: '명령어와 참여 이벤트가 자연스럽게 움직여 방송 중 손이 덜 갑니다.', icon: Radio },
+  { title: '시청자는 계속 참여', body: '플랫폼이 바뀌어도 포인트와 이벤트 참여가 같은 경험으로 이어집니다.', icon: BadgeCheck },
+  { title: '화면에는 필요한 장면만', body: '예측, 룰렛, 영상 후원이 방송 화면에 보기 좋게 나타납니다.', icon: GalleryVerticalEnd },
 ] as const;
 
 export function LandingPage() {
@@ -64,8 +64,8 @@ export function LandingPage() {
               채팅봇은<br />가볍게,<br />참여 경험은<br />더 선명하게.
             </h1>
             <p className="mt-6 max-w-2xl break-keep text-base leading-8 text-muted-foreground md:text-lg">
-              AruBot은 CHZZK와 CIME 방송의 명령어, 포인트, 룰렛, 영상 후원, 예측 투표를 하나의 흐름으로 연결합니다.
-              방송인은 운영을 줄이고, 시청자는 어디서 보든 이어지는 참여 경험을 얻습니다.
+              AruBot은 CHZZK와 CIME 방송의 채팅 참여, 포인트, 룰렛, 영상 후원, 예측 투표를 하나의 경험으로 묶습니다.
+              방송인은 진행에 더 집중하고, 시청자는 어디서 보든 같은 방식으로 즐깁니다.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <LinkButton href="/streamer" size="lg">
@@ -116,7 +116,7 @@ export function LandingPage() {
                 <div className="mb-4 flex items-center justify-between gap-3">
                   <div>
                     <div className="text-sm font-semibold">통합 포인트</div>
-                    <div className="text-xs text-muted-foreground">플랫폼 연결 시 같은 시청자로 합산</div>
+                    <div className="text-xs text-muted-foreground">어느 플랫폼에서 봐도 같은 내 포인트</div>
                   </div>
                   <div className="flex items-center gap-1.5">
                     <Sun className="h-4 w-4 text-amber-500" />
@@ -152,7 +152,7 @@ export function LandingPage() {
               </h2>
             </div>
             <p className="max-w-md text-sm leading-7 text-muted-foreground">
-              공개 페이지와 OBS 화면, 채팅 명령어가 서로 이어져 별도 안내 없이 자연스럽게 참여할 수 있습니다.
+              공개 페이지, OBS 화면, 채팅 명령어가 같은 흐름으로 이어져 처음 온 시청자도 바로 참여할 수 있습니다.
             </p>
           </div>
           <div className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -208,7 +208,7 @@ export function LandingPage() {
             방송인과 시청자가 같은 경험을 공유하는 채팅봇.
           </h2>
           <p className="mx-auto mt-4 max-w-2xl text-sm leading-7 text-muted-foreground md:text-base">
-            지금 연결하면 스트리머 콘솔과 시청자 포인트 페이지를 같은 계정으로 사용할 수 있습니다.
+            지금 연결하면 방송 진행과 시청자 참여가 같은 흐름 안에서 자연스럽게 이어집니다.
           </p>
           <div className="mt-7 flex flex-wrap justify-center gap-3">
             <LinkButton href="/streamer" size="lg">
@@ -231,7 +231,7 @@ export function LandingPage() {
         <div className="mx-auto flex max-w-7xl flex-col gap-3 border-t pt-6 text-sm text-muted-foreground md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-2">
             <Bell className="h-4 w-4" />
-            방송 참여와 운영을 자연스럽게 연결하는 AruBot
+            방송 참여와 진행을 자연스럽게 이어주는 AruBot
           </div>
           <div className="flex flex-wrap gap-3">
             <Link href="/streamer" className="transition hover:text-foreground">스트리머 콘솔</Link>

@@ -5691,7 +5691,7 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}) {
         output = { joined: true, incoming };
       } else if (node.type === 'approval') {
         const message = renderBlueprintTemplate(config.message || '승인이 필요합니다.', scope);
-        const job = dryRun ? null : await enqueueAutomationJob(ownerUserId, {
+        const job = dryRun ? null : await queueAutomationJob(ownerUserId, {
           connectionId: null,
           jobType: 'blueprint.approval',
           payload: { nodeId: node.id, blueprintId: blueprint.id, runId: run.id, message }
@@ -5701,7 +5701,7 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}) {
         const delayMs = Math.max(0, Number(evaluateBlueprintValue(config.delayMs || Number(config.seconds || 0) * 1000, scope) || 0));
         const edge = edgeFrom(node.id, 'out');
         if (edge && !dryRun) {
-          await enqueueAutomationJob(ownerUserId, {
+          await queueAutomationJob(ownerUserId, {
             connectionId: null,
             jobType: 'blueprint.timer',
             runAfter: new Date(Date.now() + delayMs).toISOString(),
@@ -5713,7 +5713,7 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}) {
         return output;
       } else if (['overlay', 'overlayUpdate', 'overlayHide', 'rouletteDisplay', 'tts', 'sound', 'obs', 'http', 'websocket', 'udp', 'tits', 'vtube', 'chatVote'].includes(node.type)) {
         const payload = renderBlueprintValueDeep(config || {}, scope);
-        const job = dryRun ? null : await enqueueAutomationJob(ownerUserId, {
+        const job = dryRun ? null : await queueAutomationJob(ownerUserId, {
           connectionId: config.connectionId || null,
           jobType: `blueprint.${node.type}`,
           payload: { nodeId: node.id, blueprintId: blueprint.id, runId: run.id, ...payload }
@@ -5775,7 +5775,7 @@ async function executeActionVariableTokens(sid, text, context = {}) {
         });
         jobs.push(runResult);
       } else {
-        const job = await enqueueAutomationJob(ownerUserId, {
+        const job = await queueAutomationJob(ownerUserId, {
           connectionId: null,
           jobType: 'action.variable',
           payload: {
@@ -5820,31 +5820,32 @@ async function startRouletteSpin(sid, rouletteName, userId, username, opts = {})
   }
   const picked = chooseRouletteItem(def);
 
-  let token;
+  let token = null;
   try {
-    token = await generateChannelRouletteToken(channelContext.channelId);
-
-    registerTokenChannelMapping(token, channelContext.channelId);
-
-    rouletteTokenToSid.set(token, sid);
-
-    console.log(`[Roulette] Generated channel token for ${channelContext.channelId}: ${token.substring(0, 16)}...`);
-
+    token = await getOrCreateViewerTokenSupabase(channelContext.channelId, 'roulette', sid, 'rlt').catch(() => null);
   } catch (error) {
-    console.error('[Roulette] Failed to generate channel token, falling back to legacy method:', error);
-
+    console.warn('[Roulette] Failed to load stable roulette viewer token from Supabase:', error?.message || error);
+  }
+  if (!token) {
     token = typeof settings.rouletteViewerToken === 'string' && settings.rouletteViewerToken.trim()
       ? String(settings.rouletteViewerToken).trim()
       : '';
-    if (!token) {
-      token = 'rlt_' + Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6);
-      try {
-        const next = { ...settings, rouletteViewerToken: token };
-        await setBotSettings(sid, next);
-      } catch { }
-    }
-    try { rouletteTokenToSid.set(token, sid); } catch { }
   }
+  if (!token) {
+    token = 'rlt_' + Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6);
+  }
+  if (settings.rouletteViewerToken !== token) {
+    try {
+      await setBotSettings(sid, { ...settings, rouletteViewerToken: token });
+    } catch (error) {
+      console.warn('[Roulette] Failed to persist stable roulette viewer token:', error?.message || error);
+    }
+  }
+  try {
+    registerTokenChannelMapping(token, channelContext.channelId);
+    rouletteTokenToSid.set(token, sid);
+  } catch { }
+  console.log(`[Roulette] Using stable viewer token for ${channelContext.channelId}: ${token.substring(0, 16)}...`);
 
   try {
     await insertRouletteSession({
@@ -7824,7 +7825,7 @@ async function generateChannelRouletteToken(channelId) {
 
     const token = `rlt_${channelHash}_${timestamp}_${randomPart}`;
 
-    const integrityCheck = await verifyTokenIntegrity(token);
+    const integrityCheck = await verifyTokenIntegrity(token, channelId);
     if (!integrityCheck.valid) {
       throw new Error(`Token integrity verification failed: ${integrityCheck.error}`);
     }
@@ -7863,7 +7864,7 @@ async function generateChannelPvdToken(channelId) {
 
     const token = `pvd_${channelHash}_${timestamp}_${randomPart}`;
 
-    const integrityCheck = await verifyTokenIntegrity(token);
+    const integrityCheck = await verifyTokenIntegrity(token, channelId);
     if (!integrityCheck.valid) {
       throw new Error(`PVD token integrity verification failed: ${integrityCheck.error}`);
     }
@@ -7920,7 +7921,7 @@ async function validateChannelToken(token, expectedChannelId = null, trackUsage 
       return { valid: false, error: 'Unknown token type' };
     }
 
-    const integrityCheck = await verifyTokenIntegrity(token);
+    const integrityCheck = await verifyTokenIntegrity(token, expectedChannelId);
     if (!integrityCheck.valid) {
       return { valid: false, error: integrityCheck.error };
     }
@@ -7940,28 +7941,30 @@ async function validateChannelToken(token, expectedChannelId = null, trackUsage 
       return { valid: false, error: securityCheck.reason };
     }
 
-    const patterns = {
-      roulette: /^rlt_([a-f0-9]{8})_([a-z0-9]+)_([a-z0-9]+)$/,
-      pvd: /^pvd_([a-f0-9]{8})_([a-z0-9]+)_([a-z0-9]+)$/
-    };
+    if (!integrityCheck.persistentToken) {
+      const patterns = {
+        roulette: /^rlt_([a-f0-9]{8})_([a-z0-9]+)_([a-z0-9]+)$/,
+        pvd: /^pvd_([a-f0-9]{8})_([a-z0-9]+)_([a-z0-9]+)$/
+      };
 
-    const match = token.match(patterns[tokenType]);
-    if (!match) {
-      return { valid: false, error: 'Invalid token pattern' };
-    }
+      const match = token.match(patterns[tokenType]);
+      if (!match) {
+        return { valid: false, error: 'Invalid token pattern' };
+      }
 
-    const [, channelHash, timestamp, randomPart] = match;
+      const [, channelHash, timestamp, randomPart] = match;
 
-    const tokenTime = parseInt(timestamp, 36);
-    const now = Date.now();
-    const maxAge = 24 * 60 * 60 * 1000; // 24?쒓컙
+      const tokenTime = parseInt(timestamp, 36);
+      const now = Date.now();
+      const maxAge = 24 * 60 * 60 * 1000; // 24?쒓컙
 
-    if (isNaN(tokenTime) || tokenTime <= 0) {
-      return { valid: false, error: 'Invalid timestamp format' };
-    }
+      if (isNaN(tokenTime) || tokenTime <= 0) {
+        return { valid: false, error: 'Invalid timestamp format' };
+      }
 
-    if (now - tokenTime > maxAge) {
-      return { valid: false, error: 'Token expired' };
+      if (now - tokenTime > maxAge) {
+        return { valid: false, error: 'Token expired' };
+      }
     }
 
     let usageCount = 0;
@@ -8676,7 +8679,7 @@ async function checkTokenGenerationLimit(channelId) {
 
 /**
  */
-async function verifyTokenIntegrity(token) {
+async function verifyTokenIntegrity(token, expectedChannelId = null) {
   try {
     if (!token || typeof token !== 'string') {
       return { valid: false, error: 'Invalid token format' };
@@ -8696,18 +8699,24 @@ async function verifyTokenIntegrity(token) {
     } else if (patterns.pvd.test(token)) {
       tokenType = 'pvd';
       match = token.match(patterns.pvd);
+    } else if (token.startsWith('rlt_')) {
+      tokenType = 'roulette';
+    } else if (token.startsWith('pvd_')) {
+      tokenType = 'pvd';
+    } else {
+      return { valid: false, error: 'Unknown token type' };
     }
 
-    if (!match) {
-      return { valid: false, error: 'Invalid token pattern' };
-    }
-
-    const [, channelHash, timestamp, randomPart] = match;
-
-    const channelId = await getChannelIdFromToken(token, tokenType, false);
+    const channelId = expectedChannelId || await getChannelIdFromToken(token, tokenType, false);
     if (!channelId) {
       return { valid: false, error: 'Channel ID not found' };
     }
+
+    if (!match) {
+      return { valid: true, channelId, persistentToken: true };
+    }
+
+    const [, channelHash, timestamp, randomPart] = match;
 
     const expectedHash = crypto.createHash('sha256')
       .update(channelId + (process.env.TOKEN_SECRET || 'default_secret'))
@@ -8723,7 +8732,7 @@ async function verifyTokenIntegrity(token) {
       return { valid: false, error: 'Invalid timestamp' };
     }
 
-    return { valid: true, channelId };
+    return { valid: true, channelId, persistentToken: false };
 
   } catch (error) {
     console.error('[Token Integrity] Verification error:', error);
@@ -9728,6 +9737,124 @@ function normalizeTitsTriggers(response) {
     : [];
 }
 
+function getVtubeEndpoint(endpoint) {
+  return String(endpoint || '').trim() || 'ws://localhost:8001';
+}
+
+function makeVtubeMessage(messageType, data = {}) {
+  return {
+    apiName: 'VTubeStudioPublicAPI',
+    apiVersion: '1.0',
+    requestID: `arubot_vts_${Date.now().toString(36)}_${crypto.randomBytes(4).toString('hex')}`,
+    messageType,
+    data: data && typeof data === 'object' ? data : {}
+  };
+}
+
+function sendVtubeRequest(endpoint, messageType, data = {}, timeoutMs = 7000) {
+  return new Promise((resolve, reject) => {
+    const message = makeVtubeMessage(messageType, data);
+    const ws = new WebSocket(getVtubeEndpoint(endpoint));
+    const timer = setTimeout(() => {
+      try { ws.close(); } catch { }
+      reject(new Error('VTube Studio response timeout'));
+    }, Math.max(1500, Math.min(30000, Number(timeoutMs || 7000))));
+
+    ws.once('open', () => ws.send(JSON.stringify(message)));
+    ws.on('message', (raw) => {
+      try {
+        const parsed = JSON.parse(String(raw));
+        if (parsed?.requestID && parsed.requestID !== message.requestID) return;
+        clearTimeout(timer);
+        try { ws.close(); } catch { }
+        if (parsed?.messageType === 'APIError') {
+          reject(new Error(parsed?.data?.message || 'VTube Studio API error'));
+          return;
+        }
+        resolve(parsed);
+      } catch (error) {
+        clearTimeout(timer);
+        try { ws.close(); } catch { }
+        reject(error);
+      }
+    });
+    ws.once('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+}
+
+function normalizeVtubeDiscovery(responses = {}, endpoint = 'ws://localhost:8001') {
+  const current = responses.current?.data || {};
+  const models = Array.isArray(responses.models?.data?.availableModels)
+    ? responses.models.data.availableModels.map((model) => ({
+      id: String(model.modelID || ''),
+      name: String(model.modelName || model.vtsModelName || model.modelID || ''),
+      loaded: model.modelLoaded === true,
+      fileName: String(model.vtsModelName || ''),
+      iconName: String(model.vtsModelIconName || '')
+    })).filter((model) => model.id)
+    : [];
+  const hotkeys = Array.isArray(responses.hotkeys?.data?.availableHotkeys)
+    ? responses.hotkeys.data.availableHotkeys.map((hotkey) => ({
+      id: String(hotkey.hotkeyID || ''),
+      name: String(hotkey.name || hotkey.hotkeyID || ''),
+      type: String(hotkey.type || ''),
+      description: String(hotkey.description || ''),
+      file: String(hotkey.file || '')
+    })).filter((hotkey) => hotkey.id || hotkey.name)
+    : [];
+  const expressions = Array.isArray(responses.expressions?.data?.expressions)
+    ? responses.expressions.data.expressions.map((expression) => ({
+      name: String(expression.name || expression.file || ''),
+      file: String(expression.file || ''),
+      active: expression.active === true
+    })).filter((expression) => expression.file || expression.name)
+    : [];
+  const itemData = responses.items?.data || {};
+  const items = [
+    ...(Array.isArray(itemData.itemsInScene) ? itemData.itemsInScene : []),
+    ...(Array.isArray(itemData.availableItems) ? itemData.availableItems : [])
+  ].map((item) => ({
+    id: String(item.itemInstanceID || item.fileName || item.itemFileName || item.name || ''),
+    name: String(item.name || item.fileName || item.itemFileName || item.itemInstanceID || ''),
+    fileName: String(item.fileName || item.itemFileName || ''),
+    instanceId: String(item.itemInstanceID || ''),
+    loaded: !!item.itemInstanceID
+  })).filter((item) => item.id || item.fileName);
+  return {
+    source: 'vtube_studio',
+    endpoint: getVtubeEndpoint(endpoint),
+    currentModel: {
+      loaded: current.modelLoaded === true,
+      id: String(current.modelID || ''),
+      name: String(current.modelName || '')
+    },
+    models,
+    hotkeys,
+    expressions,
+    items,
+    fetchedAt: new Date().toISOString()
+  };
+}
+
+async function discoverVtubeStudio(endpoint) {
+  const target = getVtubeEndpoint(endpoint);
+  const [current, models, hotkeys, expressions, items] = await Promise.all([
+    sendVtubeRequest(target, 'CurrentModelRequest'),
+    sendVtubeRequest(target, 'AvailableModelsRequest'),
+    sendVtubeRequest(target, 'HotkeysInCurrentModelRequest'),
+    sendVtubeRequest(target, 'ExpressionStateRequest', { details: false }),
+    sendVtubeRequest(target, 'ItemListRequest', {
+      includeAvailableSpots: false,
+      includeItemInstancesInScene: true,
+      includeAvailableItemFiles: true
+    }).catch(() => null)
+  ]);
+  return normalizeVtubeDiscovery({ current, models, hotkeys, expressions, items }, target);
+}
+
 function ownerFromControlToken(token) {
   const parts = String(token || '').split('_');
   if (parts.length < 3 || parts[0] !== 'ctl') return null;
@@ -9759,6 +9886,62 @@ async function requireAutomationLocalAgent(req, res, next) {
     console.error('[Automations] local agent auth error', error?.message || error);
     return res.status(401).json({ error: 'Invalid local program token' });
   }
+}
+
+const automationLocalAgentSocketsByOwner = new Map();
+
+function getAutomationCapabilitiesFromMessage(message = {}) {
+  const capabilities = message && typeof message.capabilities === 'object' ? message.capabilities : {};
+  return {
+    ...capabilities,
+    transport: 'websocket',
+    lastHeartbeatTransport: 'websocket'
+  };
+}
+
+function registerAutomationLocalAgentSocket(agent, ws) {
+  const owner = agent?.ownerUserId;
+  if (!owner) return () => {};
+  let sockets = automationLocalAgentSocketsByOwner.get(owner);
+  if (!sockets) {
+    sockets = new Set();
+    automationLocalAgentSocketsByOwner.set(owner, sockets);
+  }
+  sockets.add(ws);
+  return () => {
+    const current = automationLocalAgentSocketsByOwner.get(owner);
+    if (!current) return;
+    current.delete(ws);
+    if (current.size === 0) automationLocalAgentSocketsByOwner.delete(owner);
+  };
+}
+
+function notifyAutomationLocalAgents(ownerUserId, reason = 'job_queued') {
+  const owner = String(ownerUserId || '').trim();
+  const sockets = automationLocalAgentSocketsByOwner.get(owner);
+  if (!sockets?.size) return 0;
+  const payload = JSON.stringify({ type: 'jobs.available', reason, at: new Date().toISOString() });
+  let sent = 0;
+  for (const ws of Array.from(sockets)) {
+    try {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(payload);
+        sent += 1;
+      }
+    } catch {}
+  }
+  return sent;
+}
+
+async function queueAutomationJob(ownerUserId, job) {
+  const queued = await enqueueAutomationJob(ownerUserId, job);
+  if (queued) {
+    notifyAutomationLocalAgents(ownerUserId, 'job_queued');
+    if (queued.owner_user_id && queued.owner_user_id !== ownerUserId) {
+      notifyAutomationLocalAgents(queued.owner_user_id, 'job_queued');
+    }
+  }
+  return queued;
 }
 
 function collectViewerPointIdentityKeys(ownerUserId, platforms = []) {
@@ -10189,7 +10372,7 @@ app.get('/api/automations/overview', async (req, res) => {
       connections,
       localAgents,
       soundStorage,
-      supportedConnectors: ['obs', 'vtube_studio', 'tits', 'toonation_alertbox', 'tts', 'stream_deck_touch_portal', 'http', 'websocket', 'udp'],
+      supportedConnectors: ['tits', 'vtube_studio', 'tts', 'stream_deck_touch_portal', 'http', 'websocket', 'udp', 'sound'],
       disabledConnectors: ['soop', 'ssapi', 'twip']
     });
   } catch (e) {
@@ -10393,7 +10576,6 @@ app.post('/api/automations/local-agents/pair', rateLimiters.userWrite, async (re
     const result = await getOrCreateAutomationLocalAgent(ownerUserId, name, { rotate: false });
     return res.json({
       ...result,
-      backendUrl: BACKEND_ORIGIN.replace(/\/$/, ''),
       tokenMasked: result.token ? null : 'alp_••••••••••••••••••••••••••••••••',
       tokenShownOnce: !!result.token
     });
@@ -10411,7 +10593,6 @@ app.post('/api/automations/local-agents/rotate', rateLimiters.userWrite, async (
     const result = await getOrCreateAutomationLocalAgent(ownerUserId, name, { rotate: true });
     return res.json({
       ...result,
-      backendUrl: BACKEND_ORIGIN.replace(/\/$/, ''),
       tokenShownOnce: true
     });
   } catch (e) {
@@ -10458,6 +10639,28 @@ app.post('/api/automations/local-agent/jobs/:jobId/complete', requireAutomationL
       errorMessage: req.body?.errorMessage || req.body?.error || null
     });
     if (!job) return res.status(404).json({ error: 'Job not found' });
+    const discovery = req.body?.result?.discovery;
+    const connectionId = job.connectionId || job.connection_id || null;
+    const jobType = String(job.jobType || job.job_type || '');
+    if (req.body?.status === 'done' && connectionId && discovery && typeof discovery === 'object') {
+      const type = jobType.startsWith('vtube.') ? 'vtube_studio'
+        : jobType.startsWith('tits.') ? 'tits'
+          : String(discovery.source || '');
+      if (type) {
+        await upsertAutomationConnection(req.automationLocalAgent.ownerUserId, {
+          id: connectionId,
+          type,
+          name: type === 'vtube_studio' ? 'VTube Studio' : type === 'tits' ? 'T.I.T.S.' : type,
+          enabled: true,
+          executionMode: 'local_program',
+          endpoint: discovery.endpoint || '',
+          discoveryCache: discovery,
+          discoveryUpdatedAt: discovery.fetchedAt || new Date().toISOString(),
+          lastStatus: 'ok',
+          lastCheckedAt: new Date().toISOString()
+        }).catch((error) => console.warn('[Automations] failed to persist local discovery cache', error?.message || error));
+      }
+    }
     return res.json({ job });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to complete automation job' });
@@ -10666,7 +10869,7 @@ app.post('/api/automations/tits/discover', rateLimiters.userWrite, async (req, r
     const endpoint = String(req.body?.endpoint || 'ws://localhost:42069').trim();
     const connectionId = req.body?.connectionId || null;
     if (executionMode === 'local_program') {
-      const job = await enqueueAutomationJob(ownerUserId, {
+      const job = await queueAutomationJob(ownerUserId, {
         connectionId,
         jobType: 'tits.discover',
         payload: { endpoint, sendImage: req.body?.sendImage !== false }
@@ -10718,7 +10921,7 @@ app.post('/api/automations/tits/throw', rateLimiters.userWrite, async (req, res)
     };
     if (!payload.items.length) return res.status(400).json({ error: 'items is required' });
     if (executionMode === 'local_program') {
-      const job = await enqueueAutomationJob(ownerUserId, { connectionId: req.body?.connectionId || null, jobType: 'tits.throw', payload });
+      const job = await queueAutomationJob(ownerUserId, { connectionId: req.body?.connectionId || null, jobType: 'tits.throw', payload });
       return res.json({ queued: true, jobId: job?.id, executionMode });
     }
     const response = await sendTitsRequest(req.body?.endpoint || 'ws://localhost:42069', 'TITSThrowItemsRequest', payload);
@@ -10739,7 +10942,7 @@ app.post('/api/automations/tits/trigger', rateLimiters.userWrite, async (req, re
     };
     if (!payload.triggerID && !payload.triggerName) return res.status(400).json({ error: 'triggerID or triggerName is required' });
     if (executionMode === 'local_program') {
-      const job = await enqueueAutomationJob(ownerUserId, { connectionId: req.body?.connectionId || null, jobType: 'tits.trigger', payload });
+      const job = await queueAutomationJob(ownerUserId, { connectionId: req.body?.connectionId || null, jobType: 'tits.trigger', payload });
       return res.json({ queued: true, jobId: job?.id, executionMode });
     }
     const response = await sendTitsRequest(req.body?.endpoint || 'ws://localhost:42069', 'TITSTriggerActivateRequest', payload);
@@ -10749,13 +10952,76 @@ app.post('/api/automations/tits/trigger', rateLimiters.userWrite, async (req, re
   }
 });
 
+app.post('/api/automations/vtube/discover', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const executionMode = req.body?.executionMode === 'oracle_direct' ? 'oracle_direct' : 'local_program';
+    const endpoint = String(req.body?.endpoint || 'ws://localhost:8001').trim();
+    const connectionId = req.body?.connectionId || null;
+    if (executionMode === 'local_program') {
+      const job = await queueAutomationJob(ownerUserId, {
+        connectionId,
+        jobType: 'vtube.discover',
+        payload: { endpoint }
+      });
+      return res.json({ queued: true, jobId: job?.id, executionMode, message: '로컬 프로그램이 VTube Studio 목록을 가져오도록 요청했습니다.' });
+    }
+    const discoveryCache = await discoverVtubeStudio(endpoint);
+    if (connectionId) {
+      await upsertAutomationConnection(ownerUserId, {
+        id: connectionId,
+        type: 'vtube_studio',
+        name: req.body?.name || 'VTube Studio',
+        enabled: true,
+        executionMode,
+        endpoint,
+        discoveryCache,
+        discoveryUpdatedAt: discoveryCache.fetchedAt,
+        lastStatus: 'ok',
+        lastCheckedAt: discoveryCache.fetchedAt
+      }).catch(() => null);
+    }
+    return res.json({ executionMode, discovery: discoveryCache });
+  } catch (e) {
+    console.error('[Automations] VTube Studio discover error', e?.message || e);
+    return res.status(502).json({ error: 'VTube Studio 연결에 실패했습니다.', details: e?.message || String(e) });
+  }
+});
+
+app.post('/api/automations/vtube/hotkey', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const executionMode = req.body?.executionMode === 'oracle_direct' ? 'oracle_direct' : 'local_program';
+    const payload = {
+      endpoint: String(req.body?.endpoint || 'ws://localhost:8001').trim(),
+      hotkeyId: String(req.body?.hotkeyId || req.body?.hotkeyID || '').trim(),
+      hotkeyName: String(req.body?.hotkeyName || '').trim(),
+      itemInstanceId: String(req.body?.itemInstanceId || req.body?.itemInstanceID || '').trim()
+    };
+    if (!payload.hotkeyId && !payload.hotkeyName) return res.status(400).json({ error: 'hotkeyId or hotkeyName is required' });
+    if (executionMode === 'local_program') {
+      const job = await queueAutomationJob(ownerUserId, { connectionId: req.body?.connectionId || null, jobType: 'vtube.hotkey', payload });
+      return res.json({ queued: true, jobId: job?.id, executionMode });
+    }
+    const response = await sendVtubeRequest(payload.endpoint, 'HotkeyTriggerRequest', {
+      hotkeyID: payload.hotkeyId || payload.hotkeyName,
+      itemInstanceID: payload.itemInstanceId
+    });
+    return res.json({ response });
+  } catch (e) {
+    return res.status(502).json({ error: 'VTube Studio 핫키 실행에 실패했습니다.', details: e?.message || String(e) });
+  }
+});
+
 app.post('/api/automations/toonation/test', rateLimiters.userWrite, async (req, res) => {
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
     const executionMode = req.body?.executionMode === 'local_program' ? 'local_program' : 'oracle_direct';
     if (executionMode === 'local_program') {
-      const job = await enqueueAutomationJob(ownerUserId, {
+      const job = await queueAutomationJob(ownerUserId, {
         connectionId: req.body?.connectionId || null,
         jobType: 'toonation.alertbox.test',
         payload: { keyStorage: 'local', eventTypes: ['donation'] }
@@ -10777,7 +11043,7 @@ app.post('/api/automations/tts/test', rateLimiters.userWrite, async (req, res) =
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
     const text = String(req.body?.text || '아루봇 음성 안내 테스트입니다.').trim().slice(0, 240);
-    const job = await enqueueAutomationJob(ownerUserId, {
+    const job = await queueAutomationJob(ownerUserId, {
       jobType: 'tts.speak',
       payload: {
         text,
@@ -10798,7 +11064,7 @@ app.post('/api/automations/sounds/test', rateLimiters.userWrite, async (req, res
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
     const fileId = path.basename(String(req.body?.fileId || req.body?.name || ''));
     if (!fileId) return res.status(400).json({ error: 'fileId is required' });
-    const job = await enqueueAutomationJob(ownerUserId, {
+    const job = await queueAutomationJob(ownerUserId, {
       jobType: 'sound.play',
       payload: {
         fileId,
@@ -10808,6 +11074,38 @@ app.post('/api/automations/sounds/test', rateLimiters.userWrite, async (req, res
     return res.json({ queued: true, jobId: job?.id });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to queue sound test' });
+  }
+});
+
+app.post('/api/automations/run', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const type = String(req.body?.type || '').toLowerCase();
+    const payload = req.body?.payload && typeof req.body.payload === 'object' ? req.body.payload : {};
+    const jobTypes = {
+      http: 'blueprint.http',
+      websocket: 'blueprint.websocket',
+      udp: 'blueprint.udp',
+      vtube: 'blueprint.vtube',
+      tts: 'tts.speak',
+      sound: 'sound.play'
+    };
+    const jobType = jobTypes[type];
+    if (!jobType) return res.status(400).json({ error: 'Unsupported automation run type' });
+    const job = await queueAutomationJob(ownerUserId, {
+      connectionId: req.body?.connectionId || null,
+      jobType,
+      payload: {
+        ...payload,
+        manualRun: true,
+        requestedAt: new Date().toISOString()
+      }
+    });
+    return res.json({ queued: true, jobId: job?.id, jobType });
+  } catch (e) {
+    console.error('[Automations] run error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to enqueue automation run' });
   }
 });
 
@@ -10829,6 +11127,12 @@ app.post('/api/automations/control-links', rateLimiters.userWrite, async (req, r
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
     const label = String(req.body?.label || '빠른 실행').trim().slice(0, 80) || '빠른 실행';
+    const actionId = String(req.body?.actionId || '').trim();
+    if (actionId) {
+      const blueprint = await getActionBlueprint(ownerUserId, actionId);
+      if (!blueprint) return res.status(404).json({ error: 'Action not found' });
+      if (!blueprint.version?.published) return res.status(400).json({ error: 'Action must be published before creating a control URL' });
+    }
     const token = `ctl_${crypto.randomBytes(32).toString('base64url')}`;
     const connection = await upsertAutomationConnection(ownerUserId, {
       type: 'stream_deck_touch_portal',
@@ -10839,7 +11143,8 @@ app.post('/api/automations/control-links', rateLimiters.userWrite, async (req, r
       config: {
         tokenHash: hashControlToken(token),
         tool: 'stream_deck_touch_portal',
-        label
+        label,
+        actionId
       },
       capabilities: { httpPost: true, httpGet: true }
     });
@@ -10867,7 +11172,29 @@ app.all('/api/automations/inbound/control/:token', async (req, res) => {
       }
     }
     if (!connection) return res.status(404).json({ error: 'Not found' });
-    const job = await enqueueAutomationJob(ownerUserId, {
+    const actionId = String(connection.config?.actionId || '').trim();
+    const context = {
+      source: 'external_control',
+      triggerRef: connection.id,
+      trigger: {
+        platform: 'stream_deck_touch_portal',
+        method: req.method,
+        label: connection.name,
+        connectionId: connection.id
+      },
+      control: {
+        label: connection.name,
+        method: req.method,
+        query: req.query || {},
+        body: req.body && typeof req.body === 'object' ? req.body : {},
+        at: new Date().toISOString()
+      }
+    };
+    if (actionId) {
+      const result = await executeActionBlueprint(ownerUserId, actionId, context);
+      return res.json({ ok: result.ok !== false, actionId, result });
+    }
+    const job = await queueAutomationJob(ownerUserId, {
       connectionId: connection.id,
       jobType: 'control.trigger',
       payload: {
@@ -15460,6 +15787,7 @@ async function validateWebSocketTokenConnection(token, tokenType, req) {
 // WebSocket servers (initialized below)
 let wssPvd; // PVD viewer WS (noServer mode)
 let wssRoulette; // Roulette viewer WS (noServer mode)
+let wssAutomationLocalAgent; // Local automation program WS
 
 function registerPvdRoutes() {
   // --- WebSocket for PVD viewer sync ---
@@ -15753,6 +16081,68 @@ function registerRouletteRoutes() {
 
 try { registerRouletteRoutes(); } catch (e) { console.error('[roulette ws] failed to register routes', e?.message || e); }
 
+function registerAutomationLocalAgentRoutes() {
+  console.log('[automation local ws] initializing WebSocketServer on /api/automations/local-agent/ws');
+  wssAutomationLocalAgent = new WebSocketServer({
+    noServer: true,
+    maxPayload: 64 * 1024,
+    perMessageDeflate: false,
+  });
+  wssAutomationLocalAgent.on('connection', async (ws, req) => {
+    let agent = null;
+    let unregister = () => {};
+    try {
+      const url = new URL(req.url, `http://localhost:${PORT}`);
+      const auth = String(req.headers.authorization || '').trim();
+      const bearer = auth.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : '';
+      const token = bearer || String(req.headers['x-local-agent-token'] || url.searchParams.get('token') || '').trim();
+      agent = await authenticateAutomationLocalAgent(token);
+      if (!agent) {
+        try { ws.close(1008, 'Invalid local program token'); } catch { }
+        return;
+      }
+      unregister = registerAutomationLocalAgentSocket(agent, ws);
+      await touchAutomationLocalAgent(agent.id, {
+        transport: 'websocket',
+        version: String(req.headers['x-arubot-local-version'] || ''),
+      }).catch(() => null);
+      try { ws.send(JSON.stringify({ type: 'hello', at: new Date().toISOString() })); } catch { }
+      try { ws.send(JSON.stringify({ type: 'jobs.available', reason: 'connected', at: new Date().toISOString() })); } catch { }
+
+      const keepAlive = setInterval(() => {
+        try { ws.ping(); } catch { }
+      }, 30000);
+
+      ws.on('message', async (raw) => {
+        let message = null;
+        try {
+          message = JSON.parse(String(raw));
+        } catch {
+          return;
+        }
+        if (message?.type === 'heartbeat') {
+          await touchAutomationLocalAgent(agent.id, getAutomationCapabilitiesFromMessage(message)).catch(() => null);
+          try { ws.send(JSON.stringify({ type: 'heartbeat.ack', at: new Date().toISOString() })); } catch { }
+        }
+      });
+
+      ws.on('close', () => {
+        try { clearInterval(keepAlive); } catch { }
+        unregister();
+      });
+      ws.on('error', () => {
+        try { ws.close(); } catch { }
+      });
+    } catch (error) {
+      unregister();
+      console.error('[automation local ws] connection error', error?.message || error);
+      try { ws.close(1011, 'Local program websocket error'); } catch { }
+    }
+  });
+}
+
+try { registerAutomationLocalAgentRoutes(); } catch (e) { console.error('[automation local ws] failed to register routes', e?.message || e); }
+
 // --- WebSocket for WARUDO direct push ---
 // Path: /api/warudo/ws?token=<API_KEY>
 const wss = new WebSocketServer({
@@ -15848,6 +16238,10 @@ try {
       }
       if (u.pathname === '/api/desktop/ws') {
         wssDesktop.handleUpgrade(req, socket, head, (ws) => wssDesktop.emit('connection', ws, req));
+        return;
+      }
+      if (u.pathname === '/api/automations/local-agent/ws') {
+        wssAutomationLocalAgent.handleUpgrade(req, socket, head, (ws) => wssAutomationLocalAgent.emit('connection', ws, req));
         return;
       }
       if (u.pathname === '/api/warudo/ws') {

@@ -1,7 +1,6 @@
-import { ArrowRight, Sparkles, type LucideIcon } from 'lucide-react';
+import { ArrowRight, type LucideIcon } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { LinkButton } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ResourceDashboard } from './resource-dashboard';
 
 export type AdminPageConfig = {
@@ -27,7 +26,6 @@ export function AdminFeaturePage({
   children?: React.ReactNode;
 }) {
   const Icon = config.icon;
-  const tips = config.tips || [];
 
   return (
     <>
@@ -57,7 +55,7 @@ export function AdminFeaturePage({
 
       {children}
 
-      <div className="grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
+      <div className="grid gap-5">
         {config.endpoint ? (
           <ResourceDashboard
             endpoint={config.endpoint}
@@ -67,32 +65,6 @@ export function AdminFeaturePage({
             actionSlot={resourceActionSlot}
           />
         ) : null}
-        <Card className="bg-[linear-gradient(180deg,hsl(var(--card)),hsl(var(--accent-sky)/0.12))]">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Sparkles className="h-5 w-5 text-primary" />
-              이 화면에서 할 수 있어요
-            </CardTitle>
-            <CardDescription>
-              방송 준비 시간을 줄이고 시청자가 바로 반응할 수 있게 도와줘요.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="grid gap-3 text-sm">
-              {tips.map((tip) => (
-                <div key={tip} className="flex items-start gap-3 rounded-xl border bg-background/70 p-3">
-                  <span className="mt-0.5 grid aspect-square w-[1.25em] shrink-0 place-items-center rounded-md bg-primary/12 text-[0.6875rem] font-semibold text-primary">!</span>
-                  <div className="leading-6 text-muted-foreground">{tip}</div>
-                </div>
-              ))}
-              {!tips.length ? (
-                <div className="rounded-xl border bg-background/70 p-4 leading-6 text-muted-foreground">
-                  필요한 기능을 연결하면 이 화면에서 바로 관리할 수 있어요.
-                </div>
-              ) : null}
-            </div>
-          </CardContent>
-        </Card>
       </div>
     </>
   );

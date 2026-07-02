@@ -14,7 +14,7 @@ export default function Loading() {
                 <div className="text-sm font-semibold text-primary">AruBot</div>
                 <h1 className="mt-1 break-keep text-2xl font-semibold leading-tight md:text-4xl">방송 관리 화면을 준비하고 있어요.</h1>
                 <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
-                  연결 상태와 채널 설정을 불러오는 중입니다.
+                  방송 참여 화면을 준비하는 중입니다.
                 </p>
               </div>
             </div>

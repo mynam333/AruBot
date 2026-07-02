@@ -211,13 +211,13 @@ export function PointsPage() {
               채팅 참여로 쌓인 포인트를 확인하고, 시청자별 잔액을 직접 수정하거나 지급·차감할 수 있습니다.
             </p>
           </div>
-          <div className="grid grid-cols-2 gap-2 sm:min-w-[min(100%,22rem)]">
-            <div className="rounded-[var(--radius-card)] border bg-card/78 p-4 text-center">
-              <div className="text-xl font-bold">{rows.length.toLocaleString('ko-KR')}</div>
+          <div className="grid min-w-0 grid-cols-[repeat(2,minmax(0,1fr))] gap-2 lg:basis-[34%]">
+            <div className="min-w-0 rounded-[var(--radius-card)] border bg-card/78 p-[clamp(0.75rem,1.5vw,1rem)] text-center">
+              <div className="truncate text-xl font-bold">{rows.length.toLocaleString('ko-KR')}</div>
               <div className="mt-1 text-xs text-muted-foreground">시청자</div>
             </div>
-            <div className="rounded-[var(--radius-card)] border bg-card/78 p-4 text-center">
-              <div className="text-xl font-bold">{formatPoints(totalPoints)}</div>
+            <div className="min-w-0 rounded-[var(--radius-card)] border bg-card/78 p-[clamp(0.75rem,1.5vw,1rem)] text-center">
+              <div className="truncate text-xl font-bold">{formatPoints(totalPoints)}</div>
               <div className="mt-1 text-xs text-muted-foreground">총 포인트</div>
             </div>
           </div>
@@ -240,7 +240,7 @@ export function PointsPage() {
       <Card>
         <CardHeader>
           <CardTitle>포인트 목록</CardTitle>
-          <CardDescription>입력란의 값을 바꾼 뒤 저장하면 해당 시청자의 포인트가 즉시 반영됩니다.</CardDescription>
+          <CardDescription>활발한 시청자를 찾고, 이벤트 보상 포인트를 바로 더하거나 조정할 수 있습니다.</CardDescription>
         </CardHeader>
         <CardContent>
           {rows.length ? (
@@ -300,7 +300,7 @@ export function PointsPage() {
                             value={drafts[userId] ?? String(Number(row.points || 0))}
                             onChange={(event) => setDrafts((current) => ({ ...current, [userId]: event.target.value }))}
                             inputMode="numeric"
-                            className="w-[min(12rem,42vw)] min-h-[var(--control-height-sm)]"
+                            className="min-h-[var(--control-height-sm)] text-right tabular-nums"
                             aria-label={`${row.username || userId} 포인트`}
                           />
                         </td>
@@ -347,9 +347,9 @@ export function PointsPage() {
                   <Badge tone="mint">포인트 적립</Badge>
                   <Badge tone="sky">방송 중 채팅만 적립</Badge>
                 </div>
-                <h2 className="break-keep text-2xl font-semibold">포인트 지급 기준을 설정하세요.</h2>
+                <h2 className="break-keep text-2xl font-semibold">포인트가 쌓이는 순간을 정하세요.</h2>
                 <p className="mt-2 break-keep text-sm leading-6 text-muted-foreground">
-                  채팅 포인트는 방송 중일 때만 쌓입니다. 제외 UUID에는 아루봇 UUID, CHZZK UUID, CIME UUID를 줄마다 입력할 수 있습니다.
+                  채팅, 출석, 후원이 어떤 보상으로 이어질지 방송 스타일에 맞춰 정합니다. 포인트를 주고 싶지 않은 계정은 목록에서 제외할 수 있어요.
                 </p>
               </div>
               <Button type="button" variant="outline" size="icon" onClick={() => setSettingsOpen(false)} aria-label="닫기">
@@ -357,7 +357,7 @@ export function PointsPage() {
               </Button>
             </div>
             <div className="grid min-h-0 gap-4 overflow-y-auto p-[clamp(1rem,2.4vw,1.5rem)]">
-              <div className="grid gap-3 sm:grid-cols-3">
+              <div className="grid min-w-0 gap-3 sm:grid-cols-[repeat(3,minmax(0,1fr))]">
                 <label className="grid gap-2 text-sm font-semibold">
                   채팅 1개당 포인트
                   <Input value={pointsPerChat} onChange={(event) => setPointsPerChat(event.target.value)} inputMode="numeric" />
@@ -377,7 +377,7 @@ export function PointsPage() {
                   value={excludeText}
                   onChange={(event) => setExcludeText(event.target.value)}
                   placeholder={'aru_로 시작하는 아루봇 UUID\nCHZZK 또는 CIME 유저 UUID'}
-                  className="min-h-[12rem] resize-y rounded-[var(--radius-control)] border bg-background/80 p-3 text-sm leading-6 outline-none transition placeholder:text-muted-foreground focus:border-primary/45 focus:ring-2 focus:ring-ring"
+                  className="box-border min-h-[12rem] w-full min-w-0 max-w-full resize-y rounded-[var(--radius-control)] border bg-background/80 p-[clamp(0.75rem,1.4vw,1rem)] text-sm leading-6 outline-none transition placeholder:text-muted-foreground focus:border-primary/45 focus:ring-2 focus:ring-ring"
                 />
               </label>
             </div>

@@ -12,20 +12,49 @@ const { WebSocket } = require('ws');
 const APP_NAME = 'AruBot Local Program';
 const LEGACY_UPDATE_MANIFEST_URL = 'https://arubot.vercel.app/downloads/local-program/latest.json';
 const DEFAULT_UPDATE_MANIFEST_URL = 'https://github.com/mynam333/AruBot/releases/latest/download/latest.json';
+const DEFAULT_DASHBOARD_URL = 'https://arubot.vercel.app';
+
+function readBuildEnv() {
+  try {
+    return require('./runtime-env.cjs') || {};
+  } catch {
+    return {};
+  }
+}
+
+const BUILD_ENV = readBuildEnv();
+
+function cleanUrl(value) {
+  return String(value || '').trim().replace(/\/$/, '');
+}
+
+function resolveBuildValue(...keys) {
+  for (const key of keys) {
+    const value = process.env[key] || BUILD_ENV[key];
+    if (String(value || '').trim()) return String(value).trim();
+  }
+  return '';
+}
+
 const DEFAULT_CONFIG = {
-  backendUrl: 'http://127.0.0.1:3001',
-  updateManifestUrl: DEFAULT_UPDATE_MANIFEST_URL,
+  backendUrl: cleanUrl(resolveBuildValue('ARUBOT_LOCAL_BACKEND_URL', 'NEXT_PUBLIC_API_BASE_URL', 'NEXT_PUBLIC_BACKEND_URL')) || 'http://127.0.0.1:3001',
+  updateManifestUrl: cleanUrl(resolveBuildValue('ARUBOT_LOCAL_UPDATE_MANIFEST_URL')) || DEFAULT_UPDATE_MANIFEST_URL,
+  dashboardUrl: cleanUrl(resolveBuildValue('ARUBOT_LOCAL_DASHBOARD_URL', 'NEXT_PUBLIC_APP_URL', 'NEXT_PUBLIC_SITE_URL')) || DEFAULT_DASHBOARD_URL,
   token: '',
   titsEndpoint: 'ws://localhost:42069',
-  toonationAlertboxKey: '',
+  vtubeEndpoint: 'ws://localhost:8001',
+  vtubeAuthToken: '',
   soundFolder: '',
-  pollIntervalMs: 1800,
   autoStart: false,
 };
 
 let mainWindow = null;
 let running = false;
-let pollTimer = null;
+let agentSocket = null;
+let agentSocketReconnectTimer = null;
+let agentSocketHeartbeatTimer = null;
+let reconnectAttempt = 0;
+let processingJobs = false;
 let config = { ...DEFAULT_CONFIG };
 let logs = [];
 let updateState = {
@@ -186,40 +215,44 @@ function loadConfig() {
   if (!persisted.updateManifestUrl || persisted.updateManifestUrl === LEGACY_UPDATE_MANIFEST_URL) {
     persisted.updateManifestUrl = DEFAULT_UPDATE_MANIFEST_URL;
   }
+  const backendUrl = DEFAULT_CONFIG.backendUrl || cleanUrl(persisted.backendUrl) || 'http://127.0.0.1:3001';
+  const updateManifestUrl = DEFAULT_CONFIG.updateManifestUrl || cleanUrl(persisted.updateManifestUrl) || DEFAULT_UPDATE_MANIFEST_URL;
+  const dashboardUrl = DEFAULT_CONFIG.dashboardUrl || cleanUrl(persisted.dashboardUrl) || DEFAULT_DASHBOARD_URL;
   config = {
     ...DEFAULT_CONFIG,
     ...persisted,
+    backendUrl,
+    updateManifestUrl,
+    dashboardUrl,
     token: decryptText(vault.token),
-    toonationAlertboxKey: decryptText(vault.toonationAlertboxKey),
+    vtubeAuthToken: decryptText(vault.vtubeAuthToken),
   };
   return config;
 }
 
 function saveConfig(next) {
-  const nextUpdateManifestUrl = String(next.updateManifestUrl ?? config.updateManifestUrl ?? DEFAULT_CONFIG.updateManifestUrl).trim();
   config = {
     ...config,
     ...next,
-    backendUrl: String(next.backendUrl ?? config.backendUrl ?? '').replace(/\/$/, ''),
-    updateManifestUrl: nextUpdateManifestUrl === LEGACY_UPDATE_MANIFEST_URL ? DEFAULT_UPDATE_MANIFEST_URL : nextUpdateManifestUrl,
+    backendUrl: DEFAULT_CONFIG.backendUrl || cleanUrl(config.backendUrl) || 'http://127.0.0.1:3001',
+    updateManifestUrl: DEFAULT_CONFIG.updateManifestUrl || cleanUrl(config.updateManifestUrl) || DEFAULT_UPDATE_MANIFEST_URL,
+    dashboardUrl: DEFAULT_CONFIG.dashboardUrl || cleanUrl(config.dashboardUrl) || DEFAULT_DASHBOARD_URL,
     token: String(next.token ?? config.token ?? '').trim(),
     titsEndpoint: String(next.titsEndpoint ?? config.titsEndpoint ?? '').trim() || DEFAULT_CONFIG.titsEndpoint,
-    toonationAlertboxKey: String(next.toonationAlertboxKey ?? config.toonationAlertboxKey ?? '').trim(),
+    vtubeEndpoint: String(next.vtubeEndpoint ?? config.vtubeEndpoint ?? '').trim() || DEFAULT_CONFIG.vtubeEndpoint,
+    vtubeAuthToken: String(next.vtubeAuthToken ?? config.vtubeAuthToken ?? '').trim(),
     soundFolder: String(next.soundFolder ?? config.soundFolder ?? '').trim(),
-    pollIntervalMs: Math.max(800, Math.min(10000, Number(next.pollIntervalMs ?? config.pollIntervalMs ?? 1800))),
     autoStart: !!(next.autoStart ?? config.autoStart),
   };
   writeJson('config.json', {
-    backendUrl: config.backendUrl,
-    updateManifestUrl: config.updateManifestUrl,
     titsEndpoint: config.titsEndpoint,
+    vtubeEndpoint: config.vtubeEndpoint,
     soundFolder: config.soundFolder,
-    pollIntervalMs: config.pollIntervalMs,
     autoStart: config.autoStart,
   });
   writeJson('vault.json', {
     token: encryptText(config.token),
-    toonationAlertboxKey: encryptText(config.toonationAlertboxKey),
+    vtubeAuthToken: encryptText(config.vtubeAuthToken),
   });
   emitState();
   return getPublicState();
@@ -230,12 +263,15 @@ function getPublicState() {
     version: app.getVersion(),
     running,
     config: {
-      ...config,
       token: config.token ? `${config.token.slice(0, 8)}...${config.token.slice(-4)}` : '',
-      updateManifestUrl: config.updateManifestUrl,
       hasToken: !!config.token,
-      toonationAlertboxKey: config.toonationAlertboxKey ? `${config.toonationAlertboxKey.slice(0, 5)}...` : '',
-      hasToonationKey: !!config.toonationAlertboxKey,
+      titsEndpoint: config.titsEndpoint,
+      vtubeEndpoint: config.vtubeEndpoint,
+      vtubeAuthToken: config.vtubeAuthToken ? `${config.vtubeAuthToken.slice(0, 8)}...` : '',
+      hasVtubeAuthToken: !!config.vtubeAuthToken,
+      soundFolder: config.soundFolder,
+      autoStart: config.autoStart,
+      connectionMode: 'websocket',
     },
     stats,
     logs,
@@ -504,6 +540,183 @@ async function discoverTits() {
   return normalizeTitsDiscovery(items, triggers);
 }
 
+function getVtubeEndpoint(endpoint = config.vtubeEndpoint) {
+  const raw = String(endpoint || DEFAULT_CONFIG.vtubeEndpoint).trim();
+  return raw || DEFAULT_CONFIG.vtubeEndpoint;
+}
+
+function makeVtubeMessage(messageType, data = {}) {
+  return {
+    apiName: 'VTubeStudioPublicAPI',
+    apiVersion: '1.0',
+    requestID: `arubot_vts_${Date.now().toString(36)}_${crypto.randomBytes(4).toString('hex')}`,
+    messageType,
+    data: data && typeof data === 'object' ? data : {},
+  };
+}
+
+function sendVtubeRequest(messageType, data = {}, options = {}) {
+  return new Promise((resolve, reject) => {
+    const endpoint = getVtubeEndpoint(options.endpoint);
+    const payload = makeVtubeMessage(messageType, data);
+    const ws = new WebSocket(endpoint);
+    const timer = setTimeout(() => {
+      try { ws.close(); } catch {}
+      reject(new Error('VTube Studio 응답 시간이 초과되었습니다.'));
+    }, Math.max(1500, Math.min(30000, Number(options.timeoutMs || 7000))));
+
+    ws.once('open', () => ws.send(JSON.stringify(payload)));
+    ws.on('message', (raw) => {
+      try {
+        const parsed = JSON.parse(String(raw));
+        if (parsed?.requestID && parsed.requestID !== payload.requestID) return;
+        clearTimeout(timer);
+        try { ws.close(); } catch {}
+        if (parsed?.messageType === 'APIError') {
+          reject(new Error(parsed?.data?.message || 'VTube Studio API 오류가 발생했습니다.'));
+          return;
+        }
+        resolve(parsed);
+      } catch (error) {
+        clearTimeout(timer);
+        try { ws.close(); } catch {}
+        reject(error);
+      }
+    });
+    ws.once('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+}
+
+async function authenticateVtubeStudio(options = {}) {
+  const endpoint = getVtubeEndpoint(options.endpoint);
+  const pluginName = 'AruBot';
+  const pluginDeveloper = 'AruBot';
+  let authToken = String(options.authToken || config.vtubeAuthToken || '').trim();
+
+  const authenticateWithToken = async (token) => {
+    const response = await sendVtubeRequest('AuthenticationRequest', {
+      pluginName,
+      pluginDeveloper,
+      authenticationToken: token,
+    }, { endpoint, timeoutMs: options.timeoutMs || 7000 });
+    return response?.data?.authenticated === true;
+  };
+
+  if (authToken) {
+    const authenticated = await authenticateWithToken(authToken).catch(() => false);
+    if (authenticated) return { authenticated: true, endpoint, authToken, reused: true };
+  }
+
+  const tokenResponse = await sendVtubeRequest('AuthenticationTokenRequest', {
+    pluginName,
+    pluginDeveloper,
+  }, { endpoint, timeoutMs: Math.max(15000, Number(options.timeoutMs || 20000)) });
+  authToken = String(tokenResponse?.data?.authenticationToken || '').trim();
+  if (!authToken) throw new Error('VTube Studio 인증 토큰을 받지 못했습니다.');
+  const authenticated = await authenticateWithToken(authToken);
+  if (!authenticated) throw new Error('VTube Studio 인증에 실패했습니다.');
+  saveConfig({ vtubeEndpoint: endpoint, vtubeAuthToken: authToken });
+  return { authenticated: true, endpoint, authToken, reused: false };
+}
+
+function normalizeVtubeDiscovery(responses = {}, endpoint = config.vtubeEndpoint) {
+  const current = responses.current?.data || {};
+  const models = Array.isArray(responses.models?.data?.availableModels)
+    ? responses.models.data.availableModels.map((model) => ({
+      id: String(model.modelID || ''),
+      name: String(model.modelName || model.vtsModelName || model.modelID || ''),
+      loaded: model.modelLoaded === true,
+      fileName: String(model.vtsModelName || ''),
+      iconName: String(model.vtsModelIconName || ''),
+    })).filter((model) => model.id)
+    : [];
+  const hotkeys = Array.isArray(responses.hotkeys?.data?.availableHotkeys)
+    ? responses.hotkeys.data.availableHotkeys.map((hotkey) => ({
+      id: String(hotkey.hotkeyID || ''),
+      name: String(hotkey.name || hotkey.hotkeyID || ''),
+      type: String(hotkey.type || ''),
+      description: String(hotkey.description || ''),
+      file: String(hotkey.file || ''),
+    })).filter((hotkey) => hotkey.id || hotkey.name)
+    : [];
+  const expressions = Array.isArray(responses.expressions?.data?.expressions)
+    ? responses.expressions.data.expressions.map((expression) => ({
+      name: String(expression.name || expression.file || ''),
+      file: String(expression.file || ''),
+      active: expression.active === true,
+    })).filter((expression) => expression.file || expression.name)
+    : [];
+  const itemData = responses.items?.data || {};
+  const items = [
+    ...(Array.isArray(itemData.itemsInScene) ? itemData.itemsInScene : []),
+    ...(Array.isArray(itemData.availableItems) ? itemData.availableItems : []),
+  ].map((item) => ({
+    id: String(item.itemInstanceID || item.fileName || item.itemFileName || item.name || ''),
+    name: String(item.name || item.fileName || item.itemFileName || item.itemInstanceID || ''),
+    fileName: String(item.fileName || item.itemFileName || ''),
+    instanceId: String(item.itemInstanceID || ''),
+    loaded: !!item.itemInstanceID,
+  })).filter((item) => item.id || item.fileName);
+  return {
+    source: 'vtube_studio',
+    endpoint,
+    currentModel: {
+      loaded: current.modelLoaded === true,
+      id: String(current.modelID || ''),
+      name: String(current.modelName || ''),
+    },
+    models,
+    hotkeys,
+    expressions,
+    items,
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
+async function discoverVtubeStudio(options = {}) {
+  const auth = await authenticateVtubeStudio(options);
+  const endpoint = auth.endpoint;
+  const [current, models, hotkeys, expressions, items] = await Promise.all([
+    sendVtubeRequest('CurrentModelRequest', {}, { endpoint }),
+    sendVtubeRequest('AvailableModelsRequest', {}, { endpoint }),
+    sendVtubeRequest('HotkeysInCurrentModelRequest', {}, { endpoint }),
+    sendVtubeRequest('ExpressionStateRequest', { details: false }, { endpoint }),
+    sendVtubeRequest('ItemListRequest', {
+      includeAvailableSpots: false,
+      includeItemInstancesInScene: true,
+      includeAvailableItemFiles: true,
+    }, { endpoint }).catch(() => null),
+  ]);
+  return normalizeVtubeDiscovery({ current, models, hotkeys, expressions, items }, endpoint);
+}
+
+async function triggerVtubeHotkey(payload = {}) {
+  const auth = await authenticateVtubeStudio({ endpoint: payload.endpoint });
+  const hotkeyID = String(payload.hotkeyID || payload.hotkeyId || payload.hotkeyName || '').trim();
+  if (!hotkeyID) throw new Error('실행할 VTube Studio 핫키가 없습니다.');
+  return await sendVtubeRequest('HotkeyTriggerRequest', {
+    hotkeyID,
+    itemInstanceID: String(payload.itemInstanceID || payload.itemInstanceId || ''),
+  }, { endpoint: auth.endpoint });
+}
+
+async function injectVtubeParameter(payload = {}) {
+  const auth = await authenticateVtubeStudio({ endpoint: payload.endpoint });
+  const parameter = String(payload.parameter || payload.parameterName || payload.id || '').trim();
+  if (!parameter) throw new Error('변경할 VTube Studio 파라미터가 없습니다.');
+  return await sendVtubeRequest('InjectParameterDataRequest', {
+    faceFound: payload.faceFound !== false,
+    parameterValues: [{
+      id: parameter,
+      value: Number(payload.value || 0),
+      weight: Number(payload.weight || 1),
+    }],
+  }, { endpoint: auth.endpoint });
+}
+
 async function processJob(job) {
   const type = String(job.job_type || job.jobType || '');
   const payload = job.payload || {};
@@ -526,14 +739,16 @@ async function processJob(job) {
       triggerName: payload.triggerName || '',
     });
   }
-  if (type === 'toonation.alertbox.test') {
-    if (!config.toonationAlertboxKey) throw new Error('투네이션 Alertbox 키가 저장되어 있지 않습니다.');
-    return {
-      ok: true,
-      provider: 'toonation',
-      keyStoredLocally: true,
-      message: '투네이션 키가 로컬 vault에 저장되어 있습니다.',
-    };
+  if (type === 'vtube.discover') {
+    return { discovery: await discoverVtubeStudio({ endpoint: payload.endpoint }) };
+  }
+  if (type === 'vtube.hotkey') {
+    return await triggerVtubeHotkey(payload);
+  }
+  if (type === 'blueprint.vtube') {
+    if (payload.hotkeyId || payload.hotkeyID || payload.hotkeyName) return await triggerVtubeHotkey(payload);
+    if (payload.parameter || payload.parameterName) return await injectVtubeParameter(payload);
+    throw new Error('VTube Studio 노드에 핫키 또는 파라미터 설정이 없습니다.');
   }
   if (type === 'tts.speak' || type === 'blueprint.tts') {
     const text = String(payload.text || '').trim();
@@ -581,7 +796,7 @@ async function processJob(job) {
   if (type === 'blueprint.http') {
     const url = await assertSafeExternalHttpUrl(payload.url, {
       allowInsecureHttp: payload.allowInsecureHttp === true,
-      allowPrivateNetwork: false,
+      allowPrivateNetwork: payload.allowPrivateNetwork === true,
     });
     const method = String(payload.method || 'POST').toUpperCase();
     if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) throw new Error('지원하지 않는 HTTP 메서드입니다.');
@@ -618,7 +833,7 @@ async function processJob(job) {
     if (url.protocol === 'ws:' && payload.allowInsecureWebSocket !== true) throw new Error('WebSocket 노드는 기본적으로 WSS만 허용합니다.');
     await assertSafeExternalHttpUrl(`${url.protocol === 'wss:' ? 'https:' : 'http:'}//${url.host}`, {
       allowInsecureHttp: payload.allowInsecureWebSocket === true,
-      allowPrivateNetwork: false,
+      allowPrivateNetwork: payload.allowPrivateNetwork === true,
     });
     return await new Promise((resolve, reject) => {
       const ws = new WebSocket(url.href);
@@ -680,6 +895,8 @@ async function processJob(job) {
 
 async function claimAndProcessJobs() {
   if (!running) return;
+  if (processingJobs) return;
+  processingJobs = true;
   try {
     const claim = await apiFetch('/api/automations/local-agent/jobs/claim', {
       method: 'POST',
@@ -687,7 +904,8 @@ async function claimAndProcessJobs() {
         limit: 5,
         capabilities: {
           tits: true,
-          toonation: !!config.toonationAlertboxKey,
+          vtubeStudio: true,
+          vtubeStudioAuthenticated: !!config.vtubeAuthToken,
           soundFolder: !!config.soundFolder,
           tts: true,
           version: app.getVersion(),
@@ -718,8 +936,9 @@ async function claimAndProcessJobs() {
       }
     }
   } catch (error) {
-    addLog('error', '백엔드 큐 확인 실패', error.message || String(error));
+    addLog('error', '작업 확인 실패', error.message || String(error));
   } finally {
+    processingJobs = false;
     emitState();
   }
 }
@@ -731,7 +950,8 @@ async function heartbeat() {
     body: JSON.stringify({
       capabilities: {
         tits: true,
-        toonation: !!config.toonationAlertboxKey,
+        vtubeStudio: true,
+        vtubeStudioAuthenticated: !!config.vtubeAuthToken,
         soundFolder: !!config.soundFolder,
         tts: true,
         version: app.getVersion(),
@@ -741,25 +961,130 @@ async function heartbeat() {
   stats.lastHeartbeatAt = new Date().toISOString();
 }
 
+function getAgentWebSocketUrl() {
+  const base = new URL(normalizeBackendUrl());
+  base.protocol = base.protocol === 'https:' ? 'wss:' : 'ws:';
+  base.pathname = '/api/automations/local-agent/ws';
+  base.search = '';
+  base.hash = '';
+  return base.toString();
+}
+
+function sendAgentSocketMessage(message) {
+  if (!agentSocket || agentSocket.readyState !== WebSocket.OPEN) return false;
+  try {
+    agentSocket.send(JSON.stringify(message));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function scheduleAgentReconnect() {
+  if (!running || agentSocketReconnectTimer) return;
+  const delay = Math.min(30000, 1000 * (2 ** Math.min(5, reconnectAttempt)));
+  reconnectAttempt += 1;
+  agentSocketReconnectTimer = setTimeout(() => {
+    agentSocketReconnectTimer = null;
+    connectAgentSocket();
+  }, delay);
+}
+
+function stopAgentSocket() {
+  if (agentSocketReconnectTimer) clearTimeout(agentSocketReconnectTimer);
+  if (agentSocketHeartbeatTimer) clearInterval(agentSocketHeartbeatTimer);
+  agentSocketReconnectTimer = null;
+  agentSocketHeartbeatTimer = null;
+  const socket = agentSocket;
+  agentSocket = null;
+  if (socket) {
+    try { socket.close(1000, 'stopped'); } catch { }
+  }
+}
+
+function sendSocketHeartbeat() {
+  const sent = sendAgentSocketMessage({
+    type: 'heartbeat',
+    capabilities: {
+      tits: true,
+      vtubeStudio: true,
+      vtubeStudioAuthenticated: !!config.vtubeAuthToken,
+      soundFolder: !!config.soundFolder,
+      tts: true,
+      version: app.getVersion(),
+    },
+    at: new Date().toISOString(),
+  });
+  if (!sent) heartbeat().catch(() => undefined);
+}
+
+function connectAgentSocket() {
+  if (!running || !config.token) return;
+  stopAgentSocket();
+  const url = getAgentWebSocketUrl();
+  const socket = new WebSocket(url, {
+    headers: {
+      Authorization: `Bearer ${config.token}`,
+      'X-AruBot-Local-Version': app.getVersion(),
+    },
+  });
+  agentSocket = socket;
+
+  socket.once('open', () => {
+    reconnectAttempt = 0;
+    addLog('success', '아루봇과 실시간 연결이 열렸습니다.');
+    sendSocketHeartbeat();
+    claimAndProcessJobs();
+    agentSocketHeartbeatTimer = setInterval(sendSocketHeartbeat, 55000);
+    emitState();
+  });
+
+  socket.on('message', (raw) => {
+    let message = null;
+    try {
+      message = JSON.parse(String(raw));
+    } catch {
+      return;
+    }
+    if (message?.type === 'hello' || message?.type === 'heartbeat.ack') {
+      stats.lastHeartbeatAt = message.at || new Date().toISOString();
+      emitState();
+      return;
+    }
+    if (message?.type === 'jobs.available') {
+      claimAndProcessJobs();
+    }
+  });
+
+  socket.once('close', () => {
+    if (agentSocket === socket) agentSocket = null;
+    if (agentSocketHeartbeatTimer) clearInterval(agentSocketHeartbeatTimer);
+    agentSocketHeartbeatTimer = null;
+    if (running) {
+      addLog('info', '실시간 연결이 끊어져 재연결을 준비합니다.');
+      scheduleAgentReconnect();
+    }
+    emitState();
+  });
+
+  socket.once('error', (error) => {
+    addLog('error', '실시간 연결 오류', error.message || String(error));
+  });
+}
+
 function startAgent() {
   if (running) return getPublicState();
-  if (!config.backendUrl || !config.token) throw new Error('백엔드 주소와 로컬 프로그램 토큰이 필요합니다.');
+  if (!config.backendUrl || !config.token) throw new Error('로컬 프로그램 토큰이 필요합니다.');
   running = true;
   addLog('success', '로컬 프로그램을 시작했습니다.');
-  heartbeat().catch((error) => addLog('error', 'heartbeat 실패', error.message || String(error)));
-  claimAndProcessJobs();
-  pollTimer = setInterval(() => {
-    heartbeat().catch(() => undefined);
-    claimAndProcessJobs();
-  }, config.pollIntervalMs);
+  connectAgentSocket();
   emitState();
   return getPublicState();
 }
 
 function stopAgent() {
   running = false;
-  if (pollTimer) clearInterval(pollTimer);
-  pollTimer = null;
+  stopAgentSocket();
   addLog('info', '로컬 프로그램을 중지했습니다.');
   emitState();
   return getPublicState();
@@ -793,8 +1118,23 @@ ipcMain.handle('agent:start', () => startAgent());
 ipcMain.handle('agent:stop', () => stopAgent());
 ipcMain.handle('tits:discover', async () => {
   const discovery = await discoverTits();
-  addLog('success', `T.I.T.S. 목록 동기화 완료: 아이템 ${discovery.items.length}개, 트리거 ${discovery.triggers.length}개`);
+  addLog('success', `T.I.T.S. 목록 불러오기 완료: 아이템 ${discovery.items.length}개, 트리거 ${discovery.triggers.length}개`);
   return discovery;
+});
+ipcMain.handle('vtube:authenticate', async () => {
+  const auth = await authenticateVtubeStudio();
+  addLog('success', auth.reused ? 'VTube Studio 인증을 확인했습니다.' : 'VTube Studio 인증을 완료했습니다.');
+  return { authenticated: auth.authenticated, reused: auth.reused, endpoint: auth.endpoint };
+});
+ipcMain.handle('vtube:discover', async () => {
+  const discovery = await discoverVtubeStudio();
+  addLog('success', `VTube Studio 목록 불러오기 완료: 모델 ${discovery.models.length}개, 핫키 ${discovery.hotkeys.length}개`);
+  return discovery;
+});
+ipcMain.handle('vtube:hotkey', async (_event, payload) => {
+  const result = await triggerVtubeHotkey(payload || {});
+  addLog('success', 'VTube Studio 핫키를 실행했습니다.');
+  return result;
 });
 ipcMain.handle('remote:overview', async () => apiFetch('/api/local-remote/overview'));
 ipcMain.handle('remote:command:save', async (_event, rule) => {
@@ -846,6 +1186,10 @@ ipcMain.handle('folder:openSound', async () => {
 });
 ipcMain.handle('external:open', async (_event, url) => {
   await shell.openExternal(String(url || ''));
+  return true;
+});
+ipcMain.handle('dashboard:open', async () => {
+  await shell.openExternal(config.dashboardUrl || DEFAULT_DASHBOARD_URL);
   return true;
 });
 ipcMain.handle('update:check', async () => {

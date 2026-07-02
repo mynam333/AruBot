@@ -140,8 +140,8 @@ function LoadingState() {
         <div className="mx-auto grid aspect-square w-[clamp(4rem,9vw,6rem)] place-items-center rounded-[var(--radius-panel)] bg-muted">
           <Loader2 className="h-8 w-8 animate-spin text-primary" />
         </div>
-        <h1 className="mt-6 text-2xl font-semibold">포인트를 불러오는 중입니다</h1>
-        <p className="mt-3 text-sm leading-7 text-muted-foreground">연결된 플랫폼 계정을 확인하고 방송별 포인트를 합산하고 있습니다.</p>
+        <h1 className="mt-6 text-2xl font-semibold">내 참여 포인트를 모으는 중입니다</h1>
+        <p className="mt-3 text-sm leading-7 text-muted-foreground">방송마다 쌓인 포인트와 바로 참여할 수 있는 페이지를 준비하고 있어요.</p>
       </section>
     </ViewerShell>
   );
@@ -266,7 +266,7 @@ export function ViewerPointsPage() {
               보는 플랫폼이 달라도 내 포인트는 하나로.
             </h1>
             <p className="mt-5 max-w-2xl break-keep text-sm leading-7 text-muted-foreground md:text-base">
-              먼저 시청 계정을 연결하면 방송별 포인트를 확인할 수 있습니다. 두 플랫폼을 모두 연결하면 같은 방송인의 포인트가 합산되어 표시됩니다.
+              자주 보는 방송의 포인트를 한곳에서 보고, 명령어와 룰렛 페이지로 바로 이동해 다음 참여를 이어가세요.
             </p>
             <LinkButton href="/viewer/connect" className="mt-7">
               <UserRoundPlus className="h-4 w-4" />
@@ -277,9 +277,9 @@ export function ViewerPointsPage() {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <UserRoundPlus className="h-5 w-5 text-primary" />
-                계정 연결 방식
+                시청자에게 열리는 것들
               </CardTitle>
-              <CardDescription>먼저 로그인한 계정에 나중에 연결한 플랫폼이 묶입니다.</CardDescription>
+              <CardDescription>포인트를 확인하는 순간 다음 참여까지 이어집니다.</CardDescription>
             </CardHeader>
             <CardContent className="grid gap-3">
               {['방송별 포인트 잔액 확인', '공개 명령어 페이지 바로가기', 'CHZZK와 CIME 포인트 합산'].map((item) => (
@@ -303,10 +303,10 @@ export function ViewerPointsPage() {
             <div>
               <Badge tone={hasBothPlatforms ? 'mint' : 'sky'}>{hasBothPlatforms ? '통합 포인트 활성화' : '시청자 포인트'}</Badge>
               <h1 className="mt-5 max-w-4xl break-keep text-[clamp(2.15rem,5.5vw,4.5rem)] font-semibold leading-tight">
-                내 방송 참여 포인트를 한눈에 확인하세요.
+                내가 쌓은 방송별 포인트를 한눈에.
               </h1>
               <p className="mt-4 max-w-2xl break-keep text-sm leading-7 text-muted-foreground md:text-base">
-                연결된 플랫폼 계정을 기준으로 방송별 포인트를 합산했습니다. 방송인의 공개 명령어와 포인트 페이지로 바로 이동할 수 있습니다.
+                자주 보는 방송의 포인트를 비교하고, 공개 명령어와 룰렛으로 바로 이어가세요.
               </p>
               <div className="mt-6 flex flex-wrap gap-2">
                 {platforms.length ? (
@@ -321,8 +321,8 @@ export function ViewerPointsPage() {
             </div>
             <Card className="bg-card/80">
               <CardHeader>
-                <CardTitle>총 보유 포인트</CardTitle>
-                <CardDescription>연결된 모든 플랫폼에서 확인된 합산값입니다.</CardDescription>
+                <CardTitle>내 참여 포인트</CardTitle>
+                <CardDescription>방송마다 쌓인 참여 기록을 모두 더한 값입니다.</CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="text-[clamp(2.4rem,6vw,4rem)] font-semibold leading-none">{formatNumber(totalPoints)}</div>
@@ -343,14 +343,14 @@ export function ViewerPointsPage() {
       <section className="mx-auto mt-5 grid max-w-7xl gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(26%,0.34fr)]">
         <div className="grid gap-3">
           <Card className="bg-card/85">
-            <CardContent className="grid gap-3 p-[clamp(1rem,2vw,1.25rem)] md:grid-cols-[1fr_auto] md:items-center">
-              <div className="relative">
+            <CardContent className="grid gap-3 p-[clamp(1rem,2vw,1.25rem)] md:grid-cols-[minmax(0,1fr)_minmax(0,0.46fr)] md:items-center">
+              <div className="relative min-w-0">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <input
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
                   placeholder="스트리머 이름이나 채널 ID로 검색"
-                  className="min-h-[var(--control-height)] w-full rounded-[var(--radius-control)] border bg-background/80 pl-9 pr-3 text-sm outline-none transition focus:border-primary/45 focus:ring-2 focus:ring-ring"
+                  className="box-border min-h-[var(--control-height)] w-full min-w-0 max-w-full rounded-[var(--radius-control)] border bg-background/80 pl-[clamp(2.25rem,4vw,2.75rem)] pr-[clamp(0.75rem,1.4vw,1rem)] text-sm outline-none transition focus:border-primary/45 focus:ring-2 focus:ring-ring"
                 />
               </div>
               <div className="flex flex-wrap gap-2">
@@ -431,14 +431,14 @@ export function ViewerPointsPage() {
                 <span className="grid aspect-square w-[clamp(4rem,9vw,6rem)] place-items-center rounded-[var(--radius-panel)] bg-muted text-muted-foreground">
                   <SearchX className="h-8 w-8" />
                 </span>
-                <h2 className="mt-6 text-2xl font-semibold">아직 표시할 포인트가 없습니다</h2>
+                <h2 className="mt-6 text-2xl font-semibold">아직 쌓인 포인트가 없습니다</h2>
                 <p className="mt-3 max-w-xl break-keep text-sm leading-7 text-muted-foreground">
-                  방송 채팅에 참여하거나, 다른 플랫폼 계정을 연결하면 확인 가능한 포인트가 이곳에 표시됩니다.
+                  방송 채팅에 참여하면 이곳에 포인트가 쌓입니다. 자주 보는 방송에서 명령어와 이벤트를 즐겨보세요.
                 </p>
                 <div className="mt-6">
                   <LinkButton href="/viewer/connect" variant="soft">
                     <UserRoundPlus className="h-4 w-4" />
-                    계정 연결 관리
+                    시청 계정 연결하기
                   </LinkButton>
                 </div>
               </CardContent>
@@ -450,30 +450,30 @@ export function ViewerPointsPage() {
         <aside className="grid h-fit gap-4">
           <Card className="bg-card/85">
             <CardHeader>
-              <CardTitle>포인트 합산 기준</CardTitle>
-              <CardDescription>같은 AruBot 계정에 연결된 플랫폼 ID를 기준으로 계산합니다.</CardDescription>
+              <CardTitle>포인트가 이어지는 방식</CardTitle>
+              <CardDescription>어느 플랫폼에서 봐도 같은 방송 참여로 느껴지도록 모아 보여줍니다.</CardDescription>
             </CardHeader>
             <CardContent className="grid gap-3 text-sm leading-6 text-muted-foreground">
               <div className="rounded-[var(--radius-control)] border bg-background/70 p-3">
-                CHZZK와 CIME을 모두 연결하면 각 플랫폼에서 쌓은 같은 방송인의 포인트가 합산됩니다.
+                CHZZK와 CIME에서 같은 방송인을 함께 시청했다면 포인트가 한 줄로 모여 보입니다.
               </div>
               <div className="rounded-[var(--radius-control)] border bg-background/70 p-3">
-                공개 페이지 이동은 방송인이 열어둔 명령어, 포인트, 룰렛 화면으로 연결됩니다.
+                각 방송 카드에서 명령어, 포인트, 룰렛 페이지로 바로 이동해 참여할 수 있습니다.
               </div>
             </CardContent>
           </Card>
           <Card className="bg-card/85">
             <CardHeader>
-              <CardTitle>계정 연결 관리</CardTitle>
-              <CardDescription>플랫폼 로그인과 계정별 연결 해제는 전용 페이지에서 관리합니다.</CardDescription>
+              <CardTitle>다음 참여를 빠르게</CardTitle>
+              <CardDescription>포인트를 확인한 뒤 바로 쓸 수 있는 참여 페이지를 모았습니다.</CardDescription>
             </CardHeader>
             <CardContent className="grid gap-3">
               <div className="rounded-[var(--radius-control)] border bg-background/70 p-3 text-sm leading-6 text-muted-foreground">
-                현재 페이지는 방송별 포인트 확인에 집중합니다. 계정 추가 연결, 연결 해제, 상태 새로고침은 계정 연결 페이지에서 처리할 수 있습니다.
+                방송마다 열린 명령어와 룰렛을 바로 찾아가고, 지금 라이브 중인 채널을 먼저 볼 수 있습니다.
               </div>
               <LinkButton href="/viewer/connect" variant="soft" className="w-full justify-center">
                 <UserRoundPlus className="h-4 w-4" />
-                계정 연결 페이지로 이동
+                내 시청 계정 보기
               </LinkButton>
             </CardContent>
           </Card>

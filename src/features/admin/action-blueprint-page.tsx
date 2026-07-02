@@ -1,5 +1,6 @@
 'use client';
 
+import * as Dialog from '@radix-ui/react-dialog';
 import {
   Activity,
   BadgeCheck,
@@ -18,6 +19,7 @@ import {
   MousePointer2,
   Move,
   Network,
+  Pencil,
   Play,
   Plus,
   Radio,
@@ -33,6 +35,7 @@ import {
   Upload,
   Volume2,
   Workflow,
+  X,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
@@ -186,6 +189,14 @@ type BlueprintExport = {
   };
 };
 
+type BlueprintContextMenu = {
+  kind: 'node' | 'pane';
+  x: number;
+  y: number;
+  nodeId?: string;
+  flowPosition?: { x: number; y: number };
+};
+
 type BlueprintNodeFlowData = {
   node: BlueprintNode;
   active: boolean;
@@ -212,29 +223,29 @@ const nodeCatalog: Array<{
   tone: 'mint' | 'sky' | 'lemon' | 'coral' | 'violet' | 'neutral' | 'rose';
   config: Record<string, unknown>;
 }> = [
-  { type: 'start', title: '시작', body: '기본 진입점', group: '필수', icon: Play, tone: 'mint', config: {} },
-  { type: 'end', title: '종료', body: '실행 종료', group: '필수', icon: BadgeCheck, tone: 'coral', config: { status: 'success', message: '완료' } },
-  { type: 'chat', title: '채팅 전송', body: '트리거 플랫폼 우선 전송', group: '기본', icon: MessageSquare, tone: 'sky', config: { message: '{user.username}님, 실행되었습니다.' } },
-  { type: 'wait', title: '대기', body: '초/밀리초 지연', group: '기본', icon: CalendarClock, tone: 'neutral', config: { seconds: 1 } },
-  { type: 'condition', title: '조건문', body: '변수와 값을 비교', group: '기본', icon: GitBranch, tone: 'lemon', config: { left: '{user.points}', operator: 'gte', right: '1000' } },
-  { type: 'setVariable', title: '임시 변수', body: '생성/수정/계산', group: '기본', icon: Braces, tone: 'violet', config: { key: 'bonusPoint', mode: 'set', value: '100' } },
-  { type: 'readVariable', title: '변수 읽기', body: '컨텍스트 값을 출력', group: '기본', icon: Type, tone: 'violet', config: { path: '{user.name}' } },
-  { type: 'action', title: '특수 변수 실행', body: '다른 액션 호출', group: '기본', icon: Workflow, tone: 'violet', config: { actionId: '' } },
+  { type: 'start', title: '시작', body: '액션의 첫 순간', group: '필수', icon: Play, tone: 'mint', config: {} },
+  { type: 'end', title: '종료', body: '마무리 응답', group: '필수', icon: BadgeCheck, tone: 'coral', config: { status: 'success', message: '완료' } },
+  { type: 'chat', title: '채팅 전송', body: '채팅에 바로 말하기', group: '기본', icon: MessageSquare, tone: 'sky', config: { message: '{user.username}님, 실행되었습니다.' } },
+  { type: 'wait', title: '대기', body: '잠깐 쉬어가기', group: '기본', icon: CalendarClock, tone: 'neutral', config: { seconds: 1 } },
+  { type: 'condition', title: '조건문', body: '상황에 따라 나누기', group: '기본', icon: GitBranch, tone: 'lemon', config: { left: '{user.points}', operator: 'gte', right: '1000' } },
+  { type: 'setVariable', title: '임시 변수', body: '값을 잠시 보관', group: '기본', icon: Braces, tone: 'violet', config: { key: 'bonusPoint', mode: 'set', value: '100' } },
+  { type: 'readVariable', title: '변수 읽기', body: '필요한 값 꺼내기', group: '기본', icon: Type, tone: 'violet', config: { path: '{user.name}' } },
+  { type: 'action', title: '특수 변수 실행', body: '다른 액션 이어가기', group: '기본', icon: Workflow, tone: 'violet', config: { actionId: '' } },
   { type: 'loop', title: 'N회 반복', body: '반복 중 true, 완료 후 false', group: '흐름', icon: RefreshCw, tone: 'sky', config: { count: 3, gapMs: 250 } },
   { type: 'random', title: '랜덤 분기', body: '가중치 기반 분기', group: '흐름', icon: Shuffle, tone: 'lemon', config: { options: [{ id: 'a', label: 'A', weight: 1 }, { id: 'b', label: 'B', weight: 1 }] } },
-  { type: 'pointsGet', title: '포인트 조회', body: '현재 포인트 확인', group: '포인트', icon: Coins, tone: 'mint', config: { userId: '{user.userId}' } },
-  { type: 'pointsAdjust', title: '포인트 지급/차감', body: '계산식으로 변경', group: '포인트', icon: Coins, tone: 'mint', config: { userId: '{user.userId}', delta: '100' } },
+  { type: 'pointsGet', title: '포인트 조회', body: '보유 포인트 가져오기', group: '포인트', icon: Coins, tone: 'mint', config: { userId: '{user.userId}' } },
+  { type: 'pointsAdjust', title: '포인트 지급/차감', body: '보상/사용 포인트 반영', group: '포인트', icon: Coins, tone: 'mint', config: { userId: '{user.userId}', delta: '100' } },
   { type: 'pointsEnough', title: '포인트 충분 여부', body: 'true/false 분기', group: '포인트', icon: Coins, tone: 'lemon', config: { userId: '{user.userId}', required: '1000' } },
   { type: 'pointsRanking', title: '포인트 랭킹', body: '상위 시청자 조회', group: '포인트', icon: Coins, tone: 'mint', config: { limit: 10 } },
   { type: 'pointsExcluded', title: '적립 제외 확인', body: '제외 UUID true/false', group: '포인트', icon: Coins, tone: 'lemon', config: { userId: '{user.userId}' } },
   { type: 'rouletteList', title: '룰렛 목록', body: '실행 가능한 룰렛 조회', group: '룰렛', icon: Sparkles, tone: 'lemon', config: {} },
-  { type: 'rouletteRun', title: '룰렛 실행', body: '결과를 다음 노드로 전달', group: '룰렛', icon: Sparkles, tone: 'lemon', config: { name: '' } },
+  { type: 'rouletteRun', title: '룰렛 실행', body: '당첨 결과 만들기', group: '룰렛', icon: Sparkles, tone: 'lemon', config: { name: '' } },
   { type: 'rouletteCompare', title: '룰렛 결과 비교', body: '결과값 조건 분기', group: '룰렛', icon: Sparkles, tone: 'lemon', config: { left: '{node.rouletteRun.result.label}', operator: 'eq', right: '' } },
-  { type: 'rouletteDisplay', title: '룰렛 결과 표시', body: '결과를 오버레이/큐로 전달', group: '룰렛', icon: Sparkles, tone: 'sky', config: { text: '{roulette.result.label}', durationMs: 4000 } },
+  { type: 'rouletteDisplay', title: '룰렛 결과 표시', body: '결과를 화면에 띄움', group: '룰렛', icon: Sparkles, tone: 'sky', config: { text: '{roulette.result.label}', durationMs: 4000 } },
   { type: 'attendanceGet', title: '출석 조회', body: '누적 출석일 확인', group: '참여', icon: CheckCircle2, tone: 'mint', config: { userId: '{user.userId}' } },
   { type: 'cooldown', title: '쿨다운 확인', body: '사용자별 제한 분기', group: '흐름', icon: CalendarClock, tone: 'lemon', config: { key: '{user.userId}', seconds: 30 } },
   { type: 'join', title: '흐름 합류', body: '여러 입력을 하나로', group: '흐름', icon: GitBranch, tone: 'neutral', config: {} },
-  { type: 'approval', title: '관리자 확인', body: '승인 작업 생성', group: '흐름', icon: CheckCircle2, tone: 'rose', config: { message: '이 액션을 실행할까요?' } },
+  { type: 'approval', title: '관리자 확인', body: '방송 전 승인 받기', group: '흐름', icon: CheckCircle2, tone: 'rose', config: { message: '이 액션을 실행할까요?' } },
   { type: 'timer', title: '타이머 예약', body: '지정 시간 뒤 실행', group: '흐름', icon: CalendarClock, tone: 'sky', config: { seconds: 10 } },
   { type: 'chatVote', title: '채팅 투표 대기', body: '채팅 투표 결과 수집', group: '참여', icon: MessageSquare, tone: 'sky', config: { seconds: 30, options: '1,2' } },
   { type: 'highlight', title: '하이라이트 마커', body: '기억할 순간 기록', group: '참여', icon: BadgeCheck, tone: 'neutral', config: { label: '하이라이트' } },
@@ -244,11 +255,11 @@ const nodeCatalog: Array<{
   { type: 'tts', title: 'TTS', body: '말할 내용 입력', group: '연출', icon: Volume2, tone: 'coral', config: { text: '{user.name}님 축하합니다!', voice: '', rate: 1, pitch: 1 } },
   { type: 'sound', title: '사운드', body: '서버/로컬 사운드 재생', group: '연출', icon: Volume2, tone: 'coral', config: { fileId: '', volume: 1 } },
   { type: 'obs', title: 'OBS', body: '장면/소스/필터 제어', group: '연동', icon: Radio, tone: 'mint', config: { action: 'scene.switch', sceneName: '' } },
-  { type: 'http', title: 'HTTP 요청', body: '외부 API 호출', group: '연동', icon: Network, tone: 'neutral', config: { method: 'POST', url: '', body: '{}' } },
-  { type: 'websocket', title: 'WebSocket', body: '메시지 전송', group: '연동', icon: Network, tone: 'neutral', config: { url: '', message: '{}', timeoutMs: 8000 } },
-  { type: 'udp', title: 'UDP', body: '로컬 프로그램 전용', group: '연동', icon: Network, tone: 'neutral', config: { host: '127.0.0.1', port: 0, message: '' } },
-  { type: 'tits', title: 'T.I.T.S', body: '트리거 실행', group: '로컬', icon: Activity, tone: 'rose', config: { triggerId: '', strength: 1, durationMs: 1000 } },
-  { type: 'vtube', title: 'VTube Studio', body: '핫키/파라미터 실행', group: '로컬', icon: Bot, tone: 'rose', config: { hotkeyId: '', parameter: '', value: '' } },
+  { type: 'http', title: 'HTTP 요청', body: '외부 도구 깨우기', group: '연동', icon: Network, tone: 'neutral', config: { method: 'POST', url: '', body: '{}' } },
+  { type: 'websocket', title: 'WebSocket', body: '로컬 도구에 메시지', group: '연동', icon: Network, tone: 'neutral', config: { url: '', message: '{}', timeoutMs: 8000 } },
+  { type: 'udp', title: 'UDP', body: '장비/효과 실행', group: '연동', icon: Network, tone: 'neutral', config: { host: '127.0.0.1', port: 0, message: '' } },
+  { type: 'tits', title: 'T.I.T.S', body: '아이템/트리거 실행', group: '로컬', icon: Activity, tone: 'rose', config: { triggerId: '', strength: 1, durationMs: 1000 } },
+  { type: 'vtube', title: 'VTube Studio', body: '모델 반응 실행', group: '로컬', icon: Bot, tone: 'rose', config: { hotkeyId: '', parameter: '', value: '' } },
   { type: 'log', title: '로그', body: '실행 기록에 남김', group: '기본', icon: Code2, tone: 'neutral', config: { message: '로그: {flow.bonusPoint}' } },
 ];
 
@@ -519,37 +530,37 @@ function toneClass(tone: (typeof nodeCatalog)[number]['tone']) {
   return {
     mint: {
       strip: 'from-emerald-300 via-teal-300 to-cyan-300 dark:from-emerald-500 dark:via-teal-500 dark:to-cyan-500',
-      icon: 'bg-pastel-mint/85 text-teal-800 ring-teal-500/18 dark:bg-teal-400/18 dark:text-teal-100',
+      icon: 'bg-pastel-mint/85 text-teal-800 ring-teal-500/18 dark:bg-teal-400/18 dark:text-teal-300',
       soft: 'bg-pastel-mint/55 text-teal-900 dark:bg-teal-400/12 dark:text-teal-100',
     },
     sky: {
       strip: 'from-sky-300 via-cyan-300 to-teal-200 dark:from-sky-500 dark:via-cyan-500 dark:to-teal-500',
-      icon: 'bg-pastel-sky/85 text-sky-800 ring-sky-500/18 dark:bg-sky-400/18 dark:text-sky-100',
+      icon: 'bg-pastel-sky/85 text-sky-800 ring-sky-500/18 dark:bg-sky-400/18 dark:text-sky-300',
       soft: 'bg-pastel-sky/55 text-sky-900 dark:bg-sky-400/12 dark:text-sky-100',
     },
     lemon: {
       strip: 'from-amber-200 via-yellow-200 to-lime-200 dark:from-amber-500 dark:via-yellow-500 dark:to-lime-500',
-      icon: 'bg-pastel-lemon/90 text-amber-900 ring-amber-500/18 dark:bg-amber-400/18 dark:text-amber-100',
+      icon: 'bg-pastel-lemon/90 text-amber-900 ring-amber-500/18 dark:bg-amber-400/18 dark:text-amber-300',
       soft: 'bg-pastel-lemon/60 text-amber-950 dark:bg-amber-400/12 dark:text-amber-100',
     },
     coral: {
       strip: 'from-rose-300 via-orange-200 to-amber-200 dark:from-rose-500 dark:via-orange-500 dark:to-amber-500',
-      icon: 'bg-pastel-coral/85 text-rose-800 ring-rose-500/18 dark:bg-rose-400/18 dark:text-rose-100',
+      icon: 'bg-pastel-coral/85 text-rose-800 ring-rose-500/18 dark:bg-rose-400/18 dark:text-rose-300',
       soft: 'bg-pastel-coral/58 text-rose-900 dark:bg-rose-400/12 dark:text-rose-100',
     },
     violet: {
       strip: 'from-violet-300 via-fuchsia-200 to-sky-200 dark:from-violet-500 dark:via-fuchsia-500 dark:to-sky-500',
-      icon: 'bg-violet-100 text-violet-800 ring-violet-500/18 dark:bg-violet-400/18 dark:text-violet-100',
+      icon: 'bg-violet-100 text-violet-800 ring-violet-500/18 dark:bg-violet-400/18 dark:text-violet-300',
       soft: 'bg-violet-100/70 text-violet-900 dark:bg-violet-400/12 dark:text-violet-100',
     },
     rose: {
       strip: 'from-pink-300 via-rose-200 to-orange-200 dark:from-pink-500 dark:via-rose-500 dark:to-orange-500',
-      icon: 'bg-rose-100 text-rose-800 ring-rose-500/18 dark:bg-rose-400/18 dark:text-rose-100',
+      icon: 'bg-rose-100 text-rose-800 ring-rose-500/18 dark:bg-rose-400/18 dark:text-rose-300',
       soft: 'bg-rose-100/70 text-rose-900 dark:bg-rose-400/12 dark:text-rose-100',
     },
     neutral: {
       strip: 'from-slate-300 via-zinc-200 to-stone-200 dark:from-slate-500 dark:via-zinc-500 dark:to-stone-500',
-      icon: 'bg-muted text-muted-foreground ring-border',
+      icon: 'bg-muted text-muted-foreground ring-border dark:bg-slate-400/12 dark:text-slate-300',
       soft: 'bg-muted/75 text-muted-foreground',
     },
   }[tone];
@@ -773,6 +784,20 @@ function BlueprintCanvasNode({ data, selected }: NodeProps<BlueprintFlowNode>) {
   const statusTone = latestStep?.status === 'failed' ? 'bg-destructive' : active ? 'bg-primary' : latestStep?.status === 'done' ? 'bg-emerald-500' : node.enabled === false ? 'bg-muted-foreground' : 'bg-primary/65';
   return (
     <div
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        window.dispatchEvent(new CustomEvent('arubot-blueprint-node-context', {
+          detail: { nodeId: node.id, x: event.clientX, y: event.clientY },
+        }));
+      }}
+      onDoubleClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        window.dispatchEvent(new CustomEvent('arubot-blueprint-node-edit', {
+          detail: { nodeId: node.id },
+        }));
+      }}
       className={cn(
         'group/blueprint-node relative select-none overflow-hidden rounded-[calc(var(--radius-card)*0.92)] border bg-card/96 shadow-subtle backdrop-blur-xl transition duration-200',
         'hover:-translate-y-0.5 hover:border-primary/35 hover:shadow-lift',
@@ -935,6 +960,8 @@ export function ActionBlueprintPage() {
   const [runSteps, setRunSteps] = useState<BlueprintRunStep[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<BlueprintContextMenu | null>(null);
+  const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
   const [paletteQuery, setPaletteQuery] = useState('');
   const [clipboard, setClipboard] = useState<BlueprintClipboard | null>(null);
   const [pasteCount, setPasteCount] = useState(0);
@@ -959,6 +986,7 @@ export function ActionBlueprintPage() {
   const viewport = blueprint.version?.viewport || DEFAULT_VIEWPORT;
   const [liveViewport, setLiveViewport] = useState<Viewport>(viewport);
   const selectedNode = selectedIds.length === 1 ? nodes.find((node) => node.id === selectedIds[0]) || null : null;
+  const editingNode = editingNodeId ? nodes.find((node) => node.id === editingNodeId) || null : null;
   const validationErrors = useMemo(() => {
     return validateBlueprint(nodes, edges);
   }, [edges, nodes]);
@@ -1112,6 +1140,83 @@ export function ActionBlueprintPage() {
     if (playTimerRef.current) clearTimeout(playTimerRef.current);
   }, []);
 
+  useEffect(() => {
+    if (!contextMenu) return undefined;
+    const close = (event?: Event) => {
+      const target = event?.target as HTMLElement | null;
+      if (target?.closest('[data-blueprint-context-menu="true"]')) return;
+      setContextMenu(null);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') close();
+    };
+    window.addEventListener('pointerdown', close);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', close);
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [contextMenu]);
+
+  useEffect(() => {
+    const element = flowWrapperRef.current;
+    if (!element) return undefined;
+    const handleContextMenu = (event: MouseEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const target = document.elementFromPoint(event.clientX, event.clientY) as HTMLElement | null;
+      const nodeElement = target?.closest('.react-flow__node') as HTMLElement | null;
+      const nodeId = nodeElement?.getAttribute('data-id');
+      if (nodeId && nodes.some((node) => node.id === nodeId)) {
+        setSelectedIds([nodeId]);
+        setSelectedEdgeId(null);
+        setContextMenu({ kind: 'node', nodeId, x: event.clientX, y: event.clientY });
+        return;
+      }
+      const flowPosition = flowInstanceRef.current?.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      setSelectedIds([]);
+      setSelectedEdgeId(null);
+      setContextMenu({
+        kind: 'pane',
+        x: event.clientX,
+        y: event.clientY,
+        flowPosition: flowPosition ? { x: flowPosition.x / FLOW_UNIT, y: flowPosition.y / FLOW_UNIT } : undefined,
+      });
+    };
+    element.addEventListener('contextmenu', handleContextMenu, true);
+    return () => element.removeEventListener('contextmenu', handleContextMenu, true);
+  }, [nodes]);
+
+  useEffect(() => {
+    const handleNodeContext = (event: Event) => {
+      const detail = (event as CustomEvent<{ nodeId?: string; x?: number; y?: number }>).detail;
+      const nodeId = detail?.nodeId;
+      if (!nodeId || !nodes.some((node) => node.id === nodeId)) return;
+      setSelectedIds([nodeId]);
+      setSelectedEdgeId(null);
+      setContextMenu({ kind: 'node', nodeId, x: detail.x || 0, y: detail.y || 0 });
+    };
+    const handleNodeEdit = (event: Event) => {
+      const detail = (event as CustomEvent<{ nodeId?: string }>).detail;
+      const nodeId = detail?.nodeId;
+      if (!nodeId || !nodes.some((node) => node.id === nodeId)) return;
+      setSelectedIds([nodeId]);
+      setSelectedEdgeId(null);
+      setEditingNodeId(nodeId);
+      setContextMenu(null);
+    };
+    window.addEventListener('arubot-blueprint-node-context', handleNodeContext);
+    window.addEventListener('arubot-blueprint-node-edit', handleNodeEdit);
+    return () => {
+      window.removeEventListener('arubot-blueprint-node-context', handleNodeContext);
+      window.removeEventListener('arubot-blueprint-node-edit', handleNodeEdit);
+    };
+  }, [nodes]);
+
   const addNode = (type: NodeType) => {
     const rect = flowWrapperRef.current?.getBoundingClientRect();
     const center = rect
@@ -1218,6 +1323,14 @@ export function ActionBlueprintPage() {
     syncFlowViewport(viewport);
   }, [syncFlowViewport, viewport]);
 
+  const handleNodeDoubleClick = (event: React.MouseEvent, node: BlueprintFlowNode) => {
+    event.preventDefault();
+    setSelectedIds([node.id]);
+    setSelectedEdgeId(null);
+    setEditingNodeId(node.id);
+    setContextMenu(null);
+  };
+
   const updateNodeConfig = (key: string, value: unknown) => {
     if (!selectedNode) return;
     updateBlueprint((current) => ({
@@ -1227,6 +1340,80 @@ export function ActionBlueprintPage() {
         nodes: (current.version?.nodes || []).map((node) => node.id === selectedNode.id ? { ...node, config: { ...node.config, [key]: value } } : node),
       },
     }));
+  };
+
+  const updateNodeConfigById = (nodeId: string, key: string, value: unknown) => {
+    updateBlueprint((current) => ({
+      ...current,
+      version: {
+        ...current.version,
+        nodes: (current.version?.nodes || []).map((node) => node.id === nodeId ? { ...node, config: { ...node.config, [key]: value } } : node),
+      },
+    }));
+  };
+
+  const updateNodeNameById = (nodeId: string, name: string) => {
+    updateBlueprint((current) => ({
+      ...current,
+      version: {
+        ...current.version,
+        nodes: (current.version?.nodes || []).map((node) => node.id === nodeId ? { ...node, name } : node),
+      },
+    }));
+  };
+
+  const editNode = (nodeId: string) => {
+    setSelectedIds([nodeId]);
+    setSelectedEdgeId(null);
+    setEditingNodeId(nodeId);
+    setContextMenu(null);
+  };
+
+  const deleteNodeById = (nodeId: string) => {
+    const node = nodes.find((item) => item.id === nodeId);
+    if (!node) return;
+    if (node.type === 'start') {
+      toast.info('시작 노드는 삭제할 수 없습니다.');
+      return;
+    }
+    updateBlueprint((current) => ({
+      ...current,
+      version: {
+        ...current.version,
+        nodes: (current.version?.nodes || []).filter((item) => item.id !== nodeId),
+        edges: (current.version?.edges || []).filter((edge) => edge.source !== nodeId && edge.target !== nodeId),
+      },
+    }));
+    setSelectedIds((current) => current.filter((id) => id !== nodeId));
+    setSelectedEdgeId(null);
+    setContextMenu(null);
+  };
+
+  const copyNodesByIds = async (nodeIds: string[]) => {
+    const selectedSet = new Set(nodeIds);
+    const selectedNodes = nodes.filter((node) => selectedSet.has(node.id));
+    if (!selectedNodes.length) return;
+    const selectedEdges = edges.filter((edge) => selectedSet.has(edge.source) && selectedSet.has(edge.target));
+    const payload: BlueprintClipboard = {
+      schema: SELECTION_CLIPBOARD_SCHEMA,
+      version: 1,
+      nodes: cloneJson(selectedNodes),
+      edges: cloneJson(selectedEdges),
+    };
+    setClipboard(payload);
+    try {
+      await navigator.clipboard?.writeText(JSON.stringify(payload));
+    } catch {
+      // Browser clipboard access can be blocked; the in-memory clipboard still works.
+    }
+    toast.success(`${selectedNodes.length}개 노드를 복사했습니다.`);
+  };
+
+  const testRunFromNode = async (nodeId: string) => {
+    setSelectedIds([nodeId]);
+    setSelectedEdgeId(null);
+    setContextMenu(null);
+    await testRun();
   };
 
   const save = async () => {
@@ -1656,23 +1843,7 @@ export function ActionBlueprintPage() {
       toast.info('복사할 노드를 선택하세요.');
       return;
     }
-    const selectedSet = new Set(selectedIds);
-    const selectedNodes = nodes.filter((node) => selectedSet.has(node.id));
-    if (!selectedNodes.length) return;
-    const selectedEdges = edges.filter((edge) => selectedSet.has(edge.source) && selectedSet.has(edge.target));
-    const payload: BlueprintClipboard = {
-      schema: SELECTION_CLIPBOARD_SCHEMA,
-      version: 1,
-      nodes: cloneJson(selectedNodes),
-      edges: cloneJson(selectedEdges),
-    };
-    setClipboard(payload);
-    try {
-      await navigator.clipboard?.writeText(JSON.stringify(payload));
-    } catch {
-      // Browser clipboard access can be blocked; the in-memory clipboard still works.
-    }
-    toast.success(`${selectedNodes.length}개 노드를 복사했습니다.`);
+    await copyNodesByIds(selectedIds);
   };
 
   const readClipboardSelection = async () => {
@@ -1688,7 +1859,7 @@ export function ActionBlueprintPage() {
     return clipboard;
   };
 
-  const pasteSelection = async () => {
+  const pasteSelection = async (targetPosition?: { x: number; y: number }) => {
     const payload = await readClipboardSelection();
     if (!payload?.nodes?.length) {
       toast.info('붙여넣을 블루프린트 노드가 없습니다.');
@@ -1704,11 +1875,15 @@ export function ActionBlueprintPage() {
     }
     const idMap = new Map(sourceNodes.map((node) => [node.id, createId(node.type)]));
     const offset = 2 + pasteCount * 1.5;
+    const minX = Math.min(...sourceNodes.map((node) => node.position.x));
+    const minY = Math.min(...sourceNodes.map((node) => node.position.y));
     const pastedNodes = sourceNodes.map((node) => ({
       ...node,
       id: idMap.get(node.id) || createId(node.type),
       name: node.type === 'start' ? node.name : `${node.name} 복사`,
-      position: { x: node.position.x + offset, y: node.position.y + offset },
+      position: targetPosition
+        ? { x: targetPosition.x + node.position.x - minX, y: targetPosition.y + node.position.y - minY }
+        : { x: node.position.x + offset, y: node.position.y + offset },
       config: cloneJson(node.config || {}),
     }));
     const pastedEdges = clipboardEdges
@@ -1730,6 +1905,7 @@ export function ActionBlueprintPage() {
     setPasteCount((current) => current + 1);
     setSelectedIds(pastedNodes.map((node) => node.id));
     setSelectedEdgeId(null);
+    setContextMenu(null);
     toast.success(`${pastedNodes.length}개 노드를 붙여넣었습니다.`);
   };
 
@@ -1820,6 +1996,8 @@ export function ActionBlueprintPage() {
     }
   };
 
+  const contextNode = contextMenu?.nodeId ? nodes.find((node) => node.id === contextMenu.nodeId) || null : null;
+
   return (
     <div className="grid gap-[clamp(1rem,2vw,1.5rem)]">
       <section className="relative overflow-hidden rounded-[var(--radius-panel)] border bg-[linear-gradient(135deg,hsl(var(--card))_0%,hsl(var(--accent-sky)/0.22)_52%,hsl(var(--accent-mint)/0.18)_100%)] p-[clamp(1rem,2.4vw,1.5rem)] shadow-soft">
@@ -1855,7 +2033,7 @@ export function ActionBlueprintPage() {
               ))}
             </div>
           </div>
-          <div className="grid gap-2 sm:grid-cols-2 xl:max-w-[32rem] xl:grid-cols-3">
+          <div className="grid min-w-0 gap-2 sm:grid-cols-[repeat(2,minmax(0,1fr))] xl:max-w-[min(100%,32rem)] xl:grid-cols-[repeat(3,minmax(0,1fr))]">
             <input
               ref={importInputRef}
               type="file"
@@ -1903,7 +2081,7 @@ export function ActionBlueprintPage() {
         </div>
       </section>
 
-      <section className="grid min-h-[min(78svh,54rem)] gap-4 xl:grid-cols-[minmax(14rem,0.22fr)_minmax(0,1fr)_minmax(18rem,0.3fr)]">
+      <section className="grid min-h-[min(78svh,54rem)] gap-4 xl:grid-cols-[minmax(0,0.22fr)_minmax(0,1fr)_minmax(0,0.3fr)]">
         <Card className="overflow-hidden border-border/70 bg-card/74 shadow-subtle">
           <CardHeader className="border-b bg-card/62">
             <div className="flex items-center justify-between gap-3">
@@ -2086,6 +2264,7 @@ export function ActionBlueprintPage() {
                 onEdgesChange={onEdgesChange}
                 onConnect={onConnect}
                 onSelectionChange={onSelectionChange}
+                onNodeDoubleClick={handleNodeDoubleClick}
                 onViewportChange={setLiveViewport}
                 onMoveEnd={onMoveEnd}
                 onError={(code, message) => {
@@ -2102,7 +2281,10 @@ export function ActionBlueprintPage() {
                 <MiniMap
                   pannable
                   zoomable
+                  bgColor="hsl(var(--card))"
                   nodeColor="hsl(var(--primary))"
+                  nodeStrokeColor="hsl(var(--border))"
+                  nodeBorderRadius={8}
                   maskColor="hsl(var(--background)/0.62)"
                   className="!hidden !border !border-border !bg-card/88 !shadow-subtle !backdrop-blur-xl md:!block"
                 />
@@ -2127,7 +2309,7 @@ export function ActionBlueprintPage() {
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <CardTitle className="text-base">검증</CardTitle>
-                  <CardDescription className="text-xs leading-5">게시 전 실행 가능 여부를 확인합니다.</CardDescription>
+                  <CardDescription className="text-xs leading-5">방송에 올리기 전 빠진 값이 없는지 살펴봅니다.</CardDescription>
                 </div>
                 <Badge tone={validationErrors.length ? 'amber' : 'mint'}>{validationErrors.length ? validationErrors.length : 'OK'}</Badge>
               </div>
@@ -2188,7 +2370,7 @@ export function ActionBlueprintPage() {
           <Card className="border-border/70 bg-card/82 shadow-subtle">
             <CardHeader className="p-4">
               <CardTitle className="text-base">설정 패널</CardTitle>
-              <CardDescription className="text-xs leading-5">{selectedNode ? '모든 입력값에는 변수를 사용할 수 있습니다.' : '노드를 선택하면 설정을 편집할 수 있습니다.'}</CardDescription>
+              <CardDescription className="text-xs leading-5">{selectedNode ? '채팅, 후원, 포인트 변수를 섞어 원하는 반응을 만들 수 있습니다.' : '노드를 선택하면 방송에서 나갈 반응을 다듬을 수 있습니다.'}</CardDescription>
             </CardHeader>
             <CardContent className="grid gap-3 p-4 pt-0">
               {selectedNode ? (
@@ -2277,7 +2459,7 @@ export function ActionBlueprintPage() {
           <Card className="border-border/70 bg-card/74 shadow-subtle">
             <CardHeader className="p-4">
               <CardTitle className="text-base">실행 단계</CardTitle>
-              <CardDescription className="text-xs leading-5">기록을 선택하면 노드별 결과를 확인합니다.</CardDescription>
+              <CardDescription className="text-xs leading-5">실행된 순서를 따라가며 어떤 반응이 나갔는지 살펴봅니다.</CardDescription>
             </CardHeader>
             <CardContent className="grid max-h-[18rem] gap-2 overflow-y-auto p-4 pt-0">
               {runSteps.map((step) => (
@@ -2296,7 +2478,102 @@ export function ActionBlueprintPage() {
           </Card>
         </div>
       </section>
+      {contextMenu ? (
+        <div
+          role="menu"
+          data-blueprint-context-menu="true"
+          className="fixed z-50 min-w-[min(18rem,calc(100vw-2rem))] overflow-hidden rounded-[var(--radius-control)] border bg-card/96 p-1.5 text-sm shadow-lift backdrop-blur-xl"
+          style={{ left: `min(${contextMenu.x}px, calc(100vw - 19rem))`, top: `min(${contextMenu.y}px, calc(100vh - 18rem))` }}
+          onPointerDown={(event) => event.stopPropagation()}
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          {contextNode ? (
+            <>
+              <div className="px-3 py-2 text-xs font-bold text-muted-foreground">{contextNode.name}</div>
+              <ContextMenuButton icon={<Pencil className="h-4 w-4" />} label="수정" onClick={() => editNode(contextNode.id)} />
+              <ContextMenuButton icon={<Copy className="h-4 w-4" />} label="복사" onClick={() => void copyNodesByIds([contextNode.id]).then(() => setContextMenu(null))} />
+              <ContextMenuButton icon={<Play className="h-4 w-4" />} label="테스트 실행" onClick={() => void testRunFromNode(contextNode.id)} disabled={testing || saving} />
+              <ContextMenuButton icon={<Trash2 className="h-4 w-4" />} label="삭제" onClick={() => deleteNodeById(contextNode.id)} disabled={contextNode.type === 'start'} danger />
+              <div className="my-1 h-px bg-border" />
+            </>
+          ) : (
+            <>
+              <div className="px-3 py-2 text-xs font-bold text-muted-foreground">캔버스</div>
+              <ContextMenuButton icon={<Upload className="h-4 w-4" />} label="붙여넣기" onClick={() => void pasteSelection(contextMenu.flowPosition)} />
+              <div className="my-1 h-px bg-border" />
+            </>
+          )}
+          <ContextMenuButton icon={<Undo2 className="h-4 w-4" />} label="되돌리기" onClick={undoBlueprint} disabled={!historyCount.past} />
+          <ContextMenuButton icon={<Redo2 className="h-4 w-4" />} label="다시 실행" onClick={redoBlueprint} disabled={!historyCount.future} />
+        </div>
+      ) : null}
+      <Dialog.Root open={!!editingNode} onOpenChange={(open) => {
+        if (!open) setEditingNodeId(null);
+      }}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-50 bg-foreground/24 backdrop-blur-[clamp(0.5rem,1.4vw,1rem)] data-[state=open]:animate-fade-in" />
+          <Dialog.Content className="fixed left-1/2 top-1/2 z-50 max-h-[min(86svh,48rem)] w-[min(42rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-[var(--radius-panel)] border bg-card text-card-foreground shadow-lift outline-none data-[state=open]:animate-scale-in">
+            {editingNode ? (
+              <>
+                <div className="relative overflow-hidden bg-[linear-gradient(135deg,hsl(var(--card)),hsl(var(--accent-sky)/0.22),hsl(var(--accent-mint)/0.16))] p-[clamp(1rem,2vw,1.35rem)]">
+                  <div className="absolute inset-x-[8%] top-0 h-[max(0.125rem,0.16vw)] rounded-full bg-[linear-gradient(90deg,hsl(var(--accent-mint)),hsl(var(--accent-sky)),hsl(var(--accent-coral)))]" />
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <Dialog.Title className="break-keep text-xl font-extrabold leading-tight">노드 수정</Dialog.Title>
+                      <Dialog.Description className="mt-2 text-sm leading-6 text-muted-foreground">
+                        {nodeSpec(editingNode.type).title} 노드의 실행 값을 수정합니다.
+                      </Dialog.Description>
+                    </div>
+                    <Dialog.Close asChild>
+                      <Button type="button" variant="outline" size="icon" aria-label="닫기">
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </Dialog.Close>
+                  </div>
+                </div>
+                <div className="grid max-h-[calc(min(86svh,48rem)-8rem)] gap-4 overflow-y-auto p-[clamp(1rem,2vw,1.35rem)]">
+                  <label className="grid min-w-0 gap-2 text-sm font-semibold">
+                    노드 이름
+                    <Input value={editingNode.name} onChange={(event) => updateNodeNameById(editingNode.id, event.target.value)} className="w-full min-w-0" />
+                  </label>
+                  <ConfigFields node={editingNode} onChange={(key, value) => updateNodeConfigById(editingNode.id, key, value)} />
+                </div>
+              </>
+            ) : null}
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     </div>
+  );
+}
+
+function ContextMenuButton({
+  icon,
+  label,
+  onClick,
+  disabled,
+  danger,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  danger?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      onClick={onClick}
+      disabled={disabled}
+      className={cn(
+        'flex w-full items-center gap-2 rounded-[calc(var(--radius-control)*0.75)] px-3 py-2 text-left text-sm font-semibold transition hover:bg-muted disabled:pointer-events-none disabled:opacity-45',
+        danger && 'text-destructive hover:bg-destructive/10',
+      )}
+    >
+      {icon}
+      <span>{label}</span>
+    </button>
   );
 }
 
@@ -2548,7 +2825,7 @@ function LongField({ label, value, onChange }: { label: string; value: string; o
       <textarea
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="min-h-[7rem] w-full min-w-0 resize-y rounded-[var(--radius-control)] border bg-background/80 px-4 py-3 text-sm leading-7 outline-none transition focus:border-primary/45 focus:ring-2 focus:ring-ring"
+        className="box-border min-h-[7rem] w-full min-w-0 max-w-full resize-y rounded-[var(--radius-control)] border bg-background/80 px-[clamp(0.85rem,1.6vw,1.1rem)] py-[clamp(0.85rem,1.6vw,1.1rem)] text-sm leading-7 outline-none transition focus:border-primary/45 focus:ring-2 focus:ring-ring"
       />
     </label>
   );

@@ -186,7 +186,7 @@ export function DonationRulesPage() {
       <div className="grid gap-3">
         {filteredRules.map((rule) => (
           <Card key={rule.id} className="overflow-hidden">
-            <CardContent className="grid gap-4 p-[clamp(1rem,2vw,1.35rem)] lg:grid-cols-[1.1fr_1.5fr_auto] lg:items-center">
+            <CardContent className="grid gap-4 p-[clamp(1rem,2vw,1.35rem)] lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1.5fr)_minmax(var(--control-height),0.42fr)] lg:items-center">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge tone={rule.enabled === false ? 'neutral' : 'mint'}>{rule.enabled === false ? '꺼짐' : '사용 중'}</Badge>
@@ -223,8 +223,8 @@ export function DonationRulesPage() {
           <div className="grid max-h-[min(92svh,48rem)] w-full max-w-2xl gap-5 overflow-y-auto rounded-[var(--radius-panel)] border bg-card p-[clamp(1rem,2.4vw,1.5rem)] shadow-lift">
             <div>
               <Badge tone="coral">후원 반응 수정</Badge>
-              <h2 className="mt-3 text-xl font-bold">후원 조건과 반응을 바꿉니다.</h2>
-              <p className="mt-2 text-sm text-muted-foreground">저장하면 다음 후원 이벤트부터 새 설정이 적용됩니다.</p>
+              <h2 className="mt-3 text-xl font-bold">후원 순간의 반응을 다듬어요.</h2>
+              <p className="mt-2 text-sm text-muted-foreground">다음 후원부터 방송 분위기에 맞는 새 반응이 나갑니다.</p>
             </div>
             <div className="grid gap-4 md:grid-cols-2">
               <label className="grid gap-2 text-sm font-semibold">
@@ -233,10 +233,10 @@ export function DonationRulesPage() {
               </label>
               <label className="grid gap-2 text-sm font-semibold">
                 메시지 포함 조건
-                <Input value={form.message} onChange={(event) => setForm({ ...form, message: event.target.value })} placeholder="비워두면 금액만 확인합니다." />
+                <Input value={form.message} onChange={(event) => setForm({ ...form, message: event.target.value })} placeholder="특정 문구가 없으면 금액만 볼게요." />
               </label>
             </div>
-            <div className="grid gap-4 md:grid-cols-[1fr_1fr_auto] md:items-end">
+            <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(var(--control-height),0.42fr)] md:items-end">
               <label className="grid gap-2 text-sm font-semibold">
                 최소 금액
                 <Input value={form.minAmount} onChange={(event) => setForm({ ...form, minAmount: event.target.value })} inputMode="numeric" />
@@ -254,7 +254,7 @@ export function DonationRulesPage() {
               <textarea
                 value={form.response}
                 onChange={(event) => setForm({ ...form, response: event.target.value })}
-                className="min-h-[clamp(7rem,18svh,11rem)] w-full resize-y rounded-[var(--radius-control)] border bg-background/80 px-4 py-3 text-sm leading-7 outline-none focus:border-primary/45 focus:ring-2 focus:ring-ring"
+                className="box-border min-h-[clamp(7rem,18svh,11rem)] w-full min-w-0 max-w-full resize-y rounded-[var(--radius-control)] border bg-background/80 px-[clamp(0.85rem,1.6vw,1.1rem)] py-[clamp(0.85rem,1.6vw,1.1rem)] text-sm leading-7 outline-none focus:border-primary/45 focus:ring-2 focus:ring-ring"
               />
             </label>
             <div className="flex flex-wrap justify-end gap-2">

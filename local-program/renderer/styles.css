@@ -49,11 +49,19 @@ textarea {
   position: sticky;
   top: 0;
   height: 100vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 1.2rem;
   border-right: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.62);
   backdrop-filter: blur(1.25rem);
   -webkit-app-region: drag;
+  scrollbar-width: none;
+}
+
+.sidebar::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 .sidebar button,
@@ -96,6 +104,7 @@ textarea {
   display: grid;
   gap: 0.45rem;
   margin-top: 1.2rem;
+  padding-bottom: 1.2rem;
 }
 
 .nav-item {
@@ -135,24 +144,6 @@ textarea {
 
 .nav-item.active {
   transform: translateX(0.12rem);
-}
-
-.side-card {
-  position: absolute;
-  right: 1.2rem;
-  bottom: 1.2rem;
-  left: 1.2rem;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  padding: 1rem;
-  background: rgba(255, 255, 255, 0.7);
-}
-
-.side-card p {
-  margin: 0.7rem 0 0;
-  color: var(--muted);
-  font-size: 0.82rem;
-  line-height: 1.55;
 }
 
 .main {

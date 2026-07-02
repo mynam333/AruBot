@@ -8,7 +8,7 @@ export default async function Page({ params }: { params: Promise<{ macroId: stri
       eyebrow="매크로 타이머"
       config={{
         title: `매크로 ${macroId} 실행 예약`,
-        description: '다음 실행 시각과 최근 실행 결과를 분리해 확인합니다.',
+        description: '예약된 안내가 언제 나가고 어떤 반응을 만들었는지 살펴봅니다.',
         endpoint: '/api/macros',
         icon: AlarmClock,
         actions: [{ href: `/macros/${macroId}/edit`, label: '편집' }],

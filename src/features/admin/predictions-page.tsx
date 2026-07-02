@@ -83,7 +83,7 @@ async function postJson<T>(path: string, body?: unknown): Promise<T | null> {
 
 function OptionMeter({ option, index, selected }: { option: PredictionOption; index: number; selected?: boolean }) {
   return (
-    <div className="group rounded-[var(--radius-card)] border bg-background/78 p-[clamp(0.875rem,1.6vw,1.125rem)] transition hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-subtle">
+    <div className="group min-w-0 rounded-[var(--radius-card)] border bg-background/78 p-[clamp(0.875rem,1.6vw,1.125rem)] transition hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-subtle">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -97,7 +97,7 @@ function OptionMeter({ option, index, selected }: { option: PredictionOption; in
             {option.count.toLocaleString('ko-KR')}명 참여
           </div>
         </div>
-        <div className="text-right">
+        <div className="min-w-0 text-right">
           <div className="text-base font-bold">{option.percentage}%</div>
           <div className="text-xs text-muted-foreground">{formatPoints(option.total)}</div>
         </div>
@@ -213,8 +213,8 @@ export function PredictionsPage() {
   return (
     <div className="grid gap-[clamp(1rem,2vw,1.5rem)]">
       <section className="relative overflow-hidden rounded-[var(--radius-panel)] border bg-[radial-gradient(circle_at_10%_10%,hsl(var(--accent-mint)/0.72),transparent_34%),linear-gradient(135deg,hsl(var(--card)),hsl(var(--accent-sky)/0.28))] p-[clamp(1.25rem,2.8vw,2rem)] shadow-subtle">
-        <div className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr] lg:items-end">
-          <div>
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)] lg:items-end">
+          <div className="min-w-0">
             <div className="mb-4 flex flex-wrap items-center gap-2">
               <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-primary/12 text-primary">
                 <BarChart3 className="h-5 w-5" />
@@ -227,17 +227,17 @@ export function PredictionsPage() {
               방송의 다음 순간을 시청자가 포인트로 예측하게 열고, 채팅 명령어와 OBS 오버레이로 참여 흐름을 자연스럽게 보여줘요.
             </p>
           </div>
-          <div className="grid grid-cols-3 gap-2">
-            <div className="rounded-[var(--radius-card)] border bg-card/78 p-4 text-center">
-              <div className="text-xl font-bold">{formatPoints(latest?.totalPoints || 0)}</div>
+          <div className="grid min-w-0 grid-cols-[repeat(3,minmax(0,1fr))] gap-2">
+            <div className="min-w-0 rounded-[var(--radius-card)] border bg-card/78 p-[clamp(0.75rem,1.5vw,1rem)] text-center">
+              <div className="truncate text-xl font-bold">{formatPoints(latest?.totalPoints || 0)}</div>
               <div className="mt-1 text-xs text-muted-foreground">총 베팅</div>
             </div>
-            <div className="rounded-[var(--radius-card)] border bg-card/78 p-4 text-center">
-              <div className="text-xl font-bold">{latest?.participantCount || 0}</div>
+            <div className="min-w-0 rounded-[var(--radius-card)] border bg-card/78 p-[clamp(0.75rem,1.5vw,1rem)] text-center">
+              <div className="truncate text-xl font-bold">{latest?.participantCount || 0}</div>
               <div className="mt-1 text-xs text-muted-foreground">참여자</div>
             </div>
-            <div className="rounded-[var(--radius-card)] border bg-card/78 p-4 text-center">
-              <div className="text-xl font-bold">{latest?.options.length || optionRows.length}</div>
+            <div className="min-w-0 rounded-[var(--radius-card)] border bg-card/78 p-[clamp(0.75rem,1.5vw,1rem)] text-center">
+              <div className="truncate text-xl font-bold">{latest?.options.length || optionRows.length}</div>
               <div className="mt-1 text-xs text-muted-foreground">선택지</div>
             </div>
           </div>
@@ -250,38 +250,38 @@ export function PredictionsPage() {
         </div>
       ) : null}
 
-      <div className="grid gap-5 xl:grid-cols-[0.95fr_1.05fr]">
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
         <Card>
           <CardHeader>
             <CardTitle>새 예측 열기</CardTitle>
             <CardDescription>선택지는 줄바꿈으로 입력해요. 최소 2개 이상이면 개수 제한 없이 사용할 수 있어요.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-4">
-            <label className="grid gap-2 text-sm font-semibold">
+            <label className="grid min-w-0 gap-2 text-sm font-semibold">
               질문
               <Input value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="예: 다음 판 결과는?" />
             </label>
-            <label className="grid gap-2 text-sm font-semibold">
+            <label className="grid min-w-0 gap-2 text-sm font-semibold">
               선택지
               <textarea
                 value={optionsText}
                 onChange={(event) => setOptionsText(event.target.value)}
                 placeholder="선택지를 한 줄에 하나씩 입력"
-                className="min-h-[12rem] resize-y rounded-[var(--radius-control)] border bg-background/80 p-[clamp(0.75rem,1.4vw,1rem)] text-sm leading-6 outline-none transition placeholder:text-muted-foreground focus:border-primary/45 focus:ring-2 focus:ring-ring"
+                className="box-border min-h-[12rem] w-full min-w-0 max-w-full resize-y rounded-[var(--radius-control)] border bg-background/80 p-[clamp(0.75rem,1.4vw,1rem)] text-sm leading-6 outline-none transition placeholder:text-muted-foreground focus:border-primary/45 focus:ring-2 focus:ring-ring"
               />
             </label>
-            <div className="grid gap-3 rounded-[var(--radius-card)] border bg-background/62 p-3 sm:grid-cols-3">
+            <div className="grid min-w-0 gap-3 rounded-[var(--radius-card)] border bg-background/62 p-[clamp(0.75rem,1.5vw,1rem)] sm:grid-cols-[repeat(3,minmax(0,1fr))]">
               <label className="grid min-w-0 gap-2 text-sm font-semibold">
                 최소 포인트
-                <Input value={minBet} onChange={(event) => setMinBet(event.target.value)} inputMode="numeric" className="min-h-[var(--control-height-sm)] text-center font-semibold" />
+                <Input value={minBet} onChange={(event) => setMinBet(event.target.value)} inputMode="numeric" className="min-h-[var(--control-height-sm)] text-center font-semibold tabular-nums" />
               </label>
               <label className="grid min-w-0 gap-2 text-sm font-semibold">
                 최대 포인트
-                <Input value={maxBet} onChange={(event) => setMaxBet(event.target.value)} inputMode="numeric" className="min-h-[var(--control-height-sm)] text-center font-semibold" />
+                <Input value={maxBet} onChange={(event) => setMaxBet(event.target.value)} inputMode="numeric" className="min-h-[var(--control-height-sm)] text-center font-semibold tabular-nums" />
               </label>
               <label className="grid min-w-0 gap-2 text-sm font-semibold">
                 자동 마감(분)
-                <Input value={durationMinutes} onChange={(event) => setDurationMinutes(event.target.value)} inputMode="numeric" placeholder="비움" className="min-h-[var(--control-height-sm)] text-center font-semibold" />
+                <Input value={durationMinutes} onChange={(event) => setDurationMinutes(event.target.value)} inputMode="numeric" placeholder="비움" className="min-h-[var(--control-height-sm)] text-center font-semibold tabular-nums" />
               </label>
             </div>
             <Button type="button" onClick={create} disabled={isPending}>
@@ -304,7 +304,7 @@ export function PredictionsPage() {
           <CardContent>
             {latest ? (
               <div className="grid gap-4">
-                <div className="rounded-[var(--radius-card)] bg-muted/55 p-4">
+                <div className="min-w-0 rounded-[var(--radius-card)] bg-muted/55 p-[clamp(0.875rem,1.6vw,1rem)]">
                   <div className="text-lg font-semibold leading-7">{latest.question}</div>
                   {winner ? <div className="mt-2 text-sm text-muted-foreground">정산 결과: {winner.label}</div> : null}
                 </div>
@@ -313,7 +313,7 @@ export function PredictionsPage() {
                     <OptionMeter key={option.id} option={option} index={index} selected={option.id === latest.winningOptionId} />
                   ))}
                 </div>
-                <div className="flex flex-wrap gap-2">
+                <div className="grid gap-2 sm:grid-cols-[repeat(auto-fit,minmax(min(100%,10rem),1fr))]">
                   {latest.status === 'open' ? (
                     <Button type="button" variant="outline" onClick={() => action(`/api/predictions/${latest.id}/lock`, null, '예측을 마감했습니다.')} disabled={isPending}>
                       <Lock className="h-4 w-4" />
@@ -356,7 +356,7 @@ export function PredictionsPage() {
         </Card>
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
         <Card>
           <CardHeader>
             <CardTitle>OBS 오버레이</CardTitle>
@@ -367,7 +367,7 @@ export function PredictionsPage() {
               type="button"
               onClick={copyOverlay}
               disabled={!overlayUrl}
-              className="group rounded-[var(--radius-card)] border bg-background/70 p-3 text-left text-sm break-all text-muted-foreground transition hover:border-primary/35 hover:bg-pastel-sky/35 disabled:cursor-not-allowed disabled:opacity-60"
+              className="group min-w-0 rounded-[var(--radius-card)] border bg-background/70 p-[clamp(0.75rem,1.4vw,1rem)] text-left text-sm break-all text-muted-foreground transition hover:border-primary/35 hover:bg-pastel-sky/35 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <span className="block blur-sm transition group-hover:blur-0 group-focus-visible:blur-0">
               {overlayUrl || '채널 연결 후 오버레이 주소가 표시됩니다.'}
@@ -420,7 +420,7 @@ export function PredictionsPage() {
         <CardContent>
           <div className="grid gap-2">
             {predictions.map((prediction) => (
-              <div key={prediction.id} className="grid gap-2 rounded-[var(--radius-card)] border bg-background/65 p-4 md:grid-cols-[1fr_auto] md:items-center">
+              <div key={prediction.id} className="grid min-w-0 gap-2 rounded-[var(--radius-card)] border bg-background/65 p-[clamp(0.875rem,1.6vw,1rem)] md:grid-cols-[minmax(0,1fr)_minmax(0,auto)] md:items-center">
                 <div className="min-w-0">
                   <div className="truncate text-sm font-semibold">{prediction.question}</div>
                   <div className="mt-1 text-xs text-muted-foreground">
