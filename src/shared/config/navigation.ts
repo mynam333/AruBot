@@ -96,7 +96,7 @@ export const adminFeatureMap = {
     description: '시청자가 신청한 영상을 보기 좋게 줄 세우고 방송 화면에 자연스럽게 띄워요.',
     endpoint: '/api/video-donation/queue',
     icon: PlaySquare,
-    actions: [{ href: '/video-donations/viewer', label: 'OBS 주소' }],
+    actions: [],
     tips: ['신청 순서가 한눈에 보여요', '긴 영상은 방송 흐름에 맞춰 조절해요', 'OBS에서 바로 재생돼요'],
   },
   roulette: {

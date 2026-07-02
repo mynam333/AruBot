@@ -3964,12 +3964,8 @@ async function isSidLive(sid) {
       return true;
     }
 
-    // onlyWhenLive is true: check actual stream status
-    const channelUids = Array.isArray(settings.channelUids)
-      ? settings.channelUids.map(String).filter(Boolean)
-      : (typeof settings.channelUidsText === 'string'
-        ? settings.channelUidsText.split(',').map(s => s.trim()).filter(Boolean)
-        : []);
+    // onlyWhenLive is true: check actual CHZZK stream status only with CHZZK channel ids.
+    const channelUids = await resolveChzzkChannelUidsForSid(sid, settings);
 
     if (!channelUids.length) {
       // No channels configured, can't determine live status
@@ -4010,12 +4006,7 @@ async function isSidActuallyLive(sid) {
 
   try {
     const settings = await getBotSettings(sid) || {};
-    
-    const channelUids = Array.isArray(settings.channelUids)
-      ? settings.channelUids.map(String).filter(Boolean)
-      : (typeof settings.channelUidsText === 'string'
-        ? settings.channelUidsText.split(',').map(s => s.trim()).filter(Boolean)
-        : []);
+    const channelUids = await resolveChzzkChannelUidsForSid(sid, settings);
 
     if (!channelUids.length) {
       return false;
@@ -5483,8 +5474,9 @@ function validateBlueprintGraph(nodes = [], edges = []) {
 async function resolveBlueprintChannelUid(ownerUserId, context = {}) {
   const direct = context.channelUid || context.channel?.channelUid || context.channel?.id || context.roulette?.channelUid;
   if (direct) return String(direct);
-  const settings = await getBotSettings(`user:${ownerUserId}`).catch(() => null) || {};
-  const uids = Array.isArray(settings.channelUids) ? settings.channelUids.map(String).filter(Boolean) : [];
+  const sid = `user:${ownerUserId}`;
+  const settings = await getBotSettings(sid).catch(() => null) || {};
+  const uids = await resolveChzzkChannelUidsForSid(sid, settings);
   return uids[0] || ownerUserId;
 }
 
@@ -6305,11 +6297,7 @@ async function getLiveInfoForSid(sid) {
   const now = Date.now();
   if (cached && (now - cached.ts) < 30 * 1000) return cached.info;
   const settings = await getBotSettings(sid) || {};
-  let channelUids = Array.isArray(settings.channelUids)
-    ? settings.channelUids.map(String).filter(Boolean)
-    : (typeof settings.channelUidsText === 'string'
-      ? settings.channelUidsText.split(',').map(s => s.trim()).filter(Boolean)
-      : []);
+  let channelUids = await resolveChzzkChannelUidsForSid(sid, settings);
 
   if (!channelUids.length) {
     // Fallback: try to resolve via /open/v1/users/me (requires valid token)
@@ -6336,6 +6324,33 @@ async function getLiveInfoForSid(sid) {
     if (cimeInfo) liveInfoCache.set(sid, { ts: now, info: cimeInfo });
     return cimeInfo;
   }
+}
+
+function looksLikeChzzkChannelId(value) {
+  return /^[a-f0-9]{32}$/i.test(String(value || '').trim());
+}
+
+async function resolveChzzkChannelUidsForSid(sid, settings = null) {
+  const ownerUserId = ownerUserIdFromSid(sid);
+  const accountChannelId = await resolveChannelIdForOwnerUserId(ownerUserId, { provider: 'chzzk', allowFallback: false });
+  if (looksLikeChzzkChannelId(accountChannelId)) return [accountChannelId];
+
+  try {
+    const accessToken = await getValidAccessToken(sid);
+    const me = await axios.get(`${OPENAPI_BASE}/open/v1/users/me`, {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    const content = me?.data?.content || me?.data || {};
+    if (looksLikeChzzkChannelId(content?.channelId)) return [String(content.channelId)];
+  } catch { }
+
+  const source = settings || await getBotSettings(sid) || {};
+  const configured = Array.isArray(source.channelUids)
+    ? source.channelUids.map(String).filter(Boolean)
+    : (typeof source.channelUidsText === 'string'
+      ? source.channelUidsText.split(',').map(s => s.trim()).filter(Boolean)
+      : []);
+  return configured.filter(looksLikeChzzkChannelId);
 }
 
 function formatElapsedStrings(startedAtTs) {
@@ -6431,7 +6446,7 @@ async function substituteAllPlaceholders(text, sid, userId, username) {
       // Resolve streamer channel UID
       let channelUid = null;
       const settings = await getBotSettings(sid) || {};
-      const uids = Array.isArray(settings.channelUids) ? settings.channelUids.map(String).filter(Boolean) : [];
+      const uids = await resolveChzzkChannelUidsForSid(sid, settings);
       if (uids.length) channelUid = uids[0];
       if (!channelUid) {
         try {
@@ -6538,8 +6553,7 @@ async function fetchCimeLiveInfoForSid(sid) {
 
 async function getChannelUidsForSid(sid) {
   const settings = await getBotSettings(sid) || {};
-  const uids = Array.isArray(settings.channelUids) ? settings.channelUids.map(String).filter(Boolean) : [];
-  return uids;
+  return resolveChzzkChannelUidsForSid(sid, settings);
 }
 
 async function getChannelFollowersCountForSid(sid) {
@@ -7088,11 +7102,7 @@ async function isLiveAllowedForSid(sid) {
   try {
     const settings = await getBotSettings(sid) || {};
     const onlyWhenLive = !!settings.onlyWhenLive;
-    const channelUids = Array.isArray(settings.channelUids)
-      ? settings.channelUids.map(String).filter(Boolean)
-      : (typeof settings.channelUidsText === 'string'
-        ? settings.channelUidsText.split(',').map(s => s.trim()).filter(Boolean)
-        : []);
+    const channelUids = await resolveChzzkChannelUidsForSid(sid, settings);
 
     if (!onlyWhenLive) return true; // no restriction
     if (!channelUids.length) return false; // restricted but no channels configured
@@ -7674,16 +7684,14 @@ async function getChannelContext(sid) {
 
     //
     let userId = null;
-    let channelId = null;
 
     if (sid.startsWith('user:')) {
       userId = sid.slice(5);
-      channelId = getChannelIdFromUserId(userId);
     } else {
       userId = sid;
-      channelId = getChannelIdFromUserId(userId);
     }
 
+    const channelId = await resolveChannelIdForOwnerUserId(userId, { provider: 'chzzk' });
     if (!channelId) return null;
 
     const cacheKey = `context:${sid}`;
@@ -7725,6 +7733,43 @@ function getChannelIdFromUserId(userId) {
   }
 
   return channelId;
+}
+
+async function resolveChannelIdForOwnerUserId(userId, options = {}) {
+  const ownerUserId = String(userId || '').replace(/^user:/, '').trim();
+  if (!ownerUserId) return null;
+  const providerHint = String(options.provider || '').trim().toLowerCase();
+  const allowFallback = options.allowFallback !== false;
+
+  try {
+    const accounts = await listPlatformAccounts(ownerUserId);
+    const providerAccounts = providerHint
+      ? (accounts || []).filter((account) => String(account?.provider || '').toLowerCase() === providerHint)
+      : [
+          ...(accounts || []).filter((account) => String(account?.provider || '').toLowerCase() === 'chzzk'),
+          ...(accounts || []).filter((account) => String(account?.provider || '').toLowerCase() !== 'chzzk'),
+        ];
+    const preferred = providerAccounts.find((account) => (
+      validateChannelId(String(account?.channel_id || account?.channelId || account?.platform_user_id || account?.platformUserId || ''))
+    )) || (!providerHint ? (accounts || []).find((account) => (
+      validateChannelId(String(account?.channel_id || account?.channelId || account?.platform_user_id || account?.platformUserId || ''))
+    )) : null);
+
+    const accountChannelId = String(
+      preferred?.channel_id ||
+      preferred?.channelId ||
+      preferred?.platform_user_id ||
+      preferred?.platformUserId ||
+      ''
+    ).trim();
+    if (validateChannelId(accountChannelId)) return accountChannelId;
+  } catch (error) {
+    console.warn('[ChannelContext] Failed to resolve platform account channel ID:', error?.message || error);
+  }
+
+  if (!allowFallback) return null;
+  const fallback = getChannelIdFromUserId(ownerUserId);
+  return validateChannelId(fallback) ? fallback : null;
 }
 
 function validateChannelId(channelId) {
@@ -9428,7 +9473,7 @@ async function getPartitionId(req, res) {
   if (byKey) {
     try {
       const userId = byKey.startsWith('user:') ? byKey.slice(5) : byKey;
-      const channelId = getChannelIdFromUserId(userId);
+      const channelId = await resolveChannelIdForOwnerUserId(userId, { provider: 'chzzk' });
 
       if (channelId) {
         const cacheKey = `api:${byKey}`;
@@ -9468,7 +9513,7 @@ async function getPartitionId(req, res) {
   try {
     const userId = await getSessionUserId(sidToken);
     if (userId) {
-      const channelId = getChannelIdFromUserId(userId);
+      const channelId = await resolveChannelIdForOwnerUserId(userId, { provider: 'chzzk' });
       const sid = `user:${String(userId)}`;
 
       if (!channelId) {
@@ -11327,17 +11372,7 @@ app.get('/api/chzzk/live', async (req, res) => {
     const sid = await getPartitionId(req, res);
     // Determine channel UID list
     const settings = await getBotSettings(sid) || {};
-    let channelUids = Array.isArray(settings.channelUids) ? settings.channelUids.map(String).filter(Boolean) : [];
-    if (!channelUids.length) {
-      try {
-        const accessToken = await getValidAccessToken(sid);
-        const me = await axios.get(`${OPENAPI_BASE}/open/v1/users/me`, {
-          headers: { Authorization: `Bearer ${accessToken}` }
-        });
-        const content = me?.data?.content || me?.data || {};
-        if (content?.channelId) channelUids = [String(content.channelId)];
-      } catch { }
-    }
+    let channelUids = await resolveChzzkChannelUidsForSid(sid, settings);
     if (!channelUids.length) return res.json({ live: false });
     let live = false;
     for (const uid of channelUids) {
@@ -11499,7 +11534,7 @@ app.post('/api/bot/rules/delete', async (req, res) => {
 async function resolveStreamerUidForSid(sid) {
   try {
     const settings = await getBotSettings(sid) || {};
-    let channelUids = Array.isArray(settings.channelUids) ? settings.channelUids.map(String).filter(Boolean) : [];
+    let channelUids = await resolveChzzkChannelUidsForSid(sid, settings);
     if (channelUids.length) return channelUids[0];
     // fallback via users/me
     const accessToken = await getValidAccessToken(sid);
@@ -13285,6 +13320,11 @@ const MAX_QUEUE = 1000;
 const sessionCreatePromises = new Map(); // sid -> Promise(entry)
 
 async function ensureSession(sid, channelId) {
+  if (!channelId) {
+    try {
+      channelId = await resolveChannelIdForOwnerUserId(ownerUserIdFromSid(sid), { provider: 'chzzk', allowFallback: false });
+    } catch { }
+  }
   let entry = sessionStore.get(sid);
   // If we already have a per-channel session, reuse it and map this sid to it
   const chKey = String(channelId || '');
@@ -13543,16 +13583,8 @@ async function ensureSession(sid, channelId) {
                       if (bonus > 0) {
                         // Resolve streamer channel UID
                         let channelUid = null;
-                        try {
-                          const accessToken = await getValidAccessToken(sid);
-                          const me = await axios.get(`${OPENAPI_BASE}/open/v1/users/me`, { headers: { Authorization: `Bearer ${accessToken}` } });
-                          const content = me?.data?.content || me?.data || {};
-                          channelUid = content?.channelId ? String(content.channelId) : null;
-                        } catch { }
-                        if (!channelUid) {
-                          const uids = Array.isArray(settings.channelUids) ? settings.channelUids.map(String).filter(Boolean) : [];
-                          if (uids.length) channelUid = uids[0];
-                        }
+                        const uids = await resolveChzzkChannelUidsForSid(sid, settings);
+                        if (uids.length) channelUid = uids[0];
                         if (channelUid && !(await isChannelPointExcluded(settings, resolvedUserId))) {
                           try { await incrChannelPoints(channelUid, resolvedUserId, resolvedUsername, bonus); } catch { }
                         }
@@ -13571,17 +13603,9 @@ async function ensureSession(sid, channelId) {
             if (currentlyLive) {
               // Resolve streamer channel UID
               let channelUid = null;
-              try {
-                const accessToken = await getValidAccessToken(sid);
-                const me = await axios.get(`${OPENAPI_BASE}/open/v1/users/me`, { headers: { Authorization: `Bearer ${accessToken}` } });
-                const content = me?.data?.content || me?.data || {};
-                channelUid = content?.channelId ? String(content.channelId) : null;
-              } catch { }
-              if (!channelUid) {
-                const settings = await getBotSettings(sid) || {};
-                const uids = Array.isArray(settings.channelUids) ? settings.channelUids.map(String).filter(Boolean) : [];
-                if (uids.length) channelUid = uids[0];
-              }
+              const settings = await getBotSettings(sid) || {};
+              const uids = await resolveChzzkChannelUidsForSid(sid, settings);
+              if (uids.length) channelUid = uids[0];
               if (channelUid) {
                 // Determine per-chat amount from settings (default 1)
                 let perChat = 1;
@@ -13689,17 +13713,9 @@ async function ensureSession(sid, channelId) {
               try {
                 // Resolve streamer channel UID (same as other points operations)
                 let channelUid = null;
-                try {
-                  const accessToken = await getValidAccessToken(sid);
-                  const me = await axios.get(`${OPENAPI_BASE}/open/v1/users/me`, { headers: { Authorization: `Bearer ${accessToken}` } });
-                  const content = me?.data?.content || me?.data || {};
-                  channelUid = content?.channelId ? String(content.channelId) : null;
-                } catch { }
-                if (!channelUid) {
-                  const s = await getBotSettings(sid) || {};
-                  const uids = Array.isArray(s.channelUids) ? s.channelUids.map(String).filter(Boolean) : [];
-                  if (uids.length) channelUid = uids[0];
-                }
+                const s = await getBotSettings(sid) || {};
+                const uids = await resolveChzzkChannelUidsForSid(sid, s);
+                if (uids.length) channelUid = uids[0];
                 if (channelUid) {
                   const have = await getChannelPoints(channelUid, String(resolvedUserId)).catch(() => 0);
                   if (Number(have || 0) < commandCost) {
@@ -13790,17 +13806,9 @@ async function ensureSession(sid, channelId) {
                       }
                       // Deduct points after checking balance
                       let channelUid = null;
-                      try {
-                        const accessToken = await getValidAccessToken(sid);
-                        const me = await axios.get(`${OPENAPI_BASE}/open/v1/users/me`, { headers: { Authorization: `Bearer ${accessToken}` } });
-                        const content = me?.data?.content || me?.data || {};
-                        channelUid = content?.channelId ? String(content.channelId) : null;
-                      } catch { }
-                      if (!channelUid) {
-                        const s = await getBotSettings(sid) || {};
-                        const uids = Array.isArray(s.channelUids) ? s.channelUids.map(String).filter(Boolean) : [];
-                        if (uids.length) channelUid = uids[0];
-                      }
+                      const s = await getBotSettings(sid) || {};
+                      const uids = await resolveChzzkChannelUidsForSid(sid, s);
+                      if (uids.length) channelUid = uids[0];
                       if (!channelUid) {
                         responseToSend = (String(response).replace(vdReAll, '').trim() || '채널 ID를 확인할 수 없습니다.');
                       } else {
@@ -13878,17 +13886,9 @@ async function ensureSession(sid, channelId) {
                     try {
                       // Resolve channel UID strictly; if missing, block execution
                       let channelUid = null;
-                      try {
-                        const accessToken = await getValidAccessToken(sid);
-                        const me = await axios.get(`${OPENAPI_BASE}/open/v1/users/me`, { headers: { Authorization: `Bearer ${accessToken}` } });
-                        const content = me?.data?.content || me?.data || {};
-                        channelUid = content?.channelId ? String(content.channelId) : null;
-                      } catch (e) { /* fall through to settings */ }
-                      if (!channelUid) {
-                        const s = await getBotSettings(sid) || {};
-                        const uids = Array.isArray(s.channelUids) ? s.channelUids.map(String).filter(Boolean) : [];
-                        if (uids.length) channelUid = uids[0];
-                      }
+                      const s = await getBotSettings(sid) || {};
+                      const uids = await resolveChzzkChannelUidsForSid(sid, s);
+                      if (uids.length) channelUid = uids[0];
                       if (!channelUid) {
                         responseToSend = '포인트 확인에 실패했습니다. 채널 연결을 확인한 뒤 다시 시도해 주세요.';
                         allowExecute = false;
@@ -14113,16 +14113,8 @@ async function ensureSession(sid, channelId) {
             if (award > 0) {
               // Resolve streamer channel UID
               let channelUid = null;
-              try {
-                const accessToken = await getValidAccessToken(sid);
-                const me = await axios.get(`${OPENAPI_BASE}/open/v1/users/me`, { headers: { Authorization: `Bearer ${accessToken}` } });
-                const content = me?.data?.content || me?.data || {};
-                channelUid = content?.channelId ? String(content.channelId) : null;
-              } catch { }
-              if (!channelUid) {
-                const uids = Array.isArray(settings.channelUids) ? settings.channelUids.map(String).filter(Boolean) : [];
-                if (uids.length) channelUid = uids[0];
-              }
+              const uids = await resolveChzzkChannelUidsForSid(sid, settings);
+              if (uids.length) channelUid = uids[0];
               if (channelUid) {
                 // Use donor's userId (channel id) as the points subject
                 const pointsUserId = donorId || `donor:${donorName}`;
@@ -14421,6 +14413,8 @@ function rememberCimeSubscriptionMonths(entry, ev) {
 }
 
 async function getCimeChannelId(ownerUserId) {
+  const accountChannelId = await resolveChannelIdForOwnerUserId(ownerUserId, { provider: 'cime', allowFallback: false });
+  if (accountChannelId) return accountChannelId;
   const tokens = await getPlatformTokens('cime', ownerUserId);
   if (tokens?.platformUserId) return String(tokens.platformUserId);
   return null;

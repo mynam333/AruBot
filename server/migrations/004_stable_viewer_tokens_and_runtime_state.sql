@@ -97,7 +97,7 @@ create index if not exists idx_video_donation_queue_active
 
 create table if not exists public.viewer_playback_state (
   channel_uid text primary key,
-  current_queue_id uuid references public.video_donation_queue(id) on delete set null,
+  current_queue_id text,
   base_start_ms bigint,
   paused boolean not null default false,
   paused_at_sec integer,
@@ -106,12 +106,16 @@ create table if not exists public.viewer_playback_state (
 );
 
 alter table public.viewer_playback_state add column if not exists channel_uid text;
-alter table public.viewer_playback_state add column if not exists current_queue_id uuid;
+alter table public.viewer_playback_state add column if not exists current_queue_id text;
 alter table public.viewer_playback_state add column if not exists base_start_ms bigint;
 alter table public.viewer_playback_state add column if not exists paused boolean not null default false;
 alter table public.viewer_playback_state add column if not exists paused_at_sec integer;
 alter table public.viewer_playback_state add column if not exists server_updated_at timestamptz not null default now();
 alter table public.viewer_playback_state add column if not exists metadata jsonb not null default '{}'::jsonb;
+
+create index if not exists idx_viewer_playback_state_current_queue
+  on public.viewer_playback_state (current_queue_id)
+  where current_queue_id is not null;
 
 create table if not exists public.channel_points_balances (
   channel_uid text not null,

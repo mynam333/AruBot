@@ -160,14 +160,14 @@ function parseMaybeJsonObject(value, fallback = {}) {
 }
 
 function addLog(level, message, details = null) {
-  logs.unshift({
+  logs.push({
     id: crypto.randomBytes(6).toString('hex'),
     at: new Date().toISOString(),
     level,
     message,
     details,
   });
-  logs = logs.slice(0, 120);
+  logs = logs.slice(-120);
   emitState();
 }
 
@@ -329,7 +329,7 @@ function configureAutoUpdater() {
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
   autoUpdater.allowPrerelease = false;
-  autoUpdater.disableWebInstaller = false;
+  autoUpdater.disableWebInstaller = true;
   autoUpdater.setFeedURL({ provider: 'generic', url: getUpdaterFeedUrl() });
 }
 
@@ -1239,9 +1239,9 @@ ipcMain.handle('update:install', async () => {
       await checkForUpdatesWithElectronUpdater();
       const info = await downloadUpdateWithElectronUpdater();
       setUpdateState({ status: 'installing', downloaded: true, progress: null });
-      addLog('success', '업데이트 다운로드가 끝났습니다. 프로그램을 재시작하며 설치합니다.');
+      addLog('success', '업데이트 다운로드가 끝났습니다. 프로그램을 재시작하며 조용히 적용합니다.');
       setTimeout(() => {
-        autoUpdater.quitAndInstall(false, true);
+        autoUpdater.quitAndInstall(true, true);
       }, 700);
       return { ...update, electronUpdater: true, opened: false, installing: true, info };
     } catch (error) {

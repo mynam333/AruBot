@@ -1268,25 +1268,37 @@ export async function analyzeQueryPerformanceSupabase() {
     throw new Error('SUPABASE_DB_URL is required for query analysis');
   }
   
-  try {
-    return await withPgClient(async (pg) => {
-      const result = await pg.query('SELECT * FROM analyze_channel_query_performance()');
-
-      return result.rows.map(row => ({
-        tableName: row.table_name,
-        indexName: row.index_name,
-        indexUsageCount: parseInt(row.index_usage_count),
-        tableSize: row.table_size,
-        indexSize: row.index_size
-      }));
-    });
-  } catch (error) {
-    if (isUndefinedDbFunctionError(error, 'analyze_channel_query_performance')) {
-      console.warn('[Performance Monitor] analyze_channel_query_performance() is not installed; skipping query analysis');
-      return [];
+  return withPgClient(async (pg) => {
+    let result;
+    try {
+      result = await pg.query('SELECT * FROM analyze_channel_query_performance()');
+    } catch (error) {
+      if (!isUndefinedDbFunctionError(error, 'analyze_channel_query_performance') && error?.code !== '42703') {
+        throw error;
+      }
+      console.warn('[Performance Monitor] analyze_channel_query_performance() is unavailable or stale; using direct pg_stat_user_indexes query');
+      result = await pg.query(`
+        SELECT
+          schemaname||'.'||relname as table_name,
+          indexrelname as index_name,
+          idx_tup_read as index_usage_count,
+          pg_size_pretty(pg_total_relation_size(relid)) as table_size,
+          pg_size_pretty(pg_relation_size(indexrelid)) as index_size
+        FROM pg_stat_user_indexes
+        WHERE schemaname = 'public'
+          AND (relname LIKE '%session%' OR relname LIKE '%token%' OR relname = 'roulette_sessions')
+        ORDER BY idx_tup_read DESC
+      `);
     }
-    throw error;
-  }
+
+    return result.rows.map(row => ({
+      tableName: row.table_name,
+      indexName: row.index_name,
+      indexUsageCount: parseInt(row.index_usage_count),
+      tableSize: row.table_size,
+      indexSize: row.index_size
+    }));
+  });
 }
 
 // 인덱스 사용률 모니터링
@@ -1296,24 +1308,43 @@ export async function monitorIndexUsageSupabase() {
     throw new Error('SUPABASE_DB_URL is required for index monitoring');
   }
   
-  try {
-    return await withPgClient(async (pg) => {
-      const result = await pg.query('SELECT * FROM monitor_index_usage()');
-
-      return result.rows.map(row => ({
-        tableName: row.table_name,
-        indexName: row.index_name,
-        usageRatio: parseFloat(row.usage_ratio),
-        recommendation: row.recommendation
-      }));
-    });
-  } catch (error) {
-    if (isUndefinedDbFunctionError(error, 'monitor_index_usage')) {
-      console.warn('[Performance Monitor] monitor_index_usage() is not installed; skipping index monitoring');
-      return [];
+  return withPgClient(async (pg) => {
+    let result;
+    try {
+      result = await pg.query('SELECT * FROM monitor_index_usage()');
+    } catch (error) {
+      if (!isUndefinedDbFunctionError(error, 'monitor_index_usage') && error?.code !== '42703') {
+        throw error;
+      }
+      console.warn('[Performance Monitor] monitor_index_usage() is unavailable or stale; using direct pg_stat_user_indexes query');
+      result = await pg.query(`
+        SELECT
+          schemaname||'.'||relname as table_name,
+          indexrelname as index_name,
+          CASE
+            WHEN idx_tup_read + idx_tup_fetch = 0 THEN 0
+            ELSE ROUND((idx_tup_read::NUMERIC / (idx_tup_read + idx_tup_fetch + 1)) * 100, 2)
+          END as usage_ratio,
+          CASE
+            WHEN idx_tup_read + idx_tup_fetch = 0 THEN 'Consider dropping - unused index'
+            WHEN idx_tup_read::NUMERIC / (idx_tup_read + idx_tup_fetch + 1) < 0.1 THEN 'Low usage - review necessity'
+            WHEN idx_tup_read::NUMERIC / (idx_tup_read + idx_tup_fetch + 1) > 0.8 THEN 'High usage - keep index'
+            ELSE 'Moderate usage - monitor'
+          END as recommendation
+        FROM pg_stat_user_indexes
+        WHERE schemaname = 'public'
+          AND (relname LIKE '%session%' OR relname LIKE '%token%' OR relname = 'roulette_sessions')
+        ORDER BY usage_ratio DESC
+      `);
     }
-    throw error;
-  }
+
+    return result.rows.map(row => ({
+      tableName: row.table_name,
+      indexName: row.index_name,
+      usageRatio: parseFloat(row.usage_ratio),
+      recommendation: row.recommendation
+    }));
+  });
 }
 
 // 성능 최적화 권장사항

@@ -67,14 +67,14 @@ RETURNS TABLE(
 BEGIN
   RETURN QUERY
   SELECT 
-    schemaname||'.'||tablename as table_name,
-    indexname as index_name,
+    schemaname||'.'||relname as table_name,
+    indexrelname as index_name,
     idx_tup_read as index_usage_count,
-    pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) as table_size,
-    pg_size_pretty(pg_relation_size(schemaname||'.'||indexname)) as index_size
+    pg_size_pretty(pg_total_relation_size(relid)) as table_size,
+    pg_size_pretty(pg_relation_size(indexrelid)) as index_size
   FROM pg_stat_user_indexes 
   WHERE schemaname = 'public' 
-    AND (tablename LIKE '%session%' OR tablename LIKE '%token%' OR tablename = 'roulette_sessions')
+    AND (relname LIKE '%session%' OR relname LIKE '%token%' OR relname = 'roulette_sessions')
   ORDER BY idx_tup_read DESC;
 END;
 $$ LANGUAGE plpgsql;
@@ -90,8 +90,8 @@ RETURNS TABLE(
 BEGIN
   RETURN QUERY
   SELECT 
-    schemaname||'.'||tablename as table_name,
-    indexname as index_name,
+    schemaname||'.'||relname as table_name,
+    indexrelname as index_name,
     CASE 
       WHEN idx_tup_read + idx_tup_fetch = 0 THEN 0
       ELSE ROUND((idx_tup_read::NUMERIC / (idx_tup_read + idx_tup_fetch + 1)) * 100, 2)
@@ -104,7 +104,7 @@ BEGIN
     END as recommendation
   FROM pg_stat_user_indexes 
   WHERE schemaname = 'public' 
-    AND (tablename LIKE '%session%' OR tablename LIKE '%token%' OR tablename = 'roulette_sessions')
+    AND (relname LIKE '%session%' OR relname LIKE '%token%' OR relname = 'roulette_sessions')
   ORDER BY usage_ratio DESC;
 END;
 $$ LANGUAGE plpgsql;

@@ -33,6 +33,7 @@ jobs:
       ARCHIVE_NAME: arubot-backend-${{ github.sha }}.tar.gz
       NODE_VERSION: '22'
       REMOTE_NODE_BIN_DIR: ${{ vars.REMOTE_NODE_BIN_DIR || '' }}
+      BACKEND_RELEASES_TO_KEEP: ${{ vars.BACKEND_RELEASES_TO_KEEP || '1' }}
 
     steps:
       - name: Checkout
@@ -85,7 +86,7 @@ jobs:
       - name: Deploy with PM2
         run: |
           ssh -p "$ORACLE_PORT" -i ~/.ssh/arubot_deploy_key "$ORACLE_USER@$ORACLE_HOST" \
-            "APP_DIR='$BACKEND_APP_DIR' RELEASE_SHA='$RELEASE_SHA' ARCHIVE_NAME='$ARCHIVE_NAME' NODE_VERSION='$NODE_VERSION' REMOTE_NODE_BIN_DIR='$REMOTE_NODE_BIN_DIR' bash -s" <<'REMOTE'
+            "APP_DIR='$BACKEND_APP_DIR' RELEASE_SHA='$RELEASE_SHA' ARCHIVE_NAME='$ARCHIVE_NAME' NODE_VERSION='$NODE_VERSION' REMOTE_NODE_BIN_DIR='$REMOTE_NODE_BIN_DIR' RELEASES_TO_KEEP='$BACKEND_RELEASES_TO_KEEP' bash -s" <<'REMOTE'
           set -euo pipefail
 
           APP_DIR="${APP_DIR:-/opt/arubot}"
@@ -93,6 +94,7 @@ jobs:
           ARCHIVE_NAME="${ARCHIVE_NAME:?ARCHIVE_NAME is required}"
           NODE_VERSION="${NODE_VERSION:-22}"
           REMOTE_NODE_BIN_DIR="${REMOTE_NODE_BIN_DIR:-}"
+          RELEASES_TO_KEEP="${RELEASES_TO_KEEP:-1}"
 
           RELEASES_DIR="$APP_DIR/releases"
           SHARED_DIR="$APP_DIR/shared"
@@ -270,6 +272,61 @@ jobs:
             echo "Activated release: $CURRENT_REAL"
           }
 
+          cleanup_old_releases() {
+            if ! [[ "$RELEASES_TO_KEEP" =~ ^[0-9]+$ ]]; then
+              echo "Invalid RELEASES_TO_KEEP value '$RELEASES_TO_KEEP'. Falling back to 1." >&2
+              RELEASES_TO_KEEP=1
+            fi
+
+            if [ "$RELEASES_TO_KEEP" -lt 1 ]; then
+              RELEASES_TO_KEEP=1
+            fi
+
+            CURRENT_REAL="$(readlink -f "$CURRENT_DIR" || true)"
+            RELEASE_REAL="$(readlink -f "$RELEASE_DIR" || true)"
+            kept=0
+            removed=0
+
+            echo "Cleaning backend releases in $RELEASES_DIR. Keeping $RELEASES_TO_KEEP release(s)."
+
+            find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d -name '.tmp-*' -mmin +60 -print -exec rm -rf -- {} +
+
+            while IFS= read -r release_path; do
+              if [ -z "$release_path" ]; then
+                continue
+              fi
+
+              release_real="$(readlink -f "$release_path" || true)"
+              if [ -n "$CURRENT_REAL" ] && [ "$release_real" = "$CURRENT_REAL" ]; then
+                kept=$((kept + 1))
+                echo "Keeping active backend release: $release_path"
+                continue
+              fi
+
+              if [ -n "$RELEASE_REAL" ] && [ "$release_real" = "$RELEASE_REAL" ]; then
+                kept=$((kept + 1))
+                echo "Keeping deployed backend release: $release_path"
+                continue
+              fi
+
+              if [ "$kept" -lt "$RELEASES_TO_KEEP" ]; then
+                kept=$((kept + 1))
+                echo "Keeping recent backend release: $release_path"
+                continue
+              fi
+
+              echo "Removing old backend release: $release_path"
+              rm -rf -- "$release_path"
+              removed=$((removed + 1))
+            done < <(
+              find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d ! -name '.*' -printf '%T@ %p\n' \
+                | sort -rn \
+                | cut -d' ' -f2-
+            )
+
+            echo "Backend release cleanup complete: removed $removed old release(s)."
+          }
+
           ensure_deploy_dirs
           rm -rf "$TMP_RELEASE_DIR"
           mkdir -p "$TMP_RELEASE_DIR"
@@ -310,11 +367,7 @@ jobs:
           pm2 start ecosystem.config.cjs --env production --update-env
           pm2 save
 
-          find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d ! -name '.*' -printf '%T@ %p\n' \
-            | sort -rn \
-            | cut -d' ' -f2- \
-            | tail -n +6 \
-            | xargs -r rm -rf
+          cleanup_old_releases
 
           pm2 status arubot-api
           pm2 describe arubot-api

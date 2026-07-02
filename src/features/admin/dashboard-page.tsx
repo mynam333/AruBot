@@ -116,7 +116,7 @@ const featureCards = [
 const quickActions = [
   { href: '/connection', label: '플랫폼 연결', icon: Cable, help: 'CHZZK와 CIME 시청자가 같은 방송 경험으로 들어오게 합니다.' },
   { href: 'dialog:command', label: '명령어 만들기', icon: MessageSquare, help: '채팅에서 바로 반응하는 참여 문구를 추가합니다.' },
-  { href: '/video-donations/viewer', label: '포인트 영상후원', icon: PlaySquare, help: '신청 영상이 방송 화면에 자연스럽게 이어지게 합니다.' },
+  { href: '/video-donations/queue', label: '포인트 영상후원', icon: PlaySquare, help: '신청 영상이 방송 화면에 자연스럽게 이어지게 합니다.' },
   { href: 'dialog:roulette', label: '룰렛 만들기', icon: Sparkles, help: '포인트와 후원이 당첨의 재미로 바뀌게 합니다.' },
   { href: '/settings', label: '방송 스타일', icon: Settings, help: 'AruBot의 말투와 공개 화면을 내 방송 분위기에 맞춥니다.' },
 ] as const;

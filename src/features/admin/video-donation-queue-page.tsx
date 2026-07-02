@@ -4,8 +4,9 @@ import { GripVertical, Loader2, PlaySquare, RefreshCw, RotateCcw, Trash2, UserRo
 import { useCallback, useEffect, useMemo, useState, useTransition } from 'react';
 import { toast } from 'sonner';
 import { VideoDonationSettingsDialog } from '@/features/admin/admin-action-dialogs';
+import { ViewerTokenPanel } from '@/features/admin/viewer-token-panel';
 import { Badge } from '@/components/ui/badge';
-import { Button, LinkButton } from '@/components/ui/button';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { apiUrl, readJson } from '@/shared/api/http';
 
@@ -279,7 +280,6 @@ export function VideoDonationQueuePage() {
           </div>
           <div className="flex flex-wrap gap-2">
             <VideoDonationSettingsDialog />
-            <LinkButton href="/video-donations/viewer" variant="outline">OBS 주소</LinkButton>
             <Button type="button" variant="outline" onClick={load} disabled={isPending}>
               <RefreshCw className={isPending ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
               새로고침
@@ -287,6 +287,13 @@ export function VideoDonationQueuePage() {
           </div>
         </div>
       </section>
+
+      <ViewerTokenPanel
+        title="영상 후원 화면 주소"
+        description="이 주소를 OBS 브라우저 소스에 넣으면 시청자가 신청한 영상이 방송 화면에 표시돼요."
+        endpoint="/api/video-donation/viewer-url"
+        rotateEndpoint="/api/video-donation/rotate-viewer-token"
+      />
 
       <div className="grid gap-[clamp(0.85rem,1.6vw,1.15rem)] md:grid-cols-4">
         <Card>

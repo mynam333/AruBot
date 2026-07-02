@@ -70,6 +70,7 @@ function setActivePage(page) {
   if (nextPage === 'remote' && !(remoteState.rules.length || remoteState.rouletteDefs.length || remoteState.videoQueue.length)) {
     loadRemote().catch((error) => pushLocalLog('error', error?.message || '리모컨 정보를 불러오지 못했습니다.'));
   }
+  if (nextPage === 'logs') scrollLogsToBottom();
 }
 
 function fmtTime(value) {
@@ -81,30 +82,57 @@ function fmtTime(value) {
   }
 }
 
+function fmtLogTime(value) {
+  if (!value) return '--:--:--';
+  try {
+    return new Intl.DateTimeFormat('ko-KR', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).format(new Date(value));
+  } catch {
+    return String(value);
+  }
+}
+
+function scrollLogsToBottom() {
+  const list = $('#logList');
+  if (!list) return;
+  window.requestAnimationFrame(() => {
+    list.scrollTop = list.scrollHeight;
+  });
+}
+
 function renderLogs(logs) {
   const list = $('#logList');
-  const rows = [...localTaskLogs, ...(Array.isArray(logs) ? logs : [])].slice(0, 120);
+  const rows = [...localTaskLogs, ...(Array.isArray(logs) ? logs : [])]
+    .sort((a, b) => new Date(a.at || 0).getTime() - new Date(b.at || 0).getTime())
+    .slice(-120);
   if (!rows.length) {
     list.innerHTML = '<div class="folder-path">아직 실행 기록이 없습니다.</div>';
     return;
   }
   list.innerHTML = rows.map((log) => `
     <div class="log-row">
-      <span>${fmtTime(log.at).replace(/\s?오.+/, '')}</span>
+      <span>${fmtLogTime(log.at)}</span>
       <span class="log-level ${log.level}">${log.level}</span>
       <span>${escapeHtml(log.message || '')}</span>
     </div>
   `).join('');
+  scrollLogsToBottom();
 }
 
 function pushLocalLog(level, message) {
-  localTaskLogs.unshift({
+  localTaskLogs.push({
     id: `local_${Date.now()}`,
     at: new Date().toISOString(),
     level,
     message,
   });
-  localTaskLogs.splice(20);
+  if (localTaskLogs.length > 20) {
+    localTaskLogs.splice(0, localTaskLogs.length - 20);
+  }
   renderLogs(latestState?.logs || []);
 }
 
@@ -310,14 +338,14 @@ $('#checkUpdateButton').addEventListener('click', () => run(async () => {
 $('#installUpdateButton').addEventListener('click', () => run(async () => {
   await window.aruLocal.saveConfig(collectConfig());
   $('#installUpdateButton').disabled = true;
-  $('#updateStatusText').textContent = '업데이트 설치 파일을 다운로드하고 있습니다.';
+  $('#updateStatusText').textContent = '업데이트를 프로그램 안에서 다운로드하고 있습니다.';
   try {
     latestUpdate = await window.aruLocal.installUpdate();
     $('#latestVersionText').textContent = latestUpdate.latestVersion || '확인 완료';
     $('#updateStatusText').textContent = latestUpdate.installing
-      ? '다운로드가 끝났습니다. 프로그램을 재시작하며 업데이트를 설치합니다.'
+      ? '다운로드가 끝났습니다. 프로그램을 재시작하며 업데이트를 적용합니다.'
       : latestUpdate.opened
-      ? '설치 파일을 실행했습니다. 설치가 끝나면 프로그램을 다시 열어주세요.'
+      ? '자동 업데이트를 사용할 수 없어 수동 설치 파일을 열었습니다.'
       : '이미 최신 버전을 사용 중입니다.';
   } finally {
     $('#installUpdateButton').disabled = !latestUpdate?.updateAvailable;

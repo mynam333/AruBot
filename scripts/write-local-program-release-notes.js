@@ -69,7 +69,7 @@ const notes = [
   '',
   '## 업데이트 방식',
   '',
-  '`latest.json`에는 다운로드 페이지와 수동 fallback용 정보가 들어 있고, `latest.yml`과 blockmap은 프로그램 내부 자동 업데이트에 사용됩니다.',
+  '`latest.yml`과 blockmap은 프로그램 내부 자동 업데이트에 사용되고, `latest.json`은 버전 표시와 수동 복구용 다운로드 정보에 사용됩니다.',
   '',
 ].join('\n');
 
