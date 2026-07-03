@@ -40,9 +40,22 @@ type PlatformAccount = {
 
 type DashboardData = {
   platforms?: PlatformAccount[];
+  youtubeStreamerStatus?: YoutubeStreamerStatus | null;
   settings?: Record<string, unknown> | null;
   stats?: Record<string, unknown> | null;
   queue?: unknown;
+};
+
+type YoutubeStreamerStatus = {
+  configured?: boolean;
+  botConfigured?: boolean;
+  channel?: {
+    youtubeChannelId?: string | null;
+    youtubeHandle?: string | null;
+    title?: string | null;
+    thumbnailUrl?: string | null;
+    moderatorRegistered?: boolean;
+  } | null;
 };
 
 const providers = [
@@ -63,7 +76,7 @@ const providers = [
   {
     id: 'youtube',
     label: 'YouTube',
-    loginPath: '/api/auth/youtube/login',
+    connectionPath: '/connection?platform=youtube',
     iconPath: '/brands/youtube.svg',
     tone: 'rose',
   },
@@ -128,6 +141,8 @@ const quickActions = [
   { href: '/settings', label: '방송 스타일', icon: Settings, help: 'AruBot의 말투와 공개 화면을 내 방송 분위기에 맞춥니다.' },
 ] as const;
 
+const compactNumberFormatter = new Intl.NumberFormat('ko-KR', { notation: 'compact', maximumFractionDigits: 1 });
+
 function pickRows(data: unknown) {
   if (Array.isArray(data)) return data;
   if (!data || typeof data !== 'object') return [];
@@ -149,7 +164,7 @@ function providerLabel(provider?: string) {
 
 function compactCount(value?: number | null) {
   if (typeof value !== 'number' || !Number.isFinite(value)) return null;
-  return new Intl.NumberFormat('ko-KR', { notation: 'compact', maximumFractionDigits: 1 }).format(value);
+  return compactNumberFormatter.format(value);
 }
 
 function ChannelAvatar({ account }: { account: PlatformAccount }) {
@@ -174,11 +189,15 @@ export function DashboardPage() {
     const controller = new AbortController();
     let alive = true;
     async function loadDashboard() {
-      const platforms = await readJson<{ platforms?: PlatformAccount[] }>('/api/account/platforms', { signal: controller.signal });
+      const [platforms, youtubeStreamerStatus] = await Promise.all([
+        readJson<{ platforms?: PlatformAccount[] }>('/api/account/platforms', { signal: controller.signal }),
+        readJson<YoutubeStreamerStatus>('/api/youtube/streamer-channel', { signal: controller.signal }).catch(() => null),
+      ]);
       if (!alive) return;
       const platformRows = Array.isArray(platforms?.platforms) ? platforms.platforms : [];
-      if (!platformRows.length) {
-        setDashboardData({ platforms: platformRows, settings: null, stats: null, queue: [] });
+      const youtubeConfigured = youtubeStreamerStatus?.configured === true;
+      if (!platformRows.length && !youtubeConfigured) {
+        setDashboardData({ platforms: platformRows, youtubeStreamerStatus, settings: null, stats: null, queue: [] });
         return;
       }
       const [settings, stats, queue] = await Promise.all([
@@ -189,6 +208,7 @@ export function DashboardPage() {
       if (!alive) return;
       setDashboardData({
         platforms: platformRows,
+        youtubeStreamerStatus,
         settings,
         stats,
         queue,
@@ -202,17 +222,34 @@ export function DashboardPage() {
   }, []);
 
   const accounts = useMemo(() => dashboardData.platforms || [], [dashboardData.platforms]);
+  const youtubeStreamerStatus = dashboardData.youtubeStreamerStatus || null;
+  const youtubeConfigured = youtubeStreamerStatus?.configured === true;
+  const youtubeAccount = useMemo<PlatformAccount | null>(() => {
+    if (!youtubeConfigured || accounts.some((account) => account.provider?.toLowerCase() === 'youtube')) return null;
+    const channel = youtubeStreamerStatus?.channel || {};
+    return {
+      provider: 'youtube',
+      channel_id: channel.youtubeChannelId || undefined,
+      channel_name: channel.title || channel.youtubeHandle || channel.youtubeChannelId || 'YouTube 채널',
+      channel_handle: channel.youtubeHandle || undefined,
+      avatar_url: channel.thumbnailUrl || undefined,
+    };
+  }, [accounts, youtubeConfigured, youtubeStreamerStatus]);
+  const visibleAccounts = useMemo(() => (
+    youtubeAccount ? [...accounts, youtubeAccount] : accounts
+  ), [accounts, youtubeAccount]);
   const queueCount = pickRows(dashboardData.queue).length;
   const botEnabled = dashboardData.settings && 'botEnabled' in dashboardData.settings ? dashboardData.settings.botEnabled !== false : null;
   const statsCount = typeof dashboardData.stats?.commands === 'number' ? dashboardData.stats.commands : undefined;
   const connectedProviders = new Set(accounts.map((account) => account.provider?.toLowerCase()).filter(Boolean));
+  if (youtubeConfigured) connectedProviders.add('youtube');
 
   const statusItems = [
     {
       title: '플랫폼 연결',
-      value: accounts.length ? `${accounts.length}개 채널` : '연결 필요',
-      label: accounts.length ? '연결됨' : '시작하기',
-      tone: accounts.length ? 'mint' : 'amber',
+      value: visibleAccounts.length ? `${visibleAccounts.length}개 채널` : '연결 필요',
+      label: visibleAccounts.length ? '연결됨' : '시작하기',
+      tone: visibleAccounts.length ? 'mint' : 'amber',
       icon: Cable,
     },
     {
@@ -253,6 +290,20 @@ export function DashboardPage() {
             <div className="mt-6 flex flex-wrap gap-2">
               {providers.map((provider) => {
                 const connected = connectedProviders.has(provider.id);
+                if (provider.id === 'youtube') {
+                  return (
+                    <LinkButton key={provider.id} href={provider.connectionPath} variant={connected ? 'secondary' : 'default'} size="lg">
+                      <img
+                        src={provider.iconPath}
+                        alt=""
+                        aria-hidden="true"
+                        className="h-5 w-5 shrink-0 rounded-[calc(var(--radius-control)*0.35)] object-contain"
+                        draggable={false}
+                      />
+                      {connected ? 'YouTube 다시 연결' : 'YouTube로 로그인'}
+                    </LinkButton>
+                  );
+                }
                 return (
                   <Button key={provider.id} asChild variant={connected ? 'secondary' : 'default'} size="lg">
                     <a href={apiUrl(provider.loginPath)}>
@@ -277,14 +328,14 @@ export function DashboardPage() {
             <CardHeader>
               <div className="flex items-center justify-between gap-3">
                 <CardTitle>연결된 채널</CardTitle>
-                <Badge tone={accounts.length ? 'mint' : 'amber'}>{accounts.length ? '사용 가능' : '연결 필요'}</Badge>
+                <Badge tone={visibleAccounts.length ? 'mint' : 'amber'}>{visibleAccounts.length ? '사용 가능' : '연결 필요'}</Badge>
               </div>
               <CardDescription>연결된 채널마다 시청자 참여 기능이 바로 열립니다.</CardDescription>
             </CardHeader>
             <CardContent>
-              {accounts.length ? (
+              {visibleAccounts.length ? (
                 <div className="grid gap-2">
-                  {accounts.map((account) => (
+                  {visibleAccounts.map((account) => (
                     <div key={`${account.provider}-${account.channel_id}`} className="flex items-center justify-between gap-3 rounded-[var(--radius-control)] border bg-background/75 p-[clamp(0.75rem,1.4vw,1rem)]">
                       <div className="flex min-w-0 items-center gap-3">
                         <ChannelAvatar account={account} />

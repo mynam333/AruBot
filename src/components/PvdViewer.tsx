@@ -53,6 +53,10 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
   const externalPausedRef = useRef(false);
   const tiktokPlayingSeenRef = useRef(false);
   const tiktokReadyAtRef = useRef(0);
+  const tiktokPlayingStartedAtRef = useRef(0);
+  const tiktokDurationRef = useRef(0);
+  const tiktokDurationReportedRef = useRef(0);
+  const tiktokEarlyEndRetryRef = useRef(0);
 
   // Parse token from /pvd/:token
   useEffect(() => {
@@ -190,10 +194,10 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
     } catch {}
   }, [captionsEnabled]);
 
-  const emitControl = useCallback((op: 'pause' | 'play' | 'seek' | 'volume', atSec?: number, nextVolume?: number) => {
+  const emitControl = useCallback((op: 'pause' | 'play' | 'seek' | 'volume' | 'duration', atSec?: number, nextVolume?: number, durationSec?: number) => {
     if (!token) return;
     const apiBase = getViewerApiBase();
-    const body = { token, op, atSec, volume: nextVolume } as any;
+    const body = { token, op, atSec, volume: nextVolume, durationSec } as any;
     fetch(`${apiBase}/api/video-donation/control-by-token`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
     }).catch(() => {});
@@ -270,6 +274,10 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
     externalPausedRef.current = false;
     tiktokPlayingSeenRef.current = false;
     tiktokReadyAtRef.current = 0;
+    tiktokPlayingStartedAtRef.current = 0;
+    tiktokDurationRef.current = 0;
+    tiktokDurationReportedRef.current = 0;
+    tiktokEarlyEndRetryRef.current = 0;
     currentVidRef.current = null;
     currentStartRef.current = 0;
     setYoutubeActive(false);
@@ -313,6 +321,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
         const now = Date.now();
         if (state === 1) {
           tiktokPlayingSeenRef.current = true;
+          if (!tiktokPlayingStartedAtRef.current) tiktokPlayingStartedAtRef.current = now;
           if (!document.hidden && now > suppressUntilRef.current && now - lastEmitRef.current > 300) {
             lastEmitRef.current = now;
             emitControl('play', Math.floor(lastTimeRef.current));
@@ -320,7 +329,19 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
           return;
         }
         if (state === 0) {
-          if (tiktokPlayingSeenRef.current) report('end');
+          const playedMs = tiktokPlayingStartedAtRef.current ? now - tiktokPlayingStartedAtRef.current : 0;
+          const duration = Number(tiktokDurationRef.current || 0);
+          const current = Number(lastTimeRef.current || 0);
+          const reachedKnownEnd = duration > 0 && current >= Math.max(0, duration - 0.75);
+          const playedLongEnough = playedMs >= 2500;
+          if (tiktokPlayingSeenRef.current && (reachedKnownEnd || playedLongEnough)) {
+            report('end');
+          } else if (tiktokEarlyEndRetryRef.current < 2) {
+            tiktokEarlyEndRetryRef.current += 1;
+            window.setTimeout(() => {
+              postToExternalPlayer({ type: 'play' });
+            }, 350);
+          }
           return;
         }
         if (state === 2) {
@@ -335,7 +356,15 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
       if (type === 'onCurrentTime') {
         const value = data.value;
         const current = Number(typeof value === 'object' ? value?.currentTime : value);
+        const duration = Number(typeof value === 'object' ? value?.duration : 0);
         if (Number.isFinite(current)) lastTimeRef.current = current;
+        if (Number.isFinite(duration) && duration > 0) {
+          tiktokDurationRef.current = duration;
+          if (Math.abs(duration - tiktokDurationReportedRef.current) >= 0.5) {
+            tiktokDurationReportedRef.current = duration;
+            emitControl('duration', undefined, undefined, Math.ceil(duration));
+          }
+        }
         return;
       }
 
@@ -473,6 +502,10 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
     if (provider === 'tiktok') {
       tiktokPlayingSeenRef.current = false;
       tiktokReadyAtRef.current = Date.now();
+      tiktokPlayingStartedAtRef.current = 0;
+      tiktokDurationRef.current = 0;
+      tiktokDurationReportedRef.current = 0;
+      tiktokEarlyEndRetryRef.current = 0;
     }
 
     try { playerRef.current && playerRef.current.stopVideo && playerRef.current.stopVideo(); } catch {}

@@ -15,6 +15,26 @@ type AdminAccess = {
   isAdmin?: boolean;
 };
 
+let adminAccessCache: { value: boolean; expiresAt: number } | null = null;
+let adminAccessPromise: Promise<boolean> | null = null;
+
+async function readAdminAccess() {
+  const now = Date.now();
+  if (adminAccessCache && adminAccessCache.expiresAt > now) return adminAccessCache.value;
+  if (!adminAccessPromise) {
+    adminAccessPromise = readJson<AdminAccess>('/api/arubot-admin/me')
+      .then((status) => {
+        const value = status?.isAdmin === true;
+        adminAccessCache = { value, expiresAt: Date.now() + 5 * 60 * 1000 };
+        return value;
+      })
+      .finally(() => {
+        adminAccessPromise = null;
+      });
+  }
+  return adminAccessPromise;
+}
+
 function getVisibleNav(isAdmin: boolean) {
   return adminNav.filter((item) => !item.adminOnly || isAdmin);
 }
@@ -81,8 +101,8 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let alive = true;
-    readJson<AdminAccess>('/api/arubot-admin/me').then((status) => {
-      if (alive) setIsAdmin(status?.isAdmin === true);
+    readAdminAccess().then((nextIsAdmin) => {
+      if (alive) setIsAdmin(nextIsAdmin);
     });
     return () => {
       alive = false;

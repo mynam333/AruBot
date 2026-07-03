@@ -8,7 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button, LinkButton } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
-import { apiUrl } from '@/shared/api/http';
+import { apiUrl, readJson } from '@/shared/api/http';
 import { cn } from '@/shared/lib/utils';
 
 type ProviderId = 'chzzk' | 'cime';
@@ -60,6 +60,8 @@ const providers = [
   },
 ] as const;
 
+const compactNumberFormatter = new Intl.NumberFormat('ko-KR', { notation: 'compact', maximumFractionDigits: 1 });
+
 function providerLabel(provider?: string | null) {
   const value = String(provider || '').toLowerCase();
   if (value === 'chzzk') return 'CHZZK';
@@ -69,7 +71,7 @@ function providerLabel(provider?: string | null) {
 
 function compactCount(value?: number | null) {
   if (typeof value !== 'number' || !Number.isFinite(value)) return null;
-  return new Intl.NumberFormat('ko-KR', { notation: 'compact', maximumFractionDigits: 1 }).format(value);
+  return compactNumberFormatter.format(value);
 }
 
 function ViewerShell({ children }: { children: React.ReactNode }) {
@@ -124,11 +126,7 @@ export function ViewerConnectPage() {
     if (silent) setRefreshing(true);
     else setLoading(true);
     try {
-      const response = await fetch(apiUrl('/api/account/platforms'), {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      const payload = (await response.json().catch(() => null)) as AccountPlatformsResponse | null;
+      const payload = await readJson<AccountPlatformsResponse>('/api/account/platforms');
       setUserId(payload?.userId || null);
       setPlatforms(Array.isArray(payload?.platforms) ? payload.platforms : []);
     } catch {

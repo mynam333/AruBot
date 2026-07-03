@@ -3,6 +3,7 @@
 import type { CSSProperties, ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { readJson } from '@/shared/api/http';
+import { useVisibilityPolling } from '@/shared/lib/use-visibility-polling';
 
 type PredictionOption = {
   id: string;
@@ -89,10 +90,9 @@ export function PredictionOverlay({ channelUid }: { channelUid: string }) {
 
   useEffect(() => {
     setPreview(new URLSearchParams(window.location.search).get('preview') === '1');
-    load();
-    const timer = window.setInterval(load, 2200);
-    return () => window.clearInterval(timer);
-  }, [load]);
+  }, []);
+
+  useVisibilityPolling(load, 2200);
 
   useEffect(() => {
     if (prediction?.status !== 'settled' || !prediction.winningOptionId) {

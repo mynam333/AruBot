@@ -21,7 +21,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Pagination } from '@/components/ui/pagination';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
 import { Tooltip } from '@/components/ui/tooltip';
-import { apiUrl } from '@/shared/api/http';
+import { apiUrl, readJson } from '@/shared/api/http';
 import { cn, formatNumber } from '@/shared/lib/utils';
 
 type PlatformAccount = {
@@ -165,11 +165,7 @@ export function ViewerPointsPage() {
     if (silent) setRefreshing(true);
     else setLoading(true);
     try {
-      const accountResponse = await fetch(apiUrl('/api/account/platforms'), {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      const accountPayload = (await accountResponse.json().catch(() => null)) as AccountPlatformsResponse | null;
+      const accountPayload = await readJson<AccountPlatformsResponse>('/api/account/platforms');
       if (!accountPayload?.userId) {
         setUnauthorized(true);
         setData(null);

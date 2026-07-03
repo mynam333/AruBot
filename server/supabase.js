@@ -311,30 +311,28 @@ export async function listChannelPoints(streamerUid) {
     const channelIdentity = await resolvePointChannelIdentity(pg, streamerUid);
     const tables = await listPointTablesForChannelAliases(channelIdentity.channelAliases);
     const users = new Map();
-    const userIdentityCache = new Map();
+    const rawRows = [];
 
     for (const table of tables) {
       const { rows } = await pg.query(`select user_id, username, points from ${table}`);
-      for (const row of rows || []) {
-        const rawUserId = String(row.user_id || '').trim();
-        if (!rawUserId) continue;
+      rawRows.push(...(rows || []));
+    }
 
-        let userIdentity = userIdentityCache.get(rawUserId);
-        if (!userIdentity) {
-          userIdentity = await resolvePointUserIdentity(pg, rawUserId);
-          userIdentityCache.set(rawUserId, userIdentity);
-        }
+    const userIdentities = await resolvePointUserIdentities(pg, rawRows.map((row) => row.user_id));
+    for (const row of rawRows) {
+      const rawUserId = String(row.user_id || '').trim();
+      if (!rawUserId) continue;
 
-        const canonicalUserId = String(userIdentity.canonicalUserId || rawUserId);
-        const existing = users.get(canonicalUserId) || {
-          user_id: canonicalUserId,
-          username: null,
-          points: 0,
-        };
-        existing.username = existing.username || row.username || rawUserId;
-        existing.points += Number(row.points || 0);
-        users.set(canonicalUserId, existing);
-      }
+      const userIdentity = userIdentities.get(rawUserId) || { canonicalUserId: rawUserId };
+      const canonicalUserId = String(userIdentity.canonicalUserId || rawUserId);
+      const existing = users.get(canonicalUserId) || {
+        user_id: canonicalUserId,
+        username: null,
+        points: 0,
+      };
+      existing.username = existing.username || row.username || rawUserId;
+      existing.points += Number(row.points || 0);
+      users.set(canonicalUserId, existing);
     }
 
     return Array.from(users.values()).sort((a, b) => {
@@ -342,6 +340,92 @@ export async function listChannelPoints(streamerUid) {
         || String(a.username || '').localeCompare(String(b.username || ''))
         || String(a.user_id || '').localeCompare(String(b.user_id || ''));
     });
+  });
+}
+
+function buildChannelPointPageCte(tables, useIdentityLookup = true) {
+  const rawUnion = tables
+    .map((table) => `select user_id::text as raw_user_id, username::text as username, coalesce(points, 0)::bigint as points from ${table}`)
+    .join('\nunion all\n');
+  const matchedCte = useIdentityLookup
+    ? `
+    matched as (
+      select r.raw_user_id, min(pa.user_id) as canonical_user_id
+      from raw_ids r
+      join platform_accounts pa
+        on pa.user_id = r.raw_user_id
+        or pa.platform_user_id = r.raw_user_id
+        or pa.channel_id = r.raw_user_id
+        or pa.channel_handle = r.raw_user_id
+        or pa.platform_user_id = regexp_replace(r.raw_user_id, '^(user:|cime:|chzzk:|youtube:)', '')
+        or pa.channel_id = regexp_replace(r.raw_user_id, '^(user:|cime:|chzzk:|youtube:)', '')
+        or pa.channel_handle = regexp_replace(r.raw_user_id, '^(user:|cime:|chzzk:|youtube:)', '')
+        or r.raw_user_id = pa.provider || ':' || pa.platform_user_id
+        or r.raw_user_id = pa.provider || ':' || pa.channel_id
+        or r.raw_user_id = pa.provider || ':' || pa.channel_handle
+      group by r.raw_user_id
+    ),`
+    : `
+    matched as (
+      select raw_user_id, null::text as canonical_user_id
+      from raw_ids
+      where false
+    ),`;
+  return `
+    with raw as (
+      ${rawUnion}
+    ),
+    raw_ids as (
+      select distinct raw_user_id
+      from raw
+      where nullif(raw_user_id, '') is not null
+    ),
+    ${matchedCte}
+    grouped as (
+      select
+        coalesce(m.canonical_user_id, r.raw_user_id) as user_id,
+        (array_agg(r.username order by r.username) filter (where nullif(r.username, '') is not null))[1] as username,
+        sum(r.points)::bigint as points
+      from raw r
+      left join matched m on m.raw_user_id = r.raw_user_id
+      where nullif(r.raw_user_id, '') is not null
+      group by coalesce(m.canonical_user_id, r.raw_user_id)
+    )
+  `;
+}
+
+export async function listChannelPointsPage(streamerUid, options = {}) {
+  const offset = Math.max(0, Number(options.offset || 0) || 0);
+  const limit = Math.max(1, Math.min(5000, Number(options.limit || 1000) || 1000));
+  return withPgClient(async (pg) => {
+    const channelIdentity = await resolvePointChannelIdentity(pg, streamerUid);
+    const tables = await listPointTablesForChannelAliases(channelIdentity.channelAliases);
+    const platformAccounts = await pg.query(`select to_regclass('public.platform_accounts') as table_name`);
+    const cte = buildChannelPointPageCte(tables, !!platformAccounts.rows?.[0]?.table_name);
+    const totals = await pg.query(`
+      ${cte}
+      select count(*)::integer as total, coalesce(sum(points), 0)::bigint as total_points
+      from grouped
+    `);
+    const total = Number(totals.rows?.[0]?.total || 0);
+    const totalPoints = Number(totals.rows?.[0]?.total_points || 0);
+    if (!total) return { rows: [], total: 0, totalPoints: 0, offset, limit };
+
+    const page = await pg.query(`
+      ${cte}
+      select user_id, username, points::double precision as points
+      from grouped
+      order by points desc, coalesce(username, '') asc, user_id asc
+      offset $1
+      limit $2
+    `, [offset, limit]);
+    return {
+      rows: page.rows || [],
+      total,
+      totalPoints,
+      offset,
+      limit,
+    };
   });
 }
 
@@ -536,38 +620,75 @@ async function resolvePointChannelIdentity(pg, streamerUid) {
 async function resolvePointUserIdentity(pg, userId) {
   const raw = String(userId || '').trim();
   if (!raw) return { canonicalUserId: '', identityKeys: [] };
-  const candidates = pointLookupCandidates(raw);
+  const identities = await resolvePointUserIdentities(pg, [raw]);
+  return identities.get(raw) || { canonicalUserId: raw, identityKeys: uniqueNonEmpty([raw, ...pointLookupCandidates(raw)]) };
+}
+
+async function resolvePointUserIdentities(pg, userIds) {
+  const raws = uniqueNonEmpty(userIds);
+  const result = new Map();
+  if (!raws.length) return result;
+
+  const candidatesByRaw = new Map(raws.map((raw) => [raw, pointLookupCandidates(raw)]));
+  const allCandidates = uniqueNonEmpty(Array.from(candidatesByRaw.values()).flat());
+
   try {
     const matched = await pg.query(
       `select user_id
          from platform_accounts
         where platform_user_id = any($1::text[])
            or channel_id = any($1::text[])
-           or user_id = any($1::text[])
-        limit 1`,
-      [candidates]
+           or user_id = any($1::text[])`,
+      [allCandidates]
     );
-    const appUserId = String(matched.rows?.[0]?.user_id || '').trim();
-    if (appUserId) {
+    const appUserIds = uniqueNonEmpty((matched.rows || []).map((row) => row.user_id));
+    const accountsByAppUser = new Map();
+    if (appUserIds.length) {
       const accounts = await pg.query(
         `select user_id, provider, platform_user_id, channel_id, channel_name, channel_handle, avatar_url, metadata
            from platform_accounts
-          where user_id = $1`,
-        [appUserId]
+          where user_id = any($1::text[])`,
+        [appUserIds]
       );
-      const keys = [raw, ...candidates, appUserId, makeArubotViewerUuid(appUserId)];
       for (const account of accounts.rows || []) {
-        keys.push(...collectPlatformPointIdentityKeys(account));
+        const key = String(account.user_id || '');
+        const list = accountsByAppUser.get(key) || [];
+        list.push(account);
+        accountsByAppUser.set(key, list);
       }
-      return {
-        canonicalUserId: appUserId,
-        identityKeys: uniqueNonEmpty(keys),
-      };
+    }
+    const appUserLookup = buildPointIdentityLookup(appUserIds, accountsByAppUser);
+
+    for (const raw of raws) {
+      const candidates = candidatesByRaw.get(raw) || [raw];
+      const appUserId = candidates.map((candidate) => appUserLookup.get(candidate)).find(Boolean) || null;
+
+      if (appUserId) {
+        const accounts = accountsByAppUser.get(appUserId) || [];
+        const keys = [raw, ...candidates, appUserId, makeArubotViewerUuid(appUserId)];
+        for (const account of accounts) {
+          keys.push(...collectPlatformPointIdentityKeys(account));
+        }
+        result.set(raw, {
+          canonicalUserId: appUserId,
+          identityKeys: uniqueNonEmpty(keys),
+        });
+      } else {
+        result.set(raw, {
+          canonicalUserId: raw,
+          identityKeys: uniqueNonEmpty([raw, ...candidates]),
+        });
+      }
     }
   } catch {
-    // Fall back to the raw platform chat id when identity tables are not available.
+    for (const raw of raws) {
+      result.set(raw, {
+        canonicalUserId: raw,
+        identityKeys: uniqueNonEmpty([raw, ...(candidatesByRaw.get(raw) || [])]),
+      });
+    }
   }
-  return { canonicalUserId: raw, identityKeys: uniqueNonEmpty([raw, ...candidates]) };
+  return result;
 }
 
 async function listPointTablesForChannelAliases(channelAliases) {
@@ -588,6 +709,24 @@ async function sumPointsForIdentity(pg, channelAliases, identityKeys) {
     total += Number(rows?.[0]?.points || 0);
   }
   return total;
+}
+
+async function getPointBalanceSummaryForIdentity(pg, channelAliases, identityKeys) {
+  const keys = uniqueNonEmpty(identityKeys);
+  if (!keys.length) return { username: null, points: 0, found: false };
+  let total = 0;
+  let username = null;
+  let found = false;
+  const tables = await listPointTablesForChannelAliases(channelAliases);
+  for (const table of tables) {
+    const { rows } = await pg.query(`select username, points from ${table} where user_id = any($1::text[])`, [keys]);
+    for (const row of rows || []) {
+      found = true;
+      if (!username && row.username) username = row.username;
+      total += Number(row.points || 0);
+    }
+  }
+  return { username, points: total, found };
 }
 
 async function deletePointRowsForIdentity(pg, channelAliases, identityKeys) {
@@ -646,6 +785,21 @@ export async function getChannelPoints(streamerUid, userId) {
   });
 }
 
+export async function getChannelPointBalanceSummary(streamerUid, userId) {
+  return withPgClient(async (pg) => {
+    const channelIdentity = await resolvePointChannelIdentity(pg, streamerUid);
+    const userIdentity = await resolvePointUserIdentity(pg, userId);
+    if (!channelIdentity.canonicalChannelUid || !userIdentity.canonicalUserId) return null;
+    const summary = await getPointBalanceSummaryForIdentity(pg, channelIdentity.channelAliases, userIdentity.identityKeys);
+    return {
+      userId: String(userIdentity.canonicalUserId),
+      username: summary.username,
+      points: Number(summary.points || 0),
+      found: summary.found === true,
+    };
+  });
+}
+
 export async function deleteChannelPoints(streamerUid, userId) {
   await withPgClient(async (pg) => {
     const channelIdentity = await resolvePointChannelIdentity(pg, streamerUid);
@@ -673,16 +827,12 @@ export async function bulkUpsertChannelPoints(streamerUid, rows) {
     if (!channelIdentity.canonicalChannelUid) return;
     const table = await ensureChannelPointsTable(channelIdentity.canonicalChannelUid);
     const normalizedRowsByUser = new Map();
-    const userIdentityCache = new Map();
+    const userIdentities = await resolvePointUserIdentities(pg, rows.map((row) => row?.user_id));
 
     for (const row of rows) {
       const rawUserId = String(row?.user_id || '').trim();
       if (!rawUserId) continue;
-      let userIdentity = userIdentityCache.get(rawUserId);
-      if (!userIdentity) {
-        userIdentity = await resolvePointUserIdentity(pg, rawUserId);
-        userIdentityCache.set(rawUserId, userIdentity);
-      }
+      const userIdentity = userIdentities.get(rawUserId) || { canonicalUserId: rawUserId, identityKeys: [rawUserId] };
       if (!userIdentity.canonicalUserId) continue;
       await deletePointRowsForIdentity(pg, channelIdentity.channelAliases, userIdentity.identityKeys);
       normalizedRowsByUser.set(String(userIdentity.canonicalUserId), {
@@ -2537,6 +2687,29 @@ function collectPlatformPointIdentityKeys(account) {
   return Array.from(keys);
 }
 
+function addPointIdentityLookup(lookup, key, appUserId) {
+  const normalizedKey = String(key || '').trim();
+  const normalizedAppUserId = String(appUserId || '').trim();
+  if (normalizedKey && normalizedAppUserId && !lookup.has(normalizedKey)) lookup.set(normalizedKey, normalizedAppUserId);
+}
+
+function buildPointIdentityLookup(appUserIds, accountsByAppUser) {
+  const lookup = new Map();
+  for (const appUserId of appUserIds || []) {
+    addPointIdentityLookup(lookup, appUserId, appUserId);
+    const accounts = accountsByAppUser.get(appUserId) || [];
+    for (const account of accounts) {
+      addPointIdentityLookup(lookup, account.platformUserId ?? account.platform_user_id, appUserId);
+      addPointIdentityLookup(lookup, account.channelId ?? account.channel_id, appUserId);
+      addPointIdentityLookup(lookup, account.handle ?? account.channel_handle, appUserId);
+      for (const key of collectPlatformPointIdentityKeys(account)) {
+        addPointIdentityLookup(lookup, key, appUserId);
+      }
+    }
+  }
+  return lookup;
+}
+
 export async function listPointViewerIdentitySummaries(userIds) {
   const ids = Array.from(
     new Set((Array.isArray(userIds) ? userIds : []).map((id) => String(id || '').trim()).filter(Boolean))
@@ -2577,15 +2750,11 @@ export async function listPointViewerIdentitySummaries(userIds) {
         accountsByAppUser.set(key, list);
       }
     }
+    const appUserLookup = buildPointIdentityLookup(appUserIds, accountsByAppUser);
 
     const result = {};
     for (const rawId of ids) {
-      const matchedAppUserId = appUserIds.find((appUserId) => {
-        const accounts = accountsByAppUser.get(appUserId) || [];
-        return appUserId === rawId || accounts.some((account) => (
-          String(account.platformUserId || '') === rawId || String(account.channelId || '') === rawId
-        ));
-      });
+      const matchedAppUserId = appUserLookup.get(rawId) || null;
       const platformAccounts = matchedAppUserId ? (accountsByAppUser.get(matchedAppUserId) || []) : [];
       const arubotUuid = matchedAppUserId ? makeArubotViewerUuid(matchedAppUserId) : null;
       const identityKeys = matchedAppUserId

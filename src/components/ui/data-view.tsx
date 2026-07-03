@@ -57,8 +57,9 @@ export function DataView({
   empty?: string;
 }) {
   const rows = pickRows(data);
-  const keys = rows.length
-    ? Array.from(new Set(rows.flatMap((row) => Object.keys(row)))).slice(0, 7)
+  const visibleRows = rows.slice(0, 80);
+  const keys = visibleRows.length
+    ? Array.from(new Set(visibleRows.flatMap((row) => Object.keys(row)))).slice(0, 7)
     : [];
 
   return (
@@ -84,7 +85,7 @@ export function DataView({
                 </tr>
               </thead>
               <tbody>
-                {rows.slice(0, 80).map((row, index) => (
+                {visibleRows.map((row, index) => (
                   <tr key={String(row.id || row.user_id || row.name || index)} className="border-t bg-background/45">
                     {keys.map((key) => (
                       <td key={key} className="max-w-[24ch] truncate px-[clamp(0.75rem,1.4vw,1rem)] py-[clamp(0.75rem,1.4vw,1rem)] text-muted-foreground">

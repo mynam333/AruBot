@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
 import { AlertCircle, Cable, CheckCircle2, Copy, ExternalLink, RefreshCw, ShieldCheck, Unlink, X } from 'lucide-react';
@@ -99,6 +99,8 @@ const providerConfigs = [
   },
 ] as const;
 
+const compactNumberFormatter = new Intl.NumberFormat('ko-KR', { notation: 'compact', maximumFractionDigits: 1 });
+
 function normalizeProvider(provider?: string) {
   return provider?.toLowerCase() as ProviderId | undefined;
 }
@@ -140,7 +142,7 @@ function AccountAvatar({ account, label, color, iconPath }: { account: PlatformA
 
 function compactCount(value?: number | null) {
   if (typeof value !== 'number' || !Number.isFinite(value)) return null;
-  return new Intl.NumberFormat('ko-KR', { notation: 'compact', maximumFractionDigits: 1 }).format(value);
+  return compactNumberFormatter.format(value);
 }
 
 export function ConnectionPage() {
@@ -153,6 +155,7 @@ export function ConnectionPage() {
   const [showYoutubeModal, setShowYoutubeModal] = useState(false);
   const [youtubeInput, setYoutubeInput] = useState('');
   const [youtubeBusy, setYoutubeBusy] = useState(false);
+  const openedYoutubeParamRef = useRef(false);
 
   const refresh = useCallback(() => {
     const controller = new AbortController();
@@ -247,6 +250,14 @@ export function ConnectionPage() {
   const youtubeBotConfigured = youtubeStreamerStatus?.botConfigured === true;
   const youtubeRegistered = youtubeStreamerStatus?.configured === true;
   const youtubeBotProfile = youtubeStreamerStatus?.botProfile || null;
+
+  useEffect(() => {
+    if (openedYoutubeParamRef.current) return;
+    if (searchParams.get('platform') !== 'youtube') return;
+    if (!youtubeStreamerStatus) return;
+    openedYoutubeParamRef.current = true;
+    if (!youtubeRegistered && youtubeBotConfigured) setShowYoutubeModal(true);
+  }, [searchParams, youtubeBotConfigured, youtubeRegistered, youtubeStreamerStatus]);
 
   const registerYoutubeChannel = async () => {
     const popup = window.open('about:blank', '_blank');

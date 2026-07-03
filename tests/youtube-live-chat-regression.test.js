@@ -87,6 +87,7 @@ describe('YouTube live chat integration regression', () => {
     expect(serverIndex).toContain('const botProfile = await getValidYoutubeBotProfile()');
     expect(serverIndex).toContain('const streamerChannel = await getYoutubeStreamerChannel(ownerUserId)');
     expect(connectionPage).toContain('운영자 실제 확인');
+    expect(connectionPage).toContain("searchParams.get('platform') !== 'youtube'");
   });
 
   test('YouTube channel auto-detection uses WebSub plus bounded retries instead of polling', () => {
@@ -119,7 +120,10 @@ describe('YouTube live chat integration regression', () => {
 
   test('admin surfaces list YouTube consistently', () => {
     expect(dashboardPage).toContain("id: 'youtube'");
-    expect(dashboardPage).toContain("loginPath: '/api/auth/youtube/login'");
+    expect(dashboardPage).toContain("connectionPath: '/connection?platform=youtube'");
+    expect(dashboardPage).toContain('YouTube로 로그인');
+    expect(dashboardPage).toContain('YouTube 다시 연결');
+    expect(dashboardPage).not.toContain("loginPath: '/api/auth/youtube/login'");
     expect(dashboardPage).toContain("if (value === 'youtube') return 'YouTube'");
     expect(variablesPage).toContain("if (provider === 'youtube') return 'YouTube'");
     expect(serverIndex).toContain("const BOT_VARIABLE_PROVIDERS = ['chzzk', 'cime', 'youtube']");

@@ -30,16 +30,45 @@ export function apiWsUrl(path: string, base = getBrowserApiBase()) {
   return url;
 }
 
+const pendingJsonReads = new Map<string, Promise<unknown>>();
+
+function canDedupeJsonRead(init?: RequestInit) {
+  const method = String(init?.method || 'GET').toUpperCase();
+  return method === 'GET' && !init?.body && !init?.signal;
+}
+
+function jsonReadKey(path: string, init?: RequestInit) {
+  return JSON.stringify({
+    path: apiUrl(path),
+    credentials: init?.credentials ?? 'include',
+    cache: init?.cache ?? 'no-store',
+    headers: init?.headers || null,
+  });
+}
+
 export async function readJson<T>(path: string, init?: RequestInit): Promise<T | null> {
-  try {
-    const response = await fetch(apiUrl(path), {
-      ...init,
-      credentials: init?.credentials ?? 'include',
-      cache: init?.cache ?? 'no-store',
-    });
-    if (!response.ok) return null;
-    return (await response.json()) as T;
-  } catch {
-    return null;
+  const dedupe = canDedupeJsonRead(init);
+  const key = dedupe ? jsonReadKey(path, init) : '';
+  if (dedupe && pendingJsonReads.has(key)) {
+    return pendingJsonReads.get(key) as Promise<T | null>;
   }
+
+  const request = (async () => {
+    try {
+      const response = await fetch(apiUrl(path), {
+        ...init,
+        credentials: init?.credentials ?? 'include',
+        cache: init?.cache ?? 'no-store',
+      });
+      if (!response.ok) return null;
+      return (await response.json()) as T;
+    } catch {
+      return null;
+    } finally {
+      if (dedupe) pendingJsonReads.delete(key);
+    }
+  })();
+
+  if (dedupe) pendingJsonReads.set(key, request);
+  return request;
 }

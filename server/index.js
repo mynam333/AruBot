@@ -9,7 +9,7 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
-import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, getSessionUserId, listChannelPoints, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, getChannelPoints, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, deletePlatformTokens, deletePlatformAccount, getAppUserAdminStatus, getYoutubeBotProfile, upsertYoutubeBotProfile, updateYoutubeBotProfileTokens, markYoutubeBotProfileStatus, deleteYoutubeBotProfile, getYoutubeStreamerChannel, upsertYoutubeStreamerChannel, markYoutubeStreamerChannelModeratorRegistered, deleteYoutubeStreamerChannel, listYoutubeStreamerChannelsByYoutubeChannelId, updateYoutubeStreamerChannelLive, updateYoutubeStreamerChannelWebsub, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps, validateSecretEncryptionConfig, getPgPoolStatus } from './supabase.js';
+import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, getSessionUserId, listChannelPoints, listChannelPointsPage, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, getChannelPoints, getChannelPointBalanceSummary, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, deletePlatformTokens, deletePlatformAccount, getAppUserAdminStatus, getYoutubeBotProfile, upsertYoutubeBotProfile, updateYoutubeBotProfileTokens, markYoutubeBotProfileStatus, deleteYoutubeBotProfile, getYoutubeStreamerChannel, upsertYoutubeStreamerChannel, markYoutubeStreamerChannelModeratorRegistered, deleteYoutubeStreamerChannel, listYoutubeStreamerChannelsByYoutubeChannelId, updateYoutubeStreamerChannelLive, updateYoutubeStreamerChannelWebsub, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps, validateSecretEncryptionConfig, getPgPoolStatus } from './supabase.js';
 import { createPlatformProfileService } from './platform-profiles.js';
 import { WebSocketServer, WebSocket } from 'ws';
 
@@ -126,6 +126,20 @@ const rateLimiters = {
   userWrite: createIpRateLimiter({ prefix: 'userWrite', windowMs: 60 * 1000, max: 120 }),
   apiKeyCommand: createIpRateLimiter({ prefix: 'apiKeyCommand', windowMs: 60 * 1000, max: 240 }),
 };
+
+const singleFlightRequests = new Map();
+
+function singleFlight(key, fn) {
+  const existing = singleFlightRequests.get(key);
+  if (existing) return existing;
+  const request = Promise.resolve()
+    .then(fn)
+    .finally(() => {
+      singleFlightRequests.delete(key);
+    });
+  singleFlightRequests.set(key, request);
+  return request;
+}
 
 setInterval(() => {
   const now = Date.now();
@@ -2371,6 +2385,12 @@ app.post('/api/video-donation/control-by-token', async (req, res) => {
     }
     const q = getVideoQueue(sid);
     if (!q[0]) return res.json({ ok: true });
+    if (op === 'duration' || op === 'duration_sync') {
+      const durationSec = Number(req.body?.durationSec ?? req.body?.duration ?? req.body?.value);
+      const item = updateCurrentPvdDurationFromPlayer(sid, durationSec);
+      if (!item) return res.status(400).json({ error: 'invalid duration' });
+      return res.json({ ok: true, item });
+    }
     let atSec = Number(req.body?.atSec);
     if (!Number.isFinite(atSec) || atSec < 0) atSec = getCurrentAtSec(sid);
     let state = pvdPlaybackState.get(sid);
@@ -4796,7 +4816,9 @@ function getPvdPlayDurationSec({ maxDurationSec, ytDurationSec = null, startSec 
   const explicitPlay = Number(playSec);
   const play = Number.isFinite(explicitPlay) && explicitPlay > 0 ? Math.floor(explicitPlay) : null;
   const fullDuration = Number(ytDurationSec);
-  const remainingFromStart = Number.isFinite(fullDuration) ? Math.max(1, Math.floor(fullDuration) - start) : maxDur;
+  const remainingFromStart = Number.isFinite(fullDuration) && fullDuration > 0
+    ? Math.max(1, Math.floor(fullDuration) - start)
+    : maxDur;
   const requestedDuration = play != null ? play : remainingFromStart;
   return Math.max(1, Math.min(maxDur, requestedDuration));
 }
@@ -4828,6 +4850,28 @@ function getCurrentPvdElapsedSec(sid) {
   const item = q[0] || null;
   if (!item) return 0;
   return Math.max(0, getCurrentAtSec(sid) - getPvdItemStartSec(item));
+}
+
+function updateCurrentPvdDurationFromPlayer(sid, durationSec) {
+  const q = getVideoQueue(sid);
+  const item = q[0] || null;
+  const fullDuration = Number(durationSec);
+  if (!item || !Number.isFinite(fullDuration) || fullDuration <= 0) return null;
+  const start = getPvdItemStartSec(item);
+  const remainingFromStart = Math.max(1, Math.ceil(fullDuration) - start);
+  const currentDuration = Number(item.durationSec || 0);
+  const nextDuration = currentDuration > 2
+    ? Math.min(Math.ceil(currentDuration), remainingFromStart)
+    : remainingFromStart;
+  if (!Number.isFinite(nextDuration) || nextDuration <= 0) return null;
+  if (Math.abs(Number(item.durationSec || 0) - nextDuration) < 0.5) return item;
+  item.durationSec = nextDuration;
+  item.mediaDurationSec = Math.ceil(fullDuration);
+  item.updatedAt = Date.now();
+  try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
+  scheduleNextPvdAutoPop(sid);
+  notifyPvdAdminSubscribers(sid, 'duration_synced').catch(() => null);
+  return item;
 }
 
 async function broadcastPvdControl(sid, message) {
@@ -5783,8 +5827,8 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}) {
       } else if (node.type === 'pointsRanking') {
         const channelUid = await resolveBlueprintChannelUid(ownerUserId, context);
         const limit = Math.max(1, Math.min(50, Number(evaluateBlueprintValue(config.limit || 10, scope) || 10)));
-        const rows = await listChannelPoints(channelUid).catch(() => []);
-        output = { channelUid, ranking: (rows || []).slice(0, limit) };
+        const page = await listChannelPointsPage(channelUid, { offset: 0, limit }).catch(() => ({ rows: [] }));
+        output = { channelUid, ranking: page.rows || [] };
       } else if (node.type === 'pointsExcluded') {
         const channelUid = await resolveBlueprintChannelUid(ownerUserId, context);
         const settings = await getBotSettings(sid).catch(() => null) || {};
@@ -6684,6 +6728,12 @@ app.post('/api/video-donation/control', async (req, res) => {
       return res.json({ ok: true, message });
     }
     if (!q[0]) return res.json({ ok: true });
+    if (op === 'duration' || op === 'duration_sync') {
+      const durationSec = Number(req.body?.durationSec ?? req.body?.duration ?? req.body?.value);
+      const item = updateCurrentPvdDurationFromPlayer(sid, durationSec);
+      if (!item) return res.status(400).json({ error: 'invalid duration' });
+      return res.json({ ok: true, item });
+    }
     let atSec = Number(req.body?.atSec);
     if (!Number.isFinite(atSec) || atSec < 0) atSec = getCurrentAtSec(sid);
     let state = pvdPlaybackState.get(sid);
@@ -12783,6 +12833,12 @@ app.post('/api/local-remote/video-donation/control', requireAutomationLocalAgent
       return res.json({ ok: true, message });
     }
     if (!q[0]) return res.json({ ok: true, empty: true });
+    if (op === 'duration' || op === 'duration_sync') {
+      const durationSec = Number(req.body?.durationSec ?? req.body?.duration ?? req.body?.value);
+      const item = updateCurrentPvdDurationFromPlayer(sid, durationSec);
+      if (!item) return res.status(400).json({ error: 'invalid duration' });
+      return res.json({ ok: true, item });
+    }
     let atSec = Number(req.body?.atSec);
     if (!Number.isFinite(atSec) || atSec < 0) atSec = getCurrentAtSec(sid);
     let state = pvdPlaybackState.get(sid);
@@ -13631,6 +13687,127 @@ async function enrichChannelPointRows(rows, settings = {}) {
   });
 }
 
+function channelPointUserId(row) {
+  return String(row?.user_id || row?.userId || '');
+}
+
+function channelPointDisplayName(row) {
+  return String(row?.username || channelPointUserId(row) || '');
+}
+
+function channelPointPlatformAccountCount(row) {
+  return Array.isArray(row?.platformAccounts) ? row.platformAccounts.length : 0;
+}
+
+function channelPointSearchText(row) {
+  const accounts = Array.isArray(row?.platformAccounts) ? row.platformAccounts : [];
+  return [
+    row?.username,
+    row?.user_id,
+    row?.userId,
+    row?.arubotUuid,
+    row?.appUserId,
+    ...accounts.flatMap((account) => [
+      account?.provider,
+      account?.platformUserId,
+      account?.channelId,
+      account?.nickname,
+      account?.handle,
+    ]),
+  ].map((value) => String(value || '').toLowerCase()).join(' ');
+}
+
+function sortChannelPointRows(rows, sortBy = 'points-desc') {
+  return [...(rows || [])].sort((a, b) => {
+    const aPoints = Number(a?.points || 0);
+    const bPoints = Number(b?.points || 0);
+    const nameCompare = channelPointDisplayName(a).localeCompare(channelPointDisplayName(b), 'ko-KR', { numeric: true, sensitivity: 'base' });
+    if (sortBy === 'points-asc') return aPoints - bPoints || nameCompare;
+    if (sortBy === 'name-asc') return nameCompare || bPoints - aPoints;
+    if (sortBy === 'name-desc') return -nameCompare || bPoints - aPoints;
+    if (sortBy === 'connected-first') return channelPointPlatformAccountCount(b) - channelPointPlatformAccountCount(a) || bPoints - aPoints || nameCompare;
+    if (sortBy === 'blocked-first') return Number(b?.pointBlocked === true) - Number(a?.pointBlocked === true) || bPoints - aPoints || nameCompare;
+    return bPoints - aPoints || nameCompare;
+  });
+}
+
+function parseChannelPointListOptions(req) {
+  const page = Math.max(1, Number(req.query.page || 1) || 1);
+  const limit = Math.max(1, Math.min(200, Number(req.query.limit || 25) || 25));
+  const query = String(req.query.q || req.query.query || '').trim();
+  const sortBy = ['points-desc', 'points-asc', 'name-asc', 'name-desc', 'connected-first', 'blocked-first'].includes(String(req.query.sort || ''))
+    ? String(req.query.sort)
+    : 'points-desc';
+  return { page, limit, query, sortBy };
+}
+
+async function buildChannelPointListPayload(rows, settings = {}, options = {}) {
+  const page = Math.max(1, Number(options.page || 1) || 1);
+  const limit = Math.max(1, Math.min(200, Number(options.limit || 25) || 25));
+  const query = String(options.query || '').trim().toLowerCase();
+  const sortBy = options.sortBy || 'points-desc';
+  const total = rows.length;
+  const totalPoints = rows.reduce((sum, row) => sum + Number(row?.points || 0), 0);
+  const requiresIdentityForList = !!query || sortBy === 'connected-first' || sortBy === 'blocked-first';
+
+  const candidateRows = requiresIdentityForList ? await enrichChannelPointRows(rows, settings) : rows;
+  const filteredRows = query
+    ? candidateRows.filter((row) => channelPointSearchText(row).includes(query))
+    : candidateRows;
+  const sortedRows = sortChannelPointRows(filteredRows, sortBy);
+  const filteredTotal = sortedRows.length;
+  const filteredPoints = sortedRows.reduce((sum, row) => sum + Number(row?.points || 0), 0);
+  const totalPages = Math.max(1, Math.ceil(filteredTotal / limit));
+  const currentPage = Math.min(page, totalPages);
+  const start = (currentPage - 1) * limit;
+  const pageRows = sortedRows.slice(start, start + limit);
+  const points = requiresIdentityForList ? pageRows : await enrichChannelPointRows(pageRows, settings);
+
+  return {
+    points,
+    total,
+    totalPoints,
+    filteredTotal,
+    filteredPoints,
+    page: currentPage,
+    limit,
+    totalPages,
+    settings: {
+      channelPointsPerChat: Math.max(0, Number(settings.channelPointsPerChat ?? 1)),
+      channelPointsPerAttendance: Math.max(0, Number(settings.channelPointsPerAttendance || 0)),
+      channelPointsExcludeUserIdsText: typeof settings.channelPointsExcludeUserIdsText === 'string' ? settings.channelPointsExcludeUserIdsText : '',
+    },
+  };
+}
+
+async function buildChannelPointPagedListPayload(pageResult, settings = {}, options = {}) {
+  const requestedPage = Math.max(1, Number(options.page || 1) || 1);
+  const limit = Math.max(1, Math.min(200, Number(options.limit || pageResult?.limit || 25) || 25));
+  const total = Number(pageResult?.total || 0);
+  const totalPoints = Number(pageResult?.totalPoints || 0);
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  const currentPage = Math.min(requestedPage, totalPages);
+  const rows = currentPage === requestedPage
+    ? (pageResult?.rows || [])
+    : (await listChannelPointsPage(options.channelUid, { offset: (currentPage - 1) * limit, limit })).rows;
+
+  return {
+    points: await enrichChannelPointRows(rows, settings),
+    total,
+    totalPoints,
+    filteredTotal: total,
+    filteredPoints: totalPoints,
+    page: currentPage,
+    limit,
+    totalPages,
+    settings: {
+      channelPointsPerChat: Math.max(0, Number(settings.channelPointsPerChat ?? 1)),
+      channelPointsPerAttendance: Math.max(0, Number(settings.channelPointsPerAttendance || 0)),
+      channelPointsExcludeUserIdsText: typeof settings.channelPointsExcludeUserIdsText === 'string' ? settings.channelPointsExcludeUserIdsText : '',
+    },
+  };
+}
+
 function parsePredictionBetCommand(text) {
   const parts = String(text || '').trim().split(/\s+/).filter(Boolean);
   const command = String(parts[0] || '').toLowerCase();
@@ -13705,6 +13882,14 @@ app.get('/api/channelpoints', async (req, res) => {
   if (!uid) return res.json({ points: [] });
   try {
     const settings = await getBotSettings(sid) || {};
+    const requestedLimit = Number(req.query.limit || 0) || 0;
+    if (requestedLimit > 0) {
+      const limit = Math.max(1, Math.min(200, requestedLimit));
+      const page = Math.max(1, Number(req.query.page || 1) || 1);
+      const pageResult = await listChannelPointsPage(uid, { offset: (page - 1) * limit, limit });
+      const payload = await buildChannelPointPagedListPayload(pageResult, settings, { page, limit, channelUid: uid });
+      return res.json(payload);
+    }
     const rows = await listChannelPoints(uid);
     return res.json({ points: await enrichChannelPointRows(rows, settings) });
   } catch (e) {
@@ -13720,15 +13905,13 @@ app.get('/api/channelpoints/list', async (req, res) => {
   if (!uid) return res.json({ points: [] });
   try {
     const settings = await getBotSettings(sid) || {};
+    const options = parseChannelPointListOptions(req);
+    if (!options.query && options.sortBy === 'points-desc') {
+      const pageResult = await listChannelPointsPage(uid, { offset: (options.page - 1) * options.limit, limit: options.limit });
+      return res.json(await buildChannelPointPagedListPayload(pageResult, settings, { ...options, channelUid: uid }));
+    }
     const rows = await listChannelPoints(uid);
-    return res.json({
-      points: await enrichChannelPointRows(rows, settings),
-      settings: {
-        channelPointsPerChat: Math.max(0, Number(settings.channelPointsPerChat ?? 1)),
-        channelPointsPerAttendance: Math.max(0, Number(settings.channelPointsPerAttendance || 0)),
-        channelPointsExcludeUserIdsText: typeof settings.channelPointsExcludeUserIdsText === 'string' ? settings.channelPointsExcludeUserIdsText : '',
-      }
-    });
+    return res.json(await buildChannelPointListPayload(rows, settings, options));
   } catch (e) {
     console.error('[channelpoints:list] error', e?.message || e);
     return res.status(500).json({ error: 'Failed to list channel points' });
@@ -13781,9 +13964,8 @@ app.get('/api/channelpoints/get', async (req, res) => {
   const channelUid = await resolveStreamerUidForSid(sid);
   if (!channelUid) return res.status(409).json({ error: 'No streamer channel configured' });
   try {
-    const rows = await listChannelPoints(channelUid);
-    const hit = rows.find((r) => String(r.user_id || r.userId || '') === userId);
-    if (!hit) return res.status(404).json({ error: 'Not found' });
+    const hit = await getChannelPointBalanceSummary(channelUid, userId);
+    if (!hit?.found) return res.status(404).json({ error: 'Not found' });
     return res.json({ userId, username: hit.username ?? null, points: Number(hit.points || 0) });
   } catch (e) {
     console.error('[channelpoints:get] error', e?.message || e);
@@ -13834,11 +14016,8 @@ app.get('/api/channelpoints/export/page', async (req, res) => {
   const offset = Math.max(0, Number(req.query.offset || 0) || 0);
   const limit = Math.max(1, Math.min(5000, Number(req.query.limit || 1000) || 1000));
   try {
-    // listChannelPoints returns all; to avoid heavy memory, we can slice here as a first step
-    // If needed, this can be optimized to query with OFFSET/LIMIT in supabase.js
-    const all = await listChannelPoints(uid);
-    const rows = all.slice(offset, offset + limit);
-    return res.json({ rows, total: all.length, offset, limit });
+    const page = await listChannelPointsPage(uid, { offset, limit });
+    return res.json({ rows: page.rows, total: page.total, totalPoints: page.totalPoints, offset, limit });
   } catch (e) {
     console.error('[channelpoints:export:page] error', e?.message || e);
     return res.status(500).json({ error: 'Failed to export page', detail: String(e?.message || e) });
@@ -13992,7 +14171,9 @@ app.get('/api/public/:uid/prediction', async (req, res) => {
   const uid = String(req.params.uid || '').trim();
   if (!uid) return res.status(400).json({ error: 'uid required' });
   try {
-    const prediction = await getActivePredictionForChannel(uid, { includeRecentlySettled: true, resultVisibleMs: 5000 });
+    const prediction = await singleFlight(`public:prediction:${uid}`, () => (
+      getActivePredictionForChannel(uid, { includeRecentlySettled: true, resultVisibleMs: 5000 })
+    ));
     return res.json({ uid, prediction });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to load prediction' });
@@ -14023,27 +14204,30 @@ app.get('/api/public/:uid/rules', async (req, res) => {
   const uid = String(req.params.uid || '').trim();
   if (!uid) return res.status(400).json({ error: 'uid required' });
   try {
-    // Heuristic: try to find any sid whose settings contain this uid
-    // Since supabase client isn't exposed, reuse getBotSettings for a set of candidate sids seen recently
-    const candidates = Array.from(activeSids.keys());
-    for (const sid of candidates) {
-      try {
-        const s = await getBotSettings(sid) || {};
-        const uids = Array.isArray(s.channelUids) ? s.channelUids.map(String) : [];
-        if (uids.includes(uid)) {
-          const rules = await getBotRules(sid);
-          const simplified = (rules || []).filter(r => r.enabled && r.adminOnly !== true && r.adminonly !== true).map(r => ({
-            id: r.id,
-            name: r.name,
-            keywords: r.keywords,
-            responses: r.responses,
-            cooldown: r.cooldown,
-            requiredRoleLevel: r.requiredRoleLevel,
-          }));
-          return res.json({ uid, rules: simplified });
-        }
-      } catch { }
-    }
+    const rules = await singleFlight(`public:rules:${uid}`, async () => {
+      // Heuristic: try to find any sid whose settings contain this uid
+      // Since supabase client isn't exposed, reuse getBotSettings for a set of candidate sids seen recently
+      const candidates = Array.from(activeSids.keys());
+      for (const sid of candidates) {
+        try {
+          const s = await getBotSettings(sid) || {};
+          const uids = Array.isArray(s.channelUids) ? s.channelUids.map(String) : [];
+          if (uids.includes(uid)) {
+            const channelRules = await getBotRules(sid);
+            return (channelRules || []).filter(r => r.enabled && r.adminOnly !== true && r.adminonly !== true).map(r => ({
+              id: r.id,
+              name: r.name,
+              keywords: r.keywords,
+              responses: r.responses,
+              cooldown: r.cooldown,
+              requiredRoleLevel: r.requiredRoleLevel,
+            }));
+          }
+        } catch { }
+      }
+      return [];
+    });
+    if (rules.length) return res.json({ uid, rules });
     // If not found, return empty list
     return res.json({ uid, rules: [] });
   } catch (e) {
@@ -14056,7 +14240,7 @@ app.get('/api/public/:uid/points', async (req, res) => {
   const uid = String(req.params.uid || '').trim();
   if (!uid) return res.status(400).json({ error: 'uid required' });
   try {
-    const rows = await listChannelPoints(uid);
+    const rows = await singleFlight(`public:points:${uid}`, () => listChannelPoints(uid));
     return res.json({ uid, points: rows });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to load points' });
@@ -14418,52 +14602,6 @@ app.post('/api/auth/chzzk/revoke', async (req, res) => {
   } catch (e) {
     console.error('Revoke error', e?.response?.data || e.message);
     return res.status(500).json({ error: 'Failed to revoke' });
-  }
-});
-
-// =============================
-// =============================
-
-app.get('/api/channel/context', async (req, res) => {
-  try {
-    const sid = await getPartitionId(req, res);
-    if (!sid) {
-      return res.status(401).json({
-        error: 'Authentication required',
-        code: 'AUTH_REQUIRED'
-      });
-    }
-
-    const channelContext = await getChannelContext(sid);
-    if (!channelContext) {
-      return res.status(404).json({
-        error: 'Channel context not found',
-        code: 'CONTEXT_NOT_FOUND'
-      });
-    }
-
-    const safeContext = {
-      channelId: channelContext.channelId,
-      channelName: channelContext.channelId,
-      userId: channelContext.userId,
-      isolated: channelContext.isolationLevel === 'strict',
-      lastActivity: channelContext.lastActivity,
-      connectionId: channelContext.connectionId
-    };
-
-    console.log('[ChannelContext] Context retrieved:', {
-      channelId: safeContext.channelId,
-      userId: safeContext.userId
-    });
-
-    return res.json(safeContext);
-
-  } catch (error) {
-    console.error('[ChannelContext] Failed to get context:', error);
-    return res.status(500).json({
-      error: 'Failed to retrieve channel context',
-      code: 'CONTEXT_ERROR'
-    });
   }
 });
 

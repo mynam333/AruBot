@@ -1,7 +1,7 @@
 'use client';
 
 import { Coins, Loader2, RefreshCw, Save, Search, Settings, ShieldOff, SlidersHorizontal, Trash2, X } from 'lucide-react';
-import { useCallback, useDeferredValue, useEffect, useMemo, useState, useTransition } from 'react';
+import { useCallback, useDeferredValue, useEffect, useState, useTransition } from 'react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button, LinkButton } from '@/components/ui/button';
@@ -29,6 +29,13 @@ type PointRow = {
 
 type PointsResponse = {
   points: PointRow[];
+  total?: number;
+  totalPoints?: number;
+  filteredTotal?: number;
+  filteredPoints?: number;
+  page?: number;
+  limit?: number;
+  totalPages?: number;
   settings?: {
     channelPointsPerChat?: number;
     channelPointsPerAttendance?: number;
@@ -58,46 +65,6 @@ function formatPoints(value: number) {
   return `${Number(value || 0).toLocaleString('ko-KR')}P`;
 }
 
-function rowDisplayName(row: PointRow) {
-  return String(row.username || rowUserId(row) || '');
-}
-
-function platformAccountCount(row: PointRow) {
-  return Array.isArray(row.platformAccounts) ? row.platformAccounts.length : 0;
-}
-
-function rowSearchText(row: PointRow) {
-  const accounts = row.platformAccounts || [];
-  return [
-    row.username,
-    row.user_id,
-    row.userId,
-    row.arubotUuid,
-    row.appUserId,
-    ...accounts.flatMap((account) => [
-      account.provider,
-      account.platformUserId,
-      account.channelId,
-      account.nickname,
-      account.handle,
-    ]),
-  ].map((value) => String(value || '').toLowerCase()).join(' ');
-}
-
-function sortPointRows(rows: PointRow[], sortBy: PointsSortKey) {
-  return [...rows].sort((a, b) => {
-    const aPoints = Number(a.points || 0);
-    const bPoints = Number(b.points || 0);
-    const nameCompare = rowDisplayName(a).localeCompare(rowDisplayName(b), 'ko-KR', { numeric: true, sensitivity: 'base' });
-    if (sortBy === 'points-asc') return aPoints - bPoints || nameCompare;
-    if (sortBy === 'name-asc') return nameCompare || bPoints - aPoints;
-    if (sortBy === 'name-desc') return -nameCompare || bPoints - aPoints;
-    if (sortBy === 'connected-first') return platformAccountCount(b) - platformAccountCount(a) || bPoints - aPoints || nameCompare;
-    if (sortBy === 'blocked-first') return Number(b.pointBlocked === true) - Number(a.pointBlocked === true) || bPoints - aPoints || nameCompare;
-    return bPoints - aPoints || nameCompare;
-  });
-}
-
 async function postJson(path: string, body: unknown) {
   const response = await fetch(apiUrl(path), {
     method: 'POST',
@@ -120,34 +87,17 @@ export function PointsPage() {
   const [excludeText, setExcludeText] = useState('');
   const [busyId, setBusyId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
+  const [totalRows, setTotalRows] = useState(0);
+  const [totalPoints, setTotalPoints] = useState(0);
+  const [filteredTotalRows, setFilteredTotalRows] = useState(0);
+  const [filteredPoints, setFilteredPoints] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
   const [query, setQuery] = useState('');
   const [sortBy, setSortBy] = useState<PointsSortKey>('points-desc');
   const [isPending, startTransition] = useTransition();
   const deferredQuery = useDeferredValue(query);
 
-  const totalPoints = useMemo(
-    () => rows.reduce((sum, row) => sum + Number(row.points || 0), 0),
-    [rows],
-  );
-  const filteredRows = useMemo(() => {
-    const term = deferredQuery.trim().toLowerCase();
-    const filtered = term ? rows.filter((row) => rowSearchText(row).includes(term)) : rows;
-    return sortPointRows(filtered, sortBy);
-  }, [deferredQuery, rows, sortBy]);
-  const filteredPoints = useMemo(
-    () => filteredRows.reduce((sum, row) => sum + Number(row.points || 0), 0),
-    [filteredRows],
-  );
-  const totalPages = Math.max(1, Math.ceil(filteredRows.length / POINTS_PAGE_SIZE));
-  const visibleRows = useMemo(() => {
-    const currentPage = Math.min(page, totalPages);
-    const start = (currentPage - 1) * POINTS_PAGE_SIZE;
-    return filteredRows.slice(start, start + POINTS_PAGE_SIZE);
-  }, [filteredRows, page, totalPages]);
-
-  useEffect(() => {
-    if (page > totalPages) setPage(totalPages);
-  }, [page, totalPages]);
+  const visibleRows = rows;
 
   useEffect(() => {
     setPage(1);
@@ -155,19 +105,32 @@ export function PointsPage() {
 
   const load = useCallback(() => {
     startTransition(async () => {
+      const params = new URLSearchParams({
+        page: String(page),
+        limit: String(POINTS_PAGE_SIZE),
+        sort: sortBy,
+      });
+      const term = deferredQuery.trim();
+      if (term) params.set('q', term);
       const [data, donationData] = await Promise.all([
-        readJson<PointsResponse>('/api/channelpoints/list'),
+        readJson<PointsResponse>(`/api/channelpoints/list?${params.toString()}`),
         readJson<DonationSettingsResponse>('/api/donation/settings'),
       ]);
       const nextRows = data?.points || [];
       setRows(nextRows);
       setDrafts(Object.fromEntries(nextRows.map((row) => [rowUserId(row), String(Number(row.points || 0))])));
+      setTotalRows(Number(data?.total ?? nextRows.length));
+      setTotalPoints(Number(data?.totalPoints ?? nextRows.reduce((sum, row) => sum + Number(row.points || 0), 0)));
+      setFilteredTotalRows(Number(data?.filteredTotal ?? nextRows.length));
+      setFilteredPoints(Number(data?.filteredPoints ?? nextRows.reduce((sum, row) => sum + Number(row.points || 0), 0)));
+      setTotalPages(Math.max(1, Number(data?.totalPages || 1)));
+      if (data?.page && Number(data.page) !== page) setPage(Math.max(1, Number(data.page)));
       setPointsPerChat(String(data?.settings?.channelPointsPerChat ?? 1));
       setPointsPerAttendance(String(data?.settings?.channelPointsPerAttendance ?? 0));
       setExcludeText(data?.settings?.channelPointsExcludeUserIdsText || '');
       setPointsPerDonationK(String(donationData?.settings?.pointsPerK ?? 10));
     });
-  }, []);
+  }, [deferredQuery, page, sortBy]);
 
   useEffect(() => {
     load();
@@ -271,7 +234,7 @@ export function PointsPage() {
           </div>
           <div className="grid min-w-0 grid-cols-[repeat(2,minmax(0,1fr))] gap-2 lg:basis-[34%]">
             <div className="min-w-0 rounded-[var(--radius-card)] border bg-card/78 p-[clamp(0.75rem,1.5vw,1rem)] text-center">
-              <div className="truncate text-xl font-bold">{rows.length.toLocaleString('ko-KR')}</div>
+              <div className="truncate text-xl font-bold">{totalRows.toLocaleString('ko-KR')}</div>
               <div className="mt-1 text-xs text-muted-foreground">시청자</div>
             </div>
             <div className="min-w-0 rounded-[var(--radius-card)] border bg-card/78 p-[clamp(0.75rem,1.5vw,1rem)] text-center">
@@ -328,7 +291,7 @@ export function PointsPage() {
               </select>
             </label>
             <div className="flex flex-wrap items-center gap-2 text-xs font-bold text-muted-foreground lg:justify-end">
-              <Badge tone="sky">{filteredRows.length.toLocaleString('ko-KR')}명 표시</Badge>
+              <Badge tone="sky">{filteredTotalRows.toLocaleString('ko-KR')}명 표시</Badge>
               <Badge tone="mint">{formatPoints(filteredPoints)}</Badge>
               {query ? (
                 <Button type="button" variant="ghost" size="sm" onClick={() => setQuery('')}>
@@ -344,7 +307,7 @@ export function PointsPage() {
             </div>
           </div>
 
-          {rows.length > 0 && filteredRows.length > 0 ? (
+          {totalRows > 0 && filteredTotalRows > 0 ? (
             <div className="overflow-x-auto rounded-[var(--radius-control)] border">
               <table className="min-w-full text-left text-sm">
                 <thead className="bg-muted/70 text-xs text-muted-foreground">
@@ -433,7 +396,7 @@ export function PointsPage() {
                 </tbody>
               </table>
             </div>
-          ) : rows.length ? (
+          ) : totalRows ? (
             <div className="rounded-[var(--radius-control)] border border-dashed bg-background/55 p-[clamp(1.25rem,2.6vw,1.75rem)] text-center text-sm text-muted-foreground">
               검색 조건에 맞는 시청자가 없습니다.
             </div>

@@ -1,12 +1,13 @@
 'use client';
 
 import { BarChart3, CheckCircle2, Copy, Lock, RotateCcw, Send, Trophy, XCircle } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState, useTransition } from 'react';
+import { useCallback, useMemo, useState, useTransition } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { apiUrl, readJson } from '@/shared/api/http';
+import { useVisibilityPolling } from '@/shared/lib/use-visibility-polling';
 
 type PredictionOption = {
   id: string;
@@ -155,11 +156,7 @@ export function PredictionsPage() {
     });
   }, []);
 
-  useEffect(() => {
-    load();
-    const timer = window.setInterval(load, 3500);
-    return () => window.clearInterval(timer);
-  }, [load]);
+  useVisibilityPolling(load, 3500);
 
   const create = () => {
     if (!question.trim()) {
