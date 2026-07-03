@@ -155,6 +155,7 @@ npm run build
 - [최적화 및 서비스 개선 제안](./docs/OPTIMIZATION_AND_SERVICE_IMPROVEMENTS.md)
 - [Supabase DB 개선 설계](./docs/SUPABASE_DB_IMPROVEMENT_PLAN.md)
 - [CIME OpenAPI 연동 정리](./docs/CIME_OPENAPI_INTEGRATION.md)
+- [Google OAuth 공개용 검증 절차](./docs/GOOGLE_OAUTH_PUBLIC_VERIFICATION.md)
 - [예측 베팅 기능](./docs/PREDICTION_BETTING_FEATURE.md)
 - [방송 자동화 액션 빌더 기획](./docs/AUTOMATION_ACTION_BUILDER_PLAN.md)
 
