@@ -1554,7 +1554,7 @@ export async function settlePredictionForSid(sid, predictionId, winningOptionId)
     }
 
     for (const bet of winners) {
-      const payout = Math.max(1, Math.floor((Number(bet.amount || 0) * total) / winnerTotal));
+      const payout = Math.floor((Number(bet.amount || 0) * total) / winnerTotal);
       await pg.query(
         `insert into ${table} (user_id, username, points) values ($1, $2, $3)
          on conflict (user_id) do update set

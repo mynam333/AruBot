@@ -13884,6 +13884,7 @@ async function handlePredictionBetCommand({ channelUid, userId, username, text }
       optionToken: parsed.option,
       amount: parsed.amount,
     });
+    broadcastPredictionSnapshot(prediction?.channelUid || channelUid, prediction, 'prediction:update');
     const optionToken = String(parsed.option || '').trim().toLowerCase();
     const selected = prediction?.options?.find((option, index) => (
       option.id === String(parsed.option) ||
@@ -14145,6 +14146,8 @@ app.post('/api/predictions/create', async (req, res) => {
       maxBet: body.maxBet,
       closesAt,
     });
+    schedulePredictionAutoLock(prediction);
+    broadcastPredictionSnapshot(prediction.channelUid || channelUid, prediction, 'prediction:update');
     return res.json({ prediction });
   } catch (e) {
     console.error('[predictions:create] error', e?.message || e);
@@ -14158,6 +14161,7 @@ app.post('/api/predictions/:id/lock', async (req, res) => {
   try {
     const prediction = await lockPredictionForSid(sid, req.params.id);
     if (!prediction) return res.status(404).json({ error: 'Prediction not found' });
+    broadcastPredictionSnapshot(prediction.channelUid, prediction, 'prediction:update');
     return res.json({ prediction });
   } catch (e) {
     console.error('[predictions:lock] error', e?.message || e);
@@ -14171,6 +14175,11 @@ app.post('/api/predictions/:id/cancel', async (req, res) => {
   try {
     const prediction = await cancelPredictionForSid(sid, req.params.id);
     if (!prediction) return res.status(404).json({ error: 'Prediction not found' });
+    if (predictionAutoLockTimers.has(prediction.id)) {
+      clearTimeout(predictionAutoLockTimers.get(prediction.id));
+      predictionAutoLockTimers.delete(prediction.id);
+    }
+    broadcastPredictionClear(prediction.channelUid);
     return res.json({ prediction });
   } catch (e) {
     console.error('[predictions:cancel] error', e?.message || e);
@@ -14186,6 +14195,11 @@ app.post('/api/predictions/:id/settle', async (req, res) => {
     if (!winningOptionId) return res.status(400).json({ error: 'winningOptionId is required' });
     const prediction = await settlePredictionForSid(sid, req.params.id, winningOptionId);
     if (!prediction) return res.status(404).json({ error: 'Prediction not found' });
+    if (predictionAutoLockTimers.has(prediction.id)) {
+      clearTimeout(predictionAutoLockTimers.get(prediction.id));
+      predictionAutoLockTimers.delete(prediction.id);
+    }
+    broadcastPredictionSnapshot(prediction.channelUid, prediction, 'prediction:update');
     return res.json({ prediction });
   } catch (e) {
     console.error('[predictions:settle] error', e?.message || e);
@@ -14200,7 +14214,7 @@ app.get('/api/public/:uid/prediction', async (req, res) => {
     const prediction = await singleFlight(`public:prediction:${uid}`, () => (
       getActivePredictionForChannel(uid, { includeRecentlySettled: true, resultVisibleMs: 5000 })
     ));
-    return res.json({ uid, prediction });
+    return res.json({ uid, prediction: toPublicPrediction(prediction) });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to load prediction' });
   }
@@ -19172,7 +19186,10 @@ async function validateWebSocketTokenConnection(token, tokenType, req) {
 let wssPvd; // PVD viewer WS (noServer mode)
 let wssPvdAdmin; // PVD admin queue WS (noServer mode)
 let wssRoulette; // Roulette viewer WS (noServer mode)
+let wssPrediction; // Prediction overlay WS (noServer mode)
 let wssAutomationLocalAgent; // Local automation program WS
+const predictionChannelSockets = new Map(); // channelUid -> Set<WebSocket>
+const predictionAutoLockTimers = new Map(); // predictionId -> timeout
 
 function registerPvdRoutes() {
   // --- WebSocket for PVD viewer sync ---
@@ -19370,6 +19387,167 @@ function registerPvdAdminRoutes() {
 }
 
 try { registerPvdAdminRoutes(); } catch (e) { console.error('[pvd admin ws] failed to register routes', e?.message || e); }
+
+function getPredictionChannelKey(channelUid) {
+  return String(channelUid || '').trim();
+}
+
+function toPublicPrediction(prediction) {
+  if (!prediction) return null;
+  return {
+    id: prediction.id,
+    channelUid: prediction.channelUid,
+    question: prediction.question,
+    status: prediction.status,
+    command: prediction.command || '!투표',
+    minBet: prediction.minBet,
+    maxBet: prediction.maxBet,
+    options: Array.isArray(prediction.options) ? prediction.options.map((option) => ({
+      id: option.id,
+      label: option.label,
+      total: Number(option.total || 0),
+      count: Number(option.count || 0),
+      percentage: Number(option.percentage || 0),
+      payoutMultiplier: option.payoutMultiplier ?? null,
+      payoutPer100: option.payoutPer100 ?? null,
+    })) : [],
+    winningOptionId: prediction.winningOptionId || null,
+    totalPoints: Number(prediction.totalPoints || 0),
+    participantCount: Number(prediction.participantCount || 0),
+    createdAt: prediction.createdAt || null,
+    closesAt: prediction.closesAt || null,
+    lockedAt: prediction.lockedAt || null,
+    settledAt: prediction.settledAt || null,
+  };
+}
+
+function sendPredictionWs(ws, payload) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  try {
+    ws.send(JSON.stringify({ ...payload, serverNow: Date.now() }), { compress: false });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function broadcastPredictionSnapshot(channelUid, prediction, event = 'prediction:update') {
+  const keys = Array.from(new Set([
+    getPredictionChannelKey(channelUid),
+    getPredictionChannelKey(prediction?.channelUid),
+  ].filter(Boolean)));
+  if (!keys.length) return { total: 0, sent: 0 };
+  let total = 0;
+  let sent = 0;
+  for (const key of keys) {
+    const sockets = predictionChannelSockets.get(key);
+    if (!sockets || sockets.size === 0) continue;
+    total += sockets.size;
+    for (const ws of Array.from(sockets)) {
+      if (sendPredictionWs(ws, { type: event, channelUid: key, prediction: toPublicPrediction(prediction) })) {
+        sent += 1;
+      } else {
+        try { sockets.delete(ws); } catch { }
+      }
+    }
+    if (sockets.size === 0) predictionChannelSockets.delete(key);
+  }
+  return { total, sent };
+}
+
+function broadcastPredictionClear(channelUid) {
+  return broadcastPredictionSnapshot(channelUid, null, 'prediction:clear');
+}
+
+function schedulePredictionAutoLock(prediction) {
+  if (!prediction?.id || !prediction?.sid || prediction.status !== 'open' || !prediction.closesAt) return;
+  try {
+    const closesAt = new Date(prediction.closesAt).getTime();
+    const delay = closesAt - Date.now();
+    if (!Number.isFinite(delay) || delay <= 0) return;
+    if (predictionAutoLockTimers.has(prediction.id)) {
+      clearTimeout(predictionAutoLockTimers.get(prediction.id));
+      predictionAutoLockTimers.delete(prediction.id);
+    }
+    const timer = setTimeout(async () => {
+      predictionAutoLockTimers.delete(prediction.id);
+      try {
+        const locked = await lockPredictionForSid(prediction.sid, prediction.id);
+        if (locked) broadcastPredictionSnapshot(locked.channelUid, locked, 'prediction:update');
+      } catch (error) {
+        console.warn('[Prediction WS] auto lock failed:', error?.message || error);
+      }
+    }, Math.min(delay, 2 ** 31 - 1));
+    timer.unref?.();
+    predictionAutoLockTimers.set(prediction.id, timer);
+  } catch { }
+}
+
+function registerPredictionRoutes() {
+  console.log('[prediction ws] initializing WebSocketServer on /api/prediction/ws');
+  wssPrediction = new WebSocketServer({
+    noServer: true,
+    maxPayload: 64 * 1024,
+    perMessageDeflate: false,
+  });
+
+  wssPrediction.on('connection', async (ws, req) => {
+    let channelUid = '';
+    try {
+      const url = new URL(req.url, `http://localhost:${PORT}`);
+      channelUid = getPredictionChannelKey(url.searchParams.get('channelUid') || url.searchParams.get('uid'));
+      if (!channelUid || channelUid.length > 128 || !/^[\w:.-]+$/.test(channelUid)) {
+        try { ws.close(1008, 'Invalid channelUid'); } catch { }
+        return;
+      }
+
+      let sockets = predictionChannelSockets.get(channelUid);
+      if (!sockets) {
+        sockets = new Set();
+        predictionChannelSockets.set(channelUid, sockets);
+      }
+      sockets.add(ws);
+
+      const keepAlive = setInterval(() => {
+        try { ws.ping(); } catch { }
+      }, 30000);
+
+      try {
+        const prediction = await getActivePredictionForChannel(channelUid, { includeRecentlySettled: true, resultVisibleMs: 5000 });
+        if (prediction) schedulePredictionAutoLock(prediction);
+        sendPredictionWs(ws, { type: 'prediction:snapshot', channelUid, prediction: toPublicPrediction(prediction) });
+      } catch (error) {
+        sendPredictionWs(ws, { type: 'prediction:error', channelUid, error: 'snapshot_failed' });
+      }
+
+      ws.on('message', async (raw) => {
+        try {
+          const message = JSON.parse(String(raw || '{}'));
+          if (message?.type === 'ping') {
+            sendPredictionWs(ws, { type: 'pong', channelUid });
+          }
+        } catch { }
+      });
+
+      ws.on('close', () => {
+        try { clearInterval(keepAlive); } catch { }
+        const set = predictionChannelSockets.get(channelUid);
+        if (set) {
+          set.delete(ws);
+          if (set.size === 0) predictionChannelSockets.delete(channelUid);
+        }
+      });
+      ws.on('error', () => {
+        try { ws.close(); } catch { }
+      });
+    } catch (error) {
+      console.error('[prediction ws] connection error', error?.message || error);
+      try { ws.close(1011, 'Prediction websocket error'); } catch { }
+    }
+  });
+}
+
+try { registerPredictionRoutes(); } catch (e) { console.error('[prediction ws] failed to register routes', e?.message || e); }
 
 // Initialize WebSocket routes (Roulette)
 function registerRouletteRoutes() {
@@ -19682,6 +19860,10 @@ try {
       }
       if (u.pathname === '/api/roulette/ws') {
         wssRoulette.handleUpgrade(req, socket, head, (ws) => wssRoulette.emit('connection', ws, req));
+        return;
+      }
+      if (u.pathname === '/api/prediction/ws') {
+        wssPrediction.handleUpgrade(req, socket, head, (ws) => wssPrediction.emit('connection', ws, req));
         return;
       }
       if (u.pathname === '/api/desktop/ws') {
