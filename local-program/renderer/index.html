@@ -163,9 +163,15 @@
               <div class="remote-section">
                 <h3>포인트 영상후원</h3>
                 <div class="folder-path" id="remotePvdNow">현재 재생 항목 없음</div>
+                <label class="range-row">
+                  <span>소리 크기</span>
+                  <input id="remotePvdVolume" type="range" min="0" max="100" value="100" />
+                  <strong id="remotePvdVolumeText">100%</strong>
+                </label>
                 <div class="actions">
                   <button class="button secondary" id="remotePvdPlayButton">재생</button>
                   <button class="button secondary" id="remotePvdPauseButton">일시정지</button>
+                  <button class="button secondary" id="remotePvdVolumeButton">소리 적용</button>
                   <button class="button primary" id="remotePvdNextButton">다음 영상</button>
                 </div>
               </div>

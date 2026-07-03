@@ -14,6 +14,7 @@ const fields = {
   remoteCommandResponse: $('#remoteCommandResponse'),
   remoteCommandEnabled: $('#remoteCommandEnabled'),
   remoteRouletteSelect: $('#remoteRouletteSelect'),
+  remotePvdVolume: $('#remotePvdVolume'),
 };
 
 const pageMeta = {
@@ -194,6 +195,7 @@ function fillCommandForm(rule) {
 }
 
 function renderRemote(data) {
+  const nextVolume = Math.max(0, Math.min(100, Math.round(Number(data?.settings?.videoDonationVolume ?? 100))));
   remoteState = {
     rules: Array.isArray(data?.rules) ? data.rules : [],
     rouletteDefs: Array.isArray(data?.rouletteDefs) ? data.rouletteDefs : [],
@@ -210,6 +212,8 @@ function renderRemote(data) {
   fillCommandForm(remoteState.rules[0] || null);
   const current = remoteState.videoQueue[0];
   $('#remotePvdNow').textContent = current ? `${current.title || current.videoId || '영상'} · ${current.username || '시청자'}` : '현재 재생 항목 없음';
+  fields.remotePvdVolume.value = String(nextVolume);
+  $('#remotePvdVolumeText').textContent = `${nextVolume}%`;
 }
 
 async function loadRemote() {
@@ -409,6 +413,18 @@ $('#remotePvdPlayButton').addEventListener('click', () => run(async () => {
 $('#remotePvdPauseButton').addEventListener('click', () => run(async () => {
   await window.aruLocal.remoteControlVideoDonation({ op: 'pause' });
   pushLocalLog('success', '영상후원 일시정지 명령을 보냈습니다.');
+}));
+
+fields.remotePvdVolume.addEventListener('input', () => {
+  const nextVolume = Math.max(0, Math.min(100, Math.round(Number(fields.remotePvdVolume.value || 0))));
+  $('#remotePvdVolumeText').textContent = `${nextVolume}%`;
+});
+
+$('#remotePvdVolumeButton').addEventListener('click', () => run(async () => {
+  const nextVolume = Math.max(0, Math.min(100, Math.round(Number(fields.remotePvdVolume.value || 0))));
+  await window.aruLocal.remoteControlVideoDonation({ op: 'volume', volume: nextVolume });
+  await loadRemote();
+  pushLocalLog('success', `영상후원 소리를 ${nextVolume}%로 조절했습니다.`);
 }));
 
 window.aruLocal.onState(renderState);

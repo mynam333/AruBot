@@ -408,6 +408,13 @@ export function VideoDonationSettingsDialog({ variant = 'secondary', label = '�
   const [pointsPerSecond, setPointsPerSecond] = useState('1');
   const [maxDurationMinutes, setMaxDurationMinutes] = useState('10');
   const [perUserLimit, setPerUserLimit] = useState('0');
+  const [volume, setVolume] = useState('100');
+  const [providers, setProviders] = useState({
+    youtube: true,
+    tiktok: false,
+    chzzk_clip: false,
+    cime_clip: false,
+  });
   const [isPending, startTransition] = useTransition();
 
   const load = async () => {
@@ -419,6 +426,13 @@ export function VideoDonationSettingsDialog({ variant = 'secondary', label = '�
       setPointsPerSecond(String(payload.pointsPerSecond ?? 1));
       setMaxDurationMinutes(String(Math.max(1, Math.round(Number(payload.maxDurationSec || 600) / 60))));
       setPerUserLimit(String(payload.perUserLimit ?? 0));
+      setVolume(String(Math.max(0, Math.min(100, Math.round(Number(payload.volume ?? 100))))));
+      setProviders({
+        youtube: payload.providers?.youtube !== false,
+        tiktok: payload.providers?.tiktok === true,
+        chzzk_clip: payload.providers?.chzzk_clip === true,
+        cime_clip: payload.providers?.cime_clip === true,
+      });
     } catch {
       // Existing values remain editable when loading fails.
     }
@@ -432,6 +446,8 @@ export function VideoDonationSettingsDialog({ variant = 'secondary', label = '�
           pointsPerSecond: Math.max(0, Number(pointsPerSecond || 0)),
           maxDurationSec: Math.max(1, Number(maxDurationMinutes || 1)) * 60,
           perUserLimit: Math.max(0, Number(perUserLimit || 0)),
+          volume: Math.max(0, Math.min(100, Math.round(Number(volume || 0)))),
+          providers,
         });
         toast.success('영상 후원 설정을 저장했어요.');
         refreshResource('/api/video-donation/queue');
@@ -458,7 +474,29 @@ export function VideoDonationSettingsDialog({ variant = 'secondary', label = '�
       testId="video-donation-settings-trigger"
     >
       <SwitchRow checked={enabled} onCheckedChange={setEnabled} label="영상 후원 받기" />
-      <div className="grid min-w-0 gap-[clamp(1.15rem,2.4vw,1.65rem)] rounded-[var(--radius-card)] border bg-background/62 p-[clamp(1rem,2vw,1.25rem)] md:grid-cols-[repeat(3,minmax(0,1fr))]">
+      <div className="grid min-w-0 gap-[clamp(0.75rem,1.5vw,1rem)] rounded-[var(--radius-card)] border bg-background/62 p-[clamp(1rem,2vw,1.25rem)] md:grid-cols-[repeat(2,minmax(0,1fr))]">
+        <SwitchRow
+          checked={providers.youtube}
+          onCheckedChange={(value) => setProviders((current) => ({ ...current, youtube: value }))}
+          label="YouTube 받기"
+        />
+        <SwitchRow
+          checked={providers.tiktok}
+          onCheckedChange={(value) => setProviders((current) => ({ ...current, tiktok: value }))}
+          label="TikTok 받기"
+        />
+        <SwitchRow
+          checked={providers.chzzk_clip}
+          onCheckedChange={(value) => setProviders((current) => ({ ...current, chzzk_clip: value }))}
+          label="CHZZK 클립 받기"
+        />
+        <SwitchRow
+          checked={providers.cime_clip}
+          onCheckedChange={(value) => setProviders((current) => ({ ...current, cime_clip: value }))}
+          label="CIME 클립 받기"
+        />
+      </div>
+      <div className="grid min-w-0 gap-[clamp(1.15rem,2.4vw,1.65rem)] rounded-[var(--radius-card)] border bg-background/62 p-[clamp(1rem,2vw,1.25rem)] md:grid-cols-[repeat(2,minmax(0,1fr))]">
         <Field label="초당 포인트">
           <Input value={pointsPerSecond} onChange={(event) => setPointsPerSecond(event.target.value)} inputMode="decimal" />
         </Field>
@@ -467,6 +505,20 @@ export function VideoDonationSettingsDialog({ variant = 'secondary', label = '�
         </Field>
         <Field label="1인 대기열 제한">
           <Input value={perUserLimit} onChange={(event) => setPerUserLimit(event.target.value)} inputMode="numeric" />
+        </Field>
+        <Field label={`기본 소리 크기 ${Math.max(0, Math.min(100, Math.round(Number(volume || 0))))}%`}>
+          <div className="flex min-h-[var(--control-height)] min-w-0 items-center gap-[clamp(0.75rem,1.5vw,1rem)] rounded-[var(--radius-control)] border bg-background/80 px-[clamp(0.85rem,1.6vw,1.1rem)]">
+            <input
+              type="range"
+              min="0"
+              max="100"
+              value={volume}
+              onChange={(event) => setVolume(event.target.value)}
+              className="min-w-0 flex-1 accent-primary"
+              aria-label="영상 후원 기본 소리 크기"
+            />
+            <span className="w-[4ch] text-right text-sm font-semibold tabular-nums">{Math.max(0, Math.min(100, Math.round(Number(volume || 0))))}%</span>
+          </div>
         </Field>
       </div>
     </ActionDialogFrame>

@@ -393,6 +393,31 @@ label {
   font-weight: 800;
 }
 
+.range-row {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.58);
+  padding: 0.75rem 0.85rem;
+}
+
+.range-row input[type="range"] {
+  width: 100%;
+  min-width: 0;
+  min-height: auto;
+  padding: 0;
+  accent-color: var(--primary);
+}
+
+.range-row strong {
+  min-width: 3.5ch;
+  color: var(--text);
+  font-size: 0.86rem;
+  text-align: right;
+}
+
 input,
 select,
 textarea {

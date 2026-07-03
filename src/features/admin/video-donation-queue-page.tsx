@@ -1,6 +1,6 @@
 'use client';
 
-import { GripVertical, Loader2, PlaySquare, RefreshCw, RotateCcw, Trash2, UserRound } from 'lucide-react';
+import { GripVertical, Loader2, PlaySquare, RefreshCw, RotateCcw, Trash2, UserRound, Volume2, VolumeX } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState, useTransition } from 'react';
 import { toast } from 'sonner';
 import { VideoDonationSettingsDialog } from '@/features/admin/admin-action-dialogs';
@@ -13,6 +13,11 @@ import { apiUrl, readJson } from '@/shared/api/http';
 type VideoDonationItem = {
   id: string;
   ts?: number;
+  mediaProvider?: string;
+  mediaId?: string | null;
+  mediaUrl?: string | null;
+  embedUrl?: string | null;
+  thumbnailUrl?: string | null;
   videoId?: string;
   title?: string | null;
   durationSec?: number;
@@ -25,6 +30,10 @@ type VideoDonationItem = {
 
 type VideoDonationQueueResponse = {
   items?: VideoDonationItem[];
+};
+
+type VideoDonationSettingsResponse = {
+  volume?: number;
 };
 
 async function postJson<T>(path: string, body: unknown): Promise<T> {
@@ -56,7 +65,19 @@ function requestedRange(item: VideoDonationItem) {
 }
 
 function thumbnailUrl(item: VideoDonationItem) {
+  if (item.thumbnailUrl) return item.thumbnailUrl;
   return item.videoId ? `https://i.ytimg.com/vi/${encodeURIComponent(item.videoId)}/hqdefault.jpg` : null;
+}
+
+function providerLabel(provider?: string) {
+  if (provider === 'tiktok') return 'TikTok';
+  if (provider === 'chzzk_clip') return 'CHZZK 클립';
+  if (provider === 'cime_clip') return 'CIME 클립';
+  return 'YouTube';
+}
+
+function mediaIdLabel(item: VideoDonationItem) {
+  return item.mediaId || item.videoId || '-';
 }
 
 function requestedAt(item: VideoDonationItem) {
@@ -134,13 +155,14 @@ function VideoDonationItemCard({
           )}
           {current ? <Badge tone="mint" className="absolute left-2 top-2">재생 중</Badge> : null}
           {!current && index != null ? <Badge tone="neutral" className="absolute left-2 top-2">대기 {index + 1}</Badge> : null}
+          <Badge tone="sky" className="absolute bottom-2 left-2">{providerLabel(item.mediaProvider)}</Badge>
         </div>
 
         <div className="grid min-w-0 gap-[clamp(0.75rem,1.4vw,1rem)]">
           <div className="flex min-w-0 flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0">
               <h3 className="break-keep text-base font-semibold leading-7 md:text-lg">
-                {item.title || item.videoId || '제목을 불러오지 못한 영상'}
+                {item.title || mediaIdLabel(item) || '제목을 불러오지 못한 영상'}
               </h3>
               <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
                 <span className="inline-flex items-center gap-1">
@@ -168,8 +190,8 @@ function VideoDonationItemCard({
               <div className="mt-1 truncate text-sm font-semibold tabular-nums">{Number(item.cost || 0).toLocaleString()}P</div>
             </div>
             <div className="min-w-0 rounded-[var(--radius-control)] border bg-background/70 p-[clamp(0.75rem,1.4vw,1rem)]">
-              <div className="text-xs text-muted-foreground">영상 ID</div>
-              <div className="mt-1 truncate text-sm font-semibold">{item.videoId || '-'}</div>
+              <div className="text-xs text-muted-foreground">미디어 ID</div>
+              <div className="mt-1 truncate text-sm font-semibold">{mediaIdLabel(item)}</div>
             </div>
           </div>
 
@@ -193,6 +215,8 @@ export function VideoDonationQueuePage() {
   const [items, setItems] = useState<VideoDonationItem[]>([]);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [volume, setVolume] = useState(100);
+  const [volumePending, setVolumePending] = useState(false);
   const [isPending, startTransition] = useTransition();
 
   const currentItem = items[0] || null;
@@ -202,8 +226,14 @@ export function VideoDonationQueuePage() {
 
   const load = useCallback(() => {
     startTransition(async () => {
-      const data = await readJson<VideoDonationQueueResponse>('/api/video-donation/queue');
+      const [data, settings] = await Promise.all([
+        readJson<VideoDonationQueueResponse>('/api/video-donation/queue'),
+        readJson<VideoDonationSettingsResponse>('/api/video-donation/settings').catch(() => null),
+      ]);
       setItems(Array.isArray(data?.items) ? data.items : []);
+      if (settings?.volume != null) {
+        setVolume(Math.max(0, Math.min(100, Math.round(Number(settings.volume)))));
+      }
     });
   }, []);
 
@@ -247,7 +277,7 @@ export function VideoDonationQueuePage() {
 
   const removeItem = async (item: VideoDonationItem, refund: boolean) => {
     const action = refund ? '삭제하고 포인트를 반환할까요?' : '대기열에서 삭제할까요?';
-    if (!window.confirm(`${item.title || item.videoId || '영상'}을 ${action}`)) return;
+    if (!window.confirm(`${item.title || mediaIdLabel(item) || '영상'}을 ${action}`)) return;
     setBusyId(item.id);
     try {
       await postJson(refund ? '/api/video-donation/delete-refund' : '/api/video-donation/delete', { id: item.id });
@@ -257,6 +287,20 @@ export function VideoDonationQueuePage() {
       toast.error(error instanceof Error ? error.message : '처리하지 못했어요.');
     } finally {
       setBusyId(null);
+    }
+  };
+
+  const applyVolume = async () => {
+    const nextVolume = Math.max(0, Math.min(100, Math.round(Number(volume || 0))));
+    setVolumePending(true);
+    try {
+      await postJson('/api/video-donation/control', { op: 'volume', volume: nextVolume });
+      toast.success(`영상 후원 소리를 ${nextVolume}%로 조절했어요.`);
+      load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '소리 크기를 조절하지 못했어요.');
+    } finally {
+      setVolumePending(false);
     }
   };
 
@@ -278,7 +322,24 @@ export function VideoDonationQueuePage() {
               시청자가 신청한 영상을 지금 나가는 항목과 다음 순서로 나눠 보여줍니다. 방송 흐름에 맞게 순서를 바꾸고, 맞지 않는 신청은 포인트 반환과 함께 정리하세요.
             </p>
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex max-w-full flex-wrap items-center gap-2">
+            <div className="flex min-h-[var(--control-height)] min-w-[min(100%,18rem)] items-center gap-2 rounded-[var(--radius-control)] border bg-card/74 px-[clamp(0.8rem,1.4vw,1rem)] shadow-subtle backdrop-blur">
+              {volume <= 0 ? <VolumeX className="h-[1em] w-[1em] text-muted-foreground" /> : <Volume2 className="h-[1em] w-[1em] text-primary" />}
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={volume}
+                onChange={(event) => setVolume(Math.max(0, Math.min(100, Number(event.target.value || 0))))}
+                className="min-w-0 flex-1 accent-primary"
+                aria-label="영상 후원 소리 크기"
+              />
+              <span className="w-[4ch] text-right text-sm font-semibold tabular-nums">{volume}%</span>
+            </div>
+            <Button type="button" variant="secondary" onClick={() => void applyVolume()} disabled={volumePending}>
+              {volumePending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Volume2 className="h-4 w-4" />}
+              소리 적용
+            </Button>
             <VideoDonationSettingsDialog />
             <Button type="button" variant="outline" onClick={load} disabled={isPending}>
               <RefreshCw className={isPending ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />

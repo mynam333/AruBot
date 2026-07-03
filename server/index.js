@@ -2318,13 +2318,20 @@ app.post('/api/video-donation/control-by-token', async (req, res) => {
     }
     if (!sid) return res.status(404).json({ error: 'token not found' });
     // Verify current token
+    let settings = {};
     try {
-      const s = await getBotSettings(sid) || {};
-      if (!s.videoDonationViewerToken || s.videoDonationViewerToken !== token) return res.status(404).json({ error: 'token not found' });
+      settings = await getBotSettings(sid) || {};
+      if (!settings.videoDonationViewerToken || settings.videoDonationViewerToken !== token) return res.status(404).json({ error: 'token not found' });
     } catch { }
+    const op = String(req.body?.op || '').toLowerCase();
+    if (op === 'volume') {
+      const volume = normalizePvdVolume(req.body?.volume ?? req.body?.value ?? 100);
+      await setBotSettings(sid, { ...settings, videoDonationVolume: volume });
+      const message = await broadcastPvdControl(sid, { op, volume });
+      return res.json({ ok: true, message });
+    }
     const q = getVideoQueue(sid);
     if (!q[0]) return res.json({ ok: true });
-    const op = String(req.body?.op || '').toLowerCase();
     let atSec = Number(req.body?.atSec);
     if (!Number.isFinite(atSec) || atSec < 0) atSec = getCurrentAtSec(sid);
     let state = pvdPlaybackState.get(sid);
@@ -2343,25 +2350,8 @@ app.post('/api/video-donation/control-by-token', async (req, res) => {
     try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
     scheduleNextPvdAutoPop(sid);
 
-    // Broadcast control to all viewers
-    const message = { type: 'control', op, atSec: Math.floor(atSec), paused: state.paused === true, serverNow: Date.now() };
-
-    try {
-      const channelResult = await broadcastToChannelBySid(sid, 'pvd', message);
-      console.log(`[PVD Control] Broadcast result: ${channelResult.success} connections`);
-    } catch (error) {
-      console.error('[PVD Control] Channel broadcast error:', error);
-    }
-
-    const set = pvdSidSockets.get(sid);
-    const payload = JSON.stringify(message);
-    if (set && set.size) {
-      for (const ws of Array.from(set)) {
-        try { if (ws.readyState === 1) ws.send(payload, { compress: false }); } catch { }
-      }
-    }
-
-    return res.json({ ok: true });
+    const message = await broadcastPvdControl(sid, { op, atSec: Math.floor(atSec), paused: state.paused === true });
+    return res.json({ ok: true, message });
   } catch (e) {
     return res.status(500).json({ error: 'failed' });
   }
@@ -4678,6 +4668,17 @@ function getVideoQueue(sid) {
 // baseStartMs is the wall-clock time when the current item started at item.startSec.
 const pvdPlaybackState = new Map(); // sid -> { baseStartMs: number, paused: boolean, pausedAtSec: number|null }
 
+function normalizePvdVolume(value, fallback = 100) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return Math.max(0, Math.min(100, Math.round(Number(fallback || 100))));
+  return Math.max(0, Math.min(100, Math.round(n)));
+}
+
+async function getPvdVolumeForSid(sid) {
+  const settings = await getBotSettings(sid).catch(() => ({})) || {};
+  return normalizePvdVolume(settings.videoDonationVolume ?? 100);
+}
+
 function getPvdItemStartSec(item) {
   return Math.max(0, Math.floor(Number(item?.startSec || 0)));
 }
@@ -4720,6 +4721,19 @@ function getCurrentPvdElapsedSec(sid) {
   const item = q[0] || null;
   if (!item) return 0;
   return Math.max(0, getCurrentAtSec(sid) - getPvdItemStartSec(item));
+}
+
+async function broadcastPvdControl(sid, message) {
+  const payload = { type: 'control', ...message, serverNow: Date.now() };
+  await broadcastToChannelBySid(sid, 'pvd', payload).catch(() => null);
+  const set = pvdSidSockets.get(sid);
+  const text = JSON.stringify(payload);
+  if (set && set.size) {
+    for (const ws of Array.from(set)) {
+      try { if (ws.readyState === 1) ws.send(text, { compress: false }); } catch { }
+    }
+  }
+  return payload;
 }
 
 // Local random token generator for PVD viewer tokens
@@ -4784,6 +4798,7 @@ function scheduleNextPvdAutoPop(sid) {
 async function broadcastPvdStart(sid) {
   try {
     const q = getVideoQueue(sid);
+    const volume = await getPvdVolumeForSid(sid);
 
     // Rebase playback state when a new head starts
     if (q[0]) {
@@ -4800,6 +4815,7 @@ async function broadcastPvdStart(sid) {
       paused: q[0] ? false : null,
       atSec: q[0] ? getCurrentAtSec(sid) : 0,
       elapsedSec: q[0] ? getCurrentPvdElapsedSec(sid) : 0,
+      volume,
       serverNow: Date.now()
     };
 
@@ -4825,12 +4841,14 @@ async function broadcastPvdStart(sid) {
     const set = pvdSidSockets.get(sid);
     if (set && set.size > 0) {
       const q = getVideoQueue(sid);
+      const volume = await getPvdVolumeForSid(sid).catch(() => 100);
       const msg = JSON.stringify({
         type: 'start',
         item: q[0] || null,
         queue: q,
         startedAt: q[0] ? pvdPlaybackState.get(sid)?.baseStartMs || null : null,
-        paused: q[0] ? false : null
+        paused: q[0] ? false : null,
+        volume
       });
       for (const ws of Array.from(set)) {
         try { if (ws.readyState === 1) { ws.send(msg, { compress: false }); } } catch { }
@@ -4917,7 +4935,9 @@ app.get('/api/video-donation/settings', async (req, res) => {
     const enabled = settings.videoDonationAcceptEnabled === true;
     const maxDur = Math.max(1, Number(settings.videoDonationMaxDurationSec ?? 600));
     const perUserLimit = Math.max(0, Number(settings.videoDonationPerUserQueueLimit ?? 0));
-    return res.json({ pointsPerSecond: pps, acceptEnabled: enabled, maxDurationSec: maxDur, perUserLimit });
+    const volume = normalizePvdVolume(settings.videoDonationVolume ?? 100);
+    const providers = normalizePvdProviders(settings.videoDonationProviders);
+    return res.json({ pointsPerSecond: pps, acceptEnabled: enabled, maxDurationSec: maxDur, perUserLimit, volume, providers });
   } catch (e) {
     console.error('[pvd:settings:get] error', e?.message || e);
     return res.status(500).json({ error: 'Failed to get settings' });
@@ -4969,14 +4989,20 @@ app.get('/api/video-donation/resolve-title', rateLimiters.externalLookup, async 
   try {
     const q = String(req.query?.url || req.query?.id || req.query?.q || '');
     if (!q) return res.status(400).json({ error: 'url, id or q required' });
-    let id = extractYouTubeId(q) || '';
-    if (!id) {
-      try { id = await searchYouTubeVideoIdByQuery(q); } catch { }
-    }
-    if (!id) return res.status(404).json({ error: 'not_found' });
-    const info = await fetchYouTubeInfo(id);
-    return res.json({ title: info?.title || null, durationSec: Number.isFinite(info?.durationSec) ? Number(info.durationSec) : null });
+    const sid = await getPartitionId(req, res).catch(() => null);
+    const settings = sid ? (await getBotSettings(sid).catch(() => ({})) || {}) : { videoDonationProviders: getDefaultPvdProviders() };
+    const info = await resolvePvdMedia(q, settings, { allowSearch: true });
+    return res.json({
+      provider: info.provider,
+      mediaId: info.mediaId,
+      title: info.title || null,
+      durationSec: Number.isFinite(info.durationSec) ? Number(info.durationSec) : null,
+      thumbnailUrl: info.thumbnailUrl || null,
+      embedUrl: info.embedUrl || null,
+    });
   } catch (e) {
+    if (e?.code === 'provider_disabled') return res.status(400).json({ error: 'provider_disabled', provider: e.provider });
+    if (e?.code === 'unsupported_media') return res.status(404).json({ error: 'not_found' });
     return res.status(500).json({ error: 'failed' });
   }
 });
@@ -4991,9 +5017,12 @@ app.post('/api/video-donation/settings', async (req, res) => {
     const enabled = body.acceptEnabled === true;
     const maxDur = Math.max(1, Number(body.maxDurationSec ?? 600));
     const perUserLimit = Math.max(0, Number(body.perUserLimit ?? 0));
+    const volume = normalizePvdVolume(body.volume ?? 100);
     const settings = await getBotSettings(sid) || {};
-    const next = { ...settings, videoDonationPointsPerSecond: pps, videoDonationAcceptEnabled: enabled, videoDonationMaxDurationSec: maxDur, videoDonationPerUserQueueLimit: perUserLimit };
+    const providers = normalizePvdProviders(body.providers || body.videoDonationProviders || settings.videoDonationProviders);
+    const next = { ...settings, videoDonationPointsPerSecond: pps, videoDonationAcceptEnabled: enabled, videoDonationMaxDurationSec: maxDur, videoDonationPerUserQueueLimit: perUserLimit, videoDonationVolume: volume, videoDonationProviders: providers };
     await setBotSettings(sid, next);
+    await broadcastPvdControl(sid, { op: 'volume', volume }).catch(() => null);
     return res.json({ ok: true });
   } catch (e) {
     console.error('[pvd:settings:post] error', e?.message || e);
@@ -5015,31 +5044,16 @@ app.post('/api/video-donation/request', rateLimiters.userWrite, async (req, res)
     const perUserLimit = Math.max(0, Number(settings.videoDonationPerUserQueueLimit ?? 0));
     let { videoUrl, title, startSec, playSec, requesterUserId, requesterUsername } = req.body || {};
     const input = String(videoUrl || '').trim();
-    const looksDirect = /youtu/i.test(input) || /^[A-Za-z0-9_-]{11}$/.test(input);
-    let videoId = looksDirect ? extractYouTubeId(input) : null;
-    // If not a URL/id, force search query and pick best match
-    if (!videoId && input) {
-      try { videoId = await searchYouTubeVideoIdByQuery(input); } catch { }
-    }
-    if (!videoId) return res.status(400).json({ error: 'No video found for the given input' });
-    // Resolve title and duration via YouTube Data API v3 (if available), fallback to oEmbed for title
-    let ytTitle = null;
-    let ytDuration = null;
+    let media;
     try {
-      const info = await fetchYouTubeInfo(videoId);
-      ytTitle = info.title || null;
-      ytDuration = Number.isFinite(info.durationSec) ? Number(info.durationSec) : null;
-    } catch { }
-    if (!ytTitle && !title) {
-      try {
-        const enc = encodeURIComponent(videoUrl);
-        const r = await axios.get(`https://www.youtube.com/oembed?url=${enc}&format=json`, { timeout: 3000 });
-        ytTitle = r?.data?.title || null;
-      } catch { }
+      media = await resolvePvdMedia(input, settings, { allowSearch: true });
+    } catch (e) {
+      if (e?.code === 'provider_disabled') return res.status(400).json({ error: 'provider_disabled', provider: e.provider, message: `${getPvdProviderLabel(e.provider)} 요청은 꺼져 있습니다.` });
+      return res.status(400).json({ error: 'unsupported_media', message: '지원하지 않는 링크입니다.' });
     }
     const start = Math.max(0, Number(startSec || 0) || 0);
     const play = Number.isFinite(Number(playSec)) && Number(playSec) > 0 ? Math.floor(Number(playSec)) : null;
-    const dur = getPvdPlayDurationSec({ maxDurationSec: maxDur, ytDurationSec: ytDuration, startSec: start, playSec: play });
+    const dur = getPvdPlayDurationSec({ maxDurationSec: maxDur, ytDurationSec: media.durationSec, startSec: start, playSec: play });
     const cost = Math.ceil(pps * dur);
 
     // Deduct points
@@ -5085,8 +5099,13 @@ app.post('/api/video-donation/request', rateLimiters.userWrite, async (req, res)
     const item = {
       id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       ts: Date.now(),
-      videoId,
-      title: title || ytTitle || null,
+      mediaProvider: media.provider,
+      mediaId: media.mediaId,
+      mediaUrl: media.mediaUrl,
+      embedUrl: media.embedUrl,
+      thumbnailUrl: media.thumbnailUrl || null,
+      videoId: media.provider === 'youtube' ? media.mediaId : null,
+      title: title || media.title || null,
       durationSec: dur,
       startSec: start,
       cost,
@@ -5135,8 +5154,9 @@ app.get('/api/video-donation/now-playing', async (req, res) => {
     }
     if (!sid) return res.status(404).json({ error: 'token not found' });
 
+    let settings = {};
     try {
-      const settings = await getBotSettings(sid) || {};
+      settings = await getBotSettings(sid) || {};
       if (!settings.videoDonationViewerToken || settings.videoDonationViewerToken !== token) {
         return res.status(404).json({ error: 'token not found' });
       }
@@ -5152,6 +5172,7 @@ app.get('/api/video-donation/now-playing', async (req, res) => {
       paused: state?.paused === true,
       atSec: getCurrentAtSec(sid),
       elapsedSec: getCurrentPvdElapsedSec(sid),
+      volume: normalizePvdVolume(settings.videoDonationVolume ?? 100),
       serverNow: Date.now()
     });
   } catch (e) {
@@ -5762,6 +5783,279 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}) {
   }
 }
 
+const PVD_PROVIDER_KEYS = ['youtube', 'tiktok', 'chzzk_clip', 'cime_clip'];
+
+function getDefaultPvdProviders() {
+  return {
+    youtube: true,
+    tiktok: false,
+    chzzk_clip: false,
+    cime_clip: false,
+  };
+}
+
+function normalizePvdProviders(value) {
+  const defaults = getDefaultPvdProviders();
+  const input = value && typeof value === 'object' ? value : {};
+  return PVD_PROVIDER_KEYS.reduce((acc, key) => {
+    acc[key] = input[key] == null ? defaults[key] : input[key] === true;
+    return acc;
+  }, {});
+}
+
+function getPvdProviderLabel(provider) {
+  if (provider === 'youtube') return 'YouTube';
+  if (provider === 'tiktok') return 'TikTok';
+  if (provider === 'chzzk_clip') return 'CHZZK 클립';
+  if (provider === 'cime_clip') return 'CIME 클립';
+  return '영상';
+}
+
+function extractTikTokId(url) {
+  const text = String(url || '').trim();
+  const direct = text.match(/(?:^|\/)(\d{15,25})(?:$|[/?#])/);
+  if (/^\d{15,25}$/.test(text)) return text;
+  try {
+    const u = new URL(text);
+    if (!/(^|\.)tiktok\.com$/i.test(u.hostname)) return null;
+    const player = u.pathname.match(/^\/player\/v1\/(\d{15,25})/);
+    if (player) return player[1];
+    const video = u.pathname.match(/\/video\/(\d{15,25})/);
+    if (video) return video[1];
+    if (direct) return direct[1];
+  } catch { }
+  return null;
+}
+
+function extractChzzkClipId(url) {
+  try {
+    const u = new URL(String(url || '').trim());
+    if (!/(^|\.)chzzk\.naver\.com$/i.test(u.hostname)) return null;
+    const m = u.pathname.match(/^\/(?:embed\/clip|clips)\/([A-Za-z0-9_-]+)/);
+    return m ? m[1] : null;
+  } catch { return null; }
+}
+
+function extractCimeClipId(url) {
+  try {
+    const u = new URL(String(url || '').trim());
+    if (!/(^|\.)ci\.me$/i.test(u.hostname) && !/(^|\.)cime\.kr$/i.test(u.hostname)) return null;
+    const m = u.pathname.match(/^\/clips\/([A-Za-z0-9_-]+)/);
+    return m ? m[1] : null;
+  } catch { return null; }
+}
+
+async function fetchCimeClipInfo(clipId) {
+  const id = String(clipId || '').trim();
+  if (!id) return null;
+  try {
+    const r = await axios.get(`https://ci.me/json/clips/${encodeURIComponent(id)}`, {
+      timeout: 7000,
+      headers: { 'Accept-Language': 'ko-KR,ko;q=0.9' },
+    });
+    const clips = r?.data?.bodyData?.clips;
+    const clip = Array.isArray(clips)
+      ? (clips.find((item) => String(item?.id || '') === id) || clips[0])
+      : null;
+    if (!clip) return null;
+    const rawDuration = Number(clip.duration ?? clip.playback?.duration);
+    const durationSec = Number.isFinite(rawDuration) && rawDuration > 0
+      ? Math.ceil(rawDuration > 10000 ? rawDuration / 1000 : rawDuration)
+      : null;
+    return {
+      raw: clip,
+      title: clip.title || null,
+      durationSec,
+      playbackUrl: clip.playback?.url || null,
+      playbackFile: clip.playback?.file || null,
+      thumbnailUrl: clip.coverImageUrl || clip.imageUrl || null,
+      layout: clip.layout || null,
+      channelName: clip.channel?.name || null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function parseHtmlMeta(html) {
+  const source = String(html || '');
+  const readMeta = (name) => {
+    const re = new RegExp(`<meta[^>]+(?:property|name)=["']${name}["'][^>]+content=["']([^"']+)["'][^>]*>`, 'i');
+    const m = source.match(re);
+    return m ? m[1].replace(/&amp;/g, '&').trim() : null;
+  };
+  const titleMatch = source.match(/<title>([^<]+)<\/title>/i);
+  let jsonLd = null;
+  const jsonLdMatch = source.match(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/i);
+  if (jsonLdMatch) {
+    try { jsonLd = JSON.parse(jsonLdMatch[1]); } catch { jsonLd = null; }
+  }
+  const durationIso = jsonLd?.duration || null;
+  return {
+    title: readMeta('og:title') || jsonLd?.name || (titleMatch ? titleMatch[1].trim() : null),
+    thumbnailUrl: readMeta('og:image') || jsonLd?.thumbnailUrl || null,
+    durationSec: durationIso ? parseIso8601Duration(durationIso) : null,
+  };
+}
+
+async function fetchGenericPageMetadata(url) {
+  try {
+    const r = await axios.get(url, {
+      timeout: 7000,
+      responseType: 'text',
+      headers: { 'Accept-Language': 'ko-KR,ko;q=0.9' },
+    });
+    return parseHtmlMeta(r?.data || '');
+  } catch {
+    return { title: null, thumbnailUrl: null, durationSec: null };
+  }
+}
+
+async function resolveTikTokFinalUrl(url) {
+  const text = String(url || '').trim();
+  if (!text) return text;
+  try {
+    const r = await axios.get(text, {
+      timeout: 7000,
+      maxRedirects: 5,
+      validateStatus: (status) => status >= 200 && status < 400,
+    });
+    return r?.request?.res?.responseUrl || text;
+  } catch {
+    return text;
+  }
+}
+
+async function parsePvdMediaInput(input, { allowSearch = true } = {}) {
+  const raw = String(input || '').trim();
+  if (!raw) return null;
+
+  const youtubeId = extractYouTubeId(raw);
+  if (youtubeId) {
+    return {
+      provider: 'youtube',
+      mediaId: youtubeId,
+      originalUrl: /^https?:\/\//i.test(raw) ? raw : `https://youtu.be/${youtubeId}`,
+      embedUrl: null,
+    };
+  }
+
+  const chzzkClipId = extractChzzkClipId(raw);
+  if (chzzkClipId) {
+    return {
+      provider: 'chzzk_clip',
+      mediaId: chzzkClipId,
+      originalUrl: `https://chzzk.naver.com/clips/${chzzkClipId}`,
+      embedUrl: `https://chzzk.naver.com/embed/clip/${chzzkClipId}`,
+    };
+  }
+
+  const cimeClipId = extractCimeClipId(raw);
+  if (cimeClipId) {
+    return {
+      provider: 'cime_clip',
+      mediaId: cimeClipId,
+      originalUrl: `https://ci.me/clips/${cimeClipId}`,
+      embedUrl: `https://ci.me/clips/${cimeClipId}`,
+    };
+  }
+
+  let tiktokId = extractTikTokId(raw);
+  let tiktokUrl = raw;
+  if (!tiktokId && /^https?:\/\//i.test(raw)) {
+    try {
+      const host = new URL(raw).hostname;
+      if (/(^|\.)tiktok\.com$/i.test(host)) {
+        tiktokUrl = await resolveTikTokFinalUrl(raw);
+        tiktokId = extractTikTokId(tiktokUrl);
+      }
+    } catch { }
+  }
+  if (tiktokId) {
+    return {
+      provider: 'tiktok',
+      mediaId: tiktokId,
+      originalUrl: tiktokUrl,
+      embedUrl: `https://www.tiktok.com/player/v1/${tiktokId}?autoplay=1&controls=1&progress_bar=1&play_button=1&volume_control=1&fullscreen_button=1`,
+    };
+  }
+
+  if (allowSearch) {
+    const found = await searchYouTubeVideoIdByQuery(raw).catch(() => null);
+    if (found) {
+      return {
+        provider: 'youtube',
+        mediaId: String(found),
+        originalUrl: `https://youtu.be/${found}`,
+        embedUrl: null,
+      };
+    }
+  }
+
+  return null;
+}
+
+async function resolvePvdMedia(input, settings = {}, { allowSearch = true } = {}) {
+  const parsed = await parsePvdMediaInput(input, { allowSearch });
+  if (!parsed) {
+    const error = new Error('unsupported_media');
+    error.code = 'unsupported_media';
+    throw error;
+  }
+
+  const providers = normalizePvdProviders(settings.videoDonationProviders);
+  if (providers[parsed.provider] !== true) {
+    const error = new Error('provider_disabled');
+    error.code = 'provider_disabled';
+    error.provider = parsed.provider;
+    throw error;
+  }
+
+  let title = null;
+  let durationSec = null;
+  let thumbnailUrl = null;
+
+  if (parsed.provider === 'youtube') {
+    const info = await fetchYouTubeInfo(parsed.mediaId);
+    title = info?.title || null;
+    durationSec = Number.isFinite(info?.durationSec) ? Number(info.durationSec) : null;
+    thumbnailUrl = `https://i.ytimg.com/vi/${encodeURIComponent(parsed.mediaId)}/hqdefault.jpg`;
+  } else if (parsed.provider === 'tiktok') {
+    try {
+      const r = await axios.get(`https://www.tiktok.com/oembed?url=${encodeURIComponent(parsed.originalUrl)}`, { timeout: 5000 });
+      title = r?.data?.title || null;
+      thumbnailUrl = r?.data?.thumbnail_url || null;
+    } catch { }
+    if (!title) title = `TikTok 영상 ${parsed.mediaId}`;
+  } else {
+    if (parsed.provider === 'cime_clip') {
+      const clip = await fetchCimeClipInfo(parsed.mediaId);
+      if (clip?.playbackUrl) {
+        parsed.embedUrl = clip.playbackUrl;
+        parsed.originalUrl = `https://ci.me/clips/${parsed.mediaId}`;
+      }
+      title = clip?.title || `${getPvdProviderLabel(parsed.provider)} ${parsed.mediaId}`;
+      durationSec = Number.isFinite(clip?.durationSec) ? Number(clip.durationSec) : null;
+      thumbnailUrl = clip?.thumbnailUrl || null;
+    } else {
+      const meta = await fetchGenericPageMetadata(parsed.originalUrl);
+      title = meta.title || `${getPvdProviderLabel(parsed.provider)} ${parsed.mediaId}`;
+      durationSec = Number.isFinite(meta.durationSec) ? Number(meta.durationSec) : null;
+      thumbnailUrl = meta.thumbnailUrl || null;
+    }
+  }
+
+  return {
+    provider: parsed.provider,
+    mediaId: parsed.mediaId,
+    mediaUrl: parsed.originalUrl,
+    embedUrl: parsed.embedUrl,
+    title,
+    durationSec,
+    thumbnailUrl,
+  };
+}
+
 async function executeActionVariableTokens(sid, text, context = {}) {
   const source = String(text || '');
   const matches = Array.from(source.matchAll(/\$\{\s*(?:action|automation|blueprint)::([^}]+)\s*\}/ig));
@@ -6225,8 +6519,15 @@ app.post('/api/video-donation/control', async (req, res) => {
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
     const q = getVideoQueue(sid);
-    if (!q[0]) return res.json({ ok: true });
     const op = String(req.body?.op || '').toLowerCase();
+    if (op === 'volume') {
+      const volume = normalizePvdVolume(req.body?.volume ?? req.body?.value ?? 100);
+      const settings = await getBotSettings(sid) || {};
+      await setBotSettings(sid, { ...settings, videoDonationVolume: volume });
+      const message = await broadcastPvdControl(sid, { op, volume });
+      return res.json({ ok: true, message });
+    }
+    if (!q[0]) return res.json({ ok: true });
     let atSec = Number(req.body?.atSec);
     if (!Number.isFinite(atSec) || atSec < 0) atSec = getCurrentAtSec(sid);
     let state = pvdPlaybackState.get(sid);
@@ -6247,23 +6548,7 @@ app.post('/api/video-donation/control', async (req, res) => {
     try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
     scheduleNextPvdAutoPop(sid);
 
-    // Broadcast control to all viewers
-    const message = { type: 'control', op, atSec: Math.floor(atSec), paused: state.paused === true, serverNow: Date.now() };
-
-    try {
-      const channelResult = await broadcastToChannelBySid(sid, 'pvd', message);
-      console.log(`[PVD Control] Broadcast result: ${channelResult.success} connections`);
-    } catch (error) {
-      console.error('[PVD Control] Channel broadcast error:', error);
-    }
-
-    const set = pvdSidSockets.get(sid);
-    const payload = JSON.stringify(message);
-    if (set && set.size) {
-      for (const ws of Array.from(set)) {
-        try { if (ws.readyState === 1) ws.send(payload, { compress: false }); } catch { }
-      }
-    }
+    const message = await broadcastPvdControl(sid, { op, atSec: Math.floor(atSec), paused: state.paused === true });
 
     return res.json({ ok: true });
   } catch (e) {
@@ -10948,6 +11233,7 @@ app.get('/api/local-remote/overview', requireAutomationLocalAgent, async (req, r
       settings: {
         botEnabled: settings.botEnabled !== false,
         videoDonationAcceptEnabled: settings.videoDonationAcceptEnabled === true,
+        videoDonationVolume: normalizePvdVolume(settings.videoDonationVolume ?? 100),
       },
     });
   } catch (e) {
@@ -11040,8 +11326,15 @@ app.post('/api/local-remote/video-donation/control', requireAutomationLocalAgent
     const sid = getLocalRemoteSid(req);
     if (!sid) return res.status(401).json({ error: 'Invalid local program token' });
     const q = getVideoQueue(sid);
-    if (!q[0]) return res.json({ ok: true, empty: true });
     const op = String(req.body?.op || '').toLowerCase();
+    if (op === 'volume') {
+      const volume = normalizePvdVolume(req.body?.volume ?? req.body?.value ?? 100);
+      const settings = await getBotSettings(sid) || {};
+      await setBotSettings(sid, { ...settings, videoDonationVolume: volume });
+      const message = await broadcastPvdControl(sid, { op, volume });
+      return res.json({ ok: true, message });
+    }
+    if (!q[0]) return res.json({ ok: true, empty: true });
     let atSec = Number(req.body?.atSec);
     if (!Number.isFinite(atSec) || atSec < 0) atSec = getCurrentAtSec(sid);
     let state = pvdPlaybackState.get(sid);
@@ -11058,15 +11351,7 @@ app.post('/api/local-remote/video-donation/control', requireAutomationLocalAgent
     }
     try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
     scheduleNextPvdAutoPop(sid);
-    const message = { type: 'control', op, atSec: Math.floor(atSec), paused: state.paused === true, serverNow: Date.now() };
-    await broadcastToChannelBySid(sid, 'pvd', message).catch(() => null);
-    const set = pvdSidSockets.get(sid);
-    const payload = JSON.stringify(message);
-    if (set && set.size) {
-      for (const ws of Array.from(set)) {
-        try { if (ws.readyState === 1) ws.send(payload, { compress: false }); } catch { }
-      }
-    }
+    const message = await broadcastPvdControl(sid, { op, atSec: Math.floor(atSec), paused: state.paused === true });
     return res.json({ ok: true, message });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to control video donation playback' });
@@ -13962,108 +14247,23 @@ async function ensureSession(sid, channelId) {
             if (allowExecute && typeof response === 'string' && vdRe.test(response)) {
               // args were parsed above as 'args' from user message
               const firstArg = Array.isArray(argsVd) ? (argsVd[0] || '') : '';
-              const startArgRaw = Array.isArray(argsVd) ? argsVd[1] : undefined;
-              const playArgRaw = Array.isArray(argsVd) ? argsVd[2] : undefined;
               
-              // URL, YouTube URL, or 11-character video ID.
-              const looksLikeUrl = /^https?:\/\//i.test(firstArg) || /youtu/i.test(firstArg) || /^[A-Za-z0-9_-]{11}$/.test(firstArg);
+              // URL, supported clip URL, YouTube URL, or 11-character video ID.
+              const looksLikeUrl = /^https?:\/\//i.test(firstArg) || /youtu/i.test(firstArg) || /tiktok/i.test(firstArg) || /chzzk/i.test(firstArg) || /ci\.me/i.test(firstArg) || /^[A-Za-z0-9_-]{11}$/.test(firstArg);
               
               const urlArg = looksLikeUrl ? firstArg : (Array.isArray(argsVd) ? argsVd.join(' ') : firstArg);
               
               if (urlArg) {
                 try {
-                  const settings = await getBotSettings(sid) || {};
-                  const enabled = settings.videoDonationAcceptEnabled === true;
-                  if (!enabled) {
-                    responseToSend = (String(response).replace(vdReAll, '').trim() || '지금은 영상 요청을 받을 수 없습니다.');
-                  } else {
-                    const pps = Math.max(0, Number(settings.videoDonationPointsPerSecond ?? 1));
-                    const maxDur = Math.max(1, Number(settings.videoDonationMaxDurationSec ?? 600));
-                    
-                    const inputArg = String(urlArg || '').trim();
-                    const looksDirectArg = /youtu/i.test(inputArg) || /^[A-Za-z0-9_-]{11}$/.test(inputArg);
-                    let videoId = looksDirectArg ? extractYouTubeId(inputArg) : null;
-                    if (!videoId && inputArg) {
-                      try { videoId = await searchYouTubeVideoIdByQuery(inputArg); } catch { }
-                    }
-                    if (!videoId) {
-                      responseToSend = (String(response).replace(vdReAll, '').trim() || '잘못된 링크입니다.');
-                    } else {
-                      const startNum = Number(startArgRaw);
-                      const playNum = Number(playArgRaw);
-                      const start = Math.max(0, Number.isFinite(startNum) ? startNum : 0);
-                      const play = Number.isFinite(playNum) && playNum > 0 ? Math.floor(playNum) : null;
-                      // Fetch YouTube info (title/duration) via Data API if available
-                      let ytTitle = null; let ytDuration = null;
-                      try {
-                        const info = await fetchYouTubeInfo(videoId);
-                        ytTitle = info.title || null;
-                        ytDuration = Number.isFinite(info.durationSec) ? Number(info.durationSec) : null;
-                      } catch (e) {
-                        console.warn('[pvd:autoReply] YouTube API failed:', e?.message || e);
-                      }
-                      // Fallback: oEmbed title
-                      if (!ytTitle) {
-                        try {
-                          const enc = encodeURIComponent(`https://youtu.be/${videoId}`);
-                          const r = await axios.get(`https://www.youtube.com/oembed?url=${enc}&format=json`, { timeout: 3000 });
-                          ytTitle = r?.data?.title || null;
-                        } catch (e) {
-                          console.warn('[pvd:autoReply] oEmbed title fetch failed');
-                        }
-                      }
-                      // maxDur limits the played length, not the absolute YouTube timestamp.
-                      const dur = getPvdPlayDurationSec({ maxDurationSec: maxDur, ytDurationSec: ytDuration, startSec: start, playSec: play });
-                      const cost = Math.ceil(pps * dur);
-                      
-                      if (ytDuration == null && play == null) {
-                        console.warn('[pvd:autoReply] duration unknown; using maxDur', { videoId, maxDur });
-                      }
-                      // Deduct points after checking balance
-                      let channelUid = null;
-                      const s = await getBotSettings(sid) || {};
-                      const uids = await resolveChzzkChannelUidsForSid(sid, s);
-                      if (uids.length) channelUid = uids[0];
-                      if (!channelUid) {
-                        responseToSend = (String(response).replace(vdReAll, '').trim() || '채널 ID를 확인할 수 없습니다.');
-                      } else {
-                        const have = await getChannelPoints(channelUid, String(resolvedUserId)).catch(() => 0);
-                        if (Number(have || 0) < cost) {
-                          responseToSend = `포인트가 부족합니다. 필요: ${cost}, 보유: ${Number(have || 0)}`;
-                        } else {
-                          await incrChannelPoints(channelUid, String(resolvedUserId), String(resolvedUsername || ''), -cost);
-                          // Enqueue
-                          const q = getVideoQueue(sid);
-                          const item = {
-                            id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-                            ts: Date.now(),
-                            videoId,
-                            title: ytTitle,
-                            durationSec: dur,
-                            startSec: start,
-                            cost,
-                            userId: String(resolvedUserId),
-                            username: String(resolvedUsername || ''),
-                            status: 'queued'
-                          };
-                          q.push(item);
-                          if (q.length === 1) {
-                            broadcastPvdStart(sid);
-                            scheduleNextPvdAutoPop(sid);
-                          }
-                          // Build reply including resolved title if available
-                          try {
-                            const cleaned = String(response).replace(vdReAll, '').trim();
-                            const t = ytTitle ? (ytTitle.length > 20 ? `${ytTitle.slice(0, 20)}...` : ytTitle) : null;
-                            const baseMsg = t ? `요청을 접수했습니다. ${t}` : '요청을 접수했습니다.';
-                            responseToSend = cleaned ? `${cleaned} ${baseMsg}`.trim() : baseMsg;
-                          } catch {
-                            responseToSend = '요청을 접수했습니다.';
-                          }
-                        }
-                      }
-                    }
-                  }
+                  responseToSend = await enqueueVideoDonationFromArgs({
+                    sid,
+                    channelUid: null,
+                    userId: resolvedUserId,
+                    username: resolvedUsername,
+                    args: argsVd,
+                    response,
+                    vdReAll,
+                  });
                 } catch (e) {
                   responseToSend = '요청 처리 중 오류가 발생했습니다.';
                 }
@@ -14699,7 +14899,7 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
   const firstArg = Array.isArray(args) ? (args[0] || '') : '';
   const startArgRaw = Array.isArray(args) ? args[1] : undefined;
   const playArgRaw = Array.isArray(args) ? args[2] : undefined;
-  const looksLikeUrl = /^https?:\/\//i.test(firstArg) || /youtu/i.test(firstArg) || /^[A-Za-z0-9_-]{11}$/.test(firstArg);
+  const looksLikeUrl = /^https?:\/\//i.test(firstArg) || /youtu/i.test(firstArg) || /tiktok/i.test(firstArg) || /chzzk/i.test(firstArg) || /ci\.me/i.test(firstArg) || /^[A-Za-z0-9_-]{11}$/.test(firstArg);
   const urlArg = looksLikeUrl ? firstArg : (Array.isArray(args) ? args.join(' ') : firstArg);
   const cleaned = String(response || '').replace(vdReAll, '').trim();
   if (!urlArg) return cleaned || '링크를 입력해 주세요.';
@@ -14710,34 +14910,26 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
   const pps = Math.max(0, Number(settings.videoDonationPointsPerSecond ?? 1));
   const maxDur = Math.max(1, Number(settings.videoDonationMaxDurationSec ?? 600));
   const inputArg = String(urlArg || '').trim();
-  const looksDirectArg = /youtu/i.test(inputArg) || /^[A-Za-z0-9_-]{11}$/.test(inputArg);
-  let videoId = looksDirectArg ? extractYouTubeId(inputArg) : null;
-  if (!videoId && inputArg) {
-    try { videoId = await searchYouTubeVideoIdByQuery(inputArg); } catch { }
+  let media;
+  try {
+    media = await resolvePvdMedia(inputArg, settings, { allowSearch: true });
+  } catch (e) {
+    if (e?.code === 'provider_disabled') return cleaned || `${getPvdProviderLabel(e.provider)} 요청은 꺼져 있습니다.`;
+    return cleaned || '올바른 링크나 검색어를 입력해 주세요.';
   }
-  if (!videoId) return cleaned || '올바른 링크나 검색어를 입력해 주세요.';
 
   const startNum = Number(startArgRaw);
   const playNum = Number(playArgRaw);
   const start = Math.max(0, Number.isFinite(startNum) ? startNum : 0);
   const play = Number.isFinite(playNum) && playNum > 0 ? Math.floor(playNum) : null;
-  let ytTitle = null;
-  let ytDuration = null;
-  try {
-    const info = await fetchYouTubeInfo(videoId);
-    ytTitle = info.title || null;
-    ytDuration = Number.isFinite(info.durationSec) ? Number(info.durationSec) : null;
-  } catch { }
-  if (!ytTitle) {
-    try {
-      const enc = encodeURIComponent(`https://youtu.be/${videoId}`);
-      const r = await axios.get(`https://www.youtube.com/oembed?url=${enc}&format=json`, { timeout: 3000 });
-      ytTitle = r?.data?.title || null;
-    } catch { }
-  }
 
-  const dur = getPvdPlayDurationSec({ maxDurationSec: maxDur, ytDurationSec: ytDuration, startSec: start, playSec: play });
+  const dur = getPvdPlayDurationSec({ maxDurationSec: maxDur, ytDurationSec: media.durationSec, startSec: start, playSec: play });
   const cost = Math.ceil(pps * dur);
+  if (!channelUid) {
+    const s = await getBotSettings(sid) || {};
+    const uids = await resolveChzzkChannelUidsForSid(sid, s);
+    if (uids.length) channelUid = uids[0];
+  }
   if (!channelUid) return cleaned || '채널 ID를 확인할 수 없습니다.';
   const have = await getChannelPoints(channelUid, String(userId)).catch(() => 0);
   if (Number(have || 0) < cost) return `포인트가 부족합니다. 필요: ${cost}, 보유: ${Number(have || 0)}`;
@@ -14747,8 +14939,13 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
   q.push({
     id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     ts: Date.now(),
-    videoId,
-    title: ytTitle,
+    mediaProvider: media.provider,
+    mediaId: media.mediaId,
+    mediaUrl: media.mediaUrl,
+    embedUrl: media.embedUrl,
+    thumbnailUrl: media.thumbnailUrl || null,
+    videoId: media.provider === 'youtube' ? media.mediaId : null,
+    title: media.title,
     durationSec: dur,
     startSec: start,
     cost,
@@ -14760,7 +14957,7 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
     broadcastPvdStart(sid);
     scheduleNextPvdAutoPop(sid);
   }
-  const title = ytTitle ? (ytTitle.length > 20 ? ytTitle.slice(0, 20) + '...' : ytTitle) : null;
+  const title = media.title ? (media.title.length > 20 ? media.title.slice(0, 20) + '...' : media.title) : null;
   const baseMsg = title ? `요청을 접수했습니다. ${title}` : '요청을 접수했습니다.';
   return cleaned ? `${cleaned} ${baseMsg}`.trim() : baseMsg;
 }

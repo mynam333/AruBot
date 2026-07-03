@@ -26,12 +26,20 @@ function getPlaybackAtSec(item: any, payload: any) {
 
 export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}) {
   const [token, setToken] = useState<string>(viewerToken || '');
+  const [volume, setVolume] = useState(100);
+  const [externalItem, setExternalItem] = useState<any | null>(null);
   const playerDivRef = useRef<HTMLDivElement | null>(null);
+  const externalFrameRef = useRef<HTMLIFrameElement | null>(null);
+  const externalVideoRef = useRef<HTMLVideoElement | null>(null);
   const playerRef = useRef<any>(null);
+  const volumeRef = useRef(100);
+  const externalProviderRef = useRef<string | null>(null);
+  const externalMediaKeyRef = useRef<string | null>(null);
   const pollTimerRef = useRef<any>(null);
   const currentVidRef = useRef<string | null>(null);
   const currentStartRef = useRef<number>(0);
   const reconnectRef = useRef<{ attempts: number; timer: any; closed: boolean }>({ attempts: 0, timer: null, closed: false });
+  const volumeEmitTimerRef = useRef<any>(null);
   const ytReadyPromiseRef = useRef<Promise<any> | null>(null);
   const ensureSeqRef = useRef<number>(0);
   const lastServerSyncRef = useRef<number>(0);
@@ -78,14 +86,98 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
     return ytReadyPromiseRef.current;
   }, []);
 
-  const emitControl = useCallback((op: 'pause' | 'play' | 'seek', atSec?: number) => {
+  const getItemProvider = useCallback((item: any) => {
+    return String(item?.mediaProvider || 'youtube').toLowerCase();
+  }, []);
+
+  const getMediaKey = useCallback((item: any) => {
+    const provider = getItemProvider(item);
+    return `${provider}:${item?.mediaId || item?.videoId || item?.embedUrl || item?.mediaUrl || ''}`;
+  }, [getItemProvider]);
+
+  const postToExternalPlayer = useCallback((message: Record<string, unknown>) => {
+    const frame = externalFrameRef.current;
+    if (!frame?.contentWindow) return;
+    try {
+      frame.contentWindow.postMessage({ ...message, 'x-tiktok-player': true }, '*');
+    } catch {}
+  }, []);
+
+  const buildExternalSrc = useCallback((item: any, atSec: number, paused?: boolean) => {
+    const provider = getItemProvider(item);
+    let src = String(item?.embedUrl || item?.mediaUrl || '');
+    if (!src && provider === 'chzzk_clip' && item?.mediaId) src = `https://chzzk.naver.com/embed/clip/${encodeURIComponent(String(item.mediaId))}`;
+    if (!src && provider === 'cime_clip' && item?.mediaId) src = `https://ci.me/clips/${encodeURIComponent(String(item.mediaId))}`;
+    if (!src && provider === 'tiktok' && item?.mediaId) src = `https://www.tiktok.com/player/v1/${encodeURIComponent(String(item.mediaId))}`;
+    if (!src) return '';
+    try {
+      const url = new URL(src);
+      if (provider === 'cime_clip' && /\.(mp4|webm|ogg)(?:$|[?#])/i.test(url.pathname)) {
+        return url.toString();
+      }
+      if (provider === 'tiktok') {
+        url.searchParams.set('autoplay', paused ? '0' : '1');
+        url.searchParams.set('controls', '1');
+        url.searchParams.set('progress_bar', '1');
+        url.searchParams.set('play_button', '1');
+        url.searchParams.set('volume_control', '1');
+        url.searchParams.set('fullscreen_button', '1');
+      } else if (provider === 'chzzk_clip') {
+        url.searchParams.set('autoplay', paused ? 'false' : 'true');
+      }
+      if (Number.isFinite(atSec) && atSec > 0) url.searchParams.set('start', String(Math.floor(atSec)));
+      return url.toString();
+    } catch {
+      return src;
+    }
+  }, [getItemProvider]);
+
+  const applyVolume = useCallback((nextVolume: number) => {
+    const normalized = Math.max(0, Math.min(100, Math.round(Number(nextVolume || 0))));
+    volumeRef.current = normalized;
+    setVolume(normalized);
+    const player = playerRef.current;
+    const video = externalVideoRef.current;
+    if (video) {
+      try {
+        video.volume = normalized / 100;
+        video.muted = normalized <= 0;
+      } catch {}
+    }
+    if (!player) {
+      if (externalProviderRef.current === 'tiktok') {
+        postToExternalPlayer({ type: normalized <= 0 ? 'mute' : 'unMute' });
+      }
+      return;
+    }
+    try {
+      if (player.setVolume) player.setVolume(normalized);
+      if (normalized <= 0) {
+        player.mute && player.mute();
+      } else {
+        player.unMute && player.unMute();
+      }
+    } catch {}
+    if (externalProviderRef.current === 'tiktok') {
+      postToExternalPlayer({ type: normalized <= 0 ? 'mute' : 'unMute' });
+    }
+  }, [postToExternalPlayer]);
+
+  const emitControl = useCallback((op: 'pause' | 'play' | 'seek' | 'volume', atSec?: number, nextVolume?: number) => {
     if (!token) return;
     const apiBase = getViewerApiBase();
-    const body = { token, op, atSec } as any;
+    const body = { token, op, atSec, volume: nextVolume } as any;
     fetch(`${apiBase}/api/video-donation/control-by-token`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
     }).catch(() => {});
   }, [getViewerApiBase, token]);
+
+  const emitVolumeControl = useCallback((nextVolume: number) => {
+    try { clearTimeout(volumeEmitTimerRef.current); } catch {}
+    volumeEmitTimerRef.current = setTimeout(() => {
+      emitControl('volume', undefined, nextVolume);
+    }, 180);
+  }, [emitControl]);
 
   const applyPlaybackTarget = useCallback((targetSec: number, paused?: boolean, force?: boolean) => {
     const player = playerRef.current;
@@ -115,10 +207,38 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
     } catch {}
   }, []);
 
+  const applyExternalPlaybackTarget = useCallback((targetSec: number, paused?: boolean) => {
+    const provider = externalProviderRef.current;
+    const target = Math.max(0, Math.floor(Number(targetSec || 0)));
+    lastTimeRef.current = target;
+    const video = externalVideoRef.current;
+    if (video) {
+      try {
+        if (Math.abs(Number(video.currentTime || 0) - target) > 1.25) video.currentTime = target;
+        if (paused) {
+          video.pause();
+        } else {
+          const result = video.play();
+          if (result && typeof result.catch === 'function') result.catch(() => {});
+        }
+      } catch {}
+      return;
+    }
+    if (provider === 'tiktok') {
+      postToExternalPlayer({ type: 'seekTo', value: target });
+      postToExternalPlayer({ type: paused ? 'pause' : 'play' });
+    }
+  }, [postToExternalPlayer]);
+
   const stopPlayer = useCallback(() => {
     try { playerRef.current && playerRef.current.stopVideo && playerRef.current.stopVideo(); } catch {}
     try { playerRef.current && playerRef.current.destroy && playerRef.current.destroy(); } catch {}
     playerRef.current = null;
+    setExternalItem(null);
+    externalFrameRef.current = null;
+    externalVideoRef.current = null;
+    externalProviderRef.current = null;
+    externalMediaKeyRef.current = null;
     currentVidRef.current = null;
     currentStartRef.current = 0;
   }, []);
@@ -141,6 +261,9 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
 
     void getYouTubeApi().then((YT) => {
       if (seq !== ensureSeqRef.current || !YT || !YT.Player || !playerDivRef.current) return;
+      setExternalItem(null);
+      externalProviderRef.current = null;
+      externalMediaKeyRef.current = null;
 
       const sameItem = currentVidRef.current === videoId && currentStartRef.current === safeStart && playerRef.current;
       if (sameItem) {
@@ -175,7 +298,10 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
           }
         } catch {}
       };
-      const onReady = () => applyPlaybackTarget(target, opts?.paused, true);
+      const onReady = () => {
+        applyVolume(volumeRef.current);
+        applyPlaybackTarget(target, opts?.paused, true);
+      };
 
       if (!playerRef.current) {
         playerRef.current = new YT.Player(playerDivRef.current, {
@@ -201,9 +327,48 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
       currentStartRef.current = safeStart;
       lastTimeRef.current = target;
 
-      setTimeout(() => applyPlaybackTarget(target, opts?.paused, true), 250);
+      setTimeout(() => {
+        applyVolume(volumeRef.current);
+        applyPlaybackTarget(target, opts?.paused, true);
+      }, 250);
     }).catch(() => {});
-  }, [applyPlaybackTarget, emitControl, getYouTubeApi, report]);
+  }, [applyPlaybackTarget, applyVolume, emitControl, getYouTubeApi, report]);
+
+  const ensureExternalPlayer = useCallback((item: any, opts?: PlaybackTarget) => {
+    const provider = getItemProvider(item);
+    const start = Math.max(0, Math.floor(Number(item?.startSec || 0) || 0));
+    const target = Math.max(start, Math.floor(Number(opts?.atSec ?? start)));
+    const key = getMediaKey(item);
+    externalProviderRef.current = provider;
+
+    try { playerRef.current && playerRef.current.stopVideo && playerRef.current.stopVideo(); } catch {}
+    try { playerRef.current && playerRef.current.destroy && playerRef.current.destroy(); } catch {}
+    playerRef.current = null;
+    currentVidRef.current = null;
+    currentStartRef.current = 0;
+
+    if (externalMediaKeyRef.current === key && externalFrameRef.current) {
+      applyExternalPlaybackTarget(target, opts?.paused);
+      return;
+    }
+
+    externalMediaKeyRef.current = key;
+    lastTimeRef.current = target;
+    setExternalItem({
+      ...item,
+      viewerSrc: buildExternalSrc(item, target, opts?.paused),
+      provider,
+      mediaKey: key,
+      targetAtSec: target,
+      paused: opts?.paused === true,
+      isDirectVideo: provider === 'cime_clip' && /\.(mp4|webm|ogg)(?:$|[?#])/i.test(String(item?.embedUrl || item?.mediaUrl || '')),
+      blockedReason: null,
+    });
+    setTimeout(() => {
+      applyVolume(volumeRef.current);
+      applyExternalPlaybackTarget(target, opts?.paused);
+    }, 450);
+  }, [applyExternalPlaybackTarget, applyVolume, buildExternalSrc, getItemProvider, getMediaKey]);
 
   const resyncFromServer = useCallback(async (force = false) => {
     if (!token) return;
@@ -216,20 +381,26 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
       const r = await fetch(`${apiBase}/api/video-donation/now-playing?token=${encodeURIComponent(token)}`, { cache: 'no-store' });
       if (!r.ok) return;
       const data = await r.json();
+      if (data?.volume != null) applyVolume(Number(data.volume));
       const item = data?.item;
-      if (item && item.videoId) {
+      if (item && (item.mediaProvider || item.videoId || item.embedUrl)) {
         const start = Math.max(0, Math.floor(Number(item.startSec || 0) || 0));
-        ensurePlayer(String(item.videoId), start, {
+        const target = {
           atSec: getPlaybackAtSec(item, data),
           paused: data?.paused === true,
           force
-        });
+        };
+        if (getItemProvider(item) === 'youtube') {
+          ensurePlayer(String(item.videoId || item.mediaId), start, target);
+        } else {
+          ensureExternalPlayer(item, target);
+        }
         suppressUntilRef.current = Date.now() + 1000;
       } else {
         stopPlayer();
       }
     } catch {}
-  }, [ensurePlayer, getViewerApiBase, stopPlayer, token]);
+  }, [applyVolume, ensureExternalPlayer, ensurePlayer, getItemProvider, getViewerApiBase, stopPlayer, token]);
 
   // Page lifecycle handling: pause locally while hidden, then force-align to server on return.
   useEffect(() => {
@@ -307,14 +478,20 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
         try {
           const data = JSON.parse(ev.data);
           if (data?.type === 'start') {
-            if (data?.item && data.item.videoId) {
+            if (data?.volume != null) applyVolume(Number(data.volume));
+            if (data?.item && (data.item.mediaProvider || data.item.videoId || data.item.embedUrl)) {
               const start = Math.max(0, Math.floor(Number(data.item.startSec || 0) || 0));
               const paused = data?.paused === true;
-              ensurePlayer(String(data.item.videoId), start, {
+              const target = {
                 atSec: getPlaybackAtSec(data.item, data),
                 paused,
                 force: true
-              });
+              };
+              if (getItemProvider(data.item) === 'youtube') {
+                ensurePlayer(String(data.item.videoId || data.item.mediaId), start, target);
+              } else {
+                ensureExternalPlayer(data.item, target);
+              }
               suppressUntilRef.current = Date.now() + 1000;
             } else {
               // start notification with no item -> stop the player immediately (end of queue)
@@ -322,9 +499,15 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
             }
           } else if (data?.type === 'control') {
             const op = String(data.op || '').toLowerCase();
+            if (op === 'volume') {
+              applyVolume(Number(data.volume));
+              return;
+            }
             const at = Number(data.atSec || 0) || 0;
             if (playerRef.current) {
               applyPlaybackTarget(Math.max(0, Math.floor(at)), op === 'pause' || data?.paused === true, true);
+            } else if (externalFrameRef.current) {
+              applyExternalPlaybackTarget(Math.max(0, Math.floor(at)), op === 'pause' || data?.paused === true);
             }
           }
         } catch {}
@@ -363,7 +546,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
       try { playerRef.current && playerRef.current.destroy && playerRef.current.destroy(); } catch {}
       playerRef.current = null;
     };
-  }, [applyPlaybackTarget, ensurePlayer, getViewerApiBase, resyncFromServer, stopPlayer, token]);
+  }, [applyExternalPlaybackTarget, applyPlaybackTarget, applyVolume, ensureExternalPlayer, ensurePlayer, getItemProvider, getViewerApiBase, resyncFromServer, stopPlayer, token]);
 
   // Low-frequency drift guard for viewers that stay connected but whose YouTube iframe stalls.
   useEffect(() => {
@@ -371,7 +554,10 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
     const id = setInterval(() => {
       if (!document.hidden && playerRef.current) void resyncFromServer(false);
     }, 7500);
-    return () => { try { clearInterval(id); } catch {} };
+    return () => {
+      try { clearInterval(id); } catch {}
+      try { clearTimeout(volumeEmitTimerRef.current); } catch {}
+    };
   }, [resyncFromServer, token]);
 
   // Detect manual seek (scrub) and broadcast 'seek' when a significant jump is detected
@@ -396,7 +582,124 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
 
   return (
     <div style={{ width: '100vw', height: '100vh', background: 'transparent' }}>
-      <div ref={playerDivRef} style={{ width: '100%', height: '100%' }} />
+      <div ref={playerDivRef} style={{ width: '100%', height: '100%', display: externalItem ? 'none' : 'block' }} />
+      {externalItem ? (
+        <div style={{ position: 'fixed', inset: 0, display: 'grid', placeItems: 'center', overflow: 'hidden' }}>
+          {externalItem.viewerSrc && externalItem.isDirectVideo ? (
+            <video
+              key={externalItem.mediaKey}
+              ref={externalVideoRef}
+              src={externalItem.viewerSrc}
+              autoPlay
+              playsInline
+              controls={false}
+              muted={volume <= 0}
+              poster={externalItem.thumbnailUrl || undefined}
+              onLoadedMetadata={(event) => {
+                try {
+                  event.currentTarget.volume = volumeRef.current / 100;
+                  event.currentTarget.muted = volumeRef.current <= 0;
+                  const start = Math.max(0, Math.floor(Number(externalItem.targetAtSec ?? externalItem.startSec ?? 0) || 0));
+                  if (start > 0) event.currentTarget.currentTime = start;
+                } catch {}
+              }}
+              onCanPlay={(event) => {
+                try {
+                  event.currentTarget.volume = volumeRef.current / 100;
+                  event.currentTarget.muted = volumeRef.current <= 0;
+                  if (externalItem.paused) {
+                    event.currentTarget.pause();
+                  } else {
+                    const result = event.currentTarget.play();
+                    if (result && typeof result.catch === 'function') result.catch(() => {});
+                  }
+                } catch {}
+              }}
+              onEnded={() => report('end')}
+              onError={() => report('error')}
+              style={{
+                width: '100vw',
+                height: '100vh',
+                objectFit: 'contain',
+                background: 'transparent',
+              }}
+            />
+          ) : externalItem.viewerSrc ? (
+            <iframe
+              key={externalItem.mediaKey}
+              ref={externalFrameRef}
+              title={externalItem.title || '영상 후원'}
+              src={externalItem.viewerSrc}
+              allow="autoplay; fullscreen; picture-in-picture; clipboard-write; web-share"
+              allowFullScreen
+              referrerPolicy="strict-origin-when-cross-origin"
+              style={{
+                width: externalItem.provider === 'tiktok' ? 'min(100vw, 56.25vh)' : '100vw',
+                height: '100vh',
+                border: 0,
+                background: 'transparent',
+              }}
+            />
+          ) : null}
+          {externalItem.blockedReason ? (
+            <div
+              style={{
+                position: 'fixed',
+                inset: 0,
+                display: 'grid',
+                placeItems: 'center',
+                padding: 'clamp(1.25rem,4vw,3rem)',
+                background: 'rgba(15,23,42,0.78)',
+                color: 'white',
+                textAlign: 'center',
+                font: '600 clamp(1rem,2vw,1.35rem) system-ui, sans-serif',
+              }}
+            >
+              <div style={{ maxWidth: '42rem', lineHeight: 1.7 }}>
+                <div style={{ marginBottom: '0.75rem', fontSize: 'clamp(1.35rem,3vw,2rem)' }}>{externalItem.title || 'CIME 클립'}</div>
+                <div>{externalItem.blockedReason}</div>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+      <div
+        style={{
+          position: 'fixed',
+          right: 'clamp(0.75rem,2vw,1.25rem)',
+          bottom: 'clamp(0.75rem,2vw,1.25rem)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.65rem',
+          padding: '0.65rem 0.85rem',
+          borderRadius: '999px',
+          border: '1px solid rgba(255,255,255,0.22)',
+          background: 'rgba(15, 23, 42, 0.72)',
+          color: 'white',
+          font: '600 0.82rem system-ui, sans-serif',
+          opacity: 0.08,
+          transition: 'opacity 160ms ease',
+          backdropFilter: 'blur(14px)',
+        }}
+        onMouseEnter={(event) => { event.currentTarget.style.opacity = '1'; }}
+        onMouseLeave={(event) => { event.currentTarget.style.opacity = '0.08'; }}
+      >
+        <span>소리</span>
+        <input
+          aria-label="영상 후원 볼륨"
+          type="range"
+          min="0"
+          max="100"
+          value={volume}
+          onChange={(event) => {
+            const next = Math.max(0, Math.min(100, Number(event.currentTarget.value || 0)));
+            applyVolume(next);
+            emitVolumeControl(next);
+          }}
+          style={{ width: 'min(28vw, 10rem)' }}
+        />
+        <span style={{ minWidth: '3ch', textAlign: 'right' }}>{volume}</span>
+      </div>
     </div>
   );
 }

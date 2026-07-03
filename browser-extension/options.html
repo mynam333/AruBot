@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>후원시 유튜브 일시정지 설정</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header>
+        <div>
+          <h1>후원시 유튜브 일시정지</h1>
+          <p>Overlay URLs</p>
+        </div>
+        <button id="save" class="primary" type="button">Save</button>
+      </header>
+
+      <section class="panel">
+        <div class="setting-row">
+          <span>
+            <strong>Monitoring</strong>
+            <small>브라우저가 켜져 있는 동안 영상 후원 WebSocket을 유지합니다.</small>
+          </span>
+          <label class="switch"><input id="monitoring" type="checkbox" /><span></span></label>
+        </div>
+        <div class="setting-row">
+          <span>
+            <strong>Extra delay</strong>
+            <small>각 영상 후원마다 추가로 멈출 시간입니다.</small>
+          </span>
+          <input id="extraDelaySec" class="number" type="number" min="0" max="30" step="1" />
+        </div>
+        <div class="setting-row wide">
+          <span>
+            <strong>AruBot API base</strong>
+            <small>비워두면 arubot.yuaru.com은 arubotapi.yuaru.com, 로컬 프론트는 127.0.0.1:3001로 자동 연결합니다.</small>
+          </span>
+          <input id="arubotApiBaseUrl" type="url" spellcheck="false" placeholder="https://arubotapi.yuaru.com" />
+        </div>
+      </section>
+
+      <section class="grid" id="services"></section>
+
+      <p id="status" class="status"></p>
+      <nav class="links" aria-label="관련 링크">
+        <a href="https://arubot.yuaru.com" target="_blank" rel="noreferrer">AruBot 홈페이지</a>
+        <a href="https://x.com/Chzzk_YuAru" target="_blank" rel="noreferrer">개발자 X</a>
+      </nav>
+    </main>
+    <template id="serviceTemplate">
+      <article class="service-card">
+        <div class="service-head">
+          <span>
+            <strong data-name></strong>
+            <small data-help></small>
+          </span>
+          <label class="switch"><input data-enabled type="checkbox" /><span></span></label>
+        </div>
+        <input data-url type="url" spellcheck="false" />
+      </article>
+    </template>
+    <script src="options.js"></script>
+  </body>
+</html>

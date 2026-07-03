@@ -1,0 +1,71 @@
+{
+  "manifest_version": 3,
+  "name": "후원시 유튜브 일시정지",
+  "short_name": "후원시 일시정지",
+  "description": "치지직, 씨미, 투네이션, 아루봇 영상 후원 중 YouTube 재생을 자동으로 일시정지합니다.",
+  "version": "0.1.0",
+  "homepage_url": "https://arubot.yuaru.com",
+  "action": {
+    "default_title": "후원시 유튜브 일시정지",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": [
+    "alarms",
+    "scripting",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "*://*.youtube.com/*",
+    "*://*.youtube-nocookie.com/*",
+    "https://chzzk.naver.com/*",
+    "https://api.chzzk.naver.com/*",
+    "https://*.nchat.naver.com/*",
+    "wss://*.nchat.naver.com/*",
+    "https://ci.me/*",
+    "https://*.ci.me/*",
+    "wss://*.ci.me/*",
+    "https://toon.at/*",
+    "wss://toon.at/*",
+    "https://arubot.yuaru.com/*",
+    "https://arubotapi.yuaru.com/*",
+    "wss://arubotapi.yuaru.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*",
+    "ws://localhost/*",
+    "ws://127.0.0.1/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.youtube.com/*",
+        "*://*.youtube-nocookie.com/*"
+      ],
+      "js": ["content-youtube.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "aru-pause@yuaru.com",
+      "strict_min_version": "121.0"
+    }
+  }
+}
