@@ -35,7 +35,7 @@ function getRows(data: unknown) {
 
   const object = data as Record<string, unknown>;
   return (
-    (['items', 'rules', 'rows', 'data', 'points', 'logs', 'definitions']
+    (['items', 'rules', 'macros', 'rows', 'data', 'points', 'logs', 'definitions']
       .map((key) => object[key])
       .find(Array.isArray) as unknown[] | undefined) || []
   );

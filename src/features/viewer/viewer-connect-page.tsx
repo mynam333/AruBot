@@ -274,12 +274,12 @@ export function ViewerConnectPage() {
                     const accountKey = `${provider.id}:${account.platform_user_id || account.channel_id || account.channel_name || 'account'}`;
                     const profile = account.metadata?.publicProfile;
                     return (
-                      <div key={accountKey} className="flex items-center justify-between gap-3 rounded-[var(--radius-control)] border bg-background/75 p-[clamp(0.75rem,1.6vw,1rem)]">
-                        <div className="flex min-w-0 items-center gap-3">
+                      <div key={accountKey} className="grid min-w-0 gap-3 overflow-hidden rounded-[var(--radius-control)] border bg-background/75 p-[clamp(0.75rem,1.6vw,1rem)] xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center">
+                        <div className="flex min-w-0 max-w-full items-center gap-3 overflow-hidden">
                           <AccountAvatar account={account} provider={provider} />
-                          <div className="min-w-0">
-                            <div className="truncate text-sm font-semibold">{account.channel_name || account.channel_id || `${provider.label} 계정`}</div>
-                            <div className="mt-1 truncate text-xs font-medium text-muted-foreground">
+                          <div className="min-w-0 max-w-full overflow-hidden">
+                            <div className="max-w-full truncate text-sm font-semibold">{account.channel_name || account.channel_id || `${provider.label} 계정`}</div>
+                            <div className="mt-1 max-w-full truncate text-xs font-medium text-muted-foreground">
                               {account.channel_handle || account.channel_id || account.platform_user_id || providerLabel(account.provider)}
                             </div>
                             <div className="mt-2 flex flex-wrap gap-1.5">
@@ -291,10 +291,10 @@ export function ViewerConnectPage() {
                             </div>
                           </div>
                         </div>
-                        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                        <div className="flex min-w-0 flex-wrap items-center justify-start gap-2 xl:justify-end">
                           {compactCount(profile?.followerCount) ? <Badge tone="neutral">{compactCount(profile?.followerCount)} 팔로워</Badge> : null}
                           {compactCount(profile?.subscriberCount) ? <Badge tone="neutral">{compactCount(profile?.subscriberCount)} 구독자</Badge> : null}
-                          <Button type="button" variant="outline" size="sm" onClick={() => revoke(provider, account)} disabled={busyAccount === accountKey}>
+                          <Button type="button" variant="outline" size="sm" className="w-full sm:w-auto" onClick={() => revoke(provider, account)} disabled={busyAccount === accountKey}>
                             <Unlink className="h-4 w-4" />
                             {busyAccount === accountKey ? '처리 중' : '연결 해제'}
                           </Button>

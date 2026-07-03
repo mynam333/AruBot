@@ -264,12 +264,12 @@ export function ConnectionPage() {
                     accounts.map((account) => {
                       const accountKey = `${config.id}:${account.platform_user_id || account.channel_id || account.channel_name || 'account'}`;
                       return (
-                      <div key={accountKey} className="flex items-center justify-between gap-3 rounded-[var(--radius-control)] border bg-background/75 p-[clamp(0.75rem,1.4vw,1rem)]">
-                        <div className="flex min-w-0 items-center gap-3">
+                      <div key={accountKey} className="grid min-w-0 gap-3 overflow-hidden rounded-[var(--radius-control)] border bg-background/75 p-[clamp(0.75rem,1.4vw,1rem)] 2xl:grid-cols-[minmax(0,1fr)_auto] 2xl:items-center">
+                        <div className="flex min-w-0 max-w-full items-center gap-3 overflow-hidden">
                           <AccountAvatar account={account} label={config.label} color={config.color} iconPath={config.iconPath} />
-                          <div className="min-w-0">
-                            <div className="truncate text-sm font-semibold">{account.channel_name || account.channel_id || `${config.label} 채널`}</div>
-                            <div className="mt-1 truncate text-xs font-medium text-muted-foreground">
+                          <div className="min-w-0 max-w-full overflow-hidden">
+                            <div className="max-w-full truncate text-sm font-semibold">{account.channel_name || account.channel_id || `${config.label} 채널`}</div>
+                            <div className="mt-1 max-w-full truncate text-xs font-medium text-muted-foreground">
                               {account.channel_handle || account.channel_id || config.label}
                             </div>
                             <div className="mt-2 flex flex-wrap gap-1.5">
@@ -280,7 +280,7 @@ export function ConnectionPage() {
                               {account.metadata?.publicProfile?.status === 'failed' ? <Badge tone="amber">프로필 확인 필요</Badge> : null}
                             </div>
                             {account.metadata?.publicProfile?.description ? (
-                              <div className="mt-2 line-clamp-2 text-xs leading-5 text-muted-foreground">
+                              <div className="mt-2 line-clamp-2 max-w-full break-words text-xs leading-5 text-muted-foreground">
                                 {account.metadata.publicProfile.description}
                               </div>
                             ) : null}
@@ -292,7 +292,7 @@ export function ConnectionPage() {
                             ) : null}
                           </div>
                         </div>
-                        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                        <div className="flex min-w-0 flex-wrap items-center justify-start gap-2 2xl:justify-end">
                           {compactCount(account.metadata?.publicProfile?.followerCount) ? (
                             <Badge tone="neutral">{compactCount(account.metadata?.publicProfile?.followerCount)} 팔로워</Badge>
                           ) : null}
@@ -304,6 +304,7 @@ export function ConnectionPage() {
                             type="button"
                             variant="outline"
                             size="sm"
+                            className="w-full sm:w-auto lg:w-full 2xl:w-auto"
                             onClick={() => revoke(config.id, account)}
                             disabled={busyAccount === accountKey}
                           >

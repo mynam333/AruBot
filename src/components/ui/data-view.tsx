@@ -6,7 +6,7 @@ function pickRows(data: unknown): Record<string, unknown>[] {
   if (Array.isArray(data)) return data.filter((item): item is Record<string, unknown> => !!item && typeof item === 'object');
   if (data && typeof data === 'object') {
     const object = data as Record<string, unknown>;
-    const arrayValue = ['items', 'rules', 'rows', 'data', 'points', 'logs', 'definitions']
+    const arrayValue = ['items', 'rules', 'macros', 'rows', 'data', 'points', 'logs', 'definitions']
       .map((key) => object[key])
       .find(Array.isArray);
     if (Array.isArray(arrayValue)) {
