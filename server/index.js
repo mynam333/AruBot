@@ -9,7 +9,7 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
-import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, getSessionUserId, listChannelPoints, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, getChannelPoints, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, deletePlatformTokens, deletePlatformAccount, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps } from './supabase.js';
+import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, getSessionUserId, listChannelPoints, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, getChannelPoints, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, deletePlatformTokens, deletePlatformAccount, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps, validateSecretEncryptionConfig, getPgPoolStatus } from './supabase.js';
 import { createPlatformProfileService } from './platform-profiles.js';
 import { WebSocketServer, WebSocket } from 'ws';
 
@@ -4900,6 +4900,7 @@ app.get(['/healthz', '/readyz'], (req, res) => {
       cime: typeof cimeSessionStore !== 'undefined' ? cimeSessionStore.size : 0,
       youtube: typeof youtubeSessionStore !== 'undefined' ? youtubeSessionStore.size : 0,
     },
+    db: getPgPoolStatus(),
   });
 });
 
@@ -7898,6 +7899,7 @@ app.get('/api/warudo/debug/ws', async (req, res) => {
   }
 });
 
+validateSecretEncryptionConfig();
 await initDb();
 
 async function refreshPostgRESTSchema() {
@@ -10671,14 +10673,30 @@ async function getValidYoutubeAccessToken(ownerUserId) {
   if (!tokens) throw new Error('No YouTube tokens stored');
   const expiresAt = new Date(tokens.expiresAt);
   if (isNaN(expiresAt.getTime()) || expiresAt <= new Date(Date.now() + 60 * 1000)) {
-    if (!tokens.refreshToken) throw new Error('No YouTube refresh token stored');
+    if (!tokens.refreshToken) {
+      const error = new Error('No YouTube refresh token stored');
+      error.provider = 'youtube';
+      error.reauthRequired = true;
+      error.status = 401;
+      throw error;
+    }
     const platformUserId = tokens.platformUserId;
-    const payload = await exchangeYoutubeToken({
-      client_id: YOUTUBE_CLIENT_ID,
-      client_secret: YOUTUBE_CLIENT_SECRET,
-      refresh_token: tokens.refreshToken,
-      grant_type: 'refresh_token'
-    });
+    let payload;
+    try {
+      payload = await exchangeYoutubeToken({
+        client_id: YOUTUBE_CLIENT_ID,
+        client_secret: YOUTUBE_CLIENT_SECRET,
+        refresh_token: tokens.refreshToken,
+        grant_type: 'refresh_token'
+      });
+    } catch (e) {
+      const message = e?.response?.data?.error_description || e?.response?.data?.error || e?.message || 'youtube_token_refresh_failed';
+      const error = new Error(String(message));
+      error.provider = 'youtube';
+      error.reauthRequired = true;
+      error.status = e?.response?.status || 401;
+      throw error;
+    }
     tokens = normalizeGoogleTokenPayload(payload, tokens);
     await upsertPlatformTokens('youtube', ownerUserId, platformUserId, tokens);
   }
@@ -11150,6 +11168,9 @@ app.get('/api/youtube/status', async (req, res) => {
       queueSize: Array.isArray(entry?.queue) ? entry.queue.length : 0,
       lastMessageAt: entry?.lastMessageAt || null,
       lastError: entry?.lastError || null,
+      lastStatus: entry?.lastStatus || null,
+      reauthRequired: isYoutubeReauthRequired(entry),
+      ignoredDonations: getYoutubeIgnoredDonationSummary(entry),
       reconnectAttempts: Number(entry?.reconnectAttempts || 0),
       mode: 'streamList'
     });
@@ -15357,6 +15378,38 @@ function makeYoutubeChatPost(ownerUserId, liveChatId, resolvedUsername, extra = 
   return { provider: 'youtube', ownerUserId, liveChatId, resolvedUsername, ...extra };
 }
 
+function isYoutubeReauthRequired(entryOrError) {
+  if (!entryOrError) return false;
+  if (entryOrError.reauthRequired === true) return true;
+  const status = Number(entryOrError.status || entryOrError.lastStatus || entryOrError?.response?.status || 0);
+  const text = String(entryOrError.lastError || entryOrError.message || entryOrError?.response?.data?.error || '').toLowerCase();
+  return status === 401 || text.includes('invalid_grant') || text.includes('unauthorized') || text.includes('no youtube refresh token');
+}
+
+function getYoutubeIgnoredDonationSummary(entry) {
+  const events = Array.isArray(entry?.queue) ? entry.queue : [];
+  const ignored = events
+    .filter((event) => event?.provider === 'youtube' && event?.type === 'donation_ignored')
+    .slice(-10);
+  const byReason = {};
+  for (const event of ignored) {
+    const reason = String(event.ignoredReason || 'unknown');
+    byReason[reason] = (byReason[reason] || 0) + 1;
+  }
+  return {
+    count: ignored.length,
+    byReason,
+    recent: ignored.slice(-5).map((event) => ({
+      ts: event.ts || null,
+      user: event.user || null,
+      reason: event.ignoredReason || 'unknown',
+      currency: event.currency || null,
+      amountDisplayString: event.amountDisplayString || null,
+      message: event.message || '',
+    })),
+  };
+}
+
 function rememberYoutubeOutbound(entry, text) {
   if (!entry) return;
   entry.recentOutboundMessages.set(String(text || '').trim(), Date.now());
@@ -15828,6 +15881,7 @@ async function ensureYoutubeSession(ownerUserId) {
       reconnectAttempts: 0,
       lastMessageAt: null,
       lastError: null,
+      lastStatus: null,
       acceptAfterTs: Date.now() - 2000,
       closed: false
     };
@@ -15841,6 +15895,7 @@ async function ensureYoutubeSession(ownerUserId) {
     } catch (e) {
       entry.connected = false;
       entry.lastError = e?.response?.data?.error?.message || e?.message || 'stream_connect_failed';
+      entry.lastStatus = e?.status || e?.response?.status || null;
       const reconnectDelay = getYoutubeReconnectDelayForError(e);
       if (reconnectDelay !== null) scheduleYoutubeReconnect(ownerUserId, reconnectDelay);
     }
@@ -16751,7 +16806,9 @@ app.get('/api/platforms/status', async (req, res) => {
         streamConnected: !!sessionStore.get(sid)?.connected,
         queueSize: Array.isArray(sessionStore.get(sid)?.queue) ? sessionStore.get(sid).queue.length : 0,
         mode: 'socket',
-        lastError: null
+        lastError: null,
+        reauthRequired: false,
+        ignoredDonations: { count: 0, byReason: {}, recent: [] }
       },
       {
         provider: 'cime',
@@ -16762,7 +16819,9 @@ app.get('/api/platforms/status', async (req, res) => {
         streamConnected: !!cimeEntry?.connected,
         queueSize: Array.isArray(cimeEntry?.queue) ? cimeEntry.queue.length : 0,
         mode: 'websocket',
-        lastError: cimeEntry?.lastError || null
+        lastError: cimeEntry?.lastError || null,
+        reauthRequired: false,
+        ignoredDonations: { count: 0, byReason: {}, recent: [] }
       },
       {
         provider: 'youtube',
@@ -16773,7 +16832,10 @@ app.get('/api/platforms/status', async (req, res) => {
         streamConnected: !!youtubeEntry?.connected,
         queueSize: Array.isArray(youtubeEntry?.queue) ? youtubeEntry.queue.length : 0,
         mode: 'streamList',
-        lastError: youtubeEntry?.lastError || null
+        lastError: youtubeEntry?.lastError || null,
+        lastStatus: youtubeEntry?.lastStatus || null,
+        reauthRequired: isYoutubeReauthRequired(youtubeEntry),
+        ignoredDonations: getYoutubeIgnoredDonationSummary(youtubeEntry)
       }
     ];
 
@@ -16783,8 +16845,11 @@ app.get('/api/platforms/status', async (req, res) => {
       summary: {
         connected: items.filter((item) => item.connected).length,
         live: items.filter((item) => item.live === true).length,
-        streamConnected: items.filter((item) => item.streamConnected).length
-      }
+        streamConnected: items.filter((item) => item.streamConnected).length,
+        reauthRequired: items.filter((item) => item.reauthRequired).length,
+        ignoredDonations: items.reduce((sum, item) => sum + Number(item.ignoredDonations?.count || 0), 0)
+      },
+      db: getPgPoolStatus()
     });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to load platform status' });

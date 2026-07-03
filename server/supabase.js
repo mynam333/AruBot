@@ -3,10 +3,76 @@ import crypto from 'crypto';
 import pkg from 'pg';
 import fs from 'fs';
 import path from 'path';
-const { Client } = pkg;
+const { Client, Pool } = pkg;
 
 let supabase;
 let columnCache = new Map(); // key: table, value: Set of column names
+let pgPool = null;
+let pgPoolUrl = null;
+
+const PG_CONNECT_TIMEOUT_MS = Math.max(1000, Number(process.env.SUPABASE_DB_CONNECT_TIMEOUT_MS || 5000));
+const PG_STATEMENT_TIMEOUT_MS = Math.max(1000, Number(process.env.SUPABASE_DB_STATEMENT_TIMEOUT_MS || 15000));
+const PG_IDLE_TIMEOUT_MS = Math.max(1000, Number(process.env.SUPABASE_DB_IDLE_TIMEOUT_MS || 30000));
+const PG_POOL_MAX = Math.max(1, Number(process.env.SUPABASE_DB_POOL_MAX || 10));
+
+function getDbUrl() {
+  return process.env.SUPABASE_DB_URL || '';
+}
+
+function pgClientOptions(dbUrl = getDbUrl()) {
+  return {
+    connectionString: dbUrl,
+    ssl: { rejectUnauthorized: false },
+    connectionTimeoutMillis: PG_CONNECT_TIMEOUT_MS,
+    statement_timeout: PG_STATEMENT_TIMEOUT_MS,
+    query_timeout: PG_STATEMENT_TIMEOUT_MS,
+  };
+}
+
+function getPgPool() {
+  const dbUrl = getDbUrl();
+  if (!dbUrl) throw new Error('SUPABASE_DB_URL is required for database operations');
+  if (!pgPool || pgPoolUrl !== dbUrl) {
+    if (pgPool) {
+      pgPool.end().catch(() => {});
+    }
+    pgPoolUrl = dbUrl;
+    pgPool = new Pool({
+      ...pgClientOptions(dbUrl),
+      max: PG_POOL_MAX,
+      idleTimeoutMillis: PG_IDLE_TIMEOUT_MS,
+      allowExitOnIdle: true,
+    });
+    pgPool.on('error', (error) => {
+      console.warn('[Supabase] PG pool idle client error:', error?.message || error);
+    });
+  }
+  return pgPool;
+}
+
+function createPgClient(dbUrl = getDbUrl()) {
+  return new Client(pgClientOptions(dbUrl));
+}
+
+export function getPgPoolStatus() {
+  return pgPool ? {
+    totalCount: pgPool.totalCount,
+    idleCount: pgPool.idleCount,
+    waitingCount: pgPool.waitingCount,
+    max: PG_POOL_MAX,
+    connectTimeoutMs: PG_CONNECT_TIMEOUT_MS,
+    statementTimeoutMs: PG_STATEMENT_TIMEOUT_MS,
+    idleTimeoutMs: PG_IDLE_TIMEOUT_MS,
+  } : {
+    totalCount: 0,
+    idleCount: 0,
+    waitingCount: 0,
+    max: PG_POOL_MAX,
+    connectTimeoutMs: PG_CONNECT_TIMEOUT_MS,
+    statementTimeoutMs: PG_STATEMENT_TIMEOUT_MS,
+    idleTimeoutMs: PG_IDLE_TIMEOUT_MS,
+  };
+}
 
 function getSecretEncryptionKey() {
   const secret = String(
@@ -19,6 +85,20 @@ function getSecretEncryptionKey() {
   );
   if (!secret || secret.length < 16) return null;
   return crypto.createHash('sha256').update(secret).digest();
+}
+
+export function validateSecretEncryptionConfig() {
+  const explicit = String(process.env.ARUBOT_SECRET_ENCRYPTION_KEY || process.env.TOKEN_ENCRYPTION_SECRET || '').trim();
+  const hasFallback = !!getSecretEncryptionKey();
+  const requireExplicit = process.env.NODE_ENV === 'production' && process.env.ARUBOT_REQUIRE_TOKEN_ENCRYPTION_KEY !== 'false';
+  if (requireExplicit && explicit.length < 16) {
+    throw new Error('ARUBOT_SECRET_ENCRYPTION_KEY or TOKEN_ENCRYPTION_SECRET must be set to at least 16 characters in production');
+  }
+  if (!hasFallback) {
+    console.warn('[Supabase] No token encryption key is configured; new credentials may be stored without encryption.');
+  } else if (!explicit) {
+    console.warn('[Supabase] Token encryption is using a fallback secret. Set ARUBOT_SECRET_ENCRYPTION_KEY for stable production key rotation.');
+  }
 }
 
 function protectSecret(value) {
@@ -58,7 +138,7 @@ function secretHash(value) {
 async function ensureTokensTableExists() {
   const dbUrl = process.env.SUPABASE_DB_URL;
   if (!dbUrl) return; // cannot heal without direct DB access
-  const client = new Client({ connectionString: dbUrl, ssl: { rejectUnauthorized: false } });
+  const client = createPgClient(dbUrl);
   await client.connect();
   try {
     const sql = `
@@ -185,20 +265,21 @@ async function withPgClient(fn, retries = 2) {
   if (!dbUrl) throw new Error('SUPABASE_DB_URL is required for channel points operations');
   let lastErr;
   for (let i=0;i<=retries;i++) {
-    const client = new Client({ connectionString: dbUrl, ssl: { rejectUnauthorized: false } });
+    const pool = getPgPool();
+    let client = null;
     try {
-      await client.connect();
+      client = await pool.connect();
       const res = await fn(client);
-      await client.end();
       return res;
     } catch (e) {
       lastErr = e;
-      try { await client.end(); } catch {}
       const code = e && (e.code || e.errno);
       const msg = String(e && (e.message || e.toString()) || '');
       const transient = code === 'XX000' || msg.includes('db_termination') || msg.includes('terminating connection') || msg.includes('server closed the connection');
       if (i < retries && transient) { await sleep(300 * (i+1)); continue; }
       throw e;
+    } finally {
+      if (client) client.release();
     }
   }
   throw lastErr;
@@ -504,23 +585,21 @@ export async function runMigrations() {
     return;
   }
 
-  const client = new Client({ connectionString: dbUrl, ssl: { rejectUnauthorized: false } });
+  const client = createPgClient(dbUrl);
   await client.connect();
 
   try {
     console.log('[Migration] Starting database migrations...');
 
-    // 마이그레이션 파일들을 순서대로 실행
-    const migrationFiles = [
-      '001_add_channel_id_columns.sql',
-      '002_create_channel_tokens_table.sql',
-      '003_performance_optimization_indexes.sql',
-      '004_stable_viewer_tokens_and_runtime_state.sql',
-      '005_multi_platform_accounts.sql'
-    ];
+    const migrationsDir = path.join(process.cwd(), 'server', 'migrations');
+    const migrationFiles = fs.existsSync(migrationsDir)
+      ? fs.readdirSync(migrationsDir)
+        .filter((fileName) => /^\d+_.+\.sql$/i.test(fileName))
+        .sort((a, b) => a.localeCompare(b, 'en'))
+      : [];
 
     for (const fileName of migrationFiles) {
-      const filePath = path.join(process.cwd(), 'server', 'migrations', fileName);
+      const filePath = path.join(migrationsDir, fileName);
       
       if (fs.existsSync(filePath)) {
         console.log(`[Migration] Executing ${fileName}...`);
@@ -556,7 +635,7 @@ export async function migrateChannelIdData() {
     return;
   }
   
-  const client = new Client({ connectionString: dbUrl, ssl: { rejectUnauthorized: false } });
+  const client = createPgClient(dbUrl);
   await client.connect();
   
   try {
@@ -1533,7 +1612,7 @@ export async function verifyChannelIdIntegrity() {
     return null;
   }
   
-  const client = new Client({ connectionString: dbUrl, ssl: { rejectUnauthorized: false } });
+  const client = createPgClient(dbUrl);
   await client.connect();
   
   try {
@@ -1565,7 +1644,7 @@ export async function verifyChannelIdIntegrity() {
 export async function ensureSchema() {
   const dbUrl = process.env.SUPABASE_DB_URL;
   if (!dbUrl) return; // optional
-  const client = new Client({ connectionString: dbUrl, ssl: { rejectUnauthorized: false } });
+  const client = createPgClient(dbUrl);
   await client.connect();
   try {
     const sql = `
@@ -1943,7 +2022,7 @@ async function tableHasColumn(table, column) {
     // Be conservative: assume column is NOT available to avoid PostgREST schema cache errors
     return false;
   }
-  const client = new Client({ connectionString: dbUrl, ssl: { rejectUnauthorized: false } });
+  const client = createPgClient(dbUrl);
   await client.connect();
   try {
     const { rows } = await client.query(

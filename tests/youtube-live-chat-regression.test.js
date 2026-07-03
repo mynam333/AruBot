@@ -59,10 +59,19 @@ describe('YouTube live chat integration regression', () => {
     expect(serverIndex).toContain("app.get('/api/youtube/status'");
     expect(serverIndex).toContain("app.get('/api/platforms/status'");
     expect(serverIndex).toContain("mode: 'streamList'");
+    expect(serverIndex).toContain('reauthRequired: isYoutubeReauthRequired');
+    expect(serverIndex).toContain('ignoredDonations: getYoutubeIgnoredDonationSummary');
     expect(serverIndex).toContain('youtube: typeof youtubeSessionStore');
     expect(serverIndex).toContain("provider: 'youtube'");
     expect(serverIndex).toContain("mode: 'websocket'");
     expect(serverIndex).toContain("mode: 'socket'");
+  });
+
+  test('YouTube token refresh failures surface reauthentication status', () => {
+    expect(serverIndex).toContain('error.reauthRequired = true');
+    expect(serverIndex).toContain('function isYoutubeReauthRequired');
+    expect(serverIndex).toContain("text.includes('invalid_grant')");
+    expect(serverIndex).toContain('lastStatus: entry?.lastStatus || null');
   });
 
   test('admin surfaces list YouTube consistently', () => {

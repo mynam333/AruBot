@@ -162,6 +162,6 @@ npm run build
 
 - 공개 뷰어 URL은 사용자별 안정 토큰을 사용해 링크 변경을 최소화합니다.
 - 영상 후원 뷰어는 페이지 가시성 변화와 플레이어 버퍼링을 고려해 상태 복구 로직을 강화했습니다.
-- CHZZK와 CIME 계정은 플랫폼 계정 테이블을 통해 하나의 내부 사용자로 연결하는 방향으로 확장됩니다.
+- CHZZK와 CIME 시청자 계정은 플랫폼 계정 테이블을 통해 하나의 내부 사용자로 연결하고, YouTube는 방송 채널 OAuth로 Live Chat 송수신을 연결합니다.
 - Supabase 마이그레이션은 `server/migrations`의 순서대로 적용합니다.
 - 로컬 프로그램 업데이트는 `public/downloads/local-program/latest.json`의 버전과 SHA-256을 확인한 뒤 새 설치 파일을 임시 폴더에 다운로드하고 실행합니다. 배포 도메인이 `https://arubot.vercel.app`가 아니라면 로컬 프로그램의 업데이트 정보 주소를 실제 프론트엔드 도메인의 `/downloads/local-program/latest.json`로 바꿔 주세요.
