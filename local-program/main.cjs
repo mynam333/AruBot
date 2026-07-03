@@ -30,6 +30,14 @@ function cleanUrl(value) {
   return String(value || '').trim().replace(/\/$/, '');
 }
 
+function getSafeExternalHttpUrl(rawUrl) {
+  const url = new URL(String(rawUrl || ''));
+  if (!['https:', 'http:'].includes(url.protocol)) {
+    throw new Error('외부 링크는 http/https URL만 열 수 있습니다.');
+  }
+  return url.toString();
+}
+
 function normalizeLocalProgramToken(value) {
   let text = String(value || '')
     .replace(/[\u200B-\u200D\uFEFF]/g, '')
@@ -580,6 +588,13 @@ function makeVtubeMessage(messageType, data = {}) {
   };
 }
 
+function getVtubePluginInfo() {
+  return {
+    pluginName: 'AruBot',
+    pluginDeveloper: 'AruBot',
+  };
+}
+
 function sendVtubeRequest(messageType, data = {}, options = {}) {
   return new Promise((resolve, reject) => {
     const endpoint = getVtubeEndpoint(options.endpoint);
@@ -615,10 +630,91 @@ function sendVtubeRequest(messageType, data = {}, options = {}) {
   });
 }
 
+function openVtubeSocket(endpoint, timeoutMs = 7000) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(endpoint);
+    const timer = setTimeout(() => {
+      try { ws.close(); } catch {}
+      reject(new Error('VTube Studio 연결 시간이 초과되었습니다.'));
+    }, Math.max(1500, Math.min(30000, Number(timeoutMs || 7000))));
+    ws.once('open', () => {
+      clearTimeout(timer);
+      resolve(ws);
+    });
+    ws.once('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+}
+
+function sendVtubeSocketRequest(ws, messageType, data = {}, options = {}) {
+  return new Promise((resolve, reject) => {
+    const payload = makeVtubeMessage(messageType, data);
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error('VTube Studio 응답 시간이 초과되었습니다.'));
+    }, Math.max(1500, Math.min(30000, Number(options.timeoutMs || 7000))));
+
+    const cleanup = () => {
+      clearTimeout(timer);
+      ws.off('message', onMessage);
+      ws.off('error', onError);
+    };
+    const onMessage = (raw) => {
+      try {
+        const parsed = JSON.parse(String(raw));
+        if (parsed?.requestID && parsed.requestID !== payload.requestID) return;
+        cleanup();
+        if (parsed?.messageType === 'APIError') {
+          reject(new Error(parsed?.data?.message || 'VTube Studio API 오류가 발생했습니다.'));
+          return;
+        }
+        resolve(parsed);
+      } catch (error) {
+        cleanup();
+        reject(error);
+      }
+    };
+    const onError = (error) => {
+      cleanup();
+      reject(error);
+    };
+
+    ws.on('message', onMessage);
+    ws.once('error', onError);
+    ws.send(JSON.stringify(payload));
+  });
+}
+
+async function sendAuthenticatedVtubeRequest(messageType, data = {}, options = {}) {
+  const endpoint = getVtubeEndpoint(options.endpoint);
+  const { pluginName, pluginDeveloper } = getVtubePluginInfo();
+  let authToken = String(options.authToken || config.vtubeAuthToken || '').trim();
+  if (!authToken) {
+    const auth = await authenticateVtubeStudio({ endpoint, timeoutMs: options.timeoutMs });
+    authToken = auth.authToken;
+  }
+
+  const ws = await openVtubeSocket(endpoint, options.timeoutMs || 7000);
+  try {
+    const authResponse = await sendVtubeSocketRequest(ws, 'AuthenticationRequest', {
+      pluginName,
+      pluginDeveloper,
+      authenticationToken: authToken,
+    }, { timeoutMs: options.timeoutMs || 7000 });
+    if (authResponse?.data?.authenticated !== true) {
+      throw new Error('VTube Studio 인증에 실패했습니다.');
+    }
+    return await sendVtubeSocketRequest(ws, messageType, data, options);
+  } finally {
+    try { ws.close(); } catch {}
+  }
+}
+
 async function authenticateVtubeStudio(options = {}) {
   const endpoint = getVtubeEndpoint(options.endpoint);
-  const pluginName = 'AruBot';
-  const pluginDeveloper = 'AruBot';
+  const { pluginName, pluginDeveloper } = getVtubePluginInfo();
   let authToken = String(options.authToken || config.vtubeAuthToken || '').trim();
 
   const authenticateWithToken = async (token) => {
@@ -704,42 +800,56 @@ function normalizeVtubeDiscovery(responses = {}, endpoint = config.vtubeEndpoint
 async function discoverVtubeStudio(options = {}) {
   const auth = await authenticateVtubeStudio(options);
   const endpoint = auth.endpoint;
-  const [current, models, hotkeys, expressions, items] = await Promise.all([
-    sendVtubeRequest('CurrentModelRequest', {}, { endpoint }),
-    sendVtubeRequest('AvailableModelsRequest', {}, { endpoint }),
-    sendVtubeRequest('HotkeysInCurrentModelRequest', {}, { endpoint }),
-    sendVtubeRequest('ExpressionStateRequest', { details: false }, { endpoint }),
-    sendVtubeRequest('ItemListRequest', {
-      includeAvailableSpots: false,
-      includeItemInstancesInScene: true,
-      includeAvailableItemFiles: true,
-    }, { endpoint }).catch(() => null),
-  ]);
-  return normalizeVtubeDiscovery({ current, models, hotkeys, expressions, items }, endpoint);
+  const { pluginName, pluginDeveloper } = getVtubePluginInfo();
+  const ws = await openVtubeSocket(endpoint, options.timeoutMs || 7000);
+  try {
+    const authResponse = await sendVtubeSocketRequest(ws, 'AuthenticationRequest', {
+      pluginName,
+      pluginDeveloper,
+      authenticationToken: auth.authToken,
+    }, { timeoutMs: options.timeoutMs || 7000 });
+    if (authResponse?.data?.authenticated !== true) {
+      throw new Error('VTube Studio 인증에 실패했습니다.');
+    }
+    const [current, models, hotkeys, expressions, items] = await Promise.all([
+      sendVtubeSocketRequest(ws, 'CurrentModelRequest', {}),
+      sendVtubeSocketRequest(ws, 'AvailableModelsRequest', {}),
+      sendVtubeSocketRequest(ws, 'HotkeysInCurrentModelRequest', {}),
+      sendVtubeSocketRequest(ws, 'ExpressionStateRequest', { details: false }),
+      sendVtubeSocketRequest(ws, 'ItemListRequest', {
+        includeAvailableSpots: false,
+        includeItemInstancesInScene: true,
+        includeAvailableItemFiles: true,
+      }).catch(() => null),
+    ]);
+    return normalizeVtubeDiscovery({ current, models, hotkeys, expressions, items }, endpoint);
+  } finally {
+    try { ws.close(); } catch {}
+  }
 }
 
 async function triggerVtubeHotkey(payload = {}) {
   const auth = await authenticateVtubeStudio({ endpoint: payload.endpoint });
   const hotkeyID = String(payload.hotkeyID || payload.hotkeyId || payload.hotkeyName || '').trim();
   if (!hotkeyID) throw new Error('실행할 VTube Studio 핫키가 없습니다.');
-  return await sendVtubeRequest('HotkeyTriggerRequest', {
+  return await sendAuthenticatedVtubeRequest('HotkeyTriggerRequest', {
     hotkeyID,
     itemInstanceID: String(payload.itemInstanceID || payload.itemInstanceId || ''),
-  }, { endpoint: auth.endpoint });
+  }, { endpoint: auth.endpoint, authToken: auth.authToken });
 }
 
 async function injectVtubeParameter(payload = {}) {
   const auth = await authenticateVtubeStudio({ endpoint: payload.endpoint });
   const parameter = String(payload.parameter || payload.parameterName || payload.id || '').trim();
   if (!parameter) throw new Error('변경할 VTube Studio 파라미터가 없습니다.');
-  return await sendVtubeRequest('InjectParameterDataRequest', {
+  return await sendAuthenticatedVtubeRequest('InjectParameterDataRequest', {
     faceFound: payload.faceFound !== false,
     parameterValues: [{
       id: parameter,
       value: Number(payload.value || 0),
       weight: Number(payload.weight || 1),
     }],
-  }, { endpoint: auth.endpoint });
+  }, { endpoint: auth.endpoint, authToken: auth.authToken });
 }
 
 async function processJob(job) {
@@ -1240,12 +1350,8 @@ ipcMain.handle('folder:openSound', async () => {
   await shell.openPath(config.soundFolder);
   return true;
 });
-ipcMain.handle('external:open', async (_event, url) => {
-  await shell.openExternal(String(url || ''));
-  return true;
-});
 ipcMain.handle('dashboard:open', async () => {
-  await shell.openExternal(config.dashboardUrl || DEFAULT_DASHBOARD_URL);
+  await shell.openExternal(getSafeExternalHttpUrl(config.dashboardUrl || DEFAULT_DASHBOARD_URL));
   return true;
 });
 ipcMain.handle('update:check', async () => {

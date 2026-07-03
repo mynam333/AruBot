@@ -8,6 +8,52 @@ const { Client } = pkg;
 let supabase;
 let columnCache = new Map(); // key: table, value: Set of column names
 
+function getSecretEncryptionKey() {
+  const secret = String(
+    process.env.ARUBOT_SECRET_ENCRYPTION_KEY ||
+    process.env.TOKEN_ENCRYPTION_SECRET ||
+    process.env.OAUTH_STATE_SECRET ||
+    process.env.SESSION_SECRET ||
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    ''
+  );
+  if (!secret || secret.length < 16) return null;
+  return crypto.createHash('sha256').update(secret).digest();
+}
+
+function protectSecret(value) {
+  if (value == null || value === '') return value ?? null;
+  const text = String(value);
+  if (text.startsWith('enc:v1:')) return text;
+  const key = getSecretEncryptionKey();
+  if (!key) return text;
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const encrypted = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `enc:v1:${iv.toString('base64url')}:${tag.toString('base64url')}:${encrypted.toString('base64url')}`;
+}
+
+function revealSecret(value) {
+  if (value == null || value === '') return value ?? null;
+  const text = String(value);
+  if (!text.startsWith('enc:v1:')) return text;
+  const key = getSecretEncryptionKey();
+  if (!key) throw new Error('Secret encryption key is required to decrypt stored credentials');
+  const [, version, ivText, tagText, encryptedText] = text.split(':');
+  if (version !== 'v1' || !ivText || !tagText || !encryptedText) throw new Error('Invalid encrypted secret format');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(ivText, 'base64url'));
+  decipher.setAuthTag(Buffer.from(tagText, 'base64url'));
+  return Buffer.concat([
+    decipher.update(Buffer.from(encryptedText, 'base64url')),
+    decipher.final()
+  ]).toString('utf8');
+}
+
+function secretHash(value) {
+  return crypto.createHash('sha256').update(String(value || ''), 'utf8').digest('hex');
+}
+
 // Ensure 'tokens' table exists using direct PG connection (for PostgREST cache heal)
 async function ensureTokensTableExists() {
   const dbUrl = process.env.SUPABASE_DB_URL;
@@ -36,11 +82,16 @@ async function ensureApiKeysTable() {
     await pg.query(`
       create table if not exists api_keys (
         api_key text primary key,
+        api_key_hash text unique,
+        api_key_hint text,
         owner_pid text not null,
         created_at timestamptz default now(),
         last_used timestamptz,
         revoked boolean default false
       );
+      alter table api_keys add column if not exists api_key_hash text;
+      alter table api_keys add column if not exists api_key_hint text;
+      create unique index if not exists idx_api_keys_hash on api_keys(api_key_hash) where api_key_hash is not null;
     `);
   });
 }
@@ -48,8 +99,13 @@ async function ensureApiKeysTable() {
 export async function issueApiKey(ownerPid) {
   await ensureApiKeysTable();
   const key = crypto.randomBytes(32).toString('hex');
+  const hash = secretHash(key);
+  const hint = `${key.slice(0, 8)}...${key.slice(-4)}`;
   await withPgClient(async (pg) => {
-    await pg.query(`insert into api_keys (api_key, owner_pid) values ($1, $2)`, [key, String(ownerPid)]);
+    await pg.query(
+      `insert into api_keys (api_key, api_key_hash, api_key_hint, owner_pid) values ($1, $2, $3, $4)`,
+      [protectSecret(key), hash, hint, String(ownerPid)]
+    );
   });
   return key;
 }
@@ -58,25 +114,40 @@ export async function getOwnerPidForApiKey(key) {
   if (!key) return null;
   await ensureApiKeysTable();
   let row = null;
+  const hash = secretHash(key);
   await withPgClient(async (pg) => {
-    const r = await pg.query(`select owner_pid, revoked from api_keys where api_key = $1`, [String(key)]);
+    const r = await pg.query(
+      `select api_key, api_key_hash, owner_pid, revoked from api_keys where api_key_hash = $1 or api_key = $2 limit 1`,
+      [hash, String(key)]
+    );
     row = r?.rows?.[0] || null;
     if (row && row.revoked) row = null;
+    if (row && !row.api_key_hash) {
+      await pg.query(
+        `update api_keys set api_key = $1, api_key_hash = $2, api_key_hint = $3 where api_key = $4`,
+        [protectSecret(key), hash, `${String(key).slice(0, 8)}...${String(key).slice(-4)}`, String(key)]
+      );
+    }
   });
   return row ? String(row.owner_pid) : null;
 }
 
 export async function touchApiKeyLastUsed(key) {
   if (!key) return;
+  const hash = secretHash(key);
   await withPgClient(async (pg) => {
-    await pg.query(`update api_keys set last_used = now() where api_key = $1`, [String(key)]);
+    await pg.query(`update api_keys set last_used = now() where api_key_hash = $1 or api_key = $2`, [hash, String(key)]);
   });
 }
 
 export async function revokeApiKey(ownerPid, key) {
   if (!key) return false;
+  const hash = secretHash(key);
   await withPgClient(async (pg) => {
-    await pg.query(`update api_keys set revoked = true where api_key = $1 and owner_pid = $2`, [String(key), String(ownerPid)]);
+    await pg.query(
+      `update api_keys set revoked = true where (api_key_hash = $1 or api_key = $2) and owner_pid = $3`,
+      [hash, String(key), String(ownerPid)]
+    );
   });
   return true;
 }
@@ -91,7 +162,7 @@ export async function getActiveApiKeyForOwner(ownerPid) {
     );
     row = r?.rows?.[0] || null;
   });
-  return row ? String(row.api_key) : null;
+  return row ? revealSecret(row.api_key) : null;
 }
 
 export async function revokeAllApiKeysForOwner(ownerPid) {
@@ -1838,15 +1909,20 @@ export async function ensureSchema() {
       -- API Keys 테이블 생성
       create table if not exists api_keys (
         api_key text primary key,
+        api_key_hash text unique,
+        api_key_hint text,
         owner_pid text not null,
         created_at timestamptz default now(),
         last_used timestamptz,
         revoked boolean default false
       );
+      alter table api_keys add column if not exists api_key_hash text;
+      alter table api_keys add column if not exists api_key_hint text;
       
       -- API Keys 인덱스
       create index if not exists idx_api_keys_owner_pid on api_keys(owner_pid);
       create index if not exists idx_api_keys_active on api_keys(owner_pid, revoked) where revoked = false;
+      create unique index if not exists idx_api_keys_hash on api_keys(api_key_hash) where api_key_hash is not null;
     `;
     await client.query(sql);
   } finally {
@@ -1884,8 +1960,8 @@ export async function upsertTokens(sid, { accessToken, refreshToken, tokenType, 
   ensure();
   const row = {
     sid,
-    access_token: accessToken,
-    refresh_token: refreshToken,
+    access_token: protectSecret(accessToken),
+    refresh_token: protectSecret(refreshToken),
     token_type: tokenType,
     expires_at: expiresAt,
   };
@@ -1910,30 +1986,25 @@ export async function upsertTokens(sid, { accessToken, refreshToken, tokenType, 
   throw lastError || new Error('Unknown error upserting tokens');
 }
 
-export function getTokens(sid) {
+export async function getTokens(sid) {
   ensure();
-  return supabase.from('tokens').select('access_token, refresh_token, token_type, expires_at').eq('sid', sid).single()
-    .then(({ data, error }) => {
-      if (error) return null;
-      if (!data || !data.access_token) return null;
-      return {
-        accessToken: data.access_token,
-        refreshToken: data.refresh_token,
-        tokenType: data.token_type,
-        expiresAt: data.expires_at,
-      };
-    });
-}
-
-// Bootstrap helper: get any token row (best-effort) to resolve userId
-export async function getAnyTokens() {
-  ensure();
-  const { data, error } = await supabase.from('tokens').select('sid, access_token, refresh_token, token_type, expires_at').limit(1).maybeSingle();
+  const { data, error } = await supabase.from('tokens').select('access_token, refresh_token, token_type, expires_at').eq('sid', sid).single();
   if (error || !data || !data.access_token) return null;
+  const accessToken = revealSecret(data.access_token);
+  const refreshToken = revealSecret(data.refresh_token);
+  if (accessToken === data.access_token || refreshToken === data.refresh_token) {
+    const nextAccessToken = protectSecret(accessToken);
+    const nextRefreshToken = protectSecret(refreshToken);
+    if (nextAccessToken !== data.access_token || nextRefreshToken !== data.refresh_token) {
+      await supabase.from('tokens')
+        .update({ access_token: nextAccessToken, refresh_token: nextRefreshToken })
+        .eq('sid', sid)
+        .then(() => null);
+    }
+  }
   return {
-    sid: data.sid,
-    accessToken: data.access_token,
-    refreshToken: data.refresh_token,
+    accessToken,
+    refreshToken,
     tokenType: data.token_type,
     expiresAt: data.expires_at,
   };
@@ -2269,7 +2340,7 @@ export async function upsertPlatformTokens(provider, userId, platformUserId, { a
          expires_at = excluded.expires_at,
          scope = excluded.scope,
          updated_at = now()`,
-      [p, String(userId).replace(/^user:/, ''), String(platformUserId), accessToken, refreshToken || null, tokenType || 'Bearer', expiresAt || null, scope || null]
+      [p, String(userId).replace(/^user:/, ''), String(platformUserId), protectSecret(accessToken), protectSecret(refreshToken || null), tokenType || 'Bearer', expiresAt || null, scope || null]
     );
   });
 }
@@ -2288,12 +2359,25 @@ export async function getPlatformTokens(provider, userId) {
     );
     const row = rows[0];
     if (!row) return null;
+    const accessToken = revealSecret(row.access_token);
+    const refreshToken = revealSecret(row.refresh_token);
+    if (accessToken === row.access_token || refreshToken === row.refresh_token) {
+      const nextAccessToken = protectSecret(accessToken);
+      const nextRefreshToken = protectSecret(refreshToken);
+      if (nextAccessToken !== row.access_token || nextRefreshToken !== row.refresh_token) {
+        await pg.query(
+          `update platform_tokens set access_token = $1, refresh_token = $2, updated_at = now()
+           where provider = $3 and user_id = $4`,
+          [nextAccessToken, nextRefreshToken, p, String(userId).replace(/^user:/, '')]
+        );
+      }
+    }
     return {
       provider: row.provider,
       userId: row.user_id,
       platformUserId: row.platform_user_id,
-      accessToken: row.access_token,
-      refreshToken: row.refresh_token,
+      accessToken,
+      refreshToken,
       tokenType: row.token_type,
       expiresAt: row.expires_at,
       scope: row.scope

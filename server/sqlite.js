@@ -2,10 +2,52 @@ import Database from 'better-sqlite3';
 import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 
 const dataDir = path.join(process.cwd(), 'server');
 const dbPath = path.join(dataDir, 'data.sqlite');
 let db;
+
+function getSecretEncryptionKey() {
+  const secret = String(
+    process.env.ARUBOT_SECRET_ENCRYPTION_KEY ||
+    process.env.TOKEN_ENCRYPTION_SECRET ||
+    process.env.OAUTH_STATE_SECRET ||
+    process.env.SESSION_SECRET ||
+    ''
+  );
+  if (!secret || secret.length < 16) return null;
+  return crypto.createHash('sha256').update(secret).digest();
+}
+
+function protectSecret(value) {
+  if (value == null || value === '') return value ?? null;
+  const text = String(value);
+  if (text.startsWith('enc:v1:')) return text;
+  const key = getSecretEncryptionKey();
+  if (!key) return text;
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const encrypted = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `enc:v1:${iv.toString('base64url')}:${tag.toString('base64url')}:${encrypted.toString('base64url')}`;
+}
+
+function revealSecret(value) {
+  if (value == null || value === '') return value ?? null;
+  const text = String(value);
+  if (!text.startsWith('enc:v1:')) return text;
+  const key = getSecretEncryptionKey();
+  if (!key) throw new Error('Secret encryption key is required to decrypt stored credentials');
+  const [, version, ivText, tagText, encryptedText] = text.split(':');
+  if (version !== 'v1' || !ivText || !tagText || !encryptedText) throw new Error('Invalid encrypted secret format');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(ivText, 'base64url'));
+  decipher.setAuthTag(Buffer.from(tagText, 'base64url'));
+  return Buffer.concat([
+    decipher.update(Buffer.from(encryptedText, 'base64url')),
+    decipher.final()
+  ]).toString('utf8');
+}
 
 export function initDb() {
   if (!fs.existsSync(dataDir)) {
@@ -265,13 +307,23 @@ export function initDb() {
 
 export function upsertTokens(sid, { accessToken, refreshToken, tokenType, expiresAt }) {
   db.prepare('INSERT OR REPLACE INTO tokens (sid, accessToken, refreshToken, tokenType, expiresAt) VALUES (?, ?, ?, ?, ?)')
-    .run(sid, accessToken, refreshToken, tokenType, expiresAt);
+    .run(sid, protectSecret(accessToken), protectSecret(refreshToken), tokenType, expiresAt);
 }
 
 export function getTokens(sid) {
   const row = db.prepare('SELECT accessToken, refreshToken, tokenType, expiresAt FROM tokens WHERE sid = ?').get(sid);
   if (!row || !row.accessToken) return null;
-  return row;
+  const accessToken = revealSecret(row.accessToken);
+  const refreshToken = revealSecret(row.refreshToken);
+  if (accessToken === row.accessToken || refreshToken === row.refreshToken) {
+    const nextAccessToken = protectSecret(accessToken);
+    const nextRefreshToken = protectSecret(refreshToken);
+    if (nextAccessToken !== row.accessToken || nextRefreshToken !== row.refreshToken) {
+      db.prepare('UPDATE tokens SET accessToken = ?, refreshToken = ? WHERE sid = ?')
+        .run(nextAccessToken, nextRefreshToken, sid);
+    }
+  }
+  return { ...row, accessToken, refreshToken };
 }
 
 export function updateTokens(sid, tokensOrNull) {

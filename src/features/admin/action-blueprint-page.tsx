@@ -57,7 +57,7 @@ import {
   type ReactFlowInstance,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -155,6 +155,43 @@ type BlueprintVersion = {
   version?: number;
   published?: boolean;
   createdAt?: string | null;
+};
+
+type AutomationDiscoveryCache = {
+  items?: Array<{ id: string; name: string; encodedImage?: string | null }>;
+  triggers?: Array<{ id: string; name: string }>;
+  hotkeys?: Array<{ id: string; name: string; type?: string; description?: string }>;
+  models?: Array<{ id: string; name: string; loaded?: boolean }>;
+  expressions?: Array<{ file?: string; name: string; active?: boolean }>;
+  currentModel?: { loaded?: boolean; id?: string; name?: string };
+  fetchedAt?: string;
+};
+
+type AutomationConnection = {
+  id: string;
+  type: string;
+  name: string;
+  enabled: boolean;
+  executionMode?: 'oracle_direct' | 'local_program';
+  endpoint?: string;
+  discoveryCache?: AutomationDiscoveryCache;
+  lastStatus?: string | null;
+};
+
+type AutomationOverview = {
+  settings?: {
+    integrationMode?: 'oracle_direct' | 'local_program';
+  };
+  connections?: AutomationConnection[];
+  soundStorage?: {
+    files?: Array<{ id: string; name: string; size?: number; updatedAt?: string; url?: string }>;
+  };
+  localAgents?: Array<{
+    id: string;
+    name: string;
+    status: string;
+    lastSeenAt: string | null;
+  }>;
 };
 
 type BlueprintRunStep = {
@@ -522,6 +559,29 @@ function portLabel(port: string) {
   return port.replace(/^option:/, '');
 }
 
+function portTone(port: string) {
+  if (port === 'false') return {
+    dot: 'bg-destructive',
+    text: 'text-destructive',
+    border: 'border-destructive/30',
+  };
+  if (port === 'true') return {
+    dot: 'bg-emerald-500',
+    text: 'text-emerald-700 dark:text-emerald-300',
+    border: 'border-emerald-500/30',
+  };
+  if (port === 'in') return {
+    dot: 'bg-primary',
+    text: 'text-primary',
+    border: 'border-primary/30',
+  };
+  return {
+    dot: 'bg-sky-500',
+    text: 'text-sky-700 dark:text-sky-300',
+    border: 'border-sky-500/30',
+  };
+}
+
 function nodeSpec(type: NodeType) {
   return nodeCatalog.find((item) => item.type === type) || nodeCatalog[0];
 }
@@ -575,6 +635,15 @@ function nodePreview(node: BlueprintNode) {
   if (node.type === 'http') return `${String(node.config.method || 'GET')} ${String(node.config.url || 'URL 미설정')}`;
   if (node.type === 'pointsAdjust') return `${String(node.config.delta || 0)} 포인트`;
   if (node.type === 'rouletteRun') return String(node.config.name || '룰렛 미선택');
+  if (node.type === 'action') return String(node.config.actionId || '블루프린트 미선택');
+  if (node.type === 'sound') return String(node.config.fileId || '사운드 미선택');
+  if (node.type === 'tits') return String(node.config.triggerName || node.config.triggerId || '트리거 미선택');
+  if (node.type === 'vtube') {
+    const hotkey = String(node.config.hotkeyName || node.config.hotkeyId || '').trim();
+    const parameter = String(node.config.parameter || '').trim();
+    if (hotkey && parameter) return `${hotkey} · ${parameter}`;
+    return hotkey || parameter || '핫키/파라미터 미선택';
+  }
   return node.type;
 }
 
@@ -774,6 +843,37 @@ function portPointPx(node: BlueprintNode, kind: 'input' | 'output', port: string
   };
 }
 
+function BlueprintPortBadge({
+  port,
+  kind,
+  index,
+  total,
+}: {
+  port: string;
+  kind: 'input' | 'output';
+  index: number;
+  total: number;
+}) {
+  const tone = portTone(kind === 'input' ? 'in' : port);
+  const label = kind === 'input' ? '입력' : portLabel(port);
+  return (
+    <div
+      aria-hidden="true"
+      className={cn(
+        'pointer-events-none absolute z-20 flex h-7 -translate-y-1/2 items-center gap-1.5 rounded-full border bg-card/95 px-2.5 text-[0.64rem] font-extrabold shadow-subtle backdrop-blur-xl',
+        tone.border,
+        tone.text,
+        kind === 'input' ? 'left-[-3.25rem]' : 'right-[-4.85rem] w-[4.55rem] justify-between',
+      )}
+      style={{ top: `${portTop(index, total)}rem` }}
+    >
+      {kind === 'input' ? <span className={cn('h-2 w-2 rounded-full', tone.dot)} /> : null}
+      <span className="min-w-0 truncate">{label}</span>
+      {kind === 'output' ? <span className={cn('h-2 w-2 shrink-0 rounded-full', tone.dot)} /> : null}
+    </div>
+  );
+}
+
 function BlueprintCanvasNode({ data, selected }: NodeProps<BlueprintFlowNode>) {
   const { node, active, latestStep } = data;
   const spec = nodeSpec(node.type);
@@ -799,7 +899,7 @@ function BlueprintCanvasNode({ data, selected }: NodeProps<BlueprintFlowNode>) {
         }));
       }}
       className={cn(
-        'group/blueprint-node relative select-none overflow-hidden rounded-[calc(var(--radius-card)*0.92)] border bg-card/96 shadow-subtle backdrop-blur-xl transition duration-200',
+        'group/blueprint-node relative select-none overflow-visible rounded-[calc(var(--radius-card)*0.92)] border bg-card/96 shadow-subtle backdrop-blur-xl transition duration-200',
         'hover:-translate-y-0.5 hover:border-primary/35 hover:shadow-lift',
         selected && 'border-primary/55 ring-2 ring-primary/35 shadow-lift',
         active && 'scale-[1.025] border-primary/65 bg-pastel-sky/75 ring-4 ring-primary/18 shadow-lift',
@@ -809,7 +909,7 @@ function BlueprintCanvasNode({ data, selected }: NodeProps<BlueprintFlowNode>) {
       )}
       style={{ width: `${NODE_WIDTH}px`, minHeight: `${NODE_MIN_HEIGHT}px` }}
     >
-      <div className={cn('h-[max(0.25rem,0.26vw)] bg-[linear-gradient(90deg,var(--tw-gradient-stops))]', tone.strip)} />
+      <div className={cn('h-[max(0.25rem,0.26vw)] rounded-t-[calc(var(--radius-card)*0.92)] bg-[linear-gradient(90deg,var(--tw-gradient-stops))]', tone.strip)} />
       <div className="grid gap-3 p-[clamp(0.75rem,1.1vw,0.875rem)]">
         <div className="flex items-start justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2.5">
@@ -839,29 +939,35 @@ function BlueprintCanvasNode({ data, selected }: NodeProps<BlueprintFlowNode>) {
         )}
       </div>
       {ins.map((port, index) => (
-        <Handle
-          key={port}
-          id={port}
-          type="target"
-          position={Position.Left}
-          title={`입력: ${portLabel(port)}`}
-          className="!grid !h-6 !w-6 !touch-manipulation !place-items-center !rounded-full !border-[max(0.125rem,0.16vw)] !border-card !bg-primary !shadow-subtle transition hover:!scale-110 md:!h-4 md:!w-4"
-          style={{ top: `${portTop(index, ins.length)}rem`, left: '-0.72rem' }}
-        />
+        <Fragment key={`input-${port}`}>
+          <BlueprintPortBadge port={port} kind="input" index={index} total={ins.length} />
+          <Handle
+            id={port}
+            type="target"
+            position={Position.Left}
+            title={`입력: ${portLabel(port)}`}
+            aria-label={`입력 포트 ${portLabel(port)}`}
+            className="!z-30 !grid !h-7 !w-7 !touch-manipulation !place-items-center !rounded-full !border-[max(0.125rem,0.16vw)] !border-card !bg-primary !shadow-subtle transition hover:!scale-110 md:!h-5 md:!w-5"
+            style={{ top: `${portTop(index, ins.length)}rem`, left: '-0.88rem' }}
+          />
+        </Fragment>
       ))}
       {outs.map((port, index) => (
-        <Handle
-          key={port}
-          id={port}
-          type="source"
-          position={Position.Right}
-          title={`출력: ${portLabel(port)}`}
-          className={cn(
-            '!grid !h-6 !w-6 !touch-manipulation !place-items-center !rounded-full !border-[max(0.125rem,0.16vw)] !border-card !shadow-subtle transition hover:!scale-110 md:!h-4 md:!w-4',
-            port === 'false' ? '!bg-destructive' : port === 'true' ? '!bg-emerald-500' : '!bg-sky-500',
-          )}
-          style={{ top: `${portTop(index, outs.length)}rem`, right: '-0.72rem' }}
-        />
+        <Fragment key={`output-${port}`}>
+          <BlueprintPortBadge port={port} kind="output" index={index} total={outs.length} />
+          <Handle
+            id={port}
+            type="source"
+            position={Position.Right}
+            title={`출력: ${portLabel(port)}`}
+            aria-label={`출력 포트 ${portLabel(port)}`}
+            className={cn(
+              '!z-30 !grid !h-7 !w-7 !touch-manipulation !place-items-center !rounded-full !border-[max(0.125rem,0.16vw)] !border-card !shadow-subtle transition hover:!scale-110 md:!h-5 md:!w-5',
+              port === 'false' ? '!bg-destructive' : port === 'true' ? '!bg-emerald-500' : '!bg-sky-500',
+            )}
+            style={{ top: `${portTop(index, outs.length)}rem`, right: '-0.88rem' }}
+          />
+        </Fragment>
       ))}
     </div>
   );
@@ -955,6 +1061,7 @@ export function ActionBlueprintPage() {
   const playTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [blueprints, setBlueprints] = useState<Blueprint[]>([]);
   const [blueprint, setBlueprint] = useState<Blueprint>(() => normalizeBlueprint(null));
+  const [automationOverview, setAutomationOverview] = useState<AutomationOverview | null>(null);
   const [runs, setRuns] = useState<BlueprintRun[]>([]);
   const [versions, setVersions] = useState<BlueprintVersion[]>([]);
   const [runSteps, setRunSteps] = useState<BlueprintRunStep[]>([]);
@@ -968,6 +1075,7 @@ export function ActionBlueprintPage() {
   const [historyCount, setHistoryCount] = useState({ past: 0, future: 0 });
   const [draftStatus, setDraftStatus] = useState<'idle' | 'saved' | 'restored'>('idle');
   const [activeRunNodeId, setActiveRunNodeId] = useState<string | null>(null);
+  const [automationBusy, setAutomationBusy] = useState<string | null>(null);
   const [simulator, setSimulator] = useState({
     platform: 'chzzk',
     username: '테스트 시청자',
@@ -1050,6 +1158,12 @@ export function ActionBlueprintPage() {
     });
     return [...groups.entries()];
   }, [filteredCatalog]);
+  const automationConnections = useMemo(() => automationOverview?.connections || [], [automationOverview?.connections]);
+  const titsConnection = useMemo(() => automationConnections.find((item) => item.type === 'tits') || null, [automationConnections]);
+  const vtubeConnection = useMemo(() => automationConnections.find((item) => item.type === 'vtube_studio') || null, [automationConnections]);
+  const hasOnlineLocalAgent = useMemo(() => {
+    return (automationOverview?.localAgents || []).some((agent) => agent.status === 'online');
+  }, [automationOverview?.localAgents]);
   const zoomLabel = Math.round((liveViewport.zoom || 1) * 100);
 
   const updateBlueprint = useCallback((updater: (current: Blueprint) => Blueprint) => {
@@ -1071,7 +1185,11 @@ export function ActionBlueprintPage() {
 
   const load = useCallback(() => {
     startTransition(async () => {
-      const data = await readJson<{ blueprints?: Blueprint[] }>('/api/action-blueprints');
+      const [data, automationData] = await Promise.all([
+        readJson<{ blueprints?: Blueprint[] }>('/api/action-blueprints'),
+        readJson<AutomationOverview>('/api/automations/overview').catch(() => null),
+      ]);
+      setAutomationOverview(automationData);
       const list = data?.blueprints || [];
       setBlueprints(list);
       if (list.length) {
@@ -1092,6 +1210,51 @@ export function ActionBlueprintPage() {
       }
     });
   }, [syncFlowViewport]);
+
+  const refreshAutomationOverview = useCallback(async () => {
+    const data = await readJson<AutomationOverview>('/api/automations/overview').catch(() => null);
+    setAutomationOverview(data);
+    return data;
+  }, []);
+
+  const ensureAutomationConnection = useCallback(async (type: 'tits' | 'vtube') => {
+    const existing = type === 'tits' ? titsConnection : vtubeConnection;
+    if (existing) return existing;
+    const data = await jsonRequest<{ connection: AutomationConnection }>('/api/automations/connections', 'POST', {
+      type: type === 'tits' ? 'tits' : 'vtube_studio',
+      name: type === 'tits' ? 'T.I.T.S.' : 'VTube Studio',
+      executionMode: 'local_program',
+      endpoint: type === 'tits' ? 'ws://localhost:42069' : 'ws://localhost:8001',
+    });
+    await refreshAutomationOverview();
+    return data.connection;
+  }, [refreshAutomationOverview, titsConnection, vtubeConnection]);
+
+  const discoverAutomation = useCallback(async (type: 'tits' | 'vtube') => {
+    const busyKey = `${type}.discover`;
+    setAutomationBusy(busyKey);
+    try {
+      const connection = await ensureAutomationConnection(type);
+      const endpoint = connection.endpoint || (type === 'tits' ? 'ws://localhost:42069' : 'ws://localhost:8001');
+      const data = await jsonRequest<{ queued?: boolean; discovery?: AutomationDiscoveryCache; message?: string }>(
+        type === 'tits' ? '/api/automations/tits/discover' : '/api/automations/vtube/discover',
+        'POST',
+        {
+          executionMode: 'local_program',
+          endpoint,
+          connectionId: connection.id,
+          name: type === 'tits' ? 'T.I.T.S.' : 'VTube Studio',
+          sendImage: type === 'tits',
+        },
+      );
+      toast.success(data.queued ? (data.message || '로컬 프로그램으로 목록을 불러오도록 요청했습니다.') : '로컬 프로그램 목록을 불러왔습니다.');
+      await refreshAutomationOverview();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '로컬 프로그램 목록을 불러오지 못했습니다.');
+    } finally {
+      setAutomationBusy(null);
+    }
+  }, [ensureAutomationConnection, refreshAutomationOverview]);
 
   useEffect(() => {
     load();
@@ -1233,6 +1396,7 @@ export function ActionBlueprintPage() {
       version: { ...current.version, nodes: [...(current.version?.nodes || []), node] },
     }));
     setSelectedIds([node.id]);
+    setEditingNodeId(node.id);
   };
 
   const removeSelection = () => {
@@ -2041,6 +2205,22 @@ export function ActionBlueprintPage() {
               className="hidden"
               onChange={(event) => void importBlueprintJson(event.target.files?.[0] || null)}
             />
+            <select
+              value={blueprint.id || ''}
+              onChange={(event) => {
+                const next = blueprints.find((item) => item.id === event.target.value);
+                if (next) void loadBlueprint(next);
+              }}
+              className="min-h-[var(--control-height-sm)] rounded-[var(--radius-control)] border bg-card/75 px-3 text-sm font-semibold outline-none transition focus:border-primary/45 focus:ring-2 focus:ring-ring sm:col-span-2 xl:col-span-3"
+              aria-label="저장된 블루프린트 선택"
+            >
+              <option value="">{blueprints.length ? '저장된 블루프린트 선택' : '저장된 블루프린트 없음'}</option>
+              {blueprints.map((item) => (
+                <option key={item.id || item.name} value={item.id || ''}>
+                  {item.name}{item.version?.published ? ' · 게시됨' : ''}
+                </option>
+              ))}
+            </select>
             <Button type="button" variant="outline" size="sm" onClick={newBlueprint}>
               <Plus className="h-4 w-4" />
               새 블루프린트
@@ -2081,7 +2261,7 @@ export function ActionBlueprintPage() {
         </div>
       </section>
 
-      <section className="grid min-h-[min(78svh,54rem)] gap-4 xl:grid-cols-[minmax(0,0.22fr)_minmax(0,1fr)_minmax(0,0.3fr)]">
+      <section className="grid min-h-[min(78svh,54rem)] gap-4 xl:grid-cols-[minmax(20rem,0.34fr)_minmax(0,1fr)]">
         <Card className="overflow-hidden border-border/70 bg-card/74 shadow-subtle">
           <CardHeader className="border-b bg-card/62">
             <div className="flex items-center justify-between gap-3">
@@ -2247,6 +2427,7 @@ export function ActionBlueprintPage() {
                 minZoom={0.45}
                 maxZoom={1.8}
                 fitView={false}
+                connectionLineStyle={{ stroke: 'hsl(var(--primary))', strokeWidth: 3, strokeDasharray: '7 5' }}
                 panOnDrag
                 panOnScroll={false}
                 zoomOnScroll
@@ -2303,7 +2484,7 @@ export function ActionBlueprintPage() {
           </CardContent>
         </Card>
 
-        <div className="grid h-fit gap-3">
+        <div className="hidden">
           <Card className="border-border/70 bg-card/74 shadow-subtle">
             <CardHeader className="p-4">
               <div className="flex items-center justify-between gap-3">
@@ -2379,7 +2560,14 @@ export function ActionBlueprintPage() {
                     노드 이름
                     <Input value={selectedNode.name} onChange={(event) => updateBlueprint((current) => ({ ...current, version: { ...current.version, nodes: (current.version?.nodes || []).map((node) => node.id === selectedNode.id ? { ...node, name: event.target.value } : node) } }))} />
                   </label>
-                  <ConfigFields node={selectedNode} onChange={updateNodeConfig} />
+                  <ConfigFields
+                    node={selectedNode}
+                    onChange={updateNodeConfig}
+                    automationOverview={automationOverview}
+                    automationBusy={automationBusy}
+                    onDiscoverAutomation={discoverAutomation}
+                    blueprints={blueprints}
+                  />
                   <div className="rounded-[var(--radius-control)] border bg-background/70 p-3 text-xs leading-5 text-muted-foreground">
                     예: <code>{'{user.name}'}</code>, <code>{'{user.points}'}</code>, <code>{'{roulette.result}'}</code>, <code>{'{flow.bonusPoint} * 2'}</code>
                   </div>
@@ -2536,7 +2724,14 @@ export function ActionBlueprintPage() {
                     노드 이름
                     <Input value={editingNode.name} onChange={(event) => updateNodeNameById(editingNode.id, event.target.value)} className="w-full min-w-0" />
                   </label>
-                  <ConfigFields node={editingNode} onChange={(key, value) => updateNodeConfigById(editingNode.id, key, value)} />
+                  <ConfigFields
+                    node={editingNode}
+                    onChange={(key, value) => updateNodeConfigById(editingNode.id, key, value)}
+                    automationOverview={automationOverview}
+                    automationBusy={automationBusy}
+                    onDiscoverAutomation={discoverAutomation}
+                    blueprints={blueprints}
+                  />
                 </div>
               </>
             ) : null}
@@ -2577,8 +2772,27 @@ function ContextMenuButton({
   );
 }
 
-function ConfigFields({ node, onChange }: { node: BlueprintNode; onChange: (key: string, value: unknown) => void }) {
+function ConfigFields({
+  node,
+  onChange,
+  automationOverview,
+  automationBusy,
+  onDiscoverAutomation,
+  blueprints = [],
+}: {
+  node: BlueprintNode;
+  onChange: (key: string, value: unknown) => void;
+  automationOverview?: AutomationOverview | null;
+  automationBusy?: string | null;
+  onDiscoverAutomation?: (type: 'tits' | 'vtube') => void;
+  blueprints?: Blueprint[];
+}) {
   const cfg = node.config || {};
+  const automationConnections = automationOverview?.connections || [];
+  const titsConnection = automationConnections.find((item) => item.type === 'tits') || null;
+  const vtubeConnection = automationConnections.find((item) => item.type === 'vtube_studio') || null;
+  const hasOnlineLocalAgent = (automationOverview?.localAgents || []).some((agent) => agent.status === 'online');
+  const soundFiles = automationOverview?.soundStorage?.files || [];
   if (node.type === 'condition' || node.type === 'rouletteCompare') {
     return (
       <div className="grid gap-3">
@@ -2684,7 +2898,23 @@ function ConfigFields({ node, onChange }: { node: BlueprintNode; onChange: (key:
       </div>
     );
   }
-  if (node.type === 'action') return <Field label="실행할 액션 ID" value={String(cfg.actionId || '')} onChange={(value) => onChange('actionId', value)} />;
+  if (node.type === 'action') {
+    const runnableBlueprints = blueprints.filter((item) => item.enabled !== false);
+    return runnableBlueprints.length ? (
+      <SelectField
+        label="실행할 블루프린트"
+        value={String(cfg.actionId || '')}
+        onChange={(value) => onChange('actionId', value)}
+        placeholder="블루프린트 선택"
+        options={runnableBlueprints.map((item) => ({
+          value: item.slug || item.id || '',
+          label: `${item.name}${item.version?.published ? ' · 게시됨' : ''}`,
+        })).filter((item) => item.value)}
+      />
+    ) : (
+      <Field label="실행할 액션 ID" value={String(cfg.actionId || '')} onChange={(value) => onChange('actionId', value)} />
+    );
+  }
   if (node.type === 'wait') return <Field label="대기 시간(초)" value={String(cfg.seconds || 0)} onChange={(value) => onChange('seconds', value)} />;
   if (node.type === 'cooldown') {
     return (
@@ -2775,24 +3005,114 @@ function ConfigFields({ node, onChange }: { node: BlueprintNode; onChange: (key:
   if (node.type === 'sound') {
     return (
       <div className="grid gap-3">
-        <Field label="사운드 파일 ID" value={String(cfg.fileId || '')} onChange={(value) => onChange('fileId', value)} />
+        {soundFiles.length ? (
+          <SelectField
+            label="사운드 파일"
+            value={String(cfg.fileId || '')}
+            onChange={(value) => onChange('fileId', value)}
+            placeholder="사운드 선택"
+            options={soundFiles.map((file) => ({ value: file.id, label: file.name || file.id }))}
+          />
+        ) : (
+          <Field label="사운드 파일 ID" value={String(cfg.fileId || '')} onChange={(value) => onChange('fileId', value)} />
+        )}
         <Field label="볼륨" value={String(cfg.volume || 1)} onChange={(value) => onChange('volume', value)} />
       </div>
     );
   }
   if (node.type === 'tits') {
+    const triggers = titsConnection?.discoveryCache?.triggers || [];
+    const items = titsConnection?.discoveryCache?.items || [];
     return (
       <div className="grid gap-3">
-        <Field label="트리거 ID" value={String(cfg.triggerId || '')} onChange={(value) => onChange('triggerId', value)} />
+        <AutomationDiscoveryHeader
+          title="T.I.T.S. 트리거"
+          connection={titsConnection}
+          hasOnlineLocalAgent={hasOnlineLocalAgent}
+          busy={automationBusy === 'tits.discover'}
+          onDiscover={() => onDiscoverAutomation?.('tits')}
+        />
+        {triggers.length ? (
+          <SelectField
+            label="실행할 트리거"
+            value={String(cfg.triggerId || '')}
+            onChange={(value) => {
+              const trigger = triggers.find((item) => item.id === value);
+              onChange('triggerId', value);
+              if (trigger?.name) onChange('triggerName', trigger.name);
+            }}
+            placeholder="트리거 선택"
+            options={triggers.map((trigger) => ({ value: trigger.id, label: trigger.name || trigger.id }))}
+          />
+        ) : (
+          <Field label="트리거 ID" value={String(cfg.triggerId || '')} onChange={(value) => onChange('triggerId', value)} />
+        )}
+        {items.length ? (
+          <SelectField
+            label="참고: 불러온 아이템"
+            value={String(cfg.itemId || '')}
+            onChange={(value) => onChange('itemId', value)}
+            placeholder="아이템을 선택해 메모"
+            options={items.map((item) => ({ value: item.id, label: item.name || item.id }))}
+          />
+        ) : null}
         <Field label="강도" value={String(cfg.strength || 1)} onChange={(value) => onChange('strength', value)} />
         <Field label="지속 시간(ms)" value={String(cfg.durationMs || 1000)} onChange={(value) => onChange('durationMs', value)} />
       </div>
     );
   }
   if (node.type === 'vtube') {
+    const discovery = vtubeConnection?.discoveryCache;
+    const hotkeys = discovery?.hotkeys || [];
+    const expressions = discovery?.expressions || [];
+    const models = discovery?.models || [];
     return (
       <div className="grid gap-3">
-        <Field label="핫키 ID" value={String(cfg.hotkeyId || '')} onChange={(value) => onChange('hotkeyId', value)} />
+        <AutomationDiscoveryHeader
+          title="VTube Studio 반응"
+          connection={vtubeConnection}
+          hasOnlineLocalAgent={hasOnlineLocalAgent}
+          busy={automationBusy === 'vtube.discover'}
+          onDiscover={() => onDiscoverAutomation?.('vtube')}
+        />
+        {discovery?.currentModel?.name ? (
+          <div className="rounded-[var(--radius-control)] border bg-background/70 p-3 text-xs leading-5 text-muted-foreground">
+            현재 모델: <span className="font-bold text-foreground">{discovery.currentModel.name}</span>
+          </div>
+        ) : null}
+        {models.length ? (
+          <SelectField
+            label="참고: 불러온 모델"
+            value={String(cfg.modelId || '')}
+            onChange={(value) => onChange('modelId', value)}
+            placeholder="모델을 선택해 메모"
+            options={models.map((model) => ({ value: model.id, label: `${model.name || model.id}${model.loaded ? ' · 로드됨' : ''}` }))}
+          />
+        ) : null}
+        {hotkeys.length ? (
+          <SelectField
+            label="실행할 핫키"
+            value={String(cfg.hotkeyId || '')}
+            onChange={(value) => {
+              const hotkey = hotkeys.find((item) => item.id === value);
+              onChange('hotkeyId', value);
+              if (hotkey?.name) onChange('hotkeyName', hotkey.name);
+            }}
+            placeholder="핫키 선택"
+            options={hotkeys.map((hotkey) => ({ value: hotkey.id, label: hotkey.name || hotkey.id }))}
+          />
+        ) : (
+          <Field label="핫키 ID" value={String(cfg.hotkeyId || '')} onChange={(value) => onChange('hotkeyId', value)} />
+        )}
+        {expressions.length ? (
+          <SelectField
+            label="참고: 표정 파일"
+            value={String(cfg.expressionFile || '')}
+            onChange={(value) => onChange('expressionFile', value)}
+            placeholder="표정 파일을 선택해 메모"
+            options={expressions.map((expression) => ({ value: expression.file || expression.name, label: `${expression.name || expression.file}${expression.active ? ' · 활성' : ''}` }))}
+          />
+        ) : null}
         <Field label="파라미터" value={String(cfg.parameter || '')} onChange={(value) => onChange('parameter', value)} />
         <Field label="값" value={String(cfg.value || '')} onChange={(value) => onChange('value', value)} />
       </div>
@@ -2806,6 +3126,72 @@ function ConfigFields({ node, onChange }: { node: BlueprintNode; onChange: (key:
       ))}
       {!Object.keys(cfg).length ? <div className="rounded-[var(--radius-control)] border bg-background/70 p-3 text-sm text-muted-foreground">설정할 항목이 없습니다.</div> : null}
     </div>
+  );
+}
+
+function AutomationDiscoveryHeader({
+  title,
+  connection,
+  hasOnlineLocalAgent,
+  busy,
+  onDiscover,
+}: {
+  title: string;
+  connection: AutomationConnection | null;
+  hasOnlineLocalAgent: boolean;
+  busy: boolean;
+  onDiscover: () => void;
+}) {
+  const cache = connection?.discoveryCache;
+  return (
+    <div className="grid gap-3 rounded-[var(--radius-control)] border bg-background/70 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="min-w-0">
+          <div className="text-sm font-bold">{title}</div>
+          <div className="mt-1 truncate text-xs text-muted-foreground">
+            {cache?.fetchedAt ? `${compactDateTime(cache.fetchedAt)} 불러옴` : '아직 로컬 프로그램 목록을 불러오지 않았습니다.'}
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Badge tone={hasOnlineLocalAgent ? 'mint' : 'neutral'}>{hasOnlineLocalAgent ? '로컬 연결됨' : '로컬 대기'}</Badge>
+          {connection?.endpoint ? <Badge tone="neutral">{connection.endpoint}</Badge> : null}
+        </div>
+      </div>
+      <Button type="button" variant="outline" size="sm" onClick={onDiscover} disabled={busy}>
+        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+        로컬 프로그램에서 목록 불러오기
+      </Button>
+    </div>
+  );
+}
+
+function SelectField({
+  label,
+  value,
+  onChange,
+  options,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: Array<{ value: string; label: string }>;
+  placeholder?: string;
+}) {
+  return (
+    <label className="grid min-w-0 gap-2 text-sm font-semibold">
+      {label}
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="min-h-[var(--control-height)] w-full min-w-0 rounded-[var(--radius-control)] border bg-background px-3 text-sm outline-none transition focus:border-primary/45 focus:ring-2 focus:ring-ring"
+      >
+        <option value="">{placeholder || '선택'}</option>
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>{option.label}</option>
+        ))}
+      </select>
+    </label>
   );
 }
 

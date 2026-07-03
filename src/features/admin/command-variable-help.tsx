@@ -114,9 +114,9 @@ export function CommandVariableHelpButton() {
                 </span>
               </div>
             ) : groups.length ? (
-              <div className="grid gap-4 lg:grid-cols-2">
+              <div className="grid items-start gap-4 lg:grid-cols-2">
                 {groups.map(([group, items]) => (
-                  <section key={group} className="grid min-w-0 gap-3 rounded-[var(--radius-panel)] border bg-background/62 p-[clamp(0.9rem,1.8vw,1.15rem)]">
+                  <section key={group} className="grid min-w-0 self-start gap-3 rounded-[var(--radius-panel)] border bg-background/62 p-[clamp(0.9rem,1.8vw,1.15rem)]">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <h3 className="text-base font-bold">{group}</h3>
                       <Badge tone="neutral">{items.length}개</Badge>

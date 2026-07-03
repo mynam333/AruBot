@@ -4,11 +4,12 @@ import fs from 'fs';
 import axios from 'axios';
 import https from 'https';
 import dns from 'dns';
+import net from 'net';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
-import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, getSessionUserId, getAnyTokens, listChannelPoints, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, getChannelPoints, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, deletePlatformTokens, deletePlatformAccount, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps } from './supabase.js';
+import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, getSessionUserId, listChannelPoints, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, getChannelPoints, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, deletePlatformTokens, deletePlatformAccount, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps } from './supabase.js';
 import { createPlatformProfileService } from './platform-profiles.js';
 import { WebSocketServer, WebSocket } from 'ws';
 
@@ -9340,6 +9341,15 @@ function getAuthRedirectUrl(req, params = {}) {
   return redirectUrl.toString();
 }
 
+function getSameOriginReturnUrl(req, rawReturnTo) {
+  const raw = String(rawReturnTo || '').trim();
+  if (!raw) return null;
+  const requestOrigin = `${req.protocol}://${req.get('host')}`;
+  const url = new URL(raw, requestOrigin);
+  if (url.origin !== requestOrigin) return null;
+  return url;
+}
+
 const oauthStateStore = new Map();
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
@@ -9423,11 +9433,13 @@ function consumeOAuthState(provider, state, cookieState) {
 
   if (storeMatches) oauthStateStore.delete(textState);
 
+  const signedCookieMatches = signedMatches && cookieMatches;
+
   return {
-    ok: cookieMatches || storeMatches || signedMatches,
+    ok: storeMatches || signedCookieMatches,
     cookieMatches,
     storeMatches,
-    signedMatches,
+    signedMatches: signedCookieMatches,
     signedStateReason: signedState.reason,
     storeFound: !!record,
     providerMatches,
@@ -9504,10 +9516,12 @@ app.get('/apikey', async (req, res) => {
     const returnTo = String(req.query.return_to || req.query.returnTo || '');
     if (returnTo) {
       try {
-        const url = new URL(returnTo);
-        url.searchParams.set('apiKey', key);
-        res.writeHead(302, { Location: url.toString() });
-        return res.end();
+        const url = getSameOriginReturnUrl(req, returnTo);
+        if (url) {
+          url.searchParams.set('apiKey', key);
+          res.writeHead(302, { Location: url.toString() });
+          return res.end();
+        }
       } catch { }
     }
     return res.send(`<html><body><h3>API Key Issued</h3><code>${key}</code></body></html>`);
@@ -9633,48 +9647,6 @@ async function getPartitionId(req, res) {
       }
     }
 
-    // Last resort: try any token row to resolve userId and attach current cookie sid
-    try {
-      const anyTok = await getAnyTokens();
-      if (anyTok) {
-        const me = await axios.get(`${OPENAPI_BASE}/open/v1/users/me`, {
-          headers: { Authorization: `${anyTok.tokenType || 'Bearer'} ${anyTok.accessToken}` }
-        });
-        const content = me?.data?.content || me?.data || {};
-        if (content?.channelId) {
-          const uid = String(content.channelId);
-          const channelId = getChannelIdFromUserId(uid);
-
-          if (!channelId) {
-            console.warn('[SessionBootstrap] Channel ID validation failed for fallback uid:', uid);
-            return null;
-          }
-
-          try { await upsertSession(sidToken, uid, 30); } catch { }
-
-          const sid = `user:${uid}`;
-
-          const sessionContext = {
-            sid,
-            channelId,
-            userId: uid,
-            lastActivity: Date.now(),
-            sessionKey: null,
-            isolationLevel: 'strict',
-            connectionId: `fallback_${Date.now()}_${Math.random().toString(36).slice(2)}`
-          };
-
-          const cacheKey = `session:${sidToken}`;
-          channelCache.set(channelId, cacheKey, sessionContext, CACHE_TTL);
-          console.log(`[SessionBootstrap] Fallback context cached - channelId: ${channelId}, userId: ${uid}`);
-
-          return sid;
-        }
-      }
-    } catch (error) {
-      console.error('[SessionBootstrap] Fallback token resolution failed:', error);
-    }
-
     console.warn('[SessionBootstrap] No session and no temp tokens for cookieSid=', sidToken);
   } catch (error) {
     console.error('[Session] getPartitionId error:', error);
@@ -9780,10 +9752,73 @@ function makeTitsMessage(messageType, data = {}) {
   };
 }
 
-function sendTitsRequest(endpoint, messageType, data = {}, timeoutMs = 4500) {
+function isPrivateIpAddress(value) {
+  if (net.isIP(value) === 4) {
+    const [a, b] = String(value).split('.').map((part) => Number(part));
+    return (
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 198 && (b === 18 || b === 19)) ||
+      a >= 224
+    );
+  }
+  if (net.isIP(value) === 6) {
+    const normalized = String(value).toLowerCase();
+    return normalized === '::' ||
+      normalized === '::1' ||
+      normalized.startsWith('fc') ||
+      normalized.startsWith('fd') ||
+      normalized.startsWith('fe8') ||
+      normalized.startsWith('fe9') ||
+      normalized.startsWith('fea') ||
+      normalized.startsWith('feb') ||
+      normalized.startsWith('::ffff:127.') ||
+      normalized.startsWith('::ffff:10.') ||
+      normalized.startsWith('::ffff:192.168.');
+  }
+  return false;
+}
+
+async function assertSafeServerAutomationWebSocketUrl(rawEndpoint) {
+  const url = new URL(getVtubeEndpoint(rawEndpoint));
+  if (!['wss:', 'ws:'].includes(url.protocol)) {
+    throw new Error('Automation endpoint must be a ws/wss URL');
+  }
+
+  const allowPrivateNetwork = process.env.ARUBOT_ALLOW_SERVER_PRIVATE_AUTOMATION === 'true';
+  const allowInsecure = process.env.ARUBOT_ALLOW_INSECURE_SERVER_AUTOMATION_WS === 'true' || process.env.NODE_ENV !== 'production';
+  if (url.protocol === 'ws:' && !allowInsecure) {
+    throw new Error('Server-side automation endpoints must use WSS in production');
+  }
+
+  const hostname = url.hostname;
+  const lowerHost = hostname.toLowerCase();
+  if (!allowPrivateNetwork && (
+    lowerHost === 'localhost' ||
+    lowerHost.endsWith('.localhost') ||
+    isPrivateIpAddress(hostname)
+  )) {
+    throw new Error('Server-side automation endpoints cannot target localhost or private networks');
+  }
+  if (!allowPrivateNetwork && !net.isIP(hostname)) {
+    const records = await dns.promises.lookup(hostname, { all: true, verbatim: true });
+    if (!records.length || records.some((record) => isPrivateIpAddress(record.address))) {
+      throw new Error('Server-side automation endpoint resolves to a private network address');
+    }
+  }
+  return url.href;
+}
+
+async function sendTitsRequest(endpoint, messageType, data = {}, timeoutMs = 4500) {
+  const safeEndpoint = await assertSafeServerAutomationWebSocketUrl(getTitsEndpoint(endpoint, 'data'));
   return new Promise((resolve, reject) => {
     const message = makeTitsMessage(messageType, data);
-    const ws = new WebSocket(getTitsEndpoint(endpoint, 'data'));
+    const ws = new WebSocket(safeEndpoint);
     const timer = setTimeout(() => {
       try { ws.close(); } catch { }
       reject(new Error('T.I.T.S. response timeout'));
@@ -9847,10 +9882,11 @@ function makeVtubeMessage(messageType, data = {}) {
   };
 }
 
-function sendVtubeRequest(endpoint, messageType, data = {}, timeoutMs = 7000) {
+async function sendVtubeRequest(endpoint, messageType, data = {}, timeoutMs = 7000) {
+  const safeEndpoint = await assertSafeServerAutomationWebSocketUrl(endpoint);
   return new Promise((resolve, reject) => {
     const message = makeVtubeMessage(messageType, data);
-    const ws = new WebSocket(getVtubeEndpoint(endpoint));
+    const ws = new WebSocket(safeEndpoint);
     const timer = setTimeout(() => {
       try { ws.close(); } catch { }
       reject(new Error('VTube Studio response timeout'));
@@ -13242,7 +13278,7 @@ app.post('/api/channel/tokens/maintenance', requireOpsAuth, async (req, res) => 
   }
 });
 
-// Manual bootstrap: attach current cookie sid to a userId resolved from any stored tokens
+// Manual bootstrap: attach current cookie sid only to tokens already stored for that same temporary sid.
 app.post('/api/auth/chzzk/session/attach', async (req, res) => {
   try {
     const cookieSid = getCookieSid(req);
@@ -13251,12 +13287,12 @@ app.post('/api/auth/chzzk/session/attach', async (req, res) => {
     const mapped = await getSessionUserId(cookieSid);
     if (mapped) return res.json({ ok: true, userId: mapped, note: 'already_mapped' });
 
-    const anyTok = await getAnyTokens();
-    if (!anyTok) return res.status(404).json({ error: 'No tokens in DB' });
-    let tokenType = anyTok.tokenType || 'Bearer';
-    let accessToken = anyTok.accessToken;
-    let refreshToken = anyTok.refreshToken;
-    const originSid = anyTok.sid; // where tokens are stored currently
+    const originSid = `sid:${cookieSid}`;
+    const tempTokens = await getTokens(originSid);
+    if (!tempTokens) return res.status(404).json({ error: 'No temporary tokens for current session' });
+    let tokenType = tempTokens.tokenType || 'Bearer';
+    let accessToken = tempTokens.accessToken;
+    let refreshToken = tempTokens.refreshToken;
 
     const callUsersMe = async () => {
       const me = await axios.get(`${OPENAPI_BASE}/open/v1/users/me`, {

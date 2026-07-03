@@ -11,7 +11,6 @@ contextBridge.exposeInMainWorld('aruLocal', {
   triggerVtubeHotkey: (payload) => ipcRenderer.invoke('vtube:hotkey', payload),
   chooseSoundFolder: () => ipcRenderer.invoke('folder:chooseSound'),
   openSoundFolder: () => ipcRenderer.invoke('folder:openSound'),
-  openExternal: (url) => ipcRenderer.invoke('external:open', url),
   openDashboard: () => ipcRenderer.invoke('dashboard:open'),
   checkUpdate: () => ipcRenderer.invoke('update:check'),
   installUpdate: () => ipcRenderer.invoke('update:install'),
