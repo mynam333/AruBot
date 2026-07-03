@@ -67,8 +67,8 @@ RETURNS TABLE(
 BEGIN
   RETURN QUERY
   SELECT 
-    schemaname||'.'||relname as table_name,
-    indexrelname as index_name,
+    (schemaname||'.'||relname)::TEXT as table_name,
+    indexrelname::TEXT as index_name,
     idx_tup_read as index_usage_count,
     pg_size_pretty(pg_total_relation_size(relid)) as table_size,
     pg_size_pretty(pg_relation_size(indexrelid)) as index_size
@@ -90,10 +90,10 @@ RETURNS TABLE(
 BEGIN
   RETURN QUERY
   SELECT 
-    schemaname||'.'||relname as table_name,
-    indexrelname as index_name,
+    (schemaname||'.'||relname)::TEXT as table_name,
+    indexrelname::TEXT as index_name,
     CASE 
-      WHEN idx_tup_read + idx_tup_fetch = 0 THEN 0
+      WHEN idx_tup_read + idx_tup_fetch = 0 THEN 0::NUMERIC
       ELSE ROUND((idx_tup_read::NUMERIC / (idx_tup_read + idx_tup_fetch + 1)) * 100, 2)
     END as usage_ratio,
     CASE 

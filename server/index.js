@@ -1989,7 +1989,9 @@ async function sendChatByPost(sid, chatPost, message, opts = {}) {
   let token = chatPost?.accessToken || null;
   if (!sessionKey) {
     try {
-      const entry = sessionStore.get(sid) || await ensureSession(sid);
+      const liveState = await refreshChzzkLiveStatusForSid(sid, { ttlMs: 5000 });
+      if (!liveState.live) return null;
+      const entry = sessionStore.get(sid) || await ensureSession(sid, liveState.channelId || undefined);
       sessionKey = entry?.sessionKey || null;
     } catch { }
   }
@@ -7039,7 +7041,7 @@ async function validateAndRecoverSessionState(sid) {
 
     if (dbSession && cachedSession) {
       const hasLiveMismatch = dbSession.live !== cachedSession.live;
-      const hasDateMismatch = dbSession.start_date !== cachedSession.startDate;
+      const hasDateMismatch = (dbSession.start_date || null) !== (cachedSession.startDate || null);
 
       if (hasLiveMismatch || hasDateMismatch) {
         logCacheDBMismatch(sid, 'session_state', {
@@ -7056,7 +7058,7 @@ async function validateAndRecoverSessionState(sid) {
 
         const newCacheState = {
           live: dbSession.live,
-          startDate: dbSession.start_date,
+          startDate: dbSession.start_date || undefined,
           sessionStartTime: dbSession.session_start_time,
           lastUpdate: dbSession.last_update
         };
@@ -7145,6 +7147,161 @@ function renderAttendanceMessage(template, context = {}) {
 }
 // Track active sids seen by the server to enable background live checks
 const activeSids = new Map(); // sid -> lastSeenTs
+const liveChatEnsurePromises = new Map(); // sid:channelId -> Promise
+const CHZZK_LIVE_STATUS_TTL_MS = Math.max(5000, Number(process.env.CHZZK_LIVE_STATUS_TTL_MS || 15000));
+const LIVE_STATUS_POLL_INTERVAL_MS = Math.max(5000, Number(process.env.LIVE_STATUS_POLL_INTERVAL_MS || 15000));
+const CHZZK_CHAT_CONNECT_ON_LIVE = String(process.env.CHZZK_CHAT_CONNECT_ON_LIVE || 'true').toLowerCase() !== 'false';
+
+function parseChzzkLiveTimestamp(value, fallback = Date.now()) {
+  if (value == null || value === '') return fallback;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    return numeric < 1000000000000 ? numeric * 1000 : numeric;
+  }
+  const parsed = Date.parse(String(value));
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function isChzzkLiveDetailOpen(content) {
+  const status = String(content?.status || content?.liveStatus || content?.state || '').toLowerCase();
+  return status === 'open' || status === 'live' || status === 'onair' || status === 'on_air' || content?.openLive === true || content?.isLive === true || content?.live === true;
+}
+
+async function ensureChzzkChatSessionForLiveSid(sid, channelId = null) {
+  if (!CHZZK_CHAT_CONNECT_ON_LIVE || !sid) return null;
+  let targetChannelId = channelId ? String(channelId) : '';
+  if (!targetChannelId) {
+    try {
+      const settings = await getBotSettings(sid) || {};
+      const uids = await resolveChzzkChannelUidsForSid(sid, settings);
+      targetChannelId = uids[0] || '';
+    } catch { }
+  }
+  if (!targetChannelId) return null;
+
+  const existing = sessionStore.get(sid);
+  if (existing?.connected && existing?.subscribed?.has?.(targetChannelId)) return existing;
+
+  const key = `${sid}:${targetChannelId}`;
+  if (liveChatEnsurePromises.has(key)) return liveChatEnsurePromises.get(key);
+
+  const promise = ensureSession(sid, targetChannelId)
+    .then((entry) => {
+      console.log(`[CHZZK] Live chat session ensured for ${sid} channel=${targetChannelId}`);
+      return entry;
+    })
+    .catch((error) => {
+      console.warn(`[CHZZK] Failed to ensure live chat session for ${sid} channel=${targetChannelId}:`, error?.response?.data || error?.message || error);
+      return null;
+    })
+    .finally(() => {
+      liveChatEnsurePromises.delete(key);
+    });
+
+  liveChatEnsurePromises.set(key, promise);
+  return promise;
+}
+
+function closeChzzkChatSessionForOfflineSid(sid, channelId = null, reason = 'live_offline') {
+  let entry = sid ? sessionStore.get(sid) : null;
+  const targetChannelId = channelId ? String(channelId) : String(entry?.channelId || '');
+  if (!entry && targetChannelId) entry = channelSessionStore.get(targetChannelId);
+  if (!entry) return false;
+
+  const sids = entry.sids instanceof Set && entry.sids.size
+    ? Array.from(entry.sids)
+    : Array.from(sessionStore.entries()).filter(([, value]) => value === entry).map(([key]) => key);
+
+  for (const mappedSid of sids) {
+    sessionStore.delete(mappedSid);
+  }
+  if (targetChannelId && channelSessionStore.get(targetChannelId) === entry) {
+    channelSessionStore.delete(targetChannelId);
+  }
+
+  entry.connected = false;
+  try { entry.subscribed?.clear?.(); } catch { }
+  try { entry.sids?.clear?.(); } catch { }
+  try {
+    if (entry.socket && (entry.socket.connected || typeof entry.socket.disconnect === 'function')) {
+      entry.socket.disconnect();
+    }
+  } catch { }
+
+  console.log(`[CHZZK] Chat session closed for offline broadcast sid=${sid || 'unknown'} channel=${targetChannelId || 'unknown'} reason=${reason}`);
+  return true;
+}
+
+async function refreshChzzkLiveStatusForSid(sid, options = {}) {
+  if (!sid) return { live: false, channelId: null, startTs: null };
+  const now = Date.now();
+  const ttlMs = Number.isFinite(Number(options.ttlMs)) ? Number(options.ttlMs) : CHZZK_LIVE_STATUS_TTL_MS;
+  const cached = liveStatusCache.get(sid);
+  if (!options.force && cached?.provider === 'chzzk' && (now - cached.ts) < ttlMs) {
+    if (cached.live && options.ensureChat !== false) {
+      ensureChzzkChatSessionForLiveSid(sid, cached.channelId).catch(() => { });
+    }
+    return { live: !!cached.live, channelId: cached.channelId || null, startTs: cached.startTs || null, cached: true };
+  }
+
+  const settings = options.settings || await getBotSettings(sid) || {};
+  const channelUids = Array.isArray(options.channelUids) ? options.channelUids : await resolveChzzkChannelUidsForSid(sid, settings);
+  if (!channelUids.length) {
+    liveStatusCache.set(sid, { ts: now, live: false, provider: 'chzzk', channelId: null, startTs: null });
+    return { live: false, channelId: null, startTs: null };
+  }
+
+  let anyLive = false;
+  let liveChannelId = null;
+  let startTs = null;
+  for (const uid of channelUids) {
+    try {
+      const r = await axiosGetWithRetry(`https://api.chzzk.naver.com/service/v2/channels/${encodeURIComponent(uid)}/live-detail`);
+      const content = r?.data?.content || r?.data || {};
+      if (isChzzkLiveDetailOpen(content)) {
+        anyLive = true;
+        liveChannelId = String(uid);
+        const candidate = content?.openDate || content?.openTime || content?.openedAt || content?.liveStartAt || content?.startTime || null;
+        startTs = parseChzzkLiveTimestamp(candidate, now);
+        break;
+      }
+    } catch (e) {
+      console.warn('[live-detail] fetch failed for', uid, e?.code || e?.message || e);
+    }
+  }
+
+  const previousLive = cached?.provider === 'chzzk' ? !!cached.live : undefined;
+  const cachedSession = liveSession.get(sid);
+  const sessionLastUpdate = Number(cachedSession?.lastUpdate || 0);
+
+  liveStatusCache.set(sid, {
+    ts: now,
+    live: anyLive,
+    provider: 'chzzk',
+    channelId: liveChannelId,
+    startTs: startTs || null
+  });
+
+  const shouldPersistSessionState = anyLive
+    ? previousLive !== true || !cachedSession?.live || (now - sessionLastUpdate) > 60 * 1000
+    : previousLive === true || !!cachedSession?.live;
+
+  if (shouldPersistSessionState) {
+    try {
+      await updateSessionState(sid, anyLive, startTs || now);
+    } catch (error) {
+      console.error(`[Session] Failed to update CHZZK live session state for ${sid}:`, error?.message || error);
+    }
+  }
+
+  if (anyLive && options.ensureChat !== false) {
+    ensureChzzkChatSessionForLiveSid(sid, liveChannelId).catch(() => { });
+  } else if (!anyLive && options.closeChat !== false) {
+    closeChzzkChatSessionForOfflineSid(sid, channelUids[0] || liveChannelId, 'live_status_offline');
+  }
+
+  return { live: anyLive, channelId: liveChannelId, startTs: startTs || null };
+}
 
 async function isLiveAllowedForSid(sid) {
   try {
@@ -7152,64 +7309,10 @@ async function isLiveAllowedForSid(sid) {
     const onlyWhenLive = !!settings.onlyWhenLive;
     const channelUids = await resolveChzzkChannelUidsForSid(sid, settings);
 
-    if (!onlyWhenLive) return true; // no restriction
-    if (!channelUids.length) return false; // restricted but no channels configured
+    if (!channelUids.length) return !onlyWhenLive; // unrestricted mode can still process without a live channel
 
-    const cached = liveStatusCache.get(sid);
-    const now = Date.now();
-    if (cached && (now - cached.ts) < 5 * 60 * 1000) {
-      // Keep previous liveSession state; cached does not update transitions
-      return !!cached.live;
-    }
-
-    // Query channels; if any is OPEN, treat as live
-    let anyLive = false;
-    let startTs = null;
-    for (const uid of channelUids) {
-      try {
-        const r = await axiosGetWithRetry(`https://api.chzzk.naver.com/service/v2/channels/${encodeURIComponent(uid)}/live-detail`);
-        const content = r?.data?.content || r?.data || {};
-        const status = String(content?.status || '').toLowerCase();
-        if (status === 'open') {
-          anyLive = true;
-          // Try to extract stream open timestamp (ms) if provided by API
-          const candidate = content?.openDate || content?.openTime || content?.openedAt || content?.liveStartAt || null;
-          const n = candidate != null ? Number(candidate) : NaN;
-          if (!Number.isNaN(n) && n > 0) startTs = n;
-          break;
-        }
-      } catch (e) {
-        console.warn('[live-detail] fetch failed for', uid, e?.code || e?.message || e);
-      }
-    }
-    liveStatusCache.set(sid, { ts: now, live: anyLive });
-
-    try {
-      const effectiveStartTs = startTs && startTs > 0 ? startTs : now;
-      await updateSessionState(sid, anyLive, effectiveStartTs);
-    } catch (error) {
-      console.error(`[Session] Failed to update session state for ${sid}:`, error);
-      const sess = liveSession.get(sid) || { live: false, startDate: undefined, lastUpdate: now };
-      if (anyLive) {
-        if (!sess.live || !sess.startDate) {
-          sess.live = true;
-          const startDateKst = getKstDateString(startTs && startTs > 0 ? startTs : undefined);
-          sess.startDate = startDateKst;
-          sess.sessionStartTime = startTs && startTs > 0 ? startTs : now;
-          sess.lastUpdate = now;
-          try { await markLiveDay(sid, sess.startDate); } catch { }
-        } else {
-          sess.lastUpdate = now;
-        }
-      } else {
-        sess.live = false;
-        sess.startDate = undefined;
-        sess.sessionStartTime = undefined;
-        sess.lastUpdate = now;
-      }
-      liveSession.set(sid, sess);
-    }
-    return anyLive;
+    const state = await refreshChzzkLiveStatusForSid(sid, { settings, channelUids });
+    return !onlyWhenLive || !!state.live;
   } catch {
     return true;
   }
@@ -11474,30 +11577,20 @@ setInterval(async () => {
         activeSids.delete(sid);
         continue;
       }
-      try { await isLiveAllowedForSid(sid); } catch { }
+      try { await refreshChzzkLiveStatusForSid(sid); } catch { }
     }
   } catch { }
-}, 60 * 1000);
+}, LIVE_STATUS_POLL_INTERVAL_MS);
 
 // Public live status endpoint (ignores onlyWhenLive; returns actual channel live state)
 app.get('/api/chzzk/live', async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
-    // Determine channel UID list
     const settings = await getBotSettings(sid) || {};
     let channelUids = await resolveChzzkChannelUidsForSid(sid, settings);
     if (!channelUids.length) return res.json({ live: false });
-    let live = false;
-    for (const uid of channelUids) {
-      try {
-        const r = await axiosGetWithRetry(`https://api.chzzk.naver.com/service/v2/channels/${encodeURIComponent(uid)}/live-detail`);
-        const status = String((r?.data?.content || r?.data || {})?.status || '').toLowerCase();
-        if (status === 'open') { live = true; break; }
-      } catch (e) {
-        console.warn('[live endpoint] live-detail failed for', uid, e?.code || e?.message || e);
-      }
-    }
-    return res.json({ live });
+    const state = await refreshChzzkLiveStatusForSid(sid, { settings, channelUids, force: true });
+    return res.json({ live: state.live, channelId: state.channelId, startTs: state.startTs });
   } catch (e) {
     return res.json({ live: false });
   }
@@ -12154,7 +12247,9 @@ app.post('/api/chzzk/chat/send', async (req, res) => {
       // If we cannot detect channel, we can still attempt ensureSession without it
     }
 
-    ensureSession(sid, channelId ? String(channelId) : undefined).catch(() => { });
+    if (channelId) {
+      refreshChzzkLiveStatusForSid(sid, { channelUids: [String(channelId)] }).catch(() => { });
+    }
 
     const accessToken = await getValidAccessToken(sid);
     const url = `${OPENAPI_BASE}/open/v1/chats/send`;
@@ -12341,8 +12436,11 @@ app.get('/api/auth/chzzk/callback', async (req, res) => {
       expiresAt: computeExpiresAt(expiresIn || 86400)
     });
     if (pid && !pid.startsWith('sid:')) {
-      ensureSession(pid, loginChannelId || undefined).catch((err) => {
-        console.warn('[CHZZK] Failed to start event session after OAuth callback:', err?.response?.data || err?.message || err);
+      refreshChzzkLiveStatusForSid(pid, {
+        channelUids: loginChannelId ? [String(loginChannelId)] : undefined,
+        force: true
+      }).catch((err) => {
+        console.warn('[CHZZK] Failed to refresh live status after OAuth callback:', err?.response?.data || err?.message || err);
       });
     }
 
@@ -13587,9 +13685,8 @@ async function ensureSession(sid, channelId) {
           const sid = entry?.primarySid || ([...sessionStore.entries()].find(([, e]) => e === entry)?.[0]);
           if (!sid) return;
 
-          // Live-only gate per sid
-          const allowed = await isLiveAllowedForSid(sid);
-          if (!allowed) return;
+          const liveState = await refreshChzzkLiveStatusForSid(sid, { ttlMs: 5000 });
+          if (!liveState.live) return;
 
           // Identify user and username once (prefer numeric/string userId from profile)
           const resolvedUsername = String(msg?.profile?.nickname || ev.user || 'Unknown');
@@ -13616,7 +13713,7 @@ async function ensureSession(sid, channelId) {
           } catch { }
 
           // Attendance: only when actually live. If not live, always skip attendance.
-          const currentlyLive = !!(liveStatusCache.get(sid)?.live);
+          const currentlyLive = !!liveState.live;
           if (currentlyLive) {
             const attendanceStartTime = Date.now();
             const attendDate = await getAttendanceDate(sid);
@@ -14219,6 +14316,8 @@ async function ensureSession(sid, channelId) {
         try {
           const sid = [...sessionStore.entries()].find(([, e]) => e === entry)?.[0];
           if (!sid) return;
+          const liveState = await refreshChzzkLiveStatusForSid(sid, { ttlMs: 5000 });
+          if (!liveState.live) return;
           const amount = Math.max(0, Number(ev.amount || 0));
           const donorName = String(ev.user || '?듬챸');
           const donorId = String(ev.id || '');
@@ -15217,6 +15316,7 @@ app.get('/api/chzzk/events', async (req, res) => {
         return res.status(401).json({ error: 'No session' });
       }
     }
+    activeSids.set(sid, Date.now());
     let { channelId, since } = req.query;
     if (!channelId) {
       // auto-detect user channel
@@ -15237,12 +15337,17 @@ app.get('/api/chzzk/events', async (req, res) => {
       }
     }
 
+    const liveState = await refreshChzzkLiveStatusForSid(sid, { channelUids: [String(channelId)] });
+    if (!liveState.live) {
+      return res.json({ events: [], connected: false, live: false, channelId: String(channelId) });
+    }
+
     const entry = await ensureSession(sid, String(channelId));
     const sinceNum = since ? Number(since) : null;
     const events = entry.queue.filter(ev => !sinceNum || (ev.ts && ev.ts > sinceNum));
     // Sort ascending by ts
     events.sort((a, b) => (a.ts || 0) - (b.ts || 0));
-    return res.json({ events });
+    return res.json({ events, connected: !!entry.connected, live: true, channelId: String(channelId) });
   } catch (e) {
     // console.error('Events error', e?.response?.data || e.message);
     return res.status(500).json({ error: 'Failed to fetch events' });
@@ -15302,12 +15407,13 @@ async function bootstrapEnsureSessions() {
     // Process sequentially with small delay to avoid burst
     for (const sid of sids) {
       try {
+        activeSids.set(sid, Date.now());
         const accessToken = await getValidAccessToken(sid);
         const me = await axios.get(`${OPENAPI_BASE}/open/v1/users/me`, { headers: { Authorization: `Bearer ${accessToken}` } });
         const content = me?.data?.content || me?.data || {};
         const channelId = content.channelId || content.channel_id || null;
         if (channelId) {
-          await ensureSession(sid, String(channelId));
+          await refreshChzzkLiveStatusForSid(sid, { channelUids: [String(channelId)], force: true });
         }
       } catch { }
       await new Promise(r => setTimeout(r, 100));

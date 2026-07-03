@@ -1344,14 +1344,14 @@ export async function analyzeQueryPerformanceSupabase() {
     try {
       result = await pg.query('SELECT * FROM analyze_channel_query_performance()');
     } catch (error) {
-      if (!isUndefinedDbFunctionError(error, 'analyze_channel_query_performance') && error?.code !== '42703') {
+      if (!isUndefinedDbFunctionError(error, 'analyze_channel_query_performance') && error?.code !== '42703' && error?.code !== '42804') {
         throw error;
       }
       console.warn('[Performance Monitor] analyze_channel_query_performance() is unavailable or stale; using direct pg_stat_user_indexes query');
       result = await pg.query(`
         SELECT
-          schemaname||'.'||relname as table_name,
-          indexrelname as index_name,
+          (schemaname||'.'||relname)::TEXT as table_name,
+          indexrelname::TEXT as index_name,
           idx_tup_read as index_usage_count,
           pg_size_pretty(pg_total_relation_size(relid)) as table_size,
           pg_size_pretty(pg_relation_size(indexrelid)) as index_size
@@ -1384,16 +1384,16 @@ export async function monitorIndexUsageSupabase() {
     try {
       result = await pg.query('SELECT * FROM monitor_index_usage()');
     } catch (error) {
-      if (!isUndefinedDbFunctionError(error, 'monitor_index_usage') && error?.code !== '42703') {
+      if (!isUndefinedDbFunctionError(error, 'monitor_index_usage') && error?.code !== '42703' && error?.code !== '42804') {
         throw error;
       }
       console.warn('[Performance Monitor] monitor_index_usage() is unavailable or stale; using direct pg_stat_user_indexes query');
       result = await pg.query(`
         SELECT
-          schemaname||'.'||relname as table_name,
-          indexrelname as index_name,
+          (schemaname||'.'||relname)::TEXT as table_name,
+          indexrelname::TEXT as index_name,
           CASE
-            WHEN idx_tup_read + idx_tup_fetch = 0 THEN 0
+            WHEN idx_tup_read + idx_tup_fetch = 0 THEN 0::NUMERIC
             ELSE ROUND((idx_tup_read::NUMERIC / (idx_tup_read + idx_tup_fetch + 1)) * 100, 2)
           END as usage_ratio,
           CASE
