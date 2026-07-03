@@ -1437,8 +1437,12 @@ export async function getPerformanceRecommendationsSupabase() {
       }));
     });
   } catch (error) {
-    if (isUndefinedDbFunctionError(error, 'get_performance_recommendations')) {
-      console.warn('[Performance Monitor] get_performance_recommendations() is not installed; skipping recommendations');
+    if (
+      isUndefinedDbFunctionError(error, 'get_performance_recommendations') ||
+      error?.code === '42703' ||
+      error?.code === '42804'
+    ) {
+      console.warn('[Performance Monitor] get_performance_recommendations() is unavailable or stale; skipping recommendations');
       return [];
     }
     throw error;

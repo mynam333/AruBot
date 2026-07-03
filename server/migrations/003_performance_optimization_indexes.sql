@@ -36,6 +36,11 @@ CREATE INDEX IF NOT EXISTS idx_sessions_cleanup ON sessions(expires_at, revoked)
 CREATE INDEX IF NOT EXISTS idx_sessions_channel_hash ON sessions(channel_id) 
   WHERE channel_id IS NOT NULL;
 
+DROP FUNCTION IF EXISTS analyze_channel_query_performance();
+DROP FUNCTION IF EXISTS monitor_index_usage();
+DROP FUNCTION IF EXISTS update_channel_statistics();
+DROP FUNCTION IF EXISTS get_performance_recommendations();
+
 -- 성능 모니터링을 위한 뷰
 CREATE OR REPLACE VIEW channel_performance_stats AS
 SELECT 
@@ -118,11 +123,6 @@ BEGIN
   ANALYZE channel_tokens;
   ANALYZE roulette_sessions;
   
-  -- 인덱스 통계 업데이트
-  REINDEX INDEX CONCURRENTLY idx_sessions_channel_id;
-  REINDEX INDEX CONCURRENTLY idx_channel_tokens_channel_type;
-  REINDEX INDEX CONCURRENTLY idx_roulette_sessions_channel_id;
-  
 EXCEPTION
   WHEN OTHERS THEN
     -- 에러 발생 시 로그만 남기고 계속 진행
@@ -142,7 +142,7 @@ BEGIN
   RETURN QUERY
   WITH table_stats AS (
     SELECT 
-      schemaname||'.'||tablename as full_name,
+      (schemaname||'.'||tablename)::TEXT as full_name,
       n_tup_ins + n_tup_upd + n_tup_del as total_modifications,
       n_tup_hot_upd,
       n_dead_tup,
@@ -153,20 +153,20 @@ BEGIN
       AND (tablename LIKE '%session%' OR tablename LIKE '%token%' OR tablename = 'roulette_sessions')
   )
   SELECT 
-    'Maintenance' as category,
-    'Run VACUUM on ' || full_name as recommendation,
-    CASE WHEN n_dead_tup > 1000 THEN 'High' ELSE 'Medium' END as priority,
-    'Improved query performance' as estimated_impact
+    'Maintenance'::TEXT as category,
+    ('Run VACUUM on ' || full_name)::TEXT as recommendation,
+    (CASE WHEN n_dead_tup > 1000 THEN 'High' ELSE 'Medium' END)::TEXT as priority,
+    'Improved query performance'::TEXT as estimated_impact
   FROM table_stats 
   WHERE n_dead_tup > 100
   
   UNION ALL
   
   SELECT 
-    'Statistics' as category,
-    'Run ANALYZE on ' || full_name as recommendation,
-    CASE WHEN last_analyze < NOW() - INTERVAL '1 week' THEN 'High' ELSE 'Low' END as priority,
-    'Better query planning' as estimated_impact
+    'Statistics'::TEXT as category,
+    ('Run ANALYZE on ' || full_name)::TEXT as recommendation,
+    (CASE WHEN last_analyze < NOW() - INTERVAL '1 week' THEN 'High' ELSE 'Low' END)::TEXT as priority,
+    'Better query planning'::TEXT as estimated_impact
   FROM table_stats 
   WHERE last_analyze IS NULL OR last_analyze < NOW() - INTERVAL '3 days'
   

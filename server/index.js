@@ -174,6 +174,7 @@ app.use('/files', cors(corsOptions), express.static(path.join(path.dirname(new U
 // =============================
 const sessionContextCache = new Map(); // sidToken -> { sid, channelId, userId, lastActivity, sessionKey }
 const sessionStore = new Map(); // sid -> entry
+const activeSids = new Map(); // sid -> lastSeenTs
 const CACHE_TTL = 5 * 60 * 1000;
 
 const CONNECTION_CLEANUP_INTERVAL = 5 * 60 * 1000;
@@ -7146,7 +7147,6 @@ function renderAttendanceMessage(template, context = {}) {
   ).slice(0, 100);
 }
 // Track active sids seen by the server to enable background live checks
-const activeSids = new Map(); // sid -> lastSeenTs
 const liveChatEnsurePromises = new Map(); // sid:channelId -> Promise
 const CHZZK_LIVE_STATUS_TTL_MS = Math.max(5000, Number(process.env.CHZZK_LIVE_STATUS_TTL_MS || 15000));
 const LIVE_STATUS_POLL_INTERVAL_MS = Math.max(5000, Number(process.env.LIVE_STATUS_POLL_INTERVAL_MS || 15000));

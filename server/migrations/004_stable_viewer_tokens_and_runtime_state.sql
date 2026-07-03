@@ -3,6 +3,9 @@
 
 create extension if not exists pgcrypto;
 
+alter table if exists public.viewer_playback_state
+  drop constraint if exists viewer_playback_state_current_queue_id_fkey;
+
 -- Existing production token table used by the current backend.
 -- Keep this optimized while the newer channel_viewer_tokens table is adopted gradually.
 create table if not exists public.channel_tokens (
