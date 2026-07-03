@@ -282,7 +282,7 @@ export function RoulettePage() {
                 <Badge tone="neutral">{totalItems}개 항목</Badge>
               </div>
               <CardTitle>방송 이벤트로 실행할 룰렛</CardTitle>
-              <CardDescription>룰렛을 만들고, OBS 오버레이와 같은 실제 실행 흐름으로 테스트합니다.</CardDescription>
+              <CardDescription>룰렛을 만들고 바로 테스트합니다.</CardDescription>
             </div>
             <div className="flex flex-wrap gap-2">
               <RouletteCreateDialog />

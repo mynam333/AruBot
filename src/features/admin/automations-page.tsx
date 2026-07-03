@@ -751,7 +751,7 @@ export function AutomationsPage() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><Cable className="h-5 w-5 text-primary" />실행 방식</CardTitle>
-          <CardDescription>방송 PC의 TTS, 사운드, T.I.T.S. 연출을 포트포워딩 없이 버튼처럼 실행합니다.</CardDescription>
+          <CardDescription>방송 PC의 TTS, 사운드, T.I.T.S. 연출을 버튼처럼 실행합니다.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
           <div className="grid gap-3 md:grid-cols-[repeat(2,minmax(0,1fr))]">
@@ -803,7 +803,7 @@ export function AutomationsPage() {
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2"><Wifi className="h-5 w-5 text-primary" />브라우저 브리지</CardTitle>
-        <CardDescription>페이지가 열려 있는 동안 내 PC의 로컬 도구로 메시지를 바로 보냅니다. 방송 중 상시 연출은 로컬 프로그램이 맡습니다.</CardDescription>
+        <CardDescription>이 페이지에서 내 PC의 로컬 도구로 메시지를 보냅니다.</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">
         <Field label="로컬 WebSocket 주소">
@@ -834,7 +834,7 @@ export function AutomationsPage() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><Sparkles className="h-5 w-5 text-primary" />T.I.T.S. 연결</CardTitle>
-          <CardDescription>T.I.T.S. 아이템과 트리거를 불러와 방송 중 바로 고르고 실행할 수 있게 합니다.</CardDescription>
+          <CardDescription>T.I.T.S. 아이템과 트리거를 불러와 바로 선택합니다.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
           <Field label="WebSocket 주소">
@@ -853,7 +853,7 @@ export function AutomationsPage() {
       <Card>
         <CardHeader>
           <CardTitle>아이템/트리거 실행</CardTitle>
-          <CardDescription>선택한 아이템과 트리거를 방송 장면에 바로 띄웁니다.</CardDescription>
+          <CardDescription>선택한 아이템과 트리거를 실행합니다.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
           <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,0.42fr)]">
@@ -891,7 +891,7 @@ export function AutomationsPage() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><Bot className="h-5 w-5 text-primary" />VTube Studio 연결</CardTitle>
-          <CardDescription>방송 PC의 VTube Studio에서 모델, 핫키, 표정 목록을 불러와 자동화 액션에서 바로 선택합니다.</CardDescription>
+          <CardDescription>VTube Studio 모델, 핫키, 표정 목록을 불러옵니다.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
           <Field label="WebSocket 주소">
@@ -917,7 +917,7 @@ export function AutomationsPage() {
       <Card>
         <CardHeader>
           <CardTitle>핫키 테스트</CardTitle>
-          <CardDescription>목록에서 고른 반응을 바로 실행해 채팅/후원 자동화에 붙일 수 있는지 확인합니다.</CardDescription>
+          <CardDescription>목록에서 고른 반응을 실행해 봅니다.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
           <Field label="실행 핫키">
@@ -952,7 +952,7 @@ export function AutomationsPage() {
       <Card>
         <CardHeader>
           <CardTitle>TTS</CardTitle>
-          <CardDescription>채팅과 액션에서 사용할 음성 안내를 방송 PC에서 바로 테스트합니다.</CardDescription>
+          <CardDescription>채팅과 액션에서 사용할 음성 안내를 테스트합니다.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
           <ToggleRow checked={ttsEnabled} label={ttsEnabled ? 'TTS 사용 중' : 'TTS 꺼짐'} onClick={() => setTtsEnabled((value) => !value)} />
@@ -977,7 +977,7 @@ export function AutomationsPage() {
       <Card>
         <CardHeader>
           <CardTitle>사운드 저장소</CardTitle>
-          <CardDescription>짧은 효과음은 바로 올리고, 큰 사운드 라이브러리는 방송 PC 폴더에서 재생하세요.</CardDescription>
+          <CardDescription>짧은 효과음을 올리고 재생 방식을 고릅니다.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
           <div className="grid gap-2">
@@ -990,7 +990,7 @@ export function AutomationsPage() {
             </div>
           </div>
           <div className="grid gap-2 md:grid-cols-[repeat(2,minmax(0,1fr))]">
-            <SegmentedButton active={soundMode === 'server_hosted'} title="서버 저장" description="업로드 후 로컬 프로그램이 내려받아 재생" icon={Database} onClick={() => setSoundMode('server_hosted')} />
+            <SegmentedButton active={soundMode === 'server_hosted'} title="클라우드 보관" description="짧은 효과음을 올려 재생" icon={Database} onClick={() => setSoundMode('server_hosted')} />
             <SegmentedButton active={soundMode === 'local_program'} title="내 PC 저장" description="로컬 사운드 폴더에서 재생" icon={HardDrive} onClick={() => setSoundMode('local_program')} />
           </div>
           <input ref={fileInputRef} type="file" accept="audio/*" className="hidden" onChange={(event) => uploadSound(event.target.files?.[0])} />
@@ -1037,7 +1037,7 @@ export function AutomationsPage() {
       <Card>
         <CardHeader>
           <CardTitle>HTTP 실행</CardTitle>
-          <CardDescription>방송 PC의 보조 도구와 외부 연출을 한 번의 액션으로 움직입니다.</CardDescription>
+          <CardDescription>보조 도구와 외부 연출을 실행합니다.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
           <div className="grid gap-3 md:grid-cols-[minmax(0,0.32fr)_minmax(0,1fr)]">
@@ -1057,7 +1057,7 @@ export function AutomationsPage() {
         <Card>
           <CardHeader>
             <CardTitle>WebSocket 실행</CardTitle>
-            <CardDescription>로컬 도구에 필요한 메시지를 보내 방송 장면을 움직입니다.</CardDescription>
+            <CardDescription>로컬 도구에 메시지를 보냅니다.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-4">
             <Field label="WebSocket URL"><Input value={websocketUrl} onChange={(event) => setWebsocketUrl(event.target.value)} /></Field>
@@ -1071,7 +1071,7 @@ export function AutomationsPage() {
         <Card>
           <CardHeader>
             <CardTitle>UDP 실행</CardTitle>
-            <CardDescription>UDP 입력을 받는 조명, 효과, 보조 프로그램을 방송 타이밍에 맞춰 실행합니다.</CardDescription>
+            <CardDescription>조명, 효과, 보조 프로그램에 UDP 메시지를 보냅니다.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-4">
             <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,0.38fr)]">
@@ -1093,7 +1093,7 @@ export function AutomationsPage() {
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2"><MousePointerClick className="h-5 w-5 text-primary" />Stream Deck / Touch Portal</CardTitle>
-        <CardDescription>버튼 앱에 주소를 넣어두면 방송 중 한 번의 터치로 선택한 액션이 실행됩니다.</CardDescription>
+        <CardDescription>버튼 앱에서 선택한 액션을 실행합니다.</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">
         <div className="grid gap-3 md:grid-cols-[minmax(0,0.72fr)_minmax(0,1fr)]">
@@ -1138,7 +1138,7 @@ export function AutomationsPage() {
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2"><PlugZap className="h-5 w-5 text-primary" />연결 목록</CardTitle>
-        <CardDescription>방송 도구와 버튼 앱으로 이어지는 연결을 한곳에서 정리합니다.</CardDescription>
+        <CardDescription>방송 도구와 버튼 앱 연결을 관리합니다.</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-3">
         {connections.map((item) => (
@@ -1219,7 +1219,7 @@ export function AutomationsPage() {
               방송의 순간을 한 번의 액션으로 움직이세요.
             </h1>
             <p className="mt-4 max-w-2xl text-sm leading-7 text-muted-foreground md:text-base">
-              T.I.T.S., VTube Studio, TTS, 사운드, 버튼 앱을 연결해 채팅과 후원 순간에 맞는 연출을 바로 실행합니다.
+              T.I.T.S., VTube Studio, TTS, 사운드, 버튼 앱을 연결합니다.
             </p>
           </div>
           <div className="grid min-w-0 gap-2 sm:grid-cols-[repeat(3,minmax(0,1fr))]">

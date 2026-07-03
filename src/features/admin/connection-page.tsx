@@ -86,7 +86,7 @@ const providerConfigs = [
     iconPath: '/brands/cime.svg',
     revokePath: '/api/auth/cime/revoke',
     color: 'sky',
-    description: 'CIME 시청자도 같은 방송 경험 안에서 채팅과 후원을 이어가게 합니다.',
+    description: 'CIME 시청자도 채팅과 후원에 자연스럽게 참여하게 합니다.',
   },
   {
     id: 'youtube' as const,
@@ -95,7 +95,7 @@ const providerConfigs = [
     iconPath: '/brands/youtube.svg',
     revokePath: '/api/auth/youtube/revoke',
     color: 'rose',
-    description: 'YouTube Live 시청자도 같은 명령어, 포인트, 룰렛 흐름으로 참여하게 합니다.',
+    description: 'YouTube Live 시청자도 명령어, 포인트, 룰렛에 참여하게 합니다.',
   },
 ] as const;
 
@@ -338,10 +338,10 @@ export function ConnectionPage() {
           <div>
             <Badge tone="mint">계정 연결</Badge>
             <h1 className="mt-4 max-w-3xl break-keep text-3xl font-semibold leading-tight md:text-5xl">
-              어느 플랫폼에서 와도 같은 방송 경험으로.
+              여러 플랫폼 시청자를 한 방송으로.
             </h1>
             <p className="mt-4 max-w-2xl text-sm leading-7 text-muted-foreground md:text-base">
-              CHZZK, CIME, YouTube 시청자가 같은 명령어, 포인트, 이벤트 흐름으로 참여할 수 있게 채널을 이어주세요.
+              CHZZK, CIME, YouTube 채널을 연결해 명령어, 포인트, 이벤트 참여를 함께 관리하세요.
             </p>
           </div>
           <Card className="bg-card/75">
@@ -486,7 +486,7 @@ export function ConnectionPage() {
                     );})
                   ) : (
                     <div className="rounded-[var(--radius-control)] border bg-background/75 p-[clamp(1rem,1.8vw,1.25rem)] text-sm leading-6 text-muted-foreground">
-                      아직 연결된 {config.label} 채널이 없습니다. 로그인하면 이 플랫폼의 시청자도 같은 참여 흐름으로 들어올 수 있습니다.
+                      아직 연결된 {config.label} 채널이 없습니다. 로그인하면 이 플랫폼 시청자도 참여할 수 있습니다.
                     </div>
                   )}
                 </div>
@@ -514,7 +514,7 @@ export function ConnectionPage() {
                       {youtubeRegistered && !youtubeStreamerStatus?.channel?.moderatorRegistered ? (
                         <Button type="button" variant="outline" onClick={confirmYoutubeModerator} disabled={youtubeBusy}>
                           <CheckCircle2 className="h-4 w-4" />
-                          운영자 실제 확인
+                          운영자 등록 확인
                         </Button>
                       ) : null}
                       {youtubeRegistered ? (
@@ -568,7 +568,7 @@ export function ConnectionPage() {
           <div>
             <h2 className="text-lg font-semibold">연결하면 참여가 바로 열립니다</h2>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              시청자는 익숙한 플랫폼에서 들어오고, 방송에서는 명령어와 포인트, 룰렛, 후원 반응이 같은 흐름으로 움직입니다.
+              시청자는 익숙한 플랫폼에서 들어오고, 방송에서는 명령어와 포인트, 룰렛, 후원 반응을 함께 관리합니다.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -624,7 +624,7 @@ export function ConnectionPage() {
                 </div>
               ) : null}
               <div className="rounded-[var(--radius-control)] bg-muted/60 p-3 text-xs leading-5 text-muted-foreground">
-                등록 버튼을 누르면 브라우저가 새 탭을 즉시 열고, 서버 등록이 끝난 뒤 그 탭을 YouTube Studio로 이동시킵니다.
+                등록 버튼을 누르면 새 탭에서 YouTube Studio가 열립니다.
               </div>
             </div>
 

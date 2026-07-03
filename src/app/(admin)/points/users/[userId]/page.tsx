@@ -8,7 +8,7 @@ export default async function Page({ params }: { params: Promise<{ userId: strin
       eyebrow="포인트 유저"
       config={{
         title: `유저 ${userId}`,
-        description: '한 시청자의 포인트 흐름과 참여 기록을 한눈에 살펴봅니다.',
+        description: '한 시청자의 포인트와 참여 기록을 살펴봅니다.',
         endpoint: '/api/channelpoints/list',
         icon: UserRound,
         actions: [{ href: '/points', label: '목록으로' }],

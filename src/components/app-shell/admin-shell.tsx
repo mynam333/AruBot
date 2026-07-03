@@ -147,7 +147,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
           </Tooltip>
           <div className="min-w-0 flex-1">
             <div className="truncate text-sm font-semibold md:text-base">{title}</div>
-            <div className="hidden truncate text-xs text-muted-foreground sm:block">방송 전 설정부터 진행 중 관리까지 한 화면 흐름으로 이어집니다.</div>
+            <div className="hidden truncate text-xs text-muted-foreground sm:block">방송 준비와 진행 관리를 한 화면에서 확인해요.</div>
           </div>
           <div className="flex items-center gap-2">
             <LinkButton href="/connection" variant="outline" size="sm" className="hidden sm:inline-flex">

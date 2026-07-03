@@ -1,13 +1,13 @@
 'use client';
 
-import { BarChart3, CheckCircle2, Copy, Lock, RotateCcw, Send, Trophy, XCircle } from 'lucide-react';
-import { useCallback, useMemo, useState, useTransition } from 'react';
+import { ArrowDownLeft, ArrowDownRight, ArrowUpLeft, ArrowUpRight, BarChart3, CheckCircle2, Copy, Lock, RotateCcw, Send, Trophy, XCircle } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { apiUrl, readJson } from '@/shared/api/http';
-import { useVisibilityPolling } from '@/shared/lib/use-visibility-polling';
+import { PredictionOverlayCard } from '@/features/predictions/prediction-overlay-card';
+import { apiUrl, apiWsUrl, readJson } from '@/shared/api/http';
 
 type PredictionOption = {
   id: string;
@@ -44,12 +44,27 @@ type Prediction = {
   createdAt: string;
   closesAt: string | null;
   settledAt: string | null;
-  bets: PredictionBet[];
+  bets?: PredictionBet[];
 };
 
 type PredictionsResponse = { predictions: Prediction[] };
 type PredictionResponse = { prediction: Prediction | null };
 type ChannelContextResponse = { channelId?: string };
+type OverlayPosition = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+
+const OVERLAY_POSITIONS: Array<{ value: OverlayPosition; label: string; Icon: typeof ArrowUpLeft }> = [
+  { value: 'top-left', label: '좌상단', Icon: ArrowUpLeft },
+  { value: 'top-right', label: '우상단', Icon: ArrowUpRight },
+  { value: 'bottom-left', label: '좌하단', Icon: ArrowDownLeft },
+  { value: 'bottom-right', label: '우하단', Icon: ArrowDownRight },
+];
+
+const OVERLAY_PREVIEW_ALIGNMENT: Record<OverlayPosition, string> = {
+  'top-left': 'items-start justify-start',
+  'top-right': 'items-start justify-end',
+  'bottom-left': 'items-end justify-start',
+  'bottom-right': 'items-end justify-end',
+};
 
 function statusLabel(status?: string) {
   if (status === 'open') return '진행 중';
@@ -69,6 +84,16 @@ function statusTone(status?: string): 'mint' | 'lemon' | 'sky' | 'coral' | 'neut
 
 function formatPoints(value: number) {
   return `${Number(value || 0).toLocaleString('ko-KR')}P`;
+}
+
+function isActivePrediction(prediction: Prediction | null) {
+  return prediction?.status === 'open' || prediction?.status === 'locked';
+}
+
+function mergePredictionList(list: Prediction[], prediction: Prediction | null) {
+  if (!prediction) return list;
+  const next = [prediction, ...list.filter((item) => item.id !== prediction.id)];
+  return next.slice(0, 30);
 }
 
 async function postJson<T>(path: string, body?: unknown): Promise<T | null> {
@@ -130,13 +155,21 @@ export function PredictionsPage() {
   const [minBet, setMinBet] = useState('10');
   const [maxBet, setMaxBet] = useState('100000');
   const [durationMinutes, setDurationMinutes] = useState('');
+  const [overlayPosition, setOverlayPosition] = useState<OverlayPosition>(() => {
+    if (typeof window === 'undefined') return 'bottom-right';
+    const saved = window.localStorage.getItem('arubot:prediction-overlay-position');
+    return OVERLAY_POSITIONS.some((position) => position.value === saved) ? saved as OverlayPosition : 'bottom-right';
+  });
   const [notice, setNotice] = useState('');
   const [isPending, startTransition] = useTransition();
+  const reconnectTimerRef = useRef<number | null>(null);
 
   const overlayUrl = useMemo(() => {
     if (!channelUid || typeof window === 'undefined') return '';
-    return `${window.location.origin}/viewer/prediction/${encodeURIComponent(channelUid)}`;
-  }, [channelUid]);
+    const url = new URL(`/viewer/prediction/${encodeURIComponent(channelUid)}`, window.location.origin);
+    url.searchParams.set('position', overlayPosition);
+    return url.toString();
+  }, [channelUid, overlayPosition]);
 
   const optionRows = useMemo(
     () => optionsText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean),
@@ -156,7 +189,65 @@ export function PredictionsPage() {
     });
   }, []);
 
-  useVisibilityPolling(load, 3500);
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  useEffect(() => {
+    window.localStorage.setItem('arubot:prediction-overlay-position', overlayPosition);
+  }, [overlayPosition]);
+
+  useEffect(() => {
+    if (!channelUid || typeof WebSocket === 'undefined') return;
+
+    let ws: WebSocket | null = null;
+    let disposed = false;
+    let attempts = 0;
+
+    const connect = () => {
+      if (disposed) return;
+      try {
+        ws = new WebSocket(apiWsUrl(`/api/prediction/ws?channelUid=${encodeURIComponent(channelUid)}`));
+      } catch {
+        return;
+      }
+
+      ws.onopen = () => {
+        attempts = 0;
+      };
+      ws.onmessage = (event) => {
+        try {
+          const message = JSON.parse(String(event.data || '{}')) as { type?: string; prediction?: Prediction | null };
+          if (message.type === 'prediction:clear') {
+            setActive(null);
+            return;
+          }
+          if (message.type === 'prediction:snapshot' || message.type === 'prediction:update') {
+            const prediction = message.prediction || null;
+            setActive(isActivePrediction(prediction) ? prediction : null);
+            setPredictions((current) => mergePredictionList(current, prediction));
+          }
+        } catch {}
+      };
+      ws.onclose = () => {
+        if (disposed) return;
+        attempts += 1;
+        const delay = Math.min(10000, 800 * 2 ** Math.min(4, attempts));
+        reconnectTimerRef.current = window.setTimeout(connect, delay);
+      };
+      ws.onerror = () => {
+        try { ws?.close(); } catch {}
+      };
+    };
+
+    connect();
+    return () => {
+      disposed = true;
+      if (reconnectTimerRef.current) window.clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+      try { ws?.close(); } catch {}
+    };
+  }, [channelUid]);
 
   const create = () => {
     if (!question.trim()) {
@@ -181,8 +272,9 @@ export function PredictionsPage() {
       }
       setQuestion('');
       setOptionsText('');
+      setActive(isActivePrediction(data.prediction) ? data.prediction : null);
+      setPredictions((current) => mergePredictionList(current, data.prediction));
       setNotice('예측 베팅을 열었습니다.');
-      load();
     });
   };
 
@@ -193,8 +285,9 @@ export function PredictionsPage() {
         setNotice('요청을 처리하지 못했습니다.');
         return;
       }
+      setActive(isActivePrediction(data.prediction) ? data.prediction : null);
+      setPredictions((current) => mergePredictionList(current, data.prediction));
       setNotice(message);
-      load();
     });
   };
 
@@ -221,7 +314,7 @@ export function PredictionsPage() {
             </div>
             <h1 className="text-[clamp(2rem,4vw,3rem)] font-semibold leading-tight">예측 베팅</h1>
             <p className="mt-[clamp(0.75rem,1.5vw,1rem)] max-w-2xl text-[clamp(0.95rem,1.35vw,1.12rem)] leading-relaxed text-muted-foreground">
-              방송의 다음 순간을 시청자가 포인트로 예측하게 열고, 채팅 명령어와 OBS 오버레이로 참여 흐름을 자연스럽게 보여줘요.
+              방송의 다음 순간을 시청자가 포인트로 예측하고, 채팅 명령어와 오버레이로 현재 상황을 보여줘요.
             </p>
           </div>
           <div className="grid min-w-0 grid-cols-[repeat(3,minmax(0,1fr))] gap-[clamp(0.5rem,1.1vw,0.85rem)]">
@@ -357,9 +450,34 @@ export function PredictionsPage() {
         <Card>
           <CardHeader>
             <CardTitle>OBS 오버레이</CardTitle>
-            <CardDescription>브라우저 소스에 주소를 넣으면 현재 예측 현황이 방송 화면에 표시돼요.</CardDescription>
+            <CardDescription>브라우저 소스에 주소를 넣으면 현재 예측 현황이 방송 화면의 원하는 꼭짓점에 표시돼요.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-[clamp(0.75rem,1.4vw,1rem)]">
+            <div className="grid gap-[clamp(0.55rem,1vw,0.75rem)]">
+              <div className="flex items-center justify-between gap-[clamp(0.65rem,1.2vw,0.9rem)]">
+                <div className="text-[clamp(0.9rem,1.18vw,1rem)] font-semibold">표시 위치</div>
+                <Badge tone="sky">{OVERLAY_POSITIONS.find((position) => position.value === overlayPosition)?.label}</Badge>
+              </div>
+              <div className="grid grid-cols-2 gap-[clamp(0.45rem,0.9vw,0.65rem)] rounded-[var(--radius-card)] border bg-muted/35 p-[clamp(0.55rem,1vw,0.75rem)]">
+                {OVERLAY_POSITIONS.map(({ value, label, Icon }) => {
+                  const selected = overlayPosition === value;
+                  return (
+                    <Button
+                      key={value}
+                      type="button"
+                      variant={selected ? 'soft' : 'outline'}
+                      size="sm"
+                      aria-pressed={selected}
+                      onClick={() => setOverlayPosition(value)}
+                      className={`justify-start ${selected ? 'border-primary/30 shadow-subtle' : 'bg-background/78'}`}
+                    >
+                      <Icon className="h-[1em] w-[1em]" />
+                      {label}
+                    </Button>
+                  );
+                })}
+              </div>
+            </div>
             <button
               type="button"
               onClick={copyOverlay}
@@ -380,30 +498,11 @@ export function PredictionsPage() {
         <Card className="bg-[linear-gradient(135deg,hsl(222_30%_12%),hsl(225_28%_18%))] text-white">
           <CardHeader>
             <CardTitle>오버레이 미리보기</CardTitle>
-            <CardDescription className="text-white/65">선택지가 많으면 방송 화면에 맞게 압축된 리스트로 표시됩니다.</CardDescription>
+            <CardDescription className="text-white/65">방송 화면에 표시될 모습을 확인해요.</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="rounded-[var(--radius-panel)] border border-white/10 bg-white/10 p-[clamp(1rem,2vw,1.5rem)] shadow-2xl backdrop-blur-xl">
-              <div className="flex items-center justify-between gap-[clamp(0.75rem,1.6vw,1.1rem)]">
-                <div className="min-w-0">
-                  <div className="truncate text-[clamp(1.1rem,1.8vw,1.35rem)] font-bold">{latest?.question || '예측이 열리면 여기에 표시됩니다.'}</div>
-                  <div className="mt-[clamp(0.25rem,0.7vw,0.45rem)] text-[clamp(0.85rem,1.1vw,0.98rem)] text-white/65">{formatPoints(latest?.totalPoints || 0)} · {latest?.participantCount || 0}명</div>
-                </div>
-                <Badge tone={active ? 'mint' : 'neutral'}>{statusLabel(active?.status)}</Badge>
-              </div>
-              <div className="mt-[clamp(0.9rem,1.8vw,1.25rem)] grid max-h-[18rem] gap-[clamp(0.55rem,1.1vw,0.8rem)] overflow-hidden">
-                {(latest?.options || []).slice(0, 8).map((option, index) => (
-                  <div key={option.id}>
-                    <div className="mb-[clamp(0.25rem,0.6vw,0.4rem)] flex justify-between gap-[clamp(0.75rem,1.6vw,1rem)] text-[clamp(0.88rem,1.15vw,1rem)]">
-                      <span className="truncate">{index + 1}. {option.label}</span>
-                      <span>{option.percentage}%</span>
-                    </div>
-                    <div className="h-[0.55rem] overflow-hidden rounded-full bg-white/12">
-                      <div className="h-full rounded-full bg-[linear-gradient(90deg,#7ee7d4,#ffc3ad)]" style={{ width: `${option.percentage}%` }} />
-                    </div>
-                  </div>
-                ))}
-              </div>
+            <div className={`flex min-h-[clamp(18rem,28vw,24rem)] overflow-x-auto rounded-[var(--radius-panel)] border border-white/10 bg-[linear-gradient(135deg,rgba(255,255,255,0.11),rgba(255,255,255,0.05))] p-[clamp(0.85rem,1.7vw,1.25rem)] shadow-2xl backdrop-blur-xl ${OVERLAY_PREVIEW_ALIGNMENT[overlayPosition]}`}>
+              <PredictionOverlayCard prediction={latest} />
             </div>
           </CardContent>
         </Card>

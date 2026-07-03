@@ -72,7 +72,7 @@ export default async function LocalProgramDownloadPage() {
             </h1>
             <p className="mt-6 max-w-2xl break-keep text-base leading-8 text-muted-foreground md:text-lg">
               AruBot Local Program은 T.I.T.S., 후원 알림, TTS, 사운드 효과를 방송 PC에서 바로 실행합니다.
-              채팅과 후원 순간에 맞춰 로컬 연출이 반응하니 방송 흐름이 더 자연스러워집니다.
+              채팅과 후원 순간에 맞춰 로컬 연출이 바로 반응합니다.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               {manifest ? (

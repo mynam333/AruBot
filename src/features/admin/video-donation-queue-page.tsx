@@ -402,7 +402,7 @@ export function VideoDonationQueuePage() {
             </div>
             <h1 className="text-3xl font-semibold leading-tight tracking-normal md:text-4xl">영상 후원 큐</h1>
             <p className="mt-3 max-w-3xl text-sm leading-7 text-muted-foreground md:text-base">
-              시청자가 신청한 영상을 지금 나가는 항목과 다음 순서로 나눠 보여줍니다. 방송 흐름에 맞게 순서를 바꾸고, 맞지 않는 신청은 포인트 반환과 함께 정리하세요.
+              시청자가 신청한 영상을 지금 재생 중인 항목과 다음 순서로 나눠 보여줍니다. 순서를 바꾸거나 맞지 않는 신청을 정리할 수 있어요.
             </p>
           </div>
           <div className="flex max-w-full flex-wrap items-center gap-2">
@@ -498,7 +498,7 @@ export function VideoDonationQueuePage() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <CardTitle>신청 대기열</CardTitle>
-              <CardDescription>드래그로 방송 흐름에 맞는 순서를 만들 수 있습니다.</CardDescription>
+              <CardDescription>드래그로 재생 순서를 바꿀 수 있습니다.</CardDescription>
             </div>
             <Badge tone="sky">{waitingItems.length}개</Badge>
           </div>

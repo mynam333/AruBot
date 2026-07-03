@@ -21,8 +21,8 @@ import { LinkButton } from '@/components/ui/button';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
 
 const highlights = [
-  { title: '채팅 명령어', body: '반복 안내는 봇에게 맡기고, 채팅은 더 빠르게 방송의 흐름을 따라갑니다.', icon: MessageSquare, tone: 'sky' },
-  { title: '통합 포인트', body: 'CHZZK와 CIME 계정 참여를 묶고, YouTube Live 채팅 참여도 같은 방송 흐름에 붙입니다.', icon: Coins, tone: 'mint' },
+  { title: '채팅 명령어', body: '반복 안내는 봇에게 맡기고, 채팅은 더 빠르게 반응합니다.', icon: MessageSquare, tone: 'sky' },
+  { title: '통합 포인트', body: 'CHZZK, CIME, YouTube Live 참여 포인트를 방송별로 모아 보여줍니다.', icon: Coins, tone: 'mint' },
   { title: '예측 투표', body: '!투표 한마디로 결과를 함께 고르고, 화면에서는 실시간 분위기가 살아납니다.', icon: Vote, tone: 'lemon' },
   { title: '영상 후원', body: '시청자가 보낸 영상은 순서대로 이어지고, 방송 화면에는 깔끔하게 재생됩니다.', icon: PlaySquare, tone: 'coral' },
   { title: '룰렛 이벤트', body: '포인트와 후원이 당첨의 긴장감으로 바뀌어 채팅 참여가 더 즐거워집니다.', icon: Sparkles, tone: 'mint' },
@@ -31,7 +31,7 @@ const highlights = [
 
 const flows = [
   { title: '방송인은 진행에 집중', body: '명령어와 참여 이벤트가 자연스럽게 움직여 방송 중 손이 덜 갑니다.', icon: Radio },
-  { title: '시청자는 계속 참여', body: '플랫폼이 바뀌어도 포인트와 이벤트 참여가 같은 경험으로 이어집니다.', icon: BadgeCheck },
+  { title: '시청자는 계속 참여', body: '플랫폼이 바뀌어도 포인트와 이벤트 참여를 이어갑니다.', icon: BadgeCheck },
   { title: '화면에는 필요한 장면만', body: '예측, 룰렛, 영상 후원이 방송 화면에 보기 좋게 나타납니다.', icon: GalleryVerticalEnd },
 ] as const;
 
@@ -64,8 +64,8 @@ export function LandingPage() {
               채팅봇은<br />가볍게,<br />참여 경험은<br />더 선명하게.
             </h1>
             <p className="mt-6 max-w-2xl break-keep text-base leading-8 text-muted-foreground md:text-lg">
-              AruBot은 CHZZK, CIME, YouTube Live 방송의 채팅 참여, 포인트, 룰렛, 영상 후원, 예측 투표를 하나의 경험으로 묶습니다.
-              방송인은 진행에 더 집중하고, 시청자는 어디서 보든 같은 방식으로 즐깁니다.
+              AruBot은 CHZZK, CIME, YouTube Live 방송의 채팅 참여, 포인트, 룰렛, 영상 후원, 예측 투표를 한곳에서 관리합니다.
+              방송인은 진행에 더 집중하고, 시청자는 어디서 보든 편하게 참여합니다.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <LinkButton href="/streamer" size="lg">
@@ -128,7 +128,7 @@ export function LandingPage() {
                   </div>
                 </div>
                 <div className="grid gap-2">
-                  {['채팅 참여', '후원 반응', 'OBS 예측 오버레이'].map((label, index) => (
+                  {['채팅 참여', '후원 반응', '예측 오버레이'].map((label, index) => (
                     <div key={label} className="grid grid-cols-[minmax(0,1fr)_36%] items-center gap-3">
                       <span className="truncate text-sm text-muted-foreground">{label}</span>
                       <span className="relative h-[clamp(0.55rem,1vw,0.7rem)] overflow-hidden rounded-full bg-muted">
@@ -156,7 +156,7 @@ export function LandingPage() {
               </h2>
             </div>
             <p className="max-w-md text-sm leading-7 text-muted-foreground">
-              공개 페이지, OBS 화면, 채팅 명령어가 같은 흐름으로 이어져 처음 온 시청자도 바로 참여할 수 있습니다.
+              공개 페이지, 방송 화면, 채팅 명령어로 처음 온 시청자도 바로 참여할 수 있습니다.
             </p>
           </div>
           <div className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -209,10 +209,10 @@ export function LandingPage() {
             <Image src="/files/logo.png" alt="" width={72} height={72} className="aspect-square w-[70%] object-contain" />
           </div>
           <h2 className="mx-auto mt-6 max-w-3xl break-keep text-[clamp(1.8rem,4vw,3.4rem)] font-semibold leading-tight">
-            방송인과 시청자가 같은 경험을 공유하는 채팅봇.
+            방송인과 시청자가 함께 쓰는 채팅봇.
           </h2>
           <p className="mx-auto mt-4 max-w-2xl text-sm leading-7 text-muted-foreground md:text-base">
-            지금 연결하면 방송 진행과 시청자 참여가 같은 흐름 안에서 자연스럽게 이어집니다.
+            지금 연결하면 방송 진행과 시청자 참여가 자연스럽게 이어집니다.
           </p>
           <div className="mt-7 flex flex-wrap justify-center gap-3">
             <LinkButton href="/streamer" size="lg">

@@ -1936,7 +1936,7 @@ export function ActionBlueprintPage() {
         }));
         setSelectedIds(created.map((node) => node.id));
         setSelectedEdgeId(null);
-        toast.success(`${template.title} 템플릿을 바로 실행 가능한 흐름으로 적용했습니다.`);
+        toast.success(`${template.title} 템플릿을 적용했습니다.`);
         return;
       }
     }

@@ -21,7 +21,7 @@ const benefits = [
   },
   {
     icon: ShieldCheck,
-    title: '방송 흐름은 그대로',
+    title: '방송 화면은 차분하게',
     body: '브라우저 안에서 동작하므로 별도 프로그램 없이 방송 중 열어둔 YouTube 탭만 조용히 관리합니다.',
   },
 ] as const;

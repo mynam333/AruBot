@@ -149,7 +149,7 @@ export function ArubotAdminPage() {
         <Badge tone="amber">접근 제한</Badge>
         <h1 className="mt-4 text-3xl font-semibold">AruBot 관리자 권한이 필요합니다</h1>
         <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">
-          이 화면은 DB에서 `app_users.is_admin = true`로 지정된 사용자만 사용할 수 있습니다.
+          관리자 권한이 있는 사용자만 사용할 수 있습니다.
         </p>
       </section>
     );
@@ -261,7 +261,7 @@ export function ArubotAdminPage() {
               <CheckCircle2 className="h-5 w-5 text-primary" />
               관리자 권한
             </CardTitle>
-            <CardDescription>권한 부여는 DB 수정으로만 처리합니다.</CardDescription>
+            <CardDescription>관리자 권한이 있는 계정을 확인합니다.</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="rounded-[var(--radius-control)] border bg-background/80 p-3 text-sm leading-6">

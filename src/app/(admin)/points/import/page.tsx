@@ -7,7 +7,7 @@ export default function Page() {
       eyebrow="포인트"
       config={{
         title: '포인트 가져오기',
-        description: '기존 백업 파일 또는 외부 포인트 목록을 안전하게 병합합니다.',
+        description: '포인트 파일을 불러와 기존 내역에 더합니다.',
         endpoint: '/api/channelpoints/list',
         icon: Upload,
         actions: [{ href: '/points', label: '목록으로' }],

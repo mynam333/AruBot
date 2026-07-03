@@ -36,11 +36,11 @@ export const adminNav = [
 export const adminFeatureMap = {
   connection: {
     title: '플랫폼 연결',
-    description: 'CHZZK, CIME, YouTube 어디서 시작해도 같은 방송 경험으로 이어지게 합니다.',
+    description: 'CHZZK, CIME, YouTube 채널을 한곳에서 연결합니다.',
     endpoint: '/api/auth/session',
     icon: Cable,
     actions: [],
-    tips: ['방송 채널을 한곳에 모아요', '다른 플랫폼 시청자도 같은 흐름으로 맞이해요', '연결한 순간 참여 기능이 열려요'],
+    tips: ['방송 채널을 한곳에 모아요', '플랫폼별 시청자를 함께 맞이해요', '연결한 순간 참여 기능이 열려요'],
   },
   commands: {
     title: '채팅 명령어',
@@ -48,11 +48,11 @@ export const adminFeatureMap = {
     endpoint: '/api/bot/rules',
     icon: MessageSquare,
     actions: [{ href: '/variables', label: '사용 가능한 변수' }],
-    tips: ['반복 질문에 빠르게 답해요', '채팅 흐름을 방해하지 않게 조절해요', '포인트로 참여 명령어를 만들어요'],
+    tips: ['반복 질문에 빠르게 답해요', '채팅이 산만해지지 않게 조절해요', '포인트로 참여 명령어를 만들어요'],
   },
   macros: {
     title: '자동 알림',
-    description: '중요한 안내가 채팅 흐름 속에서 자연스럽게 보이도록 도와줘요.',
+    description: '중요한 공지를 필요한 타이밍에 채팅으로 보여줘요.',
     endpoint: '/api/macros',
     icon: Timer,
     actions: [],
@@ -99,7 +99,7 @@ export const adminFeatureMap = {
     endpoint: '/api/video-donation/queue',
     icon: PlaySquare,
     actions: [],
-    tips: ['신청 순서가 한눈에 보여요', '긴 영상은 방송 흐름에 맞춰 조절해요', 'OBS에서 바로 재생돼요'],
+    tips: ['신청 순서가 한눈에 보여요', '긴 영상은 재생 시간을 조절해요', 'OBS에서 바로 재생돼요'],
   },
   roulette: {
     title: '룰렛',
@@ -156,7 +156,7 @@ export const adminFeatureMap = {
   },
   bot: {
     title: 'AruBot',
-    description: '채팅 참여, 포인트, 이벤트 연출이 한 흐름으로 움직이게 합니다.',
+    description: '채팅 참여, 포인트, 이벤트 연출을 함께 관리합니다.',
     endpoint: '/api/bot/stats',
     icon: LifeBuoy,
     actions: [{ href: '/connection', label: '플랫폼 연결' }],
