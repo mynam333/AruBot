@@ -1245,18 +1245,30 @@ export async function getPredictionForSid(sid, predictionId) {
   });
 }
 
-export async function getActivePredictionForChannel(channelUid) {
+export async function getActivePredictionForChannel(channelUid, options = {}) {
   await ensurePredictionTables();
   return withPgClient(async (pg) => {
     const channelIdentity = await resolvePointChannelIdentity(pg, channelUid);
     const channelAliases = channelIdentity.channelAliases.length ? channelIdentity.channelAliases : [String(channelUid)];
+    const includeRecentlySettled = options.includeRecentlySettled === true;
+    const resultVisibleMs = Math.max(1000, Math.min(30000, Number(options.resultVisibleMs || 5000)));
     const result = await pg.query(
       `select * from prediction_events
        where channel_uid = any($1::text[])
-         and status in ('open', 'locked')
-       order by created_at desc
+         and (
+           status in ('open', 'locked')
+           or (
+             $2::boolean = true
+             and status = 'settled'
+             and settled_at is not null
+             and settled_at >= now() - ($3::int * interval '1 millisecond')
+           )
+         )
+       order by
+         case when status in ('open', 'locked') then 0 else 1 end,
+         coalesce(settled_at, locked_at, created_at) desc
        limit 1`,
-      [channelAliases]
+      [channelAliases, includeRecentlySettled, resultVisibleMs]
     );
     let row = result.rows?.[0] || null;
     if (!row) return null;

@@ -417,6 +417,24 @@ nextjs-portal {
   display: none;
 }
 
+.prediction-marquee-track {
+  display: inline-block;
+  min-width: max-content;
+  white-space: nowrap;
+  padding-inline-end: 2ch;
+  will-change: transform;
+  animation: prediction-marquee var(--prediction-marquee-duration, 8s) linear infinite;
+}
+
+@keyframes prediction-marquee {
+  0%, 12% {
+    transform: translateX(0);
+  }
+  88%, 100% {
+    transform: translateX(var(--prediction-marquee-distance, 0));
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;

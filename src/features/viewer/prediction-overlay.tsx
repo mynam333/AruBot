@@ -1,6 +1,7 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { readJson } from '@/shared/api/http';
 
 type PredictionOption = {
@@ -18,8 +19,10 @@ type Prediction = {
   question: string;
   status: string;
   options: PredictionOption[];
+  winningOptionId: string | null;
   totalPoints: number;
   participantCount: number;
+  settledAt?: string | null;
 };
 
 type PublicPredictionResponse = {
@@ -30,9 +33,54 @@ function formatPoints(value: number) {
   return `${Number(value || 0).toLocaleString('ko-KR')}P`;
 }
 
+function ScrollingText({ children, className = '' }: { children: ReactNode; className?: string }) {
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  const textRef = useRef<HTMLSpanElement | null>(null);
+  const [scrollState, setScrollState] = useState({ active: false, distance: 0, duration: 8 });
+
+  useEffect(() => {
+    const measure = () => {
+      const box = boxRef.current;
+      const text = textRef.current;
+      if (!box || !text) return;
+      const overflow = Math.ceil(text.scrollWidth - box.clientWidth);
+      setScrollState({
+        active: overflow > 1,
+        distance: Math.max(0, overflow),
+        duration: Math.min(24, Math.max(7, overflow / 28)),
+      });
+    };
+
+    measure();
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
+    if (observer && boxRef.current) observer.observe(boxRef.current);
+    if (observer && textRef.current) observer.observe(textRef.current);
+    window.setTimeout(measure, 80);
+    return () => observer?.disconnect();
+  }, [children]);
+
+  const style = scrollState.active
+    ? ({
+      '--prediction-marquee-distance': `-${scrollState.distance}px`,
+      '--prediction-marquee-duration': `${scrollState.duration}s`,
+    } as CSSProperties)
+    : undefined;
+
+  return (
+    <div ref={boxRef} className={`min-w-0 overflow-hidden ${className}`}>
+      <span ref={textRef} className={scrollState.active ? 'prediction-marquee-track' : 'block truncate'} style={style}>
+        {children}
+      </span>
+    </div>
+  );
+}
+
 export function PredictionOverlay({ channelUid }: { channelUid: string }) {
   const [prediction, setPrediction] = useState<Prediction | null>(null);
   const [preview, setPreview] = useState(false);
+  const [hiddenResultId, setHiddenResultId] = useState<string | null>(null);
+  const playedResultRef = useRef('');
+  const hideTimerRef = useRef<number | null>(null);
 
   const load = useCallback(async () => {
     const data = await readJson<PublicPredictionResponse>(`/api/public/${encodeURIComponent(channelUid)}/prediction`);
@@ -46,41 +94,101 @@ export function PredictionOverlay({ channelUid }: { channelUid: string }) {
     return () => window.clearInterval(timer);
   }, [load]);
 
-  const visibleOptions = useMemo(() => prediction?.options || [], [prediction]);
+  useEffect(() => {
+    if (prediction?.status !== 'settled' || !prediction.winningOptionId) {
+      setHiddenResultId(null);
+      if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = null;
+      return;
+    }
 
-  if (!prediction && !preview) return null;
+    const resultKey = `${prediction.id}:${prediction.winningOptionId}:${prediction.settledAt || ''}`;
+    setHiddenResultId(null);
+
+    if (playedResultRef.current !== resultKey) {
+      playedResultRef.current = resultKey;
+      try {
+        const audio = new Audio('/files/batting_result.mp3');
+        audio.volume = 0.2;
+        const playResult = audio.play();
+        if (playResult && typeof playResult.catch === 'function') playResult.catch(() => undefined);
+      } catch {}
+    }
+
+    if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
+    hideTimerRef.current = window.setTimeout(() => {
+      setHiddenResultId(prediction.id);
+    }, 5000);
+
+    return () => {
+      if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = null;
+    };
+  }, [prediction?.id, prediction?.status, prediction?.winningOptionId, prediction?.settledAt]);
+
+  const displayPrediction = prediction?.status === 'settled' && hiddenResultId === prediction.id ? null : prediction;
+  const visibleOptions = useMemo(() => displayPrediction?.options || [], [displayPrediction]);
+  const isSettled = displayPrediction?.status === 'settled';
+  const winningOption = useMemo(
+    () => displayPrediction?.options.find((option) => option.id === displayPrediction.winningOptionId) || null,
+    [displayPrediction],
+  );
+  const statusLabel = isSettled ? 'RESULT' : displayPrediction?.status === 'locked' ? 'LOCKED' : 'LIVE';
+
+  if (!displayPrediction && !preview) return null;
 
   return (
-    <main className="viewer-surface grid min-h-screen place-items-end bg-transparent p-[clamp(1rem,3vw,2rem)]">
-      <section className="w-[min(42rem,92vw)] overflow-hidden rounded-[clamp(1rem,2vw,1.6rem)] border border-white/14 bg-[linear-gradient(135deg,rgba(18,24,38,0.86),rgba(28,34,54,0.72))] p-[clamp(1rem,2.4vw,1.6rem)] text-white shadow-[0_1.5rem_4rem_rgba(0,0,0,0.34)] backdrop-blur-xl">
-        <div className="flex items-start justify-between gap-4">
+    <main className="viewer-surface h-screen w-screen bg-transparent">
+      <section className="grid h-full w-full grid-rows-[auto_minmax(0,1fr)] overflow-hidden border border-white/14 bg-[linear-gradient(135deg,rgba(18,24,38,0.9),rgba(28,34,54,0.78))] p-[clamp(1.2rem,3vw,2.6rem)] text-white shadow-[0_1.5rem_4rem_rgba(0,0,0,0.34)] backdrop-blur-xl">
+        <div className="flex items-start justify-between gap-[clamp(0.8rem,2vw,1.4rem)]">
           <div className="min-w-0">
-            <div className="text-[clamp(1rem,2vw,1.35rem)] font-bold leading-tight">
-              {prediction?.question || '예측 베팅 대기 중'}
-            </div>
-            <div className="mt-2 text-[clamp(0.72rem,1.4vw,0.9rem)] text-white/68">
-              {formatPoints(prediction?.totalPoints || 0)} · {prediction?.participantCount || 0}명 참여 · !투표 &lt;번호&gt; &lt;배팅 포인트&gt;
+            <ScrollingText className="text-[clamp(1.5rem,4.6vw,3.4rem)] font-bold leading-tight">
+              {displayPrediction?.question || '예측 베팅 대기 중'}
+            </ScrollingText>
+            <div className="mt-[clamp(0.45rem,1vw,0.75rem)] text-[clamp(0.95rem,1.8vw,1.15rem)] leading-relaxed text-white/70">
+              {formatPoints(displayPrediction?.totalPoints || 0)} · {displayPrediction?.participantCount || 0}명 참여 · !투표 &lt;번호&gt; &lt;배팅 포인트&gt;
             </div>
           </div>
-          <div className="shrink-0 rounded-full border border-emerald-300/25 bg-emerald-300/14 px-[clamp(0.6rem,1.5vw,0.9rem)] py-[clamp(0.3rem,0.9vw,0.45rem)] text-[clamp(0.7rem,1.2vw,0.82rem)] font-bold text-emerald-100">
-            LIVE
+          <div className={`shrink-0 rounded-full border px-[clamp(0.7rem,1.5vw,1rem)] py-[clamp(0.35rem,0.9vw,0.55rem)] text-[clamp(0.8rem,1.35vw,0.95rem)] font-bold ${isSettled ? 'border-amber-200/35 bg-amber-200/18 text-amber-50' : 'border-emerald-300/25 bg-emerald-300/14 text-emerald-100'}`}>
+            {statusLabel}
           </div>
         </div>
 
-        <div className="mt-[clamp(0.9rem,2vw,1.25rem)] grid max-h-[min(54vh,28rem)] gap-[clamp(0.55rem,1.2vw,0.8rem)] overflow-hidden">
+        {isSettled && winningOption ? (
+          <div className="mt-[clamp(1rem,2vw,1.5rem)] overflow-hidden rounded-[clamp(0.9rem,1.8vw,1.35rem)] border border-amber-200/35 bg-[linear-gradient(135deg,rgba(250,204,21,0.24),rgba(45,212,191,0.14),rgba(255,255,255,0.08))] p-[clamp(0.9rem,2vw,1.45rem)] shadow-[0_1rem_3rem_rgba(250,204,21,0.18)]">
+            <div className="text-[clamp(0.85rem,1.4vw,1rem)] font-bold uppercase tracking-[0.16em] text-amber-100/82">예측 결과</div>
+            <ScrollingText className="mt-[clamp(0.35rem,0.9vw,0.6rem)] text-[clamp(1.65rem,4.2vw,3rem)] font-black leading-tight text-white">
+              {winningOption.label} 승리
+            </ScrollingText>
+            <div className="mt-[clamp(0.45rem,1vw,0.75rem)] text-[clamp(0.95rem,1.6vw,1.12rem)] font-semibold text-white/72">
+              총 {formatPoints(displayPrediction?.totalPoints || 0)} · {displayPrediction?.participantCount || 0}명 참여
+            </div>
+          </div>
+        ) : null}
+
+        <div className="mt-[clamp(1rem,2.2vw,1.6rem)] grid min-h-0 content-start gap-[clamp(0.75rem,1.55vw,1.15rem)] overflow-hidden">
           {visibleOptions.map((option, index) => (
-            <div key={option.id} className="grid gap-1">
-              <div className="flex items-center justify-between gap-3 text-[clamp(0.78rem,1.45vw,0.95rem)]">
-                <div className="min-w-0 truncate font-semibold">
+            <div
+              key={option.id}
+              className={`grid gap-[clamp(0.45rem,0.9vw,0.65rem)] rounded-[clamp(0.75rem,1.5vw,1.1rem)] p-[clamp(0.8rem,1.6vw,1.2rem)] transition duration-500 ${
+                isSettled && option.id === displayPrediction?.winningOptionId
+                  ? 'border border-amber-200/45 bg-[linear-gradient(135deg,rgba(250,204,21,0.22),rgba(34,211,238,0.12))] shadow-[0_0_2.4rem_rgba(250,204,21,0.24)]'
+                  : isSettled
+                    ? 'bg-white/[0.045] opacity-45'
+                    : 'bg-white/8'
+              }`}
+            >
+              <div className="flex items-center justify-between gap-[clamp(0.75rem,1.8vw,1.2rem)] text-[clamp(1rem,2vw,1.25rem)]">
+                <ScrollingText className="font-semibold">
                   {index + 1}. {option.label}
-                </div>
-                <div className="shrink-0 font-bold text-white">
+                </ScrollingText>
+                <div className={`shrink-0 font-bold ${isSettled && option.id === displayPrediction?.winningOptionId ? 'text-amber-50' : 'text-white'}`}>
                   {option.percentage}% {option.payoutMultiplier ? <span className="text-white/58">x{option.payoutMultiplier}</span> : null}
                 </div>
               </div>
-              <div className="h-[clamp(0.45rem,1vw,0.7rem)] overflow-hidden rounded-full bg-white/12">
+              <div className="h-[clamp(0.65rem,1.2vw,0.9rem)] overflow-hidden rounded-full bg-white/12">
                 <div
-                  className="h-full rounded-full bg-[linear-gradient(90deg,#8ee8d8,#ffc7b5,#d7c3ff)] transition-all duration-700"
+                  className={`h-full rounded-full transition-all duration-700 ${isSettled && option.id === displayPrediction?.winningOptionId ? 'bg-[linear-gradient(90deg,#fde68a,#8ee8d8,#ffffff)]' : 'bg-[linear-gradient(90deg,#8ee8d8,#ffc7b5,#d7c3ff)]'}`}
                   style={{ width: `${Math.max(0, Math.min(100, option.percentage))}%` }}
                 />
               </div>

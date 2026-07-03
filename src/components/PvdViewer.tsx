@@ -30,6 +30,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
   const [externalItem, setExternalItem] = useState<any | null>(null);
   const [captionsEnabled, setCaptionsEnabled] = useState(false);
   const [youtubeActive, setYoutubeActive] = useState(false);
+  const [volumeControlsVisible, setVolumeControlsVisible] = useState(false);
   const playerDivRef = useRef<HTMLDivElement | null>(null);
   const externalFrameRef = useRef<HTMLIFrameElement | null>(null);
   const externalVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -813,63 +814,73 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
       <div
         style={{
           position: 'fixed',
-          right: 'clamp(0.75rem,2vw,1.25rem)',
-          bottom: 'clamp(0.75rem,2vw,1.25rem)',
+          right: 0,
+          bottom: 0,
+          padding: 'clamp(0.75rem,2vw,1.25rem)',
+          background: 'transparent',
+        }}
+        onMouseEnter={() => setVolumeControlsVisible(true)}
+        onMouseLeave={() => setVolumeControlsVisible(false)}
+        onFocusCapture={() => setVolumeControlsVisible(true)}
+        onBlurCapture={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setVolumeControlsVisible(false);
+        }}
+      >
+        <div
+          style={{
           display: 'flex',
           alignItems: 'center',
-          gap: '0.65rem',
-          padding: '0.65rem 0.85rem',
+          gap: 'clamp(0.55rem,1.3vw,0.8rem)',
+          padding: 'clamp(0.55rem,1.2vw,0.75rem) clamp(0.75rem,1.6vw,1rem)',
           borderRadius: '999px',
           border: '1px solid rgba(255,255,255,0.22)',
           background: 'rgba(15, 23, 42, 0.72)',
           color: 'white',
-          font: '600 0.82rem system-ui, sans-serif',
-          opacity: 0,
-          transition: 'opacity 160ms ease',
-          backdropFilter: 'blur(14px)',
+          font: '600 clamp(0.78rem,1.3vw,0.92rem) system-ui, sans-serif',
+          opacity: volumeControlsVisible ? 1 : 0,
+          visibility: volumeControlsVisible ? 'visible' : 'hidden',
+          pointerEvents: volumeControlsVisible ? 'auto' : 'none',
+          transform: volumeControlsVisible ? 'translateY(0)' : 'translateY(8%)',
+          transition: 'opacity 160ms ease, transform 160ms ease, visibility 0s linear 160ms',
+          backdropFilter: volumeControlsVisible ? 'blur(14px)' : 'none',
         }}
-        onMouseEnter={(event) => { event.currentTarget.style.opacity = '1'; }}
-        onMouseLeave={(event) => { event.currentTarget.style.opacity = '0'; }}
-        onFocus={(event) => { event.currentTarget.style.opacity = '1'; }}
-        onBlur={(event) => {
-          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) event.currentTarget.style.opacity = '0';
-        }}
-      >
-        <span>소리</span>
-        <input
-          aria-label="영상 후원 볼륨"
-          type="range"
-          min="0"
-          max="100"
-          value={volume}
-          onChange={(event) => {
-            const next = Math.max(0, Math.min(100, Number(event.currentTarget.value || 0)));
-            applyVolume(next);
-            emitVolumeControl(next);
-          }}
-          style={{ width: 'min(28vw, 10rem)' }}
-        />
-        <span style={{ minWidth: '3ch', textAlign: 'right' }}>{volume}</span>
-        {youtubeActive ? (
-          <button
-            type="button"
-            onClick={toggleCaptions}
-            style={{
-              minHeight: '2rem',
-              border: '1px solid rgba(255,255,255,0.24)',
-              borderRadius: '999px',
-              background: captionsEnabled ? 'rgba(110,231,183,0.28)' : 'rgba(255,255,255,0.12)',
-              color: 'white',
-              padding: '0 0.75rem',
-              font: '700 0.78rem system-ui, sans-serif',
-              cursor: 'pointer',
+        >
+          <span>소리</span>
+          <input
+            aria-label="영상 후원 볼륨"
+            type="range"
+            min="0"
+            max="100"
+            value={volume}
+            onChange={(event) => {
+              const next = Math.max(0, Math.min(100, Number(event.currentTarget.value || 0)));
+              applyVolume(next);
+              emitVolumeControl(next);
             }}
-            aria-pressed={captionsEnabled}
-            aria-label={captionsEnabled ? '유튜브 자막 끄기' : '유튜브 자막 켜기'}
-          >
-            자막 {captionsEnabled ? '켬' : '끔'}
-          </button>
-        ) : null}
+            style={{ width: 'min(28vw, 10rem)' }}
+          />
+          <span style={{ minWidth: '3ch', textAlign: 'right' }}>{volume}</span>
+          {youtubeActive ? (
+            <button
+              type="button"
+              onClick={toggleCaptions}
+              style={{
+                minHeight: '2rem',
+                border: '1px solid rgba(255,255,255,0.24)',
+                borderRadius: '999px',
+                background: captionsEnabled ? 'rgba(110,231,183,0.28)' : 'rgba(255,255,255,0.12)',
+                color: 'white',
+                padding: '0 0.75rem',
+                font: '700 0.78rem system-ui, sans-serif',
+                cursor: 'pointer',
+              }}
+              aria-pressed={captionsEnabled}
+              aria-label={captionsEnabled ? '유튜브 자막 끄기' : '유튜브 자막 켜기'}
+            >
+              자막 {captionsEnabled ? '켬' : '끔'}
+            </button>
+          ) : null}
+        </div>
       </div>
     </div>
   );

@@ -177,6 +177,11 @@ app.use('/files', cors(corsOptions), express.static(path.join(path.dirname(new U
 const sessionContextCache = new Map(); // sidToken -> { sid, channelId, userId, lastActivity, sessionKey }
 const sessionStore = new Map(); // sid -> entry
 const activeSids = new Map(); // sid -> lastSeenTs
+const youtubeSessionStore = new Map(); // ownerUserId -> entry
+const youtubeSessionCreatePromises = new Map(); // ownerUserId -> Promise(entry)
+const youtubeSendQueues = new Map(); // ownerUserId -> Promise
+const cimeSessionStore = new Map(); // ownerUserId -> entry
+const cimeSessionCreatePromises = new Map(); // ownerUserId -> Promise(entry)
 const CACHE_TTL = 5 * 60 * 1000;
 
 const CONNECTION_CLEANUP_INTERVAL = 5 * 60 * 1000;
@@ -6914,19 +6919,7 @@ async function substituteAllPlaceholders(text, sid, userId, username) {
   // User channel points
   if (userId && (/{user\.points}/.test(out) || /{user\.channelPoints}/.test(out))) {
     try {
-      // Resolve streamer channel UID
-      let channelUid = null;
-      const settings = await getBotSettings(sid) || {};
-      const uids = await resolveChzzkChannelUidsForSid(sid, settings);
-      if (uids.length) channelUid = uids[0];
-      if (!channelUid) {
-        try {
-          const accessToken = await getValidAccessToken(sid);
-          const me = await axios.get(`${OPENAPI_BASE}/open/v1/users/me`, { headers: { Authorization: `Bearer ${accessToken}` } });
-          const content = me?.data?.content || me?.data || {};
-          if (content?.channelId) channelUid = String(content.channelId);
-        } catch { }
-      }
+      const channelUid = await resolveStreamerUidForSid(sid);
       if (channelUid) {
         const pts = await getChannelPoints(channelUid, userId);
         out = out.replace(/{user\.points}/g, String(pts)).replace(/{user\.channelPoints}/g, String(pts));
@@ -10706,6 +10699,17 @@ function normalizeVtubeDiscovery(responses = {}, endpoint = 'ws://localhost:8001
       active: expression.active === true
     })).filter((expression) => expression.file || expression.name)
     : [];
+  const parameterData = responses.parameters?.data || {};
+  const parameters = [
+    ...(Array.isArray(parameterData.defaultParameters) ? parameterData.defaultParameters : []),
+    ...(Array.isArray(parameterData.customParameters) ? parameterData.customParameters : [])
+  ].map((parameter) => ({
+    id: String(parameter.id || parameter.name || parameter.parameterID || ''),
+    name: String(parameter.name || parameter.id || parameter.parameterID || ''),
+    min: Number.isFinite(Number(parameter.min)) ? Number(parameter.min) : null,
+    max: Number.isFinite(Number(parameter.max)) ? Number(parameter.max) : null,
+    defaultValue: Number.isFinite(Number(parameter.defaultValue)) ? Number(parameter.defaultValue) : null
+  })).filter((parameter) => parameter.id || parameter.name);
   const itemData = responses.items?.data || {};
   const items = [
     ...(Array.isArray(itemData.itemsInScene) ? itemData.itemsInScene : []),
@@ -10728,6 +10732,7 @@ function normalizeVtubeDiscovery(responses = {}, endpoint = 'ws://localhost:8001
     models,
     hotkeys,
     expressions,
+    parameters,
     items,
     fetchedAt: new Date().toISOString()
   };
@@ -10735,18 +10740,19 @@ function normalizeVtubeDiscovery(responses = {}, endpoint = 'ws://localhost:8001
 
 async function discoverVtubeStudio(endpoint) {
   const target = getVtubeEndpoint(endpoint);
-  const [current, models, hotkeys, expressions, items] = await Promise.all([
+  const [current, models, hotkeys, expressions, parameters, items] = await Promise.all([
     sendVtubeRequest(target, 'CurrentModelRequest'),
     sendVtubeRequest(target, 'AvailableModelsRequest'),
     sendVtubeRequest(target, 'HotkeysInCurrentModelRequest'),
     sendVtubeRequest(target, 'ExpressionStateRequest', { details: false }),
+    sendVtubeRequest(target, 'InputParameterListRequest').catch(() => null),
     sendVtubeRequest(target, 'ItemListRequest', {
       includeAvailableSpots: false,
       includeItemInstancesInScene: true,
       includeAvailableItemFiles: true
     }).catch(() => null)
   ]);
-  return normalizeVtubeDiscovery({ current, models, hotkeys, expressions, items }, target);
+  return normalizeVtubeDiscovery({ current, models, hotkeys, expressions, parameters, items }, target);
 }
 
 function ownerFromControlToken(token) {
@@ -12664,7 +12670,7 @@ app.get('/api/local-remote/overview', requireAutomationLocalAgent, async (req, r
     const sid = getLocalRemoteSid(req);
     if (!sid) return res.status(401).json({ error: 'Invalid local program token' });
     const settings = await getBotSettings(sid) || {};
-    const rules = await getBotRules(sid).catch(() => []);
+    const rules = await getBotRulesWithDefaults(sid).catch(() => []);
     const rouletteDefs = getRouletteDefsFromSettings(settings);
     const videoQueue = getVideoQueue(sid);
     return res.json({
@@ -12705,6 +12711,7 @@ app.post('/api/local-remote/commands/upsert', requireAutomationLocalAgent, async
       lastUsed: Number(input.lastUsed || 0),
     };
     await upsertBotRule(sid, rule);
+    await markDefaultBotRulesInitialized(sid);
     return res.json({ rule });
   } catch (e) {
     console.error('[Local Remote] command upsert error', e?.message || e);
@@ -13411,10 +13418,111 @@ app.get('/api/channel/context', async (req, res) => {
 });
 
 // --- Per-user bot rules ---
+const DEFAULT_BOT_RULES = Object.freeze([
+  {
+    id: 'default_follow',
+    name: '팔로우',
+    keywords: ['!팔로우'],
+    responses: ['{user.name}님의 팔로우 기록은 {user.followedAt}부터, 함께한 날은 {user.followedDays}일입니다.'],
+    enabled: true,
+    adminOnly: false,
+    requiredRoleLevel: 1,
+    pointsCost: 0,
+    cooldown: 3000,
+    lastUsed: 0,
+  },
+  {
+    id: 'default_uptime',
+    name: '업타임',
+    keywords: ['!업타임'],
+    responses: ['업타임: {live.elapsed_ko}'],
+    enabled: true,
+    adminOnly: false,
+    requiredRoleLevel: 1,
+    pointsCost: 0,
+    cooldown: 3000,
+    lastUsed: 0,
+  },
+  {
+    id: 'default_points',
+    name: '포인트',
+    keywords: ['!포인트', '!내포인트'],
+    responses: ['{user.name}님의 보유 포인트는 {user.points}P입니다.'],
+    enabled: true,
+    adminOnly: false,
+    requiredRoleLevel: 1,
+    pointsCost: 0,
+    cooldown: 3000,
+    lastUsed: 0,
+  },
+  {
+    id: 'default_attendance',
+    name: '출석',
+    keywords: ['!출석'],
+    responses: ['{user.name}님의 누적 출석은 {user.attendanceDays}일입니다.'],
+    enabled: true,
+    adminOnly: false,
+    requiredRoleLevel: 1,
+    pointsCost: 0,
+    cooldown: 3000,
+    lastUsed: 0,
+  },
+  {
+    id: 'default_live_title',
+    name: '방송 정보',
+    keywords: ['!방제', '!방송'],
+    responses: ['현재 방송: {live.title}'],
+    enabled: true,
+    adminOnly: false,
+    requiredRoleLevel: 1,
+    pointsCost: 0,
+    cooldown: 3000,
+    lastUsed: 0,
+  },
+]);
+
+function createDefaultBotRules() {
+  return DEFAULT_BOT_RULES.map((rule) => ({
+    ...rule,
+    keywords: [...rule.keywords],
+    responses: [...rule.responses],
+    lastUsed: 0,
+  }));
+}
+
+async function markDefaultBotRulesInitialized(sid, settings = null) {
+  if (!sid) return;
+  const current = settings || await getBotSettings(sid).catch(() => ({})) || {};
+  if (current.defaultBotRulesInitialized === true) return;
+  await setBotSettings(sid, { ...current, defaultBotRulesInitialized: true }).catch((error) => {
+    console.warn('[Bot Rules] failed to mark default initialization:', error?.message || error);
+  });
+}
+
+async function getBotRulesWithDefaults(sid) {
+  if (!sid) return [];
+  const existingRules = await getBotRules(sid);
+  const settings = await getBotSettings(sid).catch(() => ({})) || {};
+  if (Array.isArray(existingRules) && existingRules.length > 0) {
+    await markDefaultBotRulesInitialized(sid, settings);
+    return existingRules;
+  }
+  if (settings.defaultBotRulesInitialized === true) {
+    return [];
+  }
+
+  const defaultRules = createDefaultBotRules();
+  await Promise.all(defaultRules.map((rule) => upsertBotRule(sid, rule)));
+  await markDefaultBotRulesInitialized(sid, settings);
+
+  const seededRules = await getBotRules(sid);
+  return Array.isArray(seededRules) && seededRules.length > 0 ? seededRules : defaultRules;
+}
+
 app.get('/api/bot/rules', async (req, res) => {
   const sid = await getPartitionId(req, res);
   if (!sid) return res.json({ rules: [] });
-  const rules = await getBotRules(sid);
+  const rules = await getBotRulesWithDefaults(sid);
   return res.json({ rules });
 });
 
@@ -13442,6 +13550,7 @@ app.post('/api/bot/rules/upsert', async (req, res) => {
     }
 
     await upsertBotRule(sid, rule);
+    await markDefaultBotRulesInitialized(sid);
     return res.json({ ok: true });
   } catch (e) {
     console.error('Rule upsert failed:', e?.message || e, e?.hint || '', e?.details || '');
@@ -13466,9 +13575,14 @@ app.post('/api/bot/rules/delete', async (req, res) => {
 // --- Channel Points endpoints ---
 async function resolveStreamerUidForSid(sid) {
   try {
+    const ownerUserId = ownerUserIdFromSid(sid);
     const settings = await getBotSettings(sid) || {};
     let channelUids = await resolveChzzkChannelUidsForSid(sid, settings);
     if (channelUids.length) return channelUids[0];
+    for (const provider of ['cime', 'youtube']) {
+      const channelId = await resolveChannelIdForOwnerUserId(ownerUserId, { provider, allowFallback: false }).catch(() => null);
+      if (channelId) return channelId;
+    }
     // fallback via users/me
     const accessToken = await getValidAccessToken(sid);
     const me = await axios.get(`${OPENAPI_BASE}/open/v1/users/me`, {
@@ -13476,6 +13590,7 @@ async function resolveStreamerUidForSid(sid) {
     });
     const content = me?.data?.content || me?.data || {};
     if (content?.channelId) return String(content.channelId);
+    if (ownerUserId) return ownerUserId;
   } catch { }
   return null;
 }
@@ -13877,7 +13992,7 @@ app.get('/api/public/:uid/prediction', async (req, res) => {
   const uid = String(req.params.uid || '').trim();
   if (!uid) return res.status(400).json({ error: 'uid required' });
   try {
-    const prediction = await getActivePredictionForChannel(uid);
+    const prediction = await getActivePredictionForChannel(uid, { includeRecentlySettled: true, resultVisibleMs: 5000 });
     return res.json({ uid, prediction });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to load prediction' });
@@ -15599,7 +15714,7 @@ async function ensureSession(sid, channelId) {
           }
 
           // Load per-user rules (empty if disabled)
-          const rules = botDisabled ? [] : await getBotRules(sid);
+          const rules = botDisabled ? [] : await getBotRulesWithDefaults(sid);
           if (!Array.isArray(rules)) {
             throw new Error('rules is not iterable');
           }
@@ -16213,10 +16328,6 @@ async function subscribeEvent(kind, sessionKey, channelId, accessToken) {
   }
 }
 
-const youtubeSessionStore = new Map(); // ownerUserId -> entry
-const youtubeSessionCreatePromises = new Map(); // ownerUserId -> Promise(entry)
-const youtubeSendQueues = new Map(); // ownerUserId -> Promise
-
 async function getYoutubeChannelId(ownerUserId) {
   const streamerChannel = await getYoutubeStreamerChannel(ownerUserId).catch(() => null);
   if (streamerChannel?.youtubeChannelId) return String(streamerChannel.youtubeChannelId);
@@ -16249,22 +16360,39 @@ function normalizeYoutubeLiveBroadcast(item) {
   };
 }
 
+function isYoutubeLiveBroadcastActive(item) {
+  const status = String(item?.status?.lifeCycleStatus || item?.status || '').toLowerCase();
+  if (!status) return true;
+  return status === 'live' || status === 'active' || status.includes('live');
+}
+
 async function fetchYoutubeActiveLive(ownerUserId, options = {}) {
   const centralLive = await refreshYoutubeLiveFromRegisteredChannel(ownerUserId, { allowSearch: options.allowSearch === true }).catch(() => null);
   if (centralLive?.liveChatId) return centralLive;
   const botProfile = await getYoutubeBotProfile(YOUTUBE_BOT_PROFILE_ID).catch(() => null);
   const streamerChannel = await getYoutubeStreamerChannel(ownerUserId).catch(() => null);
   if (botProfile?.selectedChannelId || streamerChannel?.youtubeChannelId) return centralLive || null;
-  const response = await youtubeApiGet('liveBroadcasts', ownerUserId, {
-    part: 'snippet,status,contentDetails',
-    mine: 'true',
-    broadcastStatus: 'active',
-    maxResults: 5
-  });
+  let response = null;
+  try {
+    response = await youtubeApiGet('liveBroadcasts', ownerUserId, {
+      part: 'snippet,status,contentDetails',
+      mine: 'true',
+      broadcastStatus: 'active',
+      maxResults: 5
+    });
+  } catch (error) {
+    const message = String(error?.response?.data?.error?.message || error?.message || '');
+    if (!message.toLowerCase().includes('incompatible parameters')) throw error;
+    response = await youtubeApiGet('liveBroadcasts', ownerUserId, {
+      part: 'snippet,status,contentDetails',
+      mine: 'true',
+      maxResults: 5
+    });
+  }
   const items = Array.isArray(response?.data?.items) ? response.data.items : [];
   const active = items
     .map(normalizeYoutubeLiveBroadcast)
-    .filter((item) => item.broadcastId && item.liveChatId)
+    .filter((item) => item.broadcastId && item.liveChatId && isYoutubeLiveBroadcastActive(item))
     .sort((a, b) => Number(b.startedAtTs || 0) - Number(a.startedAtTs || 0));
   return active[0] || null;
 }
@@ -16791,7 +16919,7 @@ async function processYoutubeChatAutomation(entry, ev) {
       console.error('[Prediction] YouTube command error', e?.message || e);
     }
 
-    const rules = await getBotRules(sid);
+    const rules = await getBotRulesWithDefaults(sid);
     if (!Array.isArray(rules)) return;
     const lower = text.toLowerCase();
     const now = Date.now();
@@ -17164,8 +17292,50 @@ async function ensureYoutubeSession(ownerUserId) {
   }
 }
 
-const cimeSessionStore = new Map(); // ownerUserId -> entry
-const cimeSessionCreatePromises = new Map(); // ownerUserId -> Promise(entry)
+function firstNonEmptyText(...values) {
+  for (const value of values) {
+    const text = String(value ?? '').trim();
+    if (text) return text;
+  }
+  return '';
+}
+
+function extractCimeUserFields(data = {}, fallbackName = 'Unknown') {
+  const profile = data.profile || data.senderProfile || data.userProfile || data.user || data.sender || {};
+  const channel = data.channel || profile.channel || {};
+  const userId = firstNonEmptyText(
+    data.senderChannelId,
+    data.senderChannelID,
+    data.senderUserId,
+    data.senderId,
+    data.userId,
+    data.userID,
+    data.memberId,
+    data.memberChannelId,
+    data.channelId,
+    data.channelID,
+    profile.userId,
+    profile.userID,
+    profile.channelId,
+    profile.channelID,
+    profile.id,
+    channel.channelId,
+    channel.id
+  );
+  const username = firstNonEmptyText(
+    data.senderNickname,
+    data.senderName,
+    data.nickname,
+    data.displayName,
+    data.name,
+    profile.nickname,
+    profile.displayName,
+    profile.name,
+    channel.channelName,
+    fallbackName
+  );
+  return { userId, username };
+}
 
 function parseCimeEvent(raw) {
   if (!raw) return null;
@@ -17178,8 +17348,11 @@ function parseCimeEvent(raw) {
   if (!eventName || !data) return null;
 
   if (eventName === 'CHAT') {
-    const ts = data.messageTime ? Date.parse(data.messageTime) : Date.now();
-    const messageId = data.messageId || data.id || `${data.senderChannelId || data.profile?.nickname || 'chat'}:${data.messageTime || ts}:${String(data.content || '').slice(0, 80)}`;
+    const tsCandidate = data.messageTime || data.createdAt || data.publishedAt || data.timestamp || data.time || null;
+    const ts = tsCandidate ? parseLiveTimestamp(tsCandidate, Date.now()) : Date.now();
+    const { userId, username } = extractCimeUserFields(data);
+    const message = firstNonEmptyText(data.content, data.message, data.text, data.chatMessage, data.body);
+    const messageId = data.messageId || data.messageID || data.id || data.eventId || `${userId || username || 'chat'}:${ts}:${String(message || '').slice(0, 80)}`;
     return {
       eventName,
       data,
@@ -17187,9 +17360,9 @@ function parseCimeEvent(raw) {
         type: 'chat',
         id: String(messageId),
         ts: Number.isFinite(ts) ? ts : Date.now(),
-        user: data.profile?.nickname || data.senderNickname || 'Unknown',
-        userId: data.senderChannelId || data.profile?.userId || '',
-        message: data.content || '',
+        user: username || 'Unknown',
+        userId,
+        message,
         raw: data,
         provider: 'cime'
       }
@@ -17198,15 +17371,17 @@ function parseCimeEvent(raw) {
 
   if (eventName === 'DONATION') {
     const ts = Date.now();
+    const donorId = firstNonEmptyText(data.donatorChannelId, data.donatorUserId, data.donatorId, data.senderChannelId, data.userId, data.profile?.userId, data.profile?.channelId);
+    const donorName = firstNonEmptyText(data.donatorNickname, data.donatorName, data.senderNickname, data.nickname, data.profile?.nickname, 'Unknown');
     return {
       eventName,
       data,
       ev: {
         type: 'donation',
-        id: `${data.donatorChannelId || data.donatorNickname || 'donation'}:${ts}`,
+        id: `${donorId || donorName || 'donation'}:${ts}`,
         ts,
-        user: data.donatorNickname || 'Unknown',
-        userId: data.donatorChannelId || '',
+        user: donorName || 'Unknown',
+        userId: donorId,
         amount: Number(data.payAmount || 0),
         message: data.donationText || '',
         raw: data,
@@ -17218,15 +17393,17 @@ function parseCimeEvent(raw) {
 
   if (eventName === 'SUBSCRIPTION') {
     const ts = Date.now();
+    const subscriberId = firstNonEmptyText(data.subscriberChannelId, data.subscriberUserId, data.subscriberId, data.senderChannelId, data.userId, data.profile?.userId, data.profile?.channelId);
+    const subscriberName = firstNonEmptyText(data.subscriberChannelName, data.subscriberNickname, data.subscriberName, data.senderNickname, data.nickname, data.profile?.nickname, 'Unknown');
     return {
       eventName,
       data,
       ev: {
         type: 'subscription',
-        id: `${data.subscriberChannelId || data.subscriberChannelName || 'subscription'}:${ts}`,
+        id: `${subscriberId || subscriberName || 'subscription'}:${ts}`,
         ts,
-        user: data.subscriberChannelName || 'Unknown',
-        userId: data.subscriberChannelId || '',
+        user: subscriberName || 'Unknown',
+        userId: subscriberId,
         months: Number(data.month || 0),
         message: data.subscriptionText || data.tierName || '',
         raw: data,
@@ -17389,8 +17566,14 @@ async function processCimeChatAutomation(entry, ev) {
     const settings = await getBotSettings(sid) || {};
     const currentlyLive = await refreshCimeLiveStatus(ownerUserId, sid, entry.channelId);
     if (settings.onlyWhenLive && !currentlyLive) return;
-    const resolvedUserId = String(ev.userId || ev.user || 'unknown_user');
     const resolvedUsername = String(ev.user || 'Unknown');
+    let resolvedUserId = String(ev.userId || '').trim();
+    if (!resolvedUserId && resolvedUsername && resolvedUsername !== 'Unknown') {
+      resolvedUserId = `cime:nickname:${crypto.createHash('sha256').update(resolvedUsername).digest('hex').slice(0, 16)}`;
+    }
+    if (!resolvedUserId) resolvedUserId = 'unknown_user';
+    const pointChannelUid = entry.channelId || await resolveStreamerUidForSid(sid);
+    if (pointChannelUid && !entry.channelId) entry.channelId = pointChannelUid;
     const isOwner = entry.channelId && String(resolvedUserId) === String(entry.channelId);
 
     if (currentlyLive) {
@@ -17420,16 +17603,20 @@ async function processCimeChatAutomation(entry, ev) {
             await sendCimeChat(ownerUserId, text).catch(() => { });
           }
           const bonus = Math.max(0, Number(settings.channelPointsPerAttendance || 0));
-          if (bonus > 0 && entry.channelId && !(await isChannelPointExcluded(settings, resolvedUserId))) {
-            await incrChannelPoints(entry.channelId, resolvedUserId, resolvedUsername, bonus).catch(() => { });
+          if (bonus > 0 && pointChannelUid && !(await isChannelPointExcluded(settings, resolvedUserId))) {
+            await incrChannelPoints(pointChannelUid, resolvedUserId, resolvedUsername, bonus).catch((error) => {
+              console.warn('[CIME] Attendance point award failed:', error?.message || error);
+            });
           }
         }
       } catch { }
 
       try {
         const perChat = Math.max(0, Number(settings.channelPointsPerChat ?? 1));
-        if (entry.channelId && perChat > 0 && !isOwner && !(await isChannelPointExcluded(settings, resolvedUserId))) {
-          await incrChannelPoints(entry.channelId, resolvedUserId, resolvedUsername, perChat).catch(() => { });
+        if (pointChannelUid && perChat > 0 && !isOwner && !(await isChannelPointExcluded(settings, resolvedUserId))) {
+          await incrChannelPoints(pointChannelUid, resolvedUserId, resolvedUsername, perChat).catch((error) => {
+            console.warn('[CIME] Chat point award failed:', error?.message || error);
+          });
         }
       } catch { }
     }
@@ -17437,7 +17624,7 @@ async function processCimeChatAutomation(entry, ev) {
     if (settings.botEnabled === false) return;
     try {
       const predictionReply = await handlePredictionBetCommand({
-        channelUid: entry.channelId,
+        channelUid: pointChannelUid || entry.channelId,
         userId: resolvedUserId,
         username: resolvedUsername,
         text,
@@ -17450,7 +17637,7 @@ async function processCimeChatAutomation(entry, ev) {
       console.error('[Prediction] CIME command error', e?.message || e);
     }
 
-    const rules = await getBotRules(sid);
+    const rules = await getBotRulesWithDefaults(sid);
     if (!Array.isArray(rules)) return;
 
     const lower = text.toLowerCase();
@@ -17481,13 +17668,13 @@ async function processCimeChatAutomation(entry, ev) {
       let allowExecute = true;
       const commandCost = Math.max(0, Number(r.pointsCost || 0));
       const isRouletteRule = responses.some((s) => typeof s === 'string' && /\$\{\s*roulette::/i.test(s));
-      if (!isRouletteRule && commandCost > 0 && entry.channelId && resolvedUserId) {
-        const have = await getChannelPoints(entry.channelId, resolvedUserId).catch(() => 0);
+      if (!isRouletteRule && commandCost > 0 && pointChannelUid && resolvedUserId) {
+        const have = await getChannelPoints(pointChannelUid, resolvedUserId).catch(() => 0);
         if (Number(have || 0) < commandCost) {
           response = `포인트가 부족합니다. (${commandCost} 필요, ${Number(have || 0)} 보유 중)`;
           allowExecute = false;
         } else {
-          await incrChannelPoints(entry.channelId, resolvedUserId, resolvedUsername, -commandCost).catch(() => { });
+          await incrChannelPoints(pointChannelUid, resolvedUserId, resolvedUsername, -commandCost).catch(() => { });
         }
       }
 
@@ -17516,7 +17703,7 @@ async function processCimeChatAutomation(entry, ev) {
         try {
           cleaned = await enqueueVideoDonationFromArgs({
             sid,
-            channelUid: entry.channelId,
+            channelUid: pointChannelUid || entry.channelId,
             userId: resolvedUserId,
             username: resolvedUsername,
             args,
@@ -17539,14 +17726,14 @@ async function processCimeChatAutomation(entry, ev) {
           const n = parseInt(args[0] || '', 10);
           if (Number.isFinite(n)) count = Math.max(1, Math.min(10, n));
           if (name) {
-            if (commandCost > 0 && entry.channelId && resolvedUserId) {
+            if (commandCost > 0 && pointChannelUid && resolvedUserId) {
               const need = commandCost * count;
-              const have = await getChannelPoints(entry.channelId, resolvedUserId).catch(() => 0);
+              const have = await getChannelPoints(pointChannelUid, resolvedUserId).catch(() => 0);
               if (Number(have || 0) < need) {
                 cleaned = `포인트가 부족합니다. (${need} 필요, ${Number(have || 0)} 보유 중)`;
                 allowExecute = false;
               } else {
-                await incrChannelPoints(entry.channelId, resolvedUserId, resolvedUsername, -need).catch(() => { });
+                await incrChannelPoints(pointChannelUid, resolvedUserId, resolvedUsername, -need).catch(() => { });
               }
             }
           }
@@ -17574,8 +17761,8 @@ async function processCimeChatAutomation(entry, ev) {
           command: { keyword: matchedKeyword || '', text, ruleId: r.id || null, ruleName: r.name || null },
           user: { userId: resolvedUserId, username: resolvedUsername },
           chatPost: makeCimeChatPost(ownerUserId, resolvedUsername),
-          channelUid: entry.channelId || null,
-          channel: { channelUid: entry.channelId || null },
+          channelUid: pointChannelUid || entry.channelId || null,
+          channel: { channelUid: pointChannelUid || entry.channelId || null },
         });
         if (actionResult.used) cleaned = actionResult.text;
       }

@@ -84,33 +84,33 @@ async function postJson<T>(path: string, body?: unknown): Promise<T | null> {
 function OptionMeter({ option, index, selected }: { option: PredictionOption; index: number; selected?: boolean }) {
   return (
     <div className="group min-w-0 rounded-[var(--radius-card)] border bg-background/78 p-[clamp(0.875rem,1.6vw,1.125rem)] transition hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-subtle">
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex items-start justify-between gap-[clamp(0.75rem,1.8vw,1.25rem)]">
         <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="grid aspect-square w-[2em] shrink-0 place-items-center rounded-[var(--radius-control)] bg-pastel-mint/75 text-sm font-bold text-teal-900 dark:bg-primary/25 dark:text-teal-50">
+          <div className="flex items-center gap-[clamp(0.45rem,1vw,0.75rem)]">
+            <span className="grid aspect-square w-[2.25em] shrink-0 place-items-center rounded-[var(--radius-control)] bg-pastel-mint/75 text-[clamp(0.9rem,1.3vw,1.05rem)] font-bold text-teal-900 dark:bg-primary/25 dark:text-teal-50">
               {index + 1}
             </span>
-            <div className="truncate text-sm font-semibold">{option.label}</div>
-            {selected ? <Trophy className="h-4 w-4 shrink-0 text-amber-500" /> : null}
+            <div className="truncate text-[clamp(1rem,1.5vw,1.15rem)] font-semibold">{option.label}</div>
+            {selected ? <Trophy className="h-[1.1em] w-[1.1em] shrink-0 text-amber-500" /> : null}
           </div>
-          <div className="mt-2 text-xs text-muted-foreground">
+          <div className="mt-[clamp(0.4rem,0.9vw,0.65rem)] text-[clamp(0.82rem,1.1vw,0.95rem)] text-muted-foreground">
             {option.count.toLocaleString('ko-KR')}명 참여
           </div>
         </div>
         <div className="min-w-0 text-right">
-          <div className="text-base font-bold">{option.percentage}%</div>
-          <div className="text-xs text-muted-foreground">{formatPoints(option.total)}</div>
+          <div className="text-[clamp(1.1rem,1.8vw,1.35rem)] font-bold">{option.percentage}%</div>
+          <div className="text-[clamp(0.82rem,1.1vw,0.95rem)] text-muted-foreground">{formatPoints(option.total)}</div>
         </div>
       </div>
-      <div className="mt-3 flex flex-wrap gap-2 text-xs">
-        <span className="rounded-full border bg-card/75 px-2.5 py-1 font-semibold text-muted-foreground">
+      <div className="mt-[clamp(0.7rem,1.4vw,1rem)] flex flex-wrap gap-[clamp(0.45rem,1vw,0.75rem)] text-[clamp(0.78rem,1vw,0.92rem)]">
+        <span className="rounded-full border bg-card/75 px-[clamp(0.65rem,1.2vw,0.9rem)] py-[clamp(0.25rem,0.7vw,0.4rem)] font-semibold text-muted-foreground">
           예상 배당 {option.payoutMultiplier ? `x${option.payoutMultiplier}` : '-'}
         </span>
-        <span className="rounded-full border bg-card/75 px-2.5 py-1 font-semibold text-muted-foreground">
+        <span className="rounded-full border bg-card/75 px-[clamp(0.65rem,1.2vw,0.9rem)] py-[clamp(0.25rem,0.7vw,0.4rem)] font-semibold text-muted-foreground">
           100P당 {option.payoutPer100 ? formatPoints(option.payoutPer100) : '-'}
         </span>
       </div>
-      <div className="mt-3 h-[0.72rem] overflow-hidden rounded-full bg-muted">
+      <div className="mt-[clamp(0.7rem,1.4vw,1rem)] h-[clamp(0.72rem,1vw,0.9rem)] overflow-hidden rounded-full bg-muted">
         <div
           className="h-full rounded-full bg-[linear-gradient(90deg,hsl(var(--primary)),hsl(var(--accent)))] transition-all duration-500"
           style={{ width: `${Math.max(0, Math.min(100, option.percentage))}%` }}
@@ -213,39 +213,39 @@ export function PredictionsPage() {
   return (
     <div className="grid gap-[clamp(1rem,2vw,1.5rem)]">
       <section className="relative overflow-hidden rounded-[var(--radius-panel)] border bg-[radial-gradient(circle_at_10%_10%,hsl(var(--accent-mint)/0.72),transparent_34%),linear-gradient(135deg,hsl(var(--card)),hsl(var(--accent-sky)/0.28))] p-[clamp(1.25rem,2.8vw,2rem)] shadow-subtle">
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)] lg:items-end">
+        <div className="grid gap-[clamp(1.25rem,2.4vw,2rem)] lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)] lg:items-end">
           <div className="min-w-0">
-            <div className="mb-4 flex flex-wrap items-center gap-2">
+            <div className="mb-[clamp(0.9rem,1.8vw,1.25rem)] flex flex-wrap items-center gap-[clamp(0.5rem,1vw,0.75rem)]">
               <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-primary/12 text-primary">
-                <BarChart3 className="h-5 w-5" />
+                <BarChart3 className="h-[1.15em] w-[1.15em]" />
               </span>
               <Badge tone="mint">시청자 예측</Badge>
               <Badge tone={statusTone(active?.status)}>{statusLabel(active?.status)}</Badge>
             </div>
-            <h1 className="text-3xl font-semibold leading-tight md:text-4xl">예측 베팅</h1>
-            <p className="mt-3 max-w-2xl text-sm leading-7 text-muted-foreground md:text-base">
+            <h1 className="text-[clamp(2rem,4vw,3rem)] font-semibold leading-tight">예측 베팅</h1>
+            <p className="mt-[clamp(0.75rem,1.5vw,1rem)] max-w-2xl text-[clamp(0.95rem,1.35vw,1.12rem)] leading-relaxed text-muted-foreground">
               방송의 다음 순간을 시청자가 포인트로 예측하게 열고, 채팅 명령어와 OBS 오버레이로 참여 흐름을 자연스럽게 보여줘요.
             </p>
           </div>
-          <div className="grid min-w-0 grid-cols-[repeat(3,minmax(0,1fr))] gap-2">
+          <div className="grid min-w-0 grid-cols-[repeat(3,minmax(0,1fr))] gap-[clamp(0.5rem,1.1vw,0.85rem)]">
             <div className="min-w-0 rounded-[var(--radius-card)] border bg-card/78 p-[clamp(0.75rem,1.5vw,1rem)] text-center">
-              <div className="truncate text-xl font-bold">{formatPoints(latest?.totalPoints || 0)}</div>
-              <div className="mt-1 text-xs text-muted-foreground">총 베팅</div>
+              <div className="truncate text-[clamp(1.1rem,2vw,1.45rem)] font-bold">{formatPoints(latest?.totalPoints || 0)}</div>
+              <div className="mt-[clamp(0.2rem,0.6vw,0.4rem)] text-[clamp(0.78rem,1vw,0.92rem)] text-muted-foreground">총 베팅</div>
             </div>
             <div className="min-w-0 rounded-[var(--radius-card)] border bg-card/78 p-[clamp(0.75rem,1.5vw,1rem)] text-center">
-              <div className="truncate text-xl font-bold">{latest?.participantCount || 0}</div>
-              <div className="mt-1 text-xs text-muted-foreground">참여자</div>
+              <div className="truncate text-[clamp(1.1rem,2vw,1.45rem)] font-bold">{latest?.participantCount || 0}</div>
+              <div className="mt-[clamp(0.2rem,0.6vw,0.4rem)] text-[clamp(0.78rem,1vw,0.92rem)] text-muted-foreground">참여자</div>
             </div>
             <div className="min-w-0 rounded-[var(--radius-card)] border bg-card/78 p-[clamp(0.75rem,1.5vw,1rem)] text-center">
-              <div className="truncate text-xl font-bold">{latest?.options.length || optionRows.length}</div>
-              <div className="mt-1 text-xs text-muted-foreground">선택지</div>
+              <div className="truncate text-[clamp(1.1rem,2vw,1.45rem)] font-bold">{latest?.options.length || optionRows.length}</div>
+              <div className="mt-[clamp(0.2rem,0.6vw,0.4rem)] text-[clamp(0.78rem,1vw,0.92rem)] text-muted-foreground">선택지</div>
             </div>
           </div>
         </div>
       </section>
 
       {notice ? (
-        <div className="rounded-[var(--radius-card)] border bg-pastel-lemon/55 p-4 text-sm font-medium text-amber-950 dark:bg-amber-500/12 dark:text-amber-100">
+        <div className="rounded-[var(--radius-card)] border bg-pastel-lemon/55 p-[clamp(0.85rem,1.5vw,1.1rem)] text-[clamp(0.9rem,1.2vw,1rem)] font-medium text-amber-950 dark:bg-amber-500/12 dark:text-amber-100">
           {notice}
         </div>
       ) : null}
@@ -256,36 +256,36 @@ export function PredictionsPage() {
             <CardTitle>새 예측 열기</CardTitle>
             <CardDescription>선택지는 줄바꿈으로 입력해요. 최소 2개 이상이면 개수 제한 없이 사용할 수 있어요.</CardDescription>
           </CardHeader>
-          <CardContent className="grid gap-4">
-            <label className="grid min-w-0 gap-2 text-sm font-semibold">
+          <CardContent className="grid gap-[clamp(0.95rem,1.8vw,1.35rem)]">
+            <label className="grid min-w-0 gap-[clamp(0.45rem,1vw,0.65rem)] text-[clamp(0.95rem,1.25vw,1.05rem)] font-semibold">
               질문
               <Input value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="예: 다음 판 결과는?" />
             </label>
-            <label className="grid min-w-0 gap-2 text-sm font-semibold">
+            <label className="grid min-w-0 gap-[clamp(0.45rem,1vw,0.65rem)] text-[clamp(0.95rem,1.25vw,1.05rem)] font-semibold">
               선택지
               <textarea
                 value={optionsText}
                 onChange={(event) => setOptionsText(event.target.value)}
                 placeholder="선택지를 한 줄에 하나씩 입력"
-                className="box-border min-h-[12rem] w-full min-w-0 max-w-full resize-y rounded-[var(--radius-control)] border bg-background/80 p-[clamp(0.75rem,1.4vw,1rem)] text-sm leading-6 outline-none transition placeholder:text-muted-foreground focus:border-primary/45 focus:ring-2 focus:ring-ring"
+                className="box-border min-h-[12rem] w-full min-w-0 max-w-full resize-y rounded-[var(--radius-control)] border bg-background/80 p-[clamp(0.75rem,1.4vw,1rem)] text-[clamp(0.95rem,1.25vw,1.05rem)] leading-relaxed outline-none transition placeholder:text-muted-foreground focus:border-primary/45 focus:ring-2 focus:ring-ring"
               />
             </label>
-            <div className="grid min-w-0 gap-3 rounded-[var(--radius-card)] border bg-background/62 p-[clamp(0.75rem,1.5vw,1rem)] sm:grid-cols-[repeat(3,minmax(0,1fr))]">
-              <label className="grid min-w-0 gap-2 text-sm font-semibold">
+            <div className="grid min-w-0 gap-[clamp(0.75rem,1.4vw,1rem)] rounded-[var(--radius-card)] border bg-background/62 p-[clamp(0.75rem,1.5vw,1rem)] sm:grid-cols-[repeat(3,minmax(0,1fr))]">
+              <label className="grid min-w-0 gap-[clamp(0.45rem,1vw,0.65rem)] text-[clamp(0.9rem,1.2vw,1rem)] font-semibold">
                 최소 포인트
-                <Input value={minBet} onChange={(event) => setMinBet(event.target.value)} inputMode="numeric" className="min-h-[var(--control-height-sm)] text-center font-semibold tabular-nums" />
+                <Input value={minBet} onChange={(event) => setMinBet(event.target.value)} inputMode="numeric" className="min-h-[var(--control-height-sm)] text-center text-[clamp(0.95rem,1.25vw,1.08rem)] font-semibold tabular-nums" />
               </label>
-              <label className="grid min-w-0 gap-2 text-sm font-semibold">
+              <label className="grid min-w-0 gap-[clamp(0.45rem,1vw,0.65rem)] text-[clamp(0.9rem,1.2vw,1rem)] font-semibold">
                 최대 포인트
-                <Input value={maxBet} onChange={(event) => setMaxBet(event.target.value)} inputMode="numeric" className="min-h-[var(--control-height-sm)] text-center font-semibold tabular-nums" />
+                <Input value={maxBet} onChange={(event) => setMaxBet(event.target.value)} inputMode="numeric" className="min-h-[var(--control-height-sm)] text-center text-[clamp(0.95rem,1.25vw,1.08rem)] font-semibold tabular-nums" />
               </label>
-              <label className="grid min-w-0 gap-2 text-sm font-semibold">
+              <label className="grid min-w-0 gap-[clamp(0.45rem,1vw,0.65rem)] text-[clamp(0.9rem,1.2vw,1rem)] font-semibold">
                 자동 마감(분)
-                <Input value={durationMinutes} onChange={(event) => setDurationMinutes(event.target.value)} inputMode="numeric" placeholder="비움" className="min-h-[var(--control-height-sm)] text-center font-semibold tabular-nums" />
+                <Input value={durationMinutes} onChange={(event) => setDurationMinutes(event.target.value)} inputMode="numeric" placeholder="비움" className="min-h-[var(--control-height-sm)] text-center text-[clamp(0.95rem,1.25vw,1.08rem)] font-semibold tabular-nums" />
               </label>
             </div>
             <Button type="button" onClick={create} disabled={isPending}>
-              <Send className="h-4 w-4" />
+              <Send className="h-[1em] w-[1em]" />
               예측 열기
             </Button>
           </CardContent>
@@ -293,30 +293,30 @@ export function PredictionsPage() {
 
         <Card className="overflow-hidden">
           <CardHeader>
-            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            <div className="flex flex-col gap-[clamp(0.75rem,1.5vw,1rem)] md:flex-row md:items-start md:justify-between">
               <div>
                 <CardTitle>진행 현황</CardTitle>
-            <CardDescription>채팅에서는 `!투표 번호 포인트` 형식으로 참여해요. `1만`, `1k`, `올인`도 사용할 수 있고 `!배팅`, `!예측`도 지원해요.</CardDescription>
+                <CardDescription>채팅에서는 `!투표 번호 포인트` 형식으로 참여해요. `1만`, `1k`, `올인`도 사용할 수 있고 `!배팅`, `!예측`도 지원해요.</CardDescription>
               </div>
               <Badge tone={statusTone(latest?.status)}>{statusLabel(latest?.status)}</Badge>
             </div>
           </CardHeader>
           <CardContent>
             {latest ? (
-              <div className="grid gap-4">
+              <div className="grid gap-[clamp(0.95rem,1.8vw,1.35rem)]">
                 <div className="min-w-0 rounded-[var(--radius-card)] bg-muted/55 p-[clamp(0.875rem,1.6vw,1rem)]">
-                  <div className="text-lg font-semibold leading-7">{latest.question}</div>
-                  {winner ? <div className="mt-2 text-sm text-muted-foreground">정산 결과: {winner.label}</div> : null}
+                  <div className="text-[clamp(1.1rem,1.8vw,1.35rem)] font-semibold leading-relaxed">{latest.question}</div>
+                  {winner ? <div className="mt-[clamp(0.45rem,0.9vw,0.7rem)] text-[clamp(0.88rem,1.15vw,1rem)] text-muted-foreground">정산 결과: {winner.label}</div> : null}
                 </div>
-                <div className="grid max-h-[min(52vh,38rem)] gap-3 overflow-y-auto pr-1">
+                <div className="grid max-h-[min(52vh,38rem)] gap-[clamp(0.75rem,1.4vw,1rem)] overflow-y-auto pr-[clamp(0.2rem,0.5vw,0.35rem)]">
                   {latest.options.map((option, index) => (
                     <OptionMeter key={option.id} option={option} index={index} selected={option.id === latest.winningOptionId} />
                   ))}
                 </div>
-                <div className="grid gap-2 sm:grid-cols-[repeat(auto-fit,minmax(min(100%,10rem),1fr))]">
+                <div className="grid gap-[clamp(0.55rem,1.1vw,0.85rem)] sm:grid-cols-[repeat(auto-fit,minmax(min(100%,10rem),1fr))]">
                   {latest.status === 'open' ? (
                     <Button type="button" variant="outline" onClick={() => action(`/api/predictions/${latest.id}/lock`, null, '예측을 마감했습니다.')} disabled={isPending}>
-                      <Lock className="h-4 w-4" />
+                      <Lock className="h-[1em] w-[1em]" />
                       베팅 마감
                     </Button>
                   ) : null}
@@ -330,26 +330,26 @@ export function PredictionsPage() {
                           onClick={() => action(`/api/predictions/${latest.id}/settle`, { winningOptionId: option.id }, `${option.label} 결과로 정산했습니다.`)}
                           disabled={isPending}
                         >
-                          <CheckCircle2 className="h-4 w-4" />
+                          <CheckCircle2 className="h-[1em] w-[1em]" />
                           {index + 1}번 정산
                         </Button>
                       ))}
                       <Button type="button" variant="destructive" onClick={() => action(`/api/predictions/${latest.id}/cancel`, null, '예측을 취소하고 환불했습니다.')} disabled={isPending}>
-                        <XCircle className="h-4 w-4" />
+                        <XCircle className="h-[1em] w-[1em]" />
                         취소/환불
                       </Button>
                     </>
                   ) : null}
                   <Button type="button" variant="outline" onClick={load} disabled={isPending}>
-                    <RotateCcw className="h-4 w-4" />
+                    <RotateCcw className="h-[1em] w-[1em]" />
                     새로고침
                   </Button>
                 </div>
               </div>
             ) : (
-              <div className="rounded-[var(--radius-card)] border border-dashed bg-muted/40 p-8 text-center">
-                <div className="text-base font-semibold">열려 있는 예측이 없습니다.</div>
-                <div className="mt-2 text-sm leading-6 text-muted-foreground">질문과 선택지를 입력하면 채팅과 OBS에서 바로 사용할 수 있어요.</div>
+              <div className="rounded-[var(--radius-card)] border border-dashed bg-muted/40 p-[clamp(1.25rem,3vw,2rem)] text-center">
+                <div className="text-[clamp(1rem,1.4vw,1.15rem)] font-semibold">열려 있는 예측이 없습니다.</div>
+                <div className="mt-[clamp(0.45rem,1vw,0.7rem)] text-[clamp(0.88rem,1.15vw,1rem)] leading-relaxed text-muted-foreground">질문과 선택지를 입력하면 채팅과 OBS에서 바로 사용할 수 있어요.</div>
               </div>
             )}
           </CardContent>
@@ -362,19 +362,19 @@ export function PredictionsPage() {
             <CardTitle>OBS 오버레이</CardTitle>
             <CardDescription>브라우저 소스에 주소를 넣으면 현재 예측 현황이 방송 화면에 표시돼요.</CardDescription>
           </CardHeader>
-          <CardContent className="grid gap-3">
+          <CardContent className="grid gap-[clamp(0.75rem,1.4vw,1rem)]">
             <button
               type="button"
               onClick={copyOverlay}
               disabled={!overlayUrl}
-              className="group min-w-0 rounded-[var(--radius-card)] border bg-background/70 p-[clamp(0.75rem,1.4vw,1rem)] text-left text-sm break-all text-muted-foreground transition hover:border-primary/35 hover:bg-pastel-sky/35 disabled:cursor-not-allowed disabled:opacity-60"
+              className="group min-w-0 rounded-[var(--radius-card)] border bg-background/70 p-[clamp(0.75rem,1.4vw,1rem)] text-left text-[clamp(0.88rem,1.15vw,1rem)] break-all text-muted-foreground transition hover:border-primary/35 hover:bg-pastel-sky/35 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <span className="block blur-sm transition group-hover:blur-0 group-focus-visible:blur-0">
               {overlayUrl || '채널 연결 후 오버레이 주소가 표시됩니다.'}
               </span>
             </button>
             <Button type="button" variant="outline" onClick={copyOverlay} disabled={!overlayUrl}>
-              <Copy className="h-4 w-4" />
+              <Copy className="h-[1em] w-[1em]" />
               주소 복사
             </Button>
           </CardContent>
@@ -387,17 +387,17 @@ export function PredictionsPage() {
           </CardHeader>
           <CardContent>
             <div className="rounded-[var(--radius-panel)] border border-white/10 bg-white/10 p-[clamp(1rem,2vw,1.5rem)] shadow-2xl backdrop-blur-xl">
-              <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center justify-between gap-[clamp(0.75rem,1.6vw,1.1rem)]">
                 <div className="min-w-0">
-                  <div className="truncate text-lg font-bold">{latest?.question || '예측이 열리면 여기에 표시됩니다.'}</div>
-                  <div className="mt-1 text-sm text-white/65">{formatPoints(latest?.totalPoints || 0)} · {latest?.participantCount || 0}명</div>
+                  <div className="truncate text-[clamp(1.1rem,1.8vw,1.35rem)] font-bold">{latest?.question || '예측이 열리면 여기에 표시됩니다.'}</div>
+                  <div className="mt-[clamp(0.25rem,0.7vw,0.45rem)] text-[clamp(0.85rem,1.1vw,0.98rem)] text-white/65">{formatPoints(latest?.totalPoints || 0)} · {latest?.participantCount || 0}명</div>
                 </div>
                 <Badge tone={active ? 'mint' : 'neutral'}>{statusLabel(active?.status)}</Badge>
               </div>
-              <div className="mt-4 grid max-h-[18rem] gap-2 overflow-hidden">
+              <div className="mt-[clamp(0.9rem,1.8vw,1.25rem)] grid max-h-[18rem] gap-[clamp(0.55rem,1.1vw,0.8rem)] overflow-hidden">
                 {(latest?.options || []).slice(0, 8).map((option, index) => (
                   <div key={option.id}>
-                    <div className="mb-1 flex justify-between gap-3 text-sm">
+                    <div className="mb-[clamp(0.25rem,0.6vw,0.4rem)] flex justify-between gap-[clamp(0.75rem,1.6vw,1rem)] text-[clamp(0.88rem,1.15vw,1rem)]">
                       <span className="truncate">{index + 1}. {option.label}</span>
                       <span>{option.percentage}%</span>
                     </div>
@@ -418,12 +418,12 @@ export function PredictionsPage() {
           <CardDescription>정산된 예측과 취소된 예측까지 함께 확인할 수 있어요.</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="grid gap-2">
+          <div className="grid gap-[clamp(0.55rem,1.1vw,0.85rem)]">
             {predictions.map((prediction) => (
-              <div key={prediction.id} className="grid min-w-0 gap-2 rounded-[var(--radius-card)] border bg-background/65 p-[clamp(0.875rem,1.6vw,1rem)] md:grid-cols-[minmax(0,1fr)_minmax(0,auto)] md:items-center">
+              <div key={prediction.id} className="grid min-w-0 gap-[clamp(0.45rem,0.9vw,0.65rem)] rounded-[var(--radius-card)] border bg-background/65 p-[clamp(0.875rem,1.6vw,1rem)] md:grid-cols-[minmax(0,1fr)_minmax(0,auto)] md:items-center">
                 <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold">{prediction.question}</div>
-                  <div className="mt-1 text-xs text-muted-foreground">
+                  <div className="truncate text-[clamp(0.95rem,1.25vw,1.08rem)] font-semibold">{prediction.question}</div>
+                  <div className="mt-[clamp(0.25rem,0.6vw,0.4rem)] text-[clamp(0.78rem,1vw,0.9rem)] text-muted-foreground">
                     {formatPoints(prediction.totalPoints)} · {prediction.participantCount}명 · {prediction.options.length}개 선택지
                   </div>
                 </div>
@@ -431,7 +431,7 @@ export function PredictionsPage() {
               </div>
             ))}
             {!predictions.length ? (
-              <div className="rounded-[var(--radius-card)] border border-dashed bg-muted/40 p-6 text-center text-sm text-muted-foreground">
+              <div className="rounded-[var(--radius-card)] border border-dashed bg-muted/40 p-[clamp(1rem,2vw,1.5rem)] text-center text-[clamp(0.88rem,1.15vw,1rem)] text-muted-foreground">
                 아직 기록된 예측이 없습니다.
               </div>
             ) : null}

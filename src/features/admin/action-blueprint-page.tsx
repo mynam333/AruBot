@@ -163,6 +163,7 @@ type AutomationDiscoveryCache = {
   hotkeys?: Array<{ id: string; name: string; type?: string; description?: string }>;
   models?: Array<{ id: string; name: string; loaded?: boolean }>;
   expressions?: Array<{ file?: string; name: string; active?: boolean }>;
+  parameters?: Array<{ id: string; name: string; min?: number | null; max?: number | null; defaultValue?: number | null }>;
   currentModel?: { loaded?: boolean; id?: string; name?: string };
   fetchedAt?: string;
 };
@@ -657,6 +658,16 @@ function toneClass(tone: (typeof nodeCatalog)[number]['tone']) {
   }[tone];
 }
 
+function paletteIconClass(item: (typeof nodeCatalog)[number]) {
+  if (item.type === 'setVariable' || item.type === 'tits') {
+    return 'bg-amber-100 text-amber-900 ring-amber-500/18 dark:bg-amber-950/55 dark:text-amber-300/75 dark:ring-amber-500/16';
+  }
+  if (item.type === 'readVariable' || item.type === 'vtube') {
+    return 'bg-cyan-100 text-cyan-800 ring-cyan-500/18 dark:bg-sky-950/55 dark:text-sky-300/75 dark:ring-sky-500/16';
+  }
+  return toneClass(item.tone).icon;
+}
+
 function nodePreview(node: BlueprintNode) {
   if (node.type === 'condition' || node.type === 'rouletteCompare') return `${String(node.config.left || '')} ${String(node.config.operator || '')} ${String(node.config.right || '')}`.trim();
   if (node.type === 'chat') return String(node.config.message || '').slice(0, 54);
@@ -866,20 +877,6 @@ function nodeHeightPx(node: BlueprintNode) {
   const outputCount = outputPorts(node).length;
   const extraRows = Math.max(0, outputCount - 2);
   return Math.max(NODE_MIN_HEIGHT, (NODE_SIZE.height + extraRows * (PORT_CHIP_HEIGHT + PORT_CHIP_GAP)) * FLOW_UNIT);
-}
-
-function inputPortPointRem(index: number) {
-  return {
-    x: PORT_CHIP_SIDE + 0.62,
-    y: 0.9 + index * (PORT_CHIP_HEIGHT + PORT_CHIP_GAP) + PORT_CHIP_HEIGHT / 2,
-  };
-}
-
-function outputPortPointRem(index: number, total: number, nodeHeightRem: number) {
-  return {
-    x: NODE_SIZE.width - PORT_CHIP_SIDE - 0.62,
-    y: nodeHeightRem - PORT_CHIP_BOTTOM - (total - 1 - index) * (PORT_CHIP_HEIGHT + PORT_CHIP_GAP) - PORT_CHIP_HEIGHT / 2,
-  };
 }
 
 function BlueprintPortHandle({
@@ -1125,9 +1122,6 @@ export function ActionBlueprintPage() {
   const automationConnections = useMemo(() => automationOverview?.connections || [], [automationOverview?.connections]);
   const titsConnection = useMemo(() => automationConnections.find((item) => item.type === 'tits') || null, [automationConnections]);
   const vtubeConnection = useMemo(() => automationConnections.find((item) => item.type === 'vtube_studio') || null, [automationConnections]);
-  const hasOnlineLocalAgent = useMemo(() => {
-    return (automationOverview?.localAgents || []).some((agent) => agent.status === 'online');
-  }, [automationOverview?.localAgents]);
   const zoomLabel = Math.round((liveViewport.zoom || 1) * 100);
 
   const updateBlueprint = useCallback((updater: (current: Blueprint) => Blueprint) => {
@@ -2267,7 +2261,6 @@ export function ActionBlueprintPage() {
                   </div>
                   {items.map((item) => {
                     const Icon = item.icon;
-                    const tone = toneClass(item.tone);
                     return (
                       <button
                         key={item.type}
@@ -2275,7 +2268,7 @@ export function ActionBlueprintPage() {
                         onClick={() => addNode(item.type)}
                         className="group flex w-full items-start gap-3 rounded-[calc(var(--radius-control)*0.9)] border bg-background/64 p-3 text-left transition hover:-translate-y-0.5 hover:border-primary/35 hover:bg-card hover:shadow-subtle"
                       >
-                        <span className={cn('grid aspect-square w-[2.15rem] shrink-0 place-items-center rounded-[calc(var(--radius-control)*0.82)] ring-1 transition group-hover:scale-105', tone.icon)}>
+                        <span className={cn('grid aspect-square w-[2.15rem] shrink-0 place-items-center rounded-[calc(var(--radius-control)*0.82)] ring-1 transition group-hover:scale-105', paletteIconClass(item))}>
                           <Icon className="h-4 w-4" />
                         </span>
                         <span className="min-w-0">
@@ -3021,6 +3014,7 @@ function ConfigFields({
     const hotkeys = discovery?.hotkeys || [];
     const expressions = discovery?.expressions || [];
     const models = discovery?.models || [];
+    const parameters = discovery?.parameters || [];
     return (
       <div className="grid gap-3">
         <AutomationDiscoveryHeader
@@ -3044,21 +3038,17 @@ function ConfigFields({
             options={models.map((model) => ({ value: model.id, label: `${model.name || model.id}${model.loaded ? ' · 로드됨' : ''}` }))}
           />
         ) : null}
-        {hotkeys.length ? (
-          <SelectField
-            label="실행할 핫키"
-            value={String(cfg.hotkeyId || '')}
-            onChange={(value) => {
-              const hotkey = hotkeys.find((item) => item.id === value);
-              onChange('hotkeyId', value);
-              if (hotkey?.name) onChange('hotkeyName', hotkey.name);
-            }}
-            placeholder="핫키 선택"
-            options={hotkeys.map((hotkey) => ({ value: hotkey.id, label: hotkey.name || hotkey.id }))}
-          />
-        ) : (
-          <Field label="핫키 ID" value={String(cfg.hotkeyId || '')} onChange={(value) => onChange('hotkeyId', value)} />
-        )}
+        <SelectField
+          label="실행할 핫키"
+          value={String(cfg.hotkeyId || '')}
+          onChange={(value) => {
+            const hotkey = hotkeys.find((item) => item.id === value);
+            onChange('hotkeyId', value);
+            if (hotkey?.name) onChange('hotkeyName', hotkey.name);
+          }}
+          placeholder={hotkeys.length ? '핫키 선택' : '목록을 먼저 불러오세요'}
+          options={hotkeys.map((hotkey) => ({ value: hotkey.id, label: hotkey.name || hotkey.id }))}
+        />
         {expressions.length ? (
           <SelectField
             label="참고: 표정 파일"
@@ -3068,7 +3058,25 @@ function ConfigFields({
             options={expressions.map((expression) => ({ value: expression.file || expression.name, label: `${expression.name || expression.file}${expression.active ? ' · 활성' : ''}` }))}
           />
         ) : null}
-        <Field label="파라미터" value={String(cfg.parameter || '')} onChange={(value) => onChange('parameter', value)} />
+        <SelectField
+          label="변경할 파라미터"
+          value={String(cfg.parameter || '')}
+          onChange={(value) => {
+            const parameter = parameters.find((item) => item.id === value || item.name === value);
+            onChange('parameter', value);
+            if (parameter?.name) onChange('parameterName', parameter.name);
+          }}
+          placeholder={parameters.length ? '파라미터 선택' : '목록을 먼저 불러오세요'}
+          options={parameters.map((parameter) => {
+            const range = parameter.min != null || parameter.max != null
+              ? ` · ${parameter.min ?? '-'}~${parameter.max ?? '-'}`
+              : '';
+            return {
+              value: parameter.id || parameter.name,
+              label: `${parameter.name || parameter.id}${range}`,
+            };
+          }).filter((option) => option.value)}
+        />
         <Field label="값" value={String(cfg.value || '')} onChange={(value) => onChange('value', value)} />
       </div>
     );
