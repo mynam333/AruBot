@@ -60,6 +60,13 @@ const providers = [
     iconPath: '/brands/cime.svg',
     tone: 'sky',
   },
+  {
+    id: 'youtube',
+    label: 'YouTube',
+    loginPath: '/api/auth/youtube/login',
+    iconPath: '/brands/youtube.svg',
+    tone: 'rose',
+  },
 ] as const;
 
 const featureCards = [
@@ -114,7 +121,7 @@ const featureCards = [
 ] as const;
 
 const quickActions = [
-  { href: '/connection', label: '플랫폼 연결', icon: Cable, help: 'CHZZK와 CIME 시청자가 같은 방송 경험으로 들어오게 합니다.' },
+  { href: '/connection', label: '플랫폼 연결', icon: Cable, help: 'CHZZK, CIME, YouTube 시청자가 같은 방송 경험으로 들어오게 합니다.' },
   { href: 'dialog:command', label: '명령어 만들기', icon: MessageSquare, help: '채팅에서 바로 반응하는 참여 문구를 추가합니다.' },
   { href: '/video-donations/queue', label: '포인트 영상후원', icon: PlaySquare, help: '신청 영상이 방송 화면에 자연스럽게 이어지게 합니다.' },
   { href: 'dialog:roulette', label: '룰렛 만들기', icon: Sparkles, help: '포인트와 후원이 당첨의 재미로 바뀌게 합니다.' },
@@ -136,6 +143,7 @@ function providerLabel(provider?: string) {
   const value = provider?.toLowerCase();
   if (value === 'chzzk') return 'CHZZK';
   if (value === 'cime') return 'CIME';
+  if (value === 'youtube') return 'YouTube';
   return provider || '채널';
 }
 
@@ -240,7 +248,7 @@ export function DashboardPage() {
               채팅 참여를 더 쉽게 만들고<br />방송 진행은 더 가볍게.
             </h1>
             <p className="mt-4 max-w-2xl text-sm leading-7 text-muted-foreground md:text-base">
-              CHZZK와 CIME 시청자가 같은 방식으로 참여하고, 명령어와 포인트 이벤트가 방송 흐름에 자연스럽게 붙습니다.
+              CHZZK, CIME, YouTube 시청자가 같은 방식으로 참여하고, 명령어와 포인트 이벤트가 방송 흐름에 자연스럽게 붙습니다.
             </p>
             <div className="mt-6 flex flex-wrap gap-2">
               {providers.map((provider) => {
@@ -301,7 +309,7 @@ export function DashboardPage() {
                 </div>
               ) : (
                 <div className="rounded-[var(--radius-control)] border bg-background/75 p-[clamp(1rem,1.8vw,1.25rem)] text-sm leading-6 text-muted-foreground">
-                  CHZZK 또는 CIME로 시작하면 다른 플랫폼 시청자도 같은 참여 흐름으로 맞이할 수 있습니다.
+                  CHZZK, CIME 또는 YouTube로 시작하면 다른 플랫폼 시청자도 같은 참여 흐름으로 맞이할 수 있습니다.
                 </div>
               )}
               <LinkButton href="/connection" variant="soft" className="mt-4 w-full justify-center">

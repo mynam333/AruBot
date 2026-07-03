@@ -162,12 +162,12 @@ function TabButton({
       type="button"
       onClick={onClick}
       className={cn(
-        'inline-flex min-h-[var(--control-height-sm)] min-w-0 items-center justify-center gap-2 rounded-full border px-[clamp(0.75rem,1.4vw,1rem)] text-sm font-bold transition hover:-translate-y-0.5 hover:border-primary/35',
+        'inline-flex min-h-[var(--control-height-sm)] w-full shrink-0 items-center justify-center gap-2 rounded-full border px-[clamp(0.75rem,1.4vw,1rem)] text-sm font-bold leading-tight transition hover:-translate-y-0.5 hover:border-primary/35 sm:w-auto',
         active ? 'border-primary/35 bg-pastel-mint text-teal-950 shadow-subtle dark:bg-primary/20 dark:text-teal-50' : 'bg-card/70 text-muted-foreground',
       )}
     >
       <Icon className="h-[1em] w-[1em] shrink-0" />
-      <span className="truncate">{label}</span>
+      <span>{label}</span>
     </button>
   );
 }
@@ -844,7 +844,7 @@ export function AutomationsPage() {
             {busyAction === 'tits.discover' ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
             목록 불러오기
           </Button>
-          <div className="grid grid-cols-[repeat(2,minmax(0,1fr))] gap-2">
+          <div className="grid gap-2 sm:grid-cols-[repeat(2,minmax(0,1fr))]">
             <Badge tone={titsItems.length ? 'mint' : 'neutral'}>{titsItems.length}개 아이템</Badge>
             <Badge tone={titsTriggers.length ? 'mint' : 'neutral'}>{titsTriggers.length}개 트리거</Badge>
           </div>
@@ -905,7 +905,7 @@ export function AutomationsPage() {
             {busyAction === 'vtube.discover' ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
             모델/핫키 불러오기
           </Button>
-          <div className="grid grid-cols-[repeat(3,minmax(0,1fr))] gap-2">
+          <div className="grid gap-2 sm:grid-cols-[repeat(3,minmax(0,1fr))]">
             <Badge tone={vtubeConnection?.discoveryCache?.currentModel?.loaded ? 'mint' : 'neutral'}>
               {vtubeConnection?.discoveryCache?.currentModel?.name || '모델 대기'}
             </Badge>
@@ -1222,7 +1222,7 @@ export function AutomationsPage() {
               T.I.T.S., VTube Studio, TTS, 사운드, 버튼 앱을 연결해 채팅과 후원 순간에 맞는 연출을 바로 실행합니다.
             </p>
           </div>
-          <div className="grid min-w-0 grid-cols-[repeat(3,minmax(0,1fr))] gap-2">
+          <div className="grid min-w-0 gap-2 sm:grid-cols-[repeat(3,minmax(0,1fr))]">
             <div className="min-w-0 rounded-[var(--radius-card)] border bg-card/78 p-[clamp(0.75rem,1.4vw,1rem)] text-center">
               <div className="truncate text-xl font-bold">{localAgents.length}</div>
               <div className="mt-1 text-xs text-muted-foreground">로컬</div>
@@ -1239,7 +1239,7 @@ export function AutomationsPage() {
         </div>
       </section>
 
-      <div className="flex max-w-full gap-2 overflow-x-auto pb-1">
+      <div className="grid grid-cols-2 gap-2 sm:flex sm:max-w-full sm:flex-wrap">
         {tabs.map((tab) => (
           <TabButton key={tab.id} active={activeTab === tab.id} label={tab.label} icon={tab.icon} onClick={() => setActiveTab(tab.id)} />
         ))}

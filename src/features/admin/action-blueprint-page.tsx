@@ -2523,6 +2523,7 @@ export function ActionBlueprintPage() {
                 >
                   <option value="chzzk">치지직</option>
                   <option value="cime">씨미</option>
+                  <option value="youtube">YouTube</option>
                 </select>
               </label>
               <div className="grid gap-2 sm:grid-cols-2">

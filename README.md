@@ -1,11 +1,13 @@
 # AruBot
 
-AruBot은 CHZZK와 CIME 채팅 운영을 함께 지원하는 Next.js + Express 기반 채팅봇 서비스입니다. 기존 기능을 유지하면서 관리자 UI를 멀티 페이지 구조로 분리하고, 영상 후원/룰렛 OBS 뷰어, 명령어, 매크로, 포인트, 후원 규칙, 공개 페이지를 관리합니다.
+AruBot은 CHZZK, CIME, YouTube Live 채팅 운영을 함께 지원하는 Next.js + Express 기반 채팅봇 서비스입니다. 기존 기능을 유지하면서 관리자 UI를 멀티 페이지 구조로 분리하고, 영상 후원/룰렛 OBS 뷰어, 명령어, 매크로, 포인트, 후원 규칙, 공개 페이지를 관리합니다.
 
 ## 주요 기능
 
 - CHZZK OAuth 로그인, 채팅 이벤트 수신, 방송 상태 조회
 - CIME OAuth 로그인, 이벤트 스트림 연동, 플랫폼 계정 연결
+- YouTube OAuth 로그인, Live Chat `streamList` 수신, 채팅 응답 전송
+- YouTube Super Chat은 원화(KRW)인 경우에만 기존 후원 이벤트와 동일하게 처리
 - 플랫폼별 로그인 후 하나의 내부 사용자로 관리하는 계정 매핑 구조
 - 봇 명령어 규칙 관리: 키워드, 자동 응답, 권한, 쿨다운, 포인트 비용
 - 방송 상태 기반 명령어 제한과 출석 체크
@@ -49,13 +51,17 @@ cp .env.example .env
 - `NEXT_PUBLIC_API_BASE`: 프론트엔드와 백엔드를 분리 배포할 때 사용할 API base URL
 - `CHZZK_CLIENT_ID`, `CHZZK_CLIENT_SECRET`, `CHZZK_REDIRECT_URI`
 - `CIME_CLIENT_ID`, `CIME_CLIENT_SECRET`, `CIME_REDIRECT_URI`
+- `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, `YOUTUBE_REDIRECT_URI`
 - `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_URL`
 
 선택 환경 변수:
 
 - `CIME_OPENAPI_BASE`: CIME OpenAPI base URL. 기본값은 `https://ci.me/api/openapi`
+- `YOUTUBE_AUTH_SCOPE`: YouTube OAuth scope. 기본값은 `https://www.googleapis.com/auth/youtube.force-ssl`
+- `YOUTUBE_API_BASE`: YouTube Data API base URL. 기본값은 `https://www.googleapis.com/youtube/v3`
+- `YOUTUBE_STREAM_PATH`: Live Chat streaming endpoint. 기본값은 `/liveChat/messages/stream`
 - `REDIS_URL`: 실시간 이벤트 fanout을 보조할 Redis 인스턴스
-- `YOUTUBE_API_KEY`: 영상 후원 제목/검색 메타데이터 보강
+- `YOUTUBE_API_KEY`: 영상 후원 제목/검색 메타데이터 보강. YouTube Live Chat 송수신에는 OAuth 토큰을 사용합니다.
 
 ## 로컬 개발
 

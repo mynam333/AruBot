@@ -34,7 +34,7 @@ export const adminNav = [
 export const adminFeatureMap = {
   connection: {
     title: '플랫폼 연결',
-    description: 'CHZZK와 CIME 어디서 시작해도 같은 방송 경험으로 이어지게 합니다.',
+    description: 'CHZZK, CIME, YouTube 어디서 시작해도 같은 방송 경험으로 이어지게 합니다.',
     endpoint: '/api/auth/session',
     icon: Cable,
     actions: [],
@@ -129,7 +129,7 @@ export const adminFeatureMap = {
   diagnostics: {
     title: '도움말',
     description: '방송 준비 중 막히는 지점을 빠르게 찾아 바로 이어갈 수 있게 돕습니다.',
-    endpoint: '/api/version',
+    endpoint: '/api/platforms/status',
     icon: LifeBuoy,
     actions: [
       { href: '/connection', label: '연결 다시 보기' },
@@ -147,7 +147,7 @@ export const adminFeatureMap = {
   live: {
     title: '오늘 방송',
     description: '방송 시작 전 필요한 참여 기능을 빠르게 열고 준비해요.',
-    endpoint: '/api/chzzk/live/me',
+    endpoint: '/api/platforms/status?refresh=true',
     icon: Home,
     actions: [{ href: '/connection', label: '플랫폼 연결' }],
     tips: ['방송 전 체크가 빨라져요', '오늘 쓸 이벤트를 바로 꺼내요', '시청자에게 보여줄 페이지를 준비해요'],

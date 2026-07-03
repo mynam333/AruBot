@@ -10,7 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { apiUrl, readJson } from '@/shared/api/http';
 import { cn } from '@/shared/lib/utils';
 
-type ProviderId = 'chzzk' | 'cime';
+type ProviderId = 'chzzk' | 'cime' | 'youtube';
 
 type PlatformAccount = {
   provider?: string;
@@ -56,6 +56,15 @@ const providerConfigs = [
     color: 'sky',
     description: 'CIME 시청자도 같은 방송 경험 안에서 채팅과 후원을 이어가게 합니다.',
   },
+  {
+    id: 'youtube' as const,
+    label: 'YouTube',
+    loginPath: '/api/auth/youtube/login',
+    iconPath: '/brands/youtube.svg',
+    revokePath: '/api/auth/youtube/revoke',
+    color: 'rose',
+    description: 'YouTube Live 시청자도 같은 명령어, 포인트, 룰렛 흐름으로 참여하게 합니다.',
+  },
 ] as const;
 
 function normalizeProvider(provider?: string) {
@@ -69,6 +78,7 @@ function ProviderMark({ label, color, iconPath }: { label: string; color: string
         'grid aspect-square w-[calc(var(--icon-box)*1.22)] shrink-0 place-items-center overflow-hidden rounded-[var(--radius-card)] border shadow-subtle',
         color === 'mint' && 'bg-pastel-mint/80 text-teal-950 dark:bg-primary/20 dark:text-teal-50',
         color === 'sky' && 'bg-pastel-sky/85 text-sky-950 dark:bg-sky-500/20 dark:text-sky-50',
+        color === 'rose' && 'bg-rose-500/10 text-rose-950 dark:bg-rose-500/20 dark:text-rose-50',
       )}
     >
       <img
@@ -139,7 +149,7 @@ export function ConnectionPage() {
         if (provider && acc[provider]) acc[provider].push(platform);
         return acc;
       },
-      { chzzk: [], cime: [] },
+      { chzzk: [], cime: [], youtube: [] },
     );
   }, [platforms]);
 
@@ -205,7 +215,7 @@ export function ConnectionPage() {
               어느 플랫폼에서 와도 같은 방송 경험으로.
             </h1>
             <p className="mt-4 max-w-2xl text-sm leading-7 text-muted-foreground md:text-base">
-              CHZZK와 CIME 시청자가 같은 명령어, 포인트, 이벤트 흐름으로 참여할 수 있게 채널을 이어주세요.
+              CHZZK, CIME, YouTube 시청자가 같은 명령어, 포인트, 이벤트 흐름으로 참여할 수 있게 채널을 이어주세요.
             </p>
           </div>
           <Card className="bg-card/75">
@@ -230,7 +240,7 @@ export function ConnectionPage() {
         </div>
       </section>
 
-      <section className="grid gap-4 lg:grid-cols-2">
+      <section className="grid gap-4 lg:grid-cols-3">
         {providerConfigs.map((config) => {
           const accounts = grouped[config.id];
           const connected = accounts.length > 0;

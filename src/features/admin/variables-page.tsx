@@ -20,6 +20,16 @@ type VariablesResponse = {
   variables: BotVariable[];
 };
 
+function providerTone(provider: string) {
+  if (provider === 'youtube') return 'rose';
+  return provider === 'cime' ? 'violet' : 'mint';
+}
+
+function providerLabel(provider: string) {
+  if (provider === 'youtube') return 'YouTube';
+  return provider === 'cime' ? 'CIME' : 'CHZZK';
+}
+
 export function VariablesPage() {
   const [variables, setVariables] = useState<BotVariable[]>([]);
   const [isPending, startTransition] = useTransition();
@@ -91,7 +101,7 @@ export function VariablesPage() {
                     {item.providers?.length ? (
                       <div className="flex flex-wrap gap-1.5">
                         {item.providers.map((provider) => (
-                          <Badge key={provider} tone={provider === 'cime' ? 'violet' : 'mint'}>{provider === 'cime' ? 'CIME' : 'CHZZK'}</Badge>
+                          <Badge key={provider} tone={providerTone(provider)}>{providerLabel(provider)}</Badge>
                         ))}
                       </div>
                     ) : null}

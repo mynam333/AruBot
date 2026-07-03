@@ -4,7 +4,7 @@ import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from '@/shared/lib/utils';
 
 const buttonVariants = cva(
-  'inline-flex min-h-[var(--control-height)] max-w-full min-w-0 items-center justify-center gap-2 whitespace-nowrap rounded-[var(--radius-control)] px-[clamp(0.875rem,1.6vw,1.125rem)] text-sm font-semibold tracking-normal transition duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50',
+  'inline-flex min-h-[var(--control-height)] max-w-full min-w-0 items-center justify-center gap-2 whitespace-normal rounded-[var(--radius-control)] px-[clamp(0.875rem,1.6vw,1.125rem)] text-center text-sm font-semibold leading-tight tracking-normal transition duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 max-sm:w-full sm:whitespace-nowrap [&>svg]:shrink-0',
   {
     variants: {
       variant: {
@@ -19,7 +19,7 @@ const buttonVariants = cva(
         default: 'min-h-[var(--control-height)]',
         sm: 'min-h-[var(--control-height-sm)] px-[clamp(0.75rem,1.2vw,1rem)] text-xs',
         lg: 'min-h-[var(--control-height-lg)] px-[clamp(1rem,1.9vw,1.375rem)]',
-        icon: 'aspect-square min-h-[var(--control-height)] w-[var(--control-height)] px-0',
+        icon: 'aspect-square min-h-[var(--control-height)] w-[var(--control-height)] px-0 max-sm:w-[var(--control-height)]',
       },
     },
     defaultVariants: {

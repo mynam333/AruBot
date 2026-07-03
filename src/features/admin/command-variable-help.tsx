@@ -22,10 +22,12 @@ type VariablesResponse = {
 };
 
 function providerTone(provider: string) {
+  if (provider === 'youtube') return 'rose';
   return provider === 'cime' ? 'violet' : 'mint';
 }
 
 function providerLabel(provider: string) {
+  if (provider === 'youtube') return 'YouTube';
   return provider === 'cime' ? 'CIME' : 'CHZZK';
 }
 

@@ -29,7 +29,7 @@ function Brand({ onClick }: { onClick?: () => void }) {
       </span>
       <span className="min-w-0">
         <span className="block text-base font-semibold leading-tight">AruBot</span>
-        <span className="block truncate text-xs font-medium text-muted-foreground">CHZZK · CIME 방송 도우미</span>
+        <span className="block truncate text-xs font-medium text-muted-foreground">멀티플랫폼 방송 도우미</span>
       </span>
     </Link>
   );

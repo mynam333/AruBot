@@ -1,0 +1,77 @@
+const fs = require('fs');
+const path = require('path');
+
+describe('YouTube live chat integration regression', () => {
+  const serverIndex = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  const connectionPage = fs.readFileSync(path.join(__dirname, '..', 'src', 'features', 'admin', 'connection-page.tsx'), 'utf8');
+  const dashboardPage = fs.readFileSync(path.join(__dirname, '..', 'src', 'features', 'admin', 'dashboard-page.tsx'), 'utf8');
+  const variablesPage = fs.readFileSync(path.join(__dirname, '..', 'src', 'features', 'admin', 'variables-page.tsx'), 'utf8');
+  const navigation = fs.readFileSync(path.join(__dirname, '..', 'src', 'shared', 'config', 'navigation.ts'), 'utf8');
+  const realtimeDiagnosticsPage = fs.readFileSync(path.join(__dirname, '..', 'src', 'app', '(admin)', 'diagnostics', 'realtime', 'page.tsx'), 'utf8');
+
+  test('uses streamList endpoint without automatic polling fallback', () => {
+    expect(serverIndex).toContain("const YOUTUBE_STREAM_PATH = process.env.YOUTUBE_STREAM_PATH || '/liveChat/messages/stream'");
+    expect(serverIndex).toContain('openYoutubeChatStream(entry)');
+    expect(serverIndex).toContain('scheduleYoutubeReconnect(entry.ownerUserId)');
+    expect(serverIndex).not.toContain('pollingIntervalMillis');
+    expect(serverIndex).not.toContain("youtubeApiGet('liveChat/messages'");
+  });
+
+  test('only KRW Super Chat becomes a donation event', () => {
+    const normalizeStart = serverIndex.indexOf('function normalizeYoutubeSuperChatEvent');
+    const normalizeEnd = serverIndex.indexOf('function normalizeYoutubeLiveChatItem', normalizeStart);
+    const normalizeBody = serverIndex.slice(normalizeStart, normalizeEnd);
+
+    expect(normalizeBody).toContain("currency !== 'KRW'");
+    expect(normalizeBody).toContain("ignoredReason: 'non_krw_super_chat'");
+    expect(normalizeBody).toContain("type: 'donation'");
+    expect(normalizeBody).toContain("donationType: 'youtube_super_chat'");
+    expect(normalizeBody).toContain('Math.floor(amountMicros / 1000000)');
+  });
+
+  test('Super Stickers are not routed through donation rules', () => {
+    const itemStart = serverIndex.indexOf('function normalizeYoutubeLiveChatItem');
+    const itemEnd = serverIndex.indexOf('function extractJsonStreamObjects', itemStart);
+    const itemBody = serverIndex.slice(itemStart, itemEnd);
+
+    expect(itemBody).toContain("type === 'superStickerEvent'");
+    expect(itemBody).toContain("eventName: 'DONATION_IGNORED'");
+    expect(itemBody).toContain("ignoredReason: 'super_sticker_not_supported'");
+  });
+
+  test('sendChatByPost supports YouTube chat posts', () => {
+    const sendStart = serverIndex.indexOf('async function sendChatByPost');
+    const sendEnd = serverIndex.indexOf('async function processRouletteQueue', sendStart);
+    const sendBody = serverIndex.slice(sendStart, sendEnd);
+
+    expect(sendBody).toContain("provider === 'youtube'");
+    expect(sendBody).toContain('return sendYoutubeChat(ownerUserId, chatPost?.liveChatId || null, text)');
+  });
+
+  test('connection page exposes YouTube as a platform provider', () => {
+    expect(connectionPage).toContain("type ProviderId = 'chzzk' | 'cime' | 'youtube'");
+    expect(connectionPage).toContain("id: 'youtube'");
+    expect(connectionPage).toContain("loginPath: '/api/auth/youtube/login'");
+    expect(connectionPage).toContain("revokePath: '/api/auth/youtube/revoke'");
+  });
+
+  test('operational status and health include YouTube sessions', () => {
+    expect(serverIndex).toContain("app.get('/api/youtube/status'");
+    expect(serverIndex).toContain("app.get('/api/platforms/status'");
+    expect(serverIndex).toContain("mode: 'streamList'");
+    expect(serverIndex).toContain('youtube: typeof youtubeSessionStore');
+    expect(serverIndex).toContain("provider: 'youtube'");
+    expect(serverIndex).toContain("mode: 'websocket'");
+    expect(serverIndex).toContain("mode: 'socket'");
+  });
+
+  test('admin surfaces list YouTube consistently', () => {
+    expect(dashboardPage).toContain("id: 'youtube'");
+    expect(dashboardPage).toContain("loginPath: '/api/auth/youtube/login'");
+    expect(dashboardPage).toContain("if (value === 'youtube') return 'YouTube'");
+    expect(variablesPage).toContain("if (provider === 'youtube') return 'YouTube'");
+    expect(serverIndex).toContain("const BOT_VARIABLE_PROVIDERS = ['chzzk', 'cime', 'youtube']");
+    expect(navigation).toContain("endpoint: '/api/platforms/status'");
+    expect(realtimeDiagnosticsPage).toContain("endpoint: '/api/platforms/status?refresh=true'");
+  });
+});

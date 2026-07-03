@@ -5,7 +5,7 @@ import { Providers } from './providers';
 
 export const metadata: Metadata = {
   title: 'AruBot | 방송 참여 관리 콘솔',
-  description: 'CHZZK와 CIME 방송을 위한 명령어, 포인트, 룰렛, 영상 후원 관리 서비스',
+  description: 'CHZZK, CIME, YouTube 방송을 위한 명령어, 포인트, 룰렛, 영상 후원 관리 서비스',
   icons: {
     icon: '/files/logo.png',
   },
