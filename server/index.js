@@ -7713,7 +7713,25 @@ const CIME_APP_API_BASE = process.env.CIME_APP_API_BASE || 'https://ci.me/api/ap
 const CIME_UNOFFICIAL_PROFILE_URL_TEMPLATE = process.env.CIME_UNOFFICIAL_PROFILE_URL_TEMPLATE || '';
 const YOUTUBE_CLIENT_ID = process.env.YOUTUBE_CLIENT_ID || process.env.GOOGLE_YOUTUBE_CLIENT_ID || '';
 const YOUTUBE_CLIENT_SECRET = process.env.YOUTUBE_CLIENT_SECRET || process.env.GOOGLE_YOUTUBE_CLIENT_SECRET || '';
-const YOUTUBE_REDIRECT_URI = process.env.YOUTUBE_REDIRECT_URI || `http://localhost:${PORT}/api/auth/youtube/callback`;
+function normalizeYoutubeRedirectUri(rawValue) {
+  const configured = String(rawValue || '').trim();
+  const fallback = `http://localhost:${PORT}/api/auth/youtube/callback`;
+  const value = configured || fallback;
+  try {
+    const url = new URL(value);
+    const isLocal = ['localhost', '127.0.0.1', '::1'].includes(url.hostname);
+    if (url.protocol === 'http:' && !isLocal) {
+      url.protocol = 'https:';
+    }
+    return url.toString();
+  } catch {
+    return value;
+  }
+}
+const YOUTUBE_REDIRECT_URI = normalizeYoutubeRedirectUri(
+  process.env.YOUTUBE_REDIRECT_URI ||
+  (BACKEND_ORIGIN ? `${String(BACKEND_ORIGIN).replace(/\/$/, '')}/api/auth/youtube/callback` : '')
+);
 const YOUTUBE_AUTH_SCOPE = String(
   process.env.YOUTUBE_AUTH_SCOPE ||
   'https://www.googleapis.com/auth/youtube.force-ssl'

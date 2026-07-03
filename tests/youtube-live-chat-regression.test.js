@@ -48,6 +48,13 @@ describe('YouTube live chat integration regression', () => {
     expect(sendBody).toContain('return sendYoutubeChat(ownerUserId, chatPost?.liveChatId || null, text)');
   });
 
+  test('normalizes non-local YouTube OAuth callback URLs to HTTPS', () => {
+    expect(serverIndex).toContain('function normalizeYoutubeRedirectUri');
+    expect(serverIndex).toContain("url.protocol === 'http:' && !isLocal");
+    expect(serverIndex).toContain("url.protocol = 'https:'");
+    expect(serverIndex).toContain('BACKEND_ORIGIN ? `${String(BACKEND_ORIGIN).replace(/\\/$/, \'\')}/api/auth/youtube/callback`');
+  });
+
   test('connection page exposes YouTube as a platform provider', () => {
     expect(connectionPage).toContain("type ProviderId = 'chzzk' | 'cime' | 'youtube'");
     expect(connectionPage).toContain("id: 'youtube'");
