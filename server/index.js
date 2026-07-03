@@ -4791,6 +4791,8 @@ async function getPvdAdminSidFromRequest(req) {
   return userId ? `user:${String(userId)}` : null;
 }
 
+const TIKTOK_DURATION_SYNC_WAIT_MS = 20 * 1000;
+
 // Playback state per sid for sync.
 // baseStartMs is the wall-clock time when the current item started at item.startSec.
 const pvdPlaybackState = new Map(); // sid -> { baseStartMs: number, paused: boolean, pausedAtSec: number|null }
@@ -4818,13 +4820,18 @@ function getPvdPlayDurationSec({ maxDurationSec, ytDurationSec = null, startSec 
   const fullDuration = Number(ytDurationSec);
   const remainingFromStart = Number.isFinite(fullDuration) && fullDuration > 0
     ? Math.max(1, Math.floor(fullDuration) - start)
-    : maxDur;
+    : 1;
   const requestedDuration = play != null ? play : remainingFromStart;
   return Math.max(1, Math.min(maxDur, requestedDuration));
 }
 
 function createPvdPlaybackState(item) {
-  return { baseStartMs: Date.now(), paused: false, pausedAtSec: null };
+  return {
+    baseStartMs: Date.now(),
+    paused: false,
+    pausedAtSec: null,
+    durationWaitStartedAtMs: item?.awaitDurationSync ? Date.now() : null,
+  };
 }
 
 function setPvdPlaybackBaseFromAtSec(state, item, atSec) {
@@ -4867,6 +4874,7 @@ function updateCurrentPvdDurationFromPlayer(sid, durationSec) {
   if (Math.abs(Number(item.durationSec || 0) - nextDuration) < 0.5) return item;
   item.durationSec = nextDuration;
   item.mediaDurationSec = Math.ceil(fullDuration);
+  item.awaitDurationSync = false;
   item.updatedAt = Date.now();
   try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
   scheduleNextPvdAutoPop(sid);
@@ -4920,6 +4928,21 @@ function scheduleNextPvdAutoPop(sid) {
   }
   // If paused, do not schedule auto-pop
   if (state.paused) return;
+  if (item.awaitDurationSync && !item.mediaDurationSec) {
+    if (!state.durationWaitStartedAtMs) state.durationWaitStartedAtMs = Date.now();
+    const waitedMs = Math.max(0, Date.now() - Number(state.durationWaitStartedAtMs || Date.now()));
+    const remainingWaitMs = TIKTOK_DURATION_SYNC_WAIT_MS - waitedMs;
+    if (remainingWaitMs > 0) {
+      const timer = setTimeout(() => {
+        scheduleNextPvdAutoPop(sid);
+      }, Math.max(500, remainingWaitMs));
+      videoDonationTimers.set(sid, timer);
+      return;
+    }
+    item.awaitDurationSync = false;
+    item.durationSyncTimedOut = true;
+    item.updatedAt = Date.now();
+  }
   // Compute remaining based on current position
   const elapsedSec = getCurrentPvdElapsedSec(sid);
   const total = Math.max(1, Number(item.durationSec || 0));
@@ -5210,6 +5233,7 @@ app.post('/api/video-donation/request', rateLimiters.userWrite, async (req, res)
     const start = Math.max(0, Number(startSec || 0) || 0);
     const play = Number.isFinite(Number(playSec)) && Number(playSec) > 0 ? Math.floor(Number(playSec)) : null;
     const dur = getPvdPlayDurationSec({ maxDurationSec: maxDur, ytDurationSec: media.durationSec, startSec: start, playSec: play });
+    const awaitDurationSync = media.provider === 'tiktok' && play == null && !Number.isFinite(Number(media.durationSec));
     const cost = Math.ceil(pps * dur);
 
     // Deduct points
@@ -5263,6 +5287,8 @@ app.post('/api/video-donation/request', rateLimiters.userWrite, async (req, res)
       videoId: media.provider === 'youtube' ? media.mediaId : null,
       title: title || media.title || null,
       durationSec: dur,
+      mediaDurationSec: Number.isFinite(Number(media.durationSec)) ? Math.ceil(Number(media.durationSec)) : null,
+      awaitDurationSync,
       startSec: start,
       cost,
       userId,
@@ -17654,6 +17680,7 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
   const play = Number.isFinite(playNum) && playNum > 0 ? Math.floor(playNum) : null;
 
   const dur = getPvdPlayDurationSec({ maxDurationSec: maxDur, ytDurationSec: media.durationSec, startSec: start, playSec: play });
+  const awaitDurationSync = media.provider === 'tiktok' && play == null && !Number.isFinite(Number(media.durationSec));
   const cost = Math.ceil(pps * dur);
   if (!channelUid) {
     const s = await getBotSettings(sid) || {};
@@ -17677,6 +17704,8 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
     videoId: media.provider === 'youtube' ? media.mediaId : null,
     title: media.title,
     durationSec: dur,
+    mediaDurationSec: Number.isFinite(Number(media.durationSec)) ? Math.ceil(Number(media.durationSec)) : null,
+    awaitDurationSync,
     startSec: start,
     cost,
     userId: String(userId),

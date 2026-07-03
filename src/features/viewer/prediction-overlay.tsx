@@ -1,7 +1,7 @@
 'use client';
 
 import type { CSSProperties, ReactNode } from 'react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { readJson } from '@/shared/api/http';
 import { useVisibilityPolling } from '@/shared/lib/use-visibility-polling';
 
@@ -39,25 +39,32 @@ function ScrollingText({ children, className = '' }: { children: ReactNode; clas
   const textRef = useRef<HTMLSpanElement | null>(null);
   const [scrollState, setScrollState] = useState({ active: false, distance: 0, duration: 8 });
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const measure = () => {
       const box = boxRef.current;
       const text = textRef.current;
       if (!box || !text) return;
-      const overflow = Math.ceil(text.scrollWidth - box.clientWidth);
+      const boxWidth = box.getBoundingClientRect().width;
+      const textWidth = Math.max(text.scrollWidth, text.getBoundingClientRect().width);
+      const overflow = Math.ceil(textWidth - boxWidth);
       setScrollState({
         active: overflow > 1,
         distance: Math.max(0, overflow),
-        duration: Math.min(24, Math.max(7, overflow / 28)),
+        duration: Math.min(28, Math.max(8, overflow / 24)),
       });
     };
 
     measure();
+    const raf = window.requestAnimationFrame(measure);
+    const timer = window.setTimeout(measure, 160);
     const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
     if (observer && boxRef.current) observer.observe(boxRef.current);
     if (observer && textRef.current) observer.observe(textRef.current);
-    window.setTimeout(measure, 80);
-    return () => observer?.disconnect();
+    return () => {
+      window.cancelAnimationFrame(raf);
+      window.clearTimeout(timer);
+      observer?.disconnect();
+    };
   }, [children]);
 
   const style = scrollState.active
@@ -68,7 +75,7 @@ function ScrollingText({ children, className = '' }: { children: ReactNode; clas
     : undefined;
 
   return (
-    <div ref={boxRef} className={`min-w-0 overflow-hidden ${className}`}>
+    <div ref={boxRef} className={`min-w-0 max-w-full overflow-hidden ${scrollState.active ? 'prediction-marquee-mask' : ''} ${className}`}>
       <span ref={textRef} className={scrollState.active ? 'prediction-marquee-track' : 'block truncate'} style={style}>
         {children}
       </span>
@@ -139,38 +146,38 @@ export function PredictionOverlay({ channelUid }: { channelUid: string }) {
 
   return (
     <main className="viewer-surface h-screen w-screen bg-transparent">
-      <section className="grid h-full w-full grid-rows-[auto_minmax(0,1fr)] overflow-hidden border border-white/14 bg-[linear-gradient(135deg,rgba(18,24,38,0.9),rgba(28,34,54,0.78))] p-[clamp(1.2rem,3vw,2.6rem)] text-white shadow-[0_1.5rem_4rem_rgba(0,0,0,0.34)] backdrop-blur-xl">
+      <section className="grid h-full w-full grid-rows-[auto_minmax(0,1fr)] overflow-hidden border border-white/14 bg-[linear-gradient(135deg,rgba(14,20,34,0.92),rgba(31,37,59,0.82))] p-[clamp(1.4rem,3.3vw,3rem)] text-white shadow-[0_1.5rem_4rem_rgba(0,0,0,0.34)] backdrop-blur-xl">
         <div className="flex items-start justify-between gap-[clamp(0.8rem,2vw,1.4rem)]">
-          <div className="min-w-0">
-            <ScrollingText className="text-[clamp(1.5rem,4.6vw,3.4rem)] font-bold leading-tight">
+          <div className="min-w-0 flex-1">
+            <ScrollingText className="w-full text-[clamp(2.1rem,6.2vw,5rem)] font-black leading-[1.04] tracking-normal">
               {displayPrediction?.question || '예측 베팅 대기 중'}
             </ScrollingText>
-            <div className="mt-[clamp(0.45rem,1vw,0.75rem)] text-[clamp(0.95rem,1.8vw,1.15rem)] leading-relaxed text-white/70">
+            <div className="mt-[clamp(0.55rem,1.2vw,0.9rem)] text-[clamp(1.1rem,2.1vw,1.45rem)] font-semibold leading-relaxed text-white/72">
               {formatPoints(displayPrediction?.totalPoints || 0)} · {displayPrediction?.participantCount || 0}명 참여 · !투표 &lt;번호&gt; &lt;배팅 포인트&gt;
             </div>
           </div>
-          <div className={`shrink-0 rounded-full border px-[clamp(0.7rem,1.5vw,1rem)] py-[clamp(0.35rem,0.9vw,0.55rem)] text-[clamp(0.8rem,1.35vw,0.95rem)] font-bold ${isSettled ? 'border-amber-200/35 bg-amber-200/18 text-amber-50' : 'border-emerald-300/25 bg-emerald-300/14 text-emerald-100'}`}>
+          <div className={`shrink-0 rounded-full border px-[clamp(0.85rem,1.7vw,1.2rem)] py-[clamp(0.45rem,1vw,0.7rem)] text-[clamp(0.95rem,1.55vw,1.15rem)] font-black tracking-[0.08em] ${isSettled ? 'border-amber-200/35 bg-amber-200/18 text-amber-50' : 'border-emerald-300/25 bg-emerald-300/14 text-emerald-100'}`}>
             {statusLabel}
           </div>
         </div>
 
         {isSettled && winningOption ? (
-          <div className="mt-[clamp(1rem,2vw,1.5rem)] overflow-hidden rounded-[clamp(0.9rem,1.8vw,1.35rem)] border border-amber-200/35 bg-[linear-gradient(135deg,rgba(250,204,21,0.24),rgba(45,212,191,0.14),rgba(255,255,255,0.08))] p-[clamp(0.9rem,2vw,1.45rem)] shadow-[0_1rem_3rem_rgba(250,204,21,0.18)]">
-            <div className="text-[clamp(0.85rem,1.4vw,1rem)] font-bold uppercase tracking-[0.16em] text-amber-100/82">예측 결과</div>
-            <ScrollingText className="mt-[clamp(0.35rem,0.9vw,0.6rem)] text-[clamp(1.65rem,4.2vw,3rem)] font-black leading-tight text-white">
+          <div className="mt-[clamp(1rem,2vw,1.5rem)] overflow-hidden rounded-[clamp(1rem,2vw,1.5rem)] border border-amber-200/35 bg-[linear-gradient(135deg,rgba(250,204,21,0.26),rgba(45,212,191,0.16),rgba(255,255,255,0.08))] p-[clamp(1rem,2.2vw,1.7rem)] shadow-[0_1rem_3rem_rgba(250,204,21,0.18)]">
+            <div className="text-[clamp(0.95rem,1.6vw,1.18rem)] font-black uppercase tracking-[0.16em] text-amber-100/84">예측 결과</div>
+            <ScrollingText className="mt-[clamp(0.35rem,0.9vw,0.6rem)] w-full text-[clamp(2.2rem,6vw,4.7rem)] font-black leading-[1.04] text-white">
               {winningOption.label} 승리
             </ScrollingText>
-            <div className="mt-[clamp(0.45rem,1vw,0.75rem)] text-[clamp(0.95rem,1.6vw,1.12rem)] font-semibold text-white/72">
+            <div className="mt-[clamp(0.45rem,1vw,0.75rem)] text-[clamp(1.08rem,1.9vw,1.35rem)] font-bold text-white/74">
               총 {formatPoints(displayPrediction?.totalPoints || 0)} · {displayPrediction?.participantCount || 0}명 참여
             </div>
           </div>
         ) : null}
 
-        <div className="mt-[clamp(1rem,2.2vw,1.6rem)] grid min-h-0 content-start gap-[clamp(0.75rem,1.55vw,1.15rem)] overflow-hidden">
+        <div className="mt-[clamp(1.1rem,2.3vw,1.8rem)] grid min-h-0 content-start gap-[clamp(0.85rem,1.65vw,1.25rem)] overflow-hidden">
           {visibleOptions.map((option, index) => (
             <div
               key={option.id}
-              className={`grid gap-[clamp(0.45rem,0.9vw,0.65rem)] rounded-[clamp(0.75rem,1.5vw,1.1rem)] p-[clamp(0.8rem,1.6vw,1.2rem)] transition duration-500 ${
+              className={`grid gap-[clamp(0.55rem,1vw,0.75rem)] rounded-[clamp(0.9rem,1.8vw,1.35rem)] p-[clamp(0.95rem,1.8vw,1.35rem)] transition duration-500 ${
                 isSettled && option.id === displayPrediction?.winningOptionId
                   ? 'border border-amber-200/45 bg-[linear-gradient(135deg,rgba(250,204,21,0.22),rgba(34,211,238,0.12))] shadow-[0_0_2.4rem_rgba(250,204,21,0.24)]'
                   : isSettled
@@ -178,15 +185,15 @@ export function PredictionOverlay({ channelUid }: { channelUid: string }) {
                     : 'bg-white/8'
               }`}
             >
-              <div className="flex items-center justify-between gap-[clamp(0.75rem,1.8vw,1.2rem)] text-[clamp(1rem,2vw,1.25rem)]">
-                <ScrollingText className="font-semibold">
+              <div className="flex items-center justify-between gap-[clamp(0.85rem,2vw,1.35rem)] text-[clamp(1.25rem,2.75vw,1.9rem)]">
+                <ScrollingText className="w-full flex-1 font-black">
                   {index + 1}. {option.label}
                 </ScrollingText>
                 <div className={`shrink-0 font-bold ${isSettled && option.id === displayPrediction?.winningOptionId ? 'text-amber-50' : 'text-white'}`}>
                   {option.percentage}% {option.payoutMultiplier ? <span className="text-white/58">x{option.payoutMultiplier}</span> : null}
                 </div>
               </div>
-              <div className="h-[clamp(0.65rem,1.2vw,0.9rem)] overflow-hidden rounded-full bg-white/12">
+              <div className="h-[clamp(0.82rem,1.45vw,1.08rem)] overflow-hidden rounded-full bg-white/12">
                 <div
                   className={`h-full rounded-full transition-all duration-700 ${isSettled && option.id === displayPrediction?.winningOptionId ? 'bg-[linear-gradient(90deg,#fde68a,#8ee8d8,#ffffff)]' : 'bg-[linear-gradient(90deg,#8ee8d8,#ffc7b5,#d7c3ff)]'}`}
                   style={{ width: `${Math.max(0, Math.min(100, option.percentage))}%` }}

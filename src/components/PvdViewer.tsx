@@ -7,6 +7,8 @@ type PlaybackTarget = {
   force?: boolean;
 };
 
+const TIKTOK_DURATION_SYNC_WAIT_MS = 20 * 1000;
+
 function getPlaybackAtSec(item: any, payload: any) {
   const start = Math.max(0, Math.floor(Number(item?.startSec || 0) || 0));
   const explicitAtSec = Number(payload?.atSec);
@@ -333,8 +335,8 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
           const duration = Number(tiktokDurationRef.current || 0);
           const current = Number(lastTimeRef.current || 0);
           const reachedKnownEnd = duration > 0 && current >= Math.max(0, duration - 0.75);
-          const playedLongEnough = playedMs >= 2500;
-          if (tiktokPlayingSeenRef.current && (reachedKnownEnd || playedLongEnough)) {
+          const waitedForDuration = duration <= 0 && playedMs >= TIKTOK_DURATION_SYNC_WAIT_MS;
+          if (tiktokPlayingSeenRef.current && (reachedKnownEnd || waitedForDuration)) {
             report('end');
           } else if (tiktokEarlyEndRetryRef.current < 2) {
             tiktokEarlyEndRetryRef.current += 1;
