@@ -3108,7 +3108,7 @@ export async function updateYoutubeStreamerChannelWebsub(ownerUserId, patch = {}
   });
 }
 
-export async function markYoutubeStreamerChannelModeratorRegistered(ownerUserId, registered = true) {
+export async function markYoutubeStreamerChannelModeratorRegistered(ownerUserId, registered = true, lastError = null) {
   const ownerId = String(ownerUserId || '').replace(/^user:/, '');
   if (!ownerId) return null;
   await ensureYoutubeCentralBotTables();
@@ -3116,10 +3116,11 @@ export async function markYoutubeStreamerChannelModeratorRegistered(ownerUserId,
     const { rows } = await pg.query(
       `update youtube_streamer_channels
           set moderator_registered = $2,
+              last_error = case when $2 then null else coalesce($3, last_error) end,
               updated_at = now()
         where owner_user_id = $1
         returning *`,
-      [ownerId, registered === true]
+      [ownerId, registered === true, lastError ? String(lastError).slice(0, 1000) : null]
     );
     return normalizeYoutubeStreamerChannelRow(rows[0]);
   });

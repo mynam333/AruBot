@@ -299,11 +299,12 @@ export function ConnectionPage() {
         method: 'POST',
         credentials: 'include',
       });
-      if (!response.ok) throw new Error('moderator confirm failed');
-      toast.success('YouTube 운영자 등록 완료를 확인했습니다.');
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(data?.verification?.message || data?.error || 'moderator confirm failed');
+      toast.success(data?.verification?.message || 'YouTube 운영자 등록 완료를 확인했습니다.');
       refresh();
-    } catch {
-      toast.error('운영자 등록 완료 확인에 실패했습니다.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '운영자 등록 완료 확인에 실패했습니다.');
     } finally {
       setYoutubeBusy(false);
     }
@@ -502,7 +503,7 @@ export function ConnectionPage() {
                       {youtubeRegistered && !youtubeStreamerStatus?.channel?.moderatorRegistered ? (
                         <Button type="button" variant="outline" onClick={confirmYoutubeModerator} disabled={youtubeBusy}>
                           <CheckCircle2 className="h-4 w-4" />
-                          운영자 등록 완료
+                          운영자 실제 확인
                         </Button>
                       ) : null}
                       {youtubeRegistered ? (
@@ -578,7 +579,7 @@ export function ConnectionPage() {
                 <Badge tone="rose">YouTube 채널 등록</Badge>
                 <h2 className="mt-3 text-xl font-semibold">방송 채널 URL 또는 핸들</h2>
                 <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                  등록 후 새 탭에서 YouTube Studio 커뮤니티 설정이 열립니다. AruBot 채널 URL을 표준 운영자 또는 관리 운영자에 추가하고 저장하세요.
+                  등록 후 새 탭에서 등록한 채널의 YouTube Studio가 열립니다. Studio 안에서 설정, 커뮤니티, 사용자 관리로 이동해 AruBot 채널 URL을 표준 운영자 또는 관리 운영자에 추가하고 저장하세요.
                 </p>
               </div>
               <Button type="button" variant="ghost" size="icon" onClick={() => setShowYoutubeModal(false)} aria-label="닫기">
@@ -612,7 +613,7 @@ export function ConnectionPage() {
                 </div>
               ) : null}
               <div className="rounded-[var(--radius-control)] bg-muted/60 p-3 text-xs leading-5 text-muted-foreground">
-                등록 버튼을 누르면 브라우저가 새 탭을 즉시 열고, 서버 등록이 끝난 뒤 그 탭을 YouTube Studio 운영자 설정 페이지로 이동시킵니다.
+                등록 버튼을 누르면 브라우저가 새 탭을 즉시 열고, 서버 등록이 끝난 뒤 그 탭을 YouTube Studio로 이동시킵니다.
               </div>
             </div>
 

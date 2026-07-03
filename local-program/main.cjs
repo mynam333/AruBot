@@ -83,6 +83,7 @@ let agentSocketHeartbeatTimer = null;
 let agentPollingTimer = null;
 let reconnectAttempt = 0;
 let processingJobs = false;
+let startupDiscoverySyncRunning = false;
 let config = { ...DEFAULT_CONFIG };
 let logs = [];
 let updateState = {
@@ -278,6 +279,7 @@ function persistPendingInstallerUpdate(update, installerPath) {
     latestVersion: update.latestVersion,
     installerPath,
     sha256: update.sha256 || '',
+    installDir: getCurrentInstallDirectory(),
     downloadedAt: new Date().toISOString(),
   };
   pendingInstallerUpdate = pending;
@@ -536,6 +538,18 @@ function quotePowerShellString(value) {
   return `'${String(value || '').replaceAll("'", "''")}'`;
 }
 
+function getCurrentInstallDirectory() {
+  if (process.platform !== 'win32' || !app.isPackaged) return '';
+  const exePath = String(app.getPath('exe') || process.execPath || '').trim();
+  if (!exePath || path.basename(exePath).toLowerCase() === 'electron.exe') return '';
+  const installDir = path.normalize(path.dirname(exePath));
+  const lower = installDir.toLowerCase();
+  const tempUpdates = path.normalize(tempUpdatePath('')).toLowerCase();
+  if (lower.startsWith(tempUpdates)) return '';
+  if (/[\\/]win-unpacked$/i.test(installDir)) return '';
+  return installDir;
+}
+
 function scheduleSilentInstallerOnQuit() {
   const pending = pendingInstallerUpdate;
   if (!pending?.installerPath || process.platform !== 'win32') return false;
@@ -544,15 +558,19 @@ function scheduleSilentInstallerOnQuit() {
     return false;
   }
 
+  const installDir = String(pending.installDir || getCurrentInstallDirectory() || '').trim();
   const helperPath = tempUpdatePath(`apply-arubot-update-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}.ps1`);
   fs.mkdirSync(path.dirname(helperPath), { recursive: true });
   const script = [
     '$ErrorActionPreference = "SilentlyContinue"',
     `$pidToWait = ${process.pid}`,
     `$installer = ${quotePowerShellString(pending.installerPath)}`,
+    `$installDir = ${quotePowerShellString(installDir)}`,
     'while (Get-Process -Id $pidToWait) { Start-Sleep -Milliseconds 500 }',
     'if (Test-Path -LiteralPath $installer) {',
-    '  $process = Start-Process -FilePath $installer -ArgumentList "/S" -WindowStyle Hidden -Wait -PassThru',
+    '  $arguments = @("/S")',
+    '  if ($installDir) { $arguments += "/D=$installDir" }',
+    '  $process = Start-Process -FilePath $installer -ArgumentList $arguments -WindowStyle Hidden -Wait -PassThru',
     '  if ($process.ExitCode -eq 0) { Remove-Item -LiteralPath $installer -Force }',
     '}',
     'Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force',
@@ -666,7 +684,13 @@ function normalizeTitsDiscovery(itemsResponse, triggersResponse) {
       name: String(trigger.name || trigger.ID || ''),
     })).filter((trigger) => trigger.id || trigger.name)
     : [];
-  return { items, triggers, fetchedAt: new Date().toISOString() };
+  return {
+    source: 'tits',
+    endpoint: getTitsEndpoint(config.titsEndpoint, 'data'),
+    items,
+    triggers,
+    fetchedAt: new Date().toISOString(),
+  };
 }
 
 async function discoverTits() {
@@ -929,6 +953,58 @@ async function discoverVtubeStudio(options = {}) {
     return normalizeVtubeDiscovery({ current, models, hotkeys, expressions, items }, endpoint);
   } finally {
     try { ws.close(); } catch {}
+  }
+}
+
+async function syncLocalDiscovery(type, discovery, options = {}) {
+  const normalizedType = type === 'vtube_studio' ? 'vtube_studio' : type === 'tits' ? 'tits' : '';
+  if (!normalizedType || !discovery || typeof discovery !== 'object') return null;
+  if (!normalizeLocalProgramToken(config.token)) return null;
+  try {
+    return await apiFetch('/api/automations/local-agent/discovery-sync', {
+      method: 'POST',
+      body: JSON.stringify({
+        type: normalizedType,
+        name: normalizedType === 'vtube_studio' ? 'VTube Studio' : 'T.I.T.S.',
+        endpoint: discovery.endpoint || (normalizedType === 'vtube_studio' ? config.vtubeEndpoint : config.titsEndpoint),
+        discoveryCache: discovery,
+      }),
+    });
+  } catch (error) {
+    if (!options.silent) addLog('error', '목록 동기화 실패', error.message || String(error));
+    return null;
+  }
+}
+
+async function discoverAndSyncTits(options = {}) {
+  const discovery = await discoverTits();
+  await syncLocalDiscovery('tits', discovery, options);
+  return discovery;
+}
+
+async function discoverAndSyncVtubeStudio(options = {}) {
+  const discovery = await discoverVtubeStudio(options);
+  await syncLocalDiscovery('vtube_studio', discovery, options);
+  return discovery;
+}
+
+async function runStartupDiscoverySync() {
+  if (startupDiscoverySyncRunning || !normalizeLocalProgramToken(config.token)) return;
+  startupDiscoverySyncRunning = true;
+  try {
+    addLog('info', 'T.I.T.S.와 VTube Studio 목록 자동 동기화를 시작합니다.');
+    const tasks = [
+      discoverAndSyncTits({ silent: true })
+        .then((discovery) => addLog('success', `T.I.T.S. 목록 자동 동기화 완료: 아이템 ${discovery.items.length}개, 트리거 ${discovery.triggers.length}개`))
+        .catch((error) => addLog('info', 'T.I.T.S. 자동 동기화를 건너뜁니다.', error.message || String(error))),
+      discoverAndSyncVtubeStudio({ silent: true, timeoutMs: 7000 })
+        .then((discovery) => addLog('success', `VTube Studio 목록 자동 동기화 완료: 모델 ${discovery.models.length}개, 핫키 ${discovery.hotkeys.length}개`))
+        .catch((error) => addLog('info', 'VTube Studio 자동 동기화를 건너뜁니다.', error.message || String(error))),
+    ];
+    await Promise.allSettled(tasks);
+  } finally {
+    startupDiscoverySyncRunning = false;
+    emitState();
   }
 }
 
@@ -1382,12 +1458,17 @@ ipcMain.handle('state:get', () => getPublicState());
 ipcMain.handle('config:save', (_event, next) => {
   const state = saveConfig(next || {});
   addLog('success', '설정을 저장했습니다.');
+  if (normalizeLocalProgramToken(config.token)) {
+    setTimeout(() => {
+      runStartupDiscoverySync().catch((error) => addLog('error', '목록 동기화 실패', error.message || String(error)));
+    }, 300);
+  }
   return state;
 });
 ipcMain.handle('agent:start', () => startAgent());
 ipcMain.handle('agent:stop', () => stopAgent());
 ipcMain.handle('tits:discover', async () => {
-  const discovery = await discoverTits();
+  const discovery = await discoverAndSyncTits();
   addLog('success', `T.I.T.S. 목록 불러오기 완료: 아이템 ${discovery.items.length}개, 트리거 ${discovery.triggers.length}개`);
   return discovery;
 });
@@ -1397,7 +1478,7 @@ ipcMain.handle('vtube:authenticate', async () => {
   return { authenticated: auth.authenticated, reused: auth.reused, endpoint: auth.endpoint };
 });
 ipcMain.handle('vtube:discover', async () => {
-  const discovery = await discoverVtubeStudio();
+  const discovery = await discoverAndSyncVtubeStudio();
   addLog('success', `VTube Studio 목록 불러오기 완료: 모델 ${discovery.models.length}개, 핫키 ${discovery.hotkeys.length}개`);
   return discovery;
 });
@@ -1501,6 +1582,16 @@ ipcMain.handle('update:check', async () => {
 ipcMain.handle('update:install', async () => {
   const update = await fetchUpdateManifest();
   if (!update.updateAvailable) return { ...update, opened: false };
+  if (process.platform === 'win32') {
+    addLog('info', `업데이트 ${update.latestVersion} 다운로드를 시작합니다.`);
+    const installerPath = await downloadInstaller(update);
+    const pending = persistPendingInstallerUpdate(update, installerPath);
+    setUpdateState({ status: 'ready', checking: false, latestVersion: update.latestVersion, updateAvailable: true, downloaded: true, readyToApply: true, progress: null, error: null });
+    addLog('success', pending.installDir
+      ? `업데이트 파일을 내려받았습니다. 프로그램을 종료하면 현재 설치 위치에 조용히 적용됩니다: ${pending.installDir}`
+      : '업데이트 파일을 내려받았습니다. 프로그램을 종료하면 설치 화면 없이 적용됩니다.');
+    return { ...update, opened: false, downloaded: true, readyToApply: true, manualInstaller: true, installDir: pending.installDir || null };
+  }
   if (app.isPackaged) {
     setUpdateState({ status: 'downloading', checking: false, updateAvailable: true, latestVersion: update.latestVersion, downloaded: false, readyToApply: false, error: null, progress: null });
     try {
@@ -1516,10 +1607,10 @@ ipcMain.handle('update:install', async () => {
   }
   addLog('info', `업데이트 ${update.latestVersion} 다운로드를 시작합니다.`);
   const installerPath = await downloadInstaller(update);
-  persistPendingInstallerUpdate(update, installerPath);
+  const pending = persistPendingInstallerUpdate(update, installerPath);
   setUpdateState({ status: 'ready', checking: false, latestVersion: update.latestVersion, updateAvailable: true, downloaded: true, readyToApply: true, progress: null, error: null });
   addLog('success', '업데이트 파일을 내려받았습니다. 프로그램을 종료하면 설치 화면 없이 적용됩니다.');
-  return { ...update, opened: false, downloaded: true, readyToApply: true, manualInstaller: true };
+  return { ...update, opened: false, downloaded: true, readyToApply: true, manualInstaller: true, installDir: pending.installDir || null };
 });
 
 app.whenReady().then(() => {
@@ -1528,9 +1619,12 @@ app.whenReady().then(() => {
   createWindow();
   if (config.autoStart && config.token) {
     setTimeout(() => {
-      try { startAgent(); } catch (error) { addLog('error', '자동 시작 실패', error.message || String(error)); }
+      startAgent().catch((error) => addLog('error', '자동 시작 실패', error.message || String(error)));
     }, 800);
   }
+  setTimeout(() => {
+    runStartupDiscoverySync().catch((error) => addLog('error', '시작 동기화 실패', error.message || String(error)));
+  }, 1600);
 });
 
 app.on('before-quit', () => {

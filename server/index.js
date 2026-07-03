@@ -11239,9 +11239,7 @@ function getYoutubeWebsubCallbackUrl(req) {
 
 function getYoutubeStudioModeratorUrl(channelId) {
   const id = String(channelId || '').trim();
-  return id
-    ? `https://studio.youtube.com/channel/${encodeURIComponent(id)}/settings/community`
-    : 'https://studio.youtube.com/settings/community';
+  return id ? `https://studio.youtube.com/channel/${encodeURIComponent(id)}` : 'https://studio.youtube.com/';
 }
 
 function getYoutubeChannelUrl(channelId) {
@@ -11994,7 +11992,7 @@ app.post('/api/youtube/streamer-channel', rateLimiters.userWrite, async (req, re
         botChannelUrl: getYoutubeChannelUrl(botProfile.selectedChannelId),
         botChannelTitle: botProfile.selectedChannelTitle || 'AruBot',
         moderatorUrl: getYoutubeStudioModeratorUrl(streamerChannel.youtubeChannelId),
-        text: 'YouTube Studio 설정 > 커뮤니티에서 AruBot 채널 URL을 표준 운영자 또는 관리 운영자에 추가한 뒤 저장하세요.'
+        text: '등록한 채널의 YouTube Studio가 열리면 설정 > 커뮤니티 > 사용자 관리로 이동해 AruBot 채널 URL을 표준 운영자 또는 관리 운영자에 추가하고 저장하세요.'
       },
       websub
     });
@@ -12008,15 +12006,28 @@ app.post('/api/youtube/streamer-channel/moderator-confirmed', rateLimiters.userW
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const verification = await verifyYoutubeBotModeratorRegistration(ownerUserId);
+    if (!verification.verified) {
+      await markYoutubeStreamerChannelModeratorRegistered(ownerUserId, false, verification.message || verification.reason).catch(() => null);
+      return res.status(409).json({
+        ok: false,
+        moderatorRegistered: false,
+        verification
+      });
+    }
     const streamerChannel = await markYoutubeStreamerChannelModeratorRegistered(ownerUserId, true);
     if (!streamerChannel) return res.status(404).json({ error: 'YouTube streamer channel is not registered' });
     closeYoutubeSession(ownerUserId, 'moderator_confirmed');
     ensureYoutubeSession(ownerUserId).catch((e) => {
       console.warn('[YouTube] Failed to start session after moderator confirmation:', e?.response?.data || e?.message || e);
     });
-    return res.json({ ok: true, moderatorRegistered: true });
+    return res.json({ ok: true, moderatorRegistered: true, verification });
   } catch (e) {
-    return res.status(500).json({ error: 'Failed to confirm YouTube moderator registration' });
+    const status = e?.status || 500;
+    return res.status(status).json({
+      error: e?.message || 'Failed to confirm YouTube moderator registration',
+      code: e?.code || 'youtube_moderator_verification_failed'
+    });
   }
 });
 
@@ -12556,6 +12567,43 @@ app.post('/api/automations/local-agent/heartbeat', requireAutomationLocalAgent, 
     return res.json({ ok: true, agent });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to update local program heartbeat' });
+  }
+});
+
+app.post('/api/automations/local-agent/discovery-sync', requireAutomationLocalAgent, async (req, res) => {
+  try {
+    const ownerUserId = req.automationLocalAgent?.ownerUserId;
+    if (!ownerUserId) return res.status(401).json({ error: 'Invalid local program token' });
+    const type = String(req.body?.type || '').toLowerCase();
+    if (!['tits', 'vtube_studio'].includes(type)) return res.status(400).json({ error: 'Unsupported discovery type' });
+    const discoveryCache = req.body?.discoveryCache && typeof req.body.discoveryCache === 'object'
+      ? req.body.discoveryCache
+      : {};
+    const connections = await listAutomationConnections(ownerUserId).catch(() => []);
+    const existing = connections.find((connection) => (
+      connection?.type === type &&
+      (connection?.executionMode === 'local_program' || connection?.execution_mode === 'local_program')
+    ));
+    const fetchedAt = discoveryCache.fetchedAt || new Date().toISOString();
+    const connection = await upsertAutomationConnection(ownerUserId, {
+      id: req.body?.connectionId || req.body?.id || existing?.id,
+      type,
+      name: req.body?.name || existing?.name || (type === 'vtube_studio' ? 'VTube Studio' : 'T.I.T.S.'),
+      enabled: true,
+      executionMode: 'local_program',
+      endpoint: req.body?.endpoint || discoveryCache.endpoint || existing?.endpoint || '',
+      config: existing?.config || {},
+      capabilities: existing?.capabilities || {},
+      discoveryCache,
+      discoveryUpdatedAt: fetchedAt,
+      lastStatus: 'ok',
+      lastCheckedAt: new Date().toISOString()
+    });
+    await touchAutomationLocalAgent(req.automationLocalAgent.id, req.body?.capabilities || {}).catch(() => null);
+    return res.json({ ok: true, connection });
+  } catch (e) {
+    console.error('[Automations] local discovery sync error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to sync local discovery' });
   }
 });
 
@@ -16428,6 +16476,135 @@ function isLikelyYoutubeSelfEcho(entry, ev) {
   const text = String(ev?.message || '').trim();
   const ts = Number(entry.recentOutboundMessages?.get(text) || 0);
   return !!text && ts > 0 && Date.now() - ts < 2 * 60 * 1000;
+}
+
+async function verifyYoutubeBotModeratorRegistration(ownerUserId) {
+  const botProfile = await getValidYoutubeBotProfile();
+  const streamerChannel = await getYoutubeStreamerChannel(ownerUserId);
+  if (!streamerChannel?.youtubeChannelId) {
+    const error = new Error('YouTube streamer channel is not registered');
+    error.status = 404;
+    error.code = 'youtube_streamer_channel_not_registered';
+    throw error;
+  }
+
+  const liveInfo = await refreshYoutubeLiveFromRegisteredChannel(ownerUserId, { allowSearch: true }).catch(() => null);
+  const liveChatId = liveInfo?.liveChatId || streamerChannel.lastLiveChatId || null;
+  if (!liveChatId) {
+    return {
+      verified: false,
+      reason: 'active_live_chat_required',
+      message: '운영자 등록 여부는 활성 YouTube Live 채팅이 있을 때만 확인할 수 있습니다.',
+      liveChatId: null
+    };
+  }
+
+  const accessToken = await getValidYoutubeBotAccessToken();
+  const marker = `AruBot moderator check ${crypto.randomBytes(4).toString('hex')}`;
+  const path = String(YOUTUBE_STREAM_PATH || '/liveChat/messages/stream').replace(/^\/+/, '');
+  const url = new URL(path, YOUTUBE_API_BASE.endsWith('/') ? YOUTUBE_API_BASE : `${YOUTUBE_API_BASE}/`);
+  url.searchParams.set('part', 'id,snippet,authorDetails');
+  url.searchParams.set('liveChatId', liveChatId);
+  url.searchParams.set('maxResults', '200');
+  url.searchParams.set('profileImageSize', '88');
+
+  const controller = new AbortController();
+  let sentMessageId = null;
+  let stream = null;
+  let settled = false;
+  const cleanup = () => {
+    if (settled) return;
+    settled = true;
+    try { controller.abort(); } catch { }
+    try { stream?.destroy?.(); } catch { }
+  };
+
+  const response = await axios.get(url.toString(), {
+    headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
+    responseType: 'stream',
+    timeout: 0,
+    signal: controller.signal
+  });
+  stream = response.data;
+
+  const observed = new Promise((resolve) => {
+    let buffer = '';
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve({
+        verified: false,
+        reason: 'verification_message_not_observed',
+        message: '검증 메시지를 라이브 채팅 스트림에서 확인하지 못했습니다.',
+        liveChatId
+      });
+    }, 20 * 1000);
+
+    const finish = (result) => {
+      try { clearTimeout(timer); } catch { }
+      cleanup();
+      resolve(result);
+    };
+
+    stream.on('data', (chunk) => {
+      buffer += chunk.toString('utf8');
+      const extracted = extractJsonStreamObjects(buffer);
+      buffer = extracted.rest;
+      for (const raw of extracted.objects) {
+        let payload = null;
+        try { payload = JSON.parse(raw); } catch { continue; }
+        const items = Array.isArray(payload?.items) ? payload.items : [];
+        for (const item of items) {
+          const snippet = item?.snippet || {};
+          const author = item?.authorDetails || {};
+          const text = snippet.textMessageDetails?.messageText || snippet.displayMessage || '';
+          const isBotMessage = String(author.channelId || '') === String(botProfile.selectedChannelId || '');
+          const isVerificationMessage = (sentMessageId && String(item?.id || '') === String(sentMessageId)) || String(text || '').includes(marker);
+          if (!isBotMessage || !isVerificationMessage) continue;
+          finish({
+            verified: author.isChatModerator === true,
+            reason: author.isChatModerator === true ? 'moderator_verified' : 'bot_is_not_moderator',
+            message: author.isChatModerator === true
+              ? 'AruBot 중앙 봇이 이 라이브 채팅의 운영자로 확인되었습니다.'
+              : 'AruBot 중앙 봇 메시지는 확인했지만 운영자 권한이 아닙니다.',
+            liveChatId,
+            messageId: item?.id || sentMessageId,
+            botChannelId: botProfile.selectedChannelId
+          });
+        }
+      }
+    });
+    stream.on('end', () => finish({
+      verified: false,
+      reason: 'verification_stream_closed',
+      message: '운영자 확인 중 YouTube Live Chat 스트림이 종료되었습니다.',
+      liveChatId
+    }));
+    stream.on('error', (error) => finish({
+      verified: false,
+      reason: 'verification_stream_error',
+      message: error?.message || '운영자 확인 스트림 오류가 발생했습니다.',
+      liveChatId
+    }));
+  });
+
+  try {
+    const sent = await youtubeBotApiPost('liveChat/messages', { part: 'snippet' }, {
+      snippet: {
+        liveChatId,
+        type: 'textMessageEvent',
+        textMessageDetails: { messageText: marker }
+      }
+    }, { timeout: 7000 });
+    sentMessageId = sent?.data?.id || null;
+  } catch (e) {
+    cleanup();
+    const error = new Error(e?.response?.data?.error?.message || e?.message || 'Failed to send YouTube moderator verification message');
+    error.status = e?.response?.status || 500;
+    error.code = 'moderator_verification_send_failed';
+    throw error;
+  }
+
+  return observed;
 }
 
 async function sendYoutubeChat(ownerUserId, liveChatId, message) {

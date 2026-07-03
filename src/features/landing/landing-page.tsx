@@ -80,6 +80,10 @@ export function LandingPage() {
                 로컬 프로그램
                 <Download className="h-4 w-4" />
               </LinkButton>
+              <LinkButton href="/downloads/browser-extension" variant="outline" size="lg">
+                브라우저 확장
+                <PlaySquare className="h-4 w-4" />
+              </LinkButton>
             </div>
           </div>
 
@@ -223,6 +227,10 @@ export function LandingPage() {
               로컬 프로그램 다운로드
               <Download className="h-4 w-4" />
             </LinkButton>
+            <LinkButton href="/downloads/browser-extension" variant="outline" size="lg">
+              브라우저 확장 설치
+              <PlaySquare className="h-4 w-4" />
+            </LinkButton>
           </div>
         </div>
       </section>
@@ -237,6 +245,7 @@ export function LandingPage() {
             <Link href="/streamer" className="transition hover:text-foreground">스트리머 콘솔</Link>
             <Link href="/viewer/me" className="transition hover:text-foreground">시청자 포인트</Link>
             <Link href="/downloads/local-program" className="transition hover:text-foreground">로컬 프로그램</Link>
+            <Link href="/downloads/browser-extension" className="transition hover:text-foreground">브라우저 확장</Link>
           </div>
         </div>
       </footer>

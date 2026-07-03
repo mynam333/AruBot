@@ -80,9 +80,13 @@ describe('YouTube live chat integration regression', () => {
     expect(serverIndex).toContain("app.post('/api/youtube/streamer-channel/moderator-confirmed'");
     expect(serverIndex).toContain("error.code = 'youtube_bot_not_configured'");
     expect(serverIndex).toContain("lastError: 'youtube_bot_moderator_not_confirmed'");
+    expect(serverIndex).toContain('async function verifyYoutubeBotModeratorRegistration');
+    expect(serverIndex).toContain('author.isChatModerator === true');
+    expect(serverIndex).toContain("'bot_is_not_moderator'");
+    expect(serverIndex).toContain("reason: 'active_live_chat_required'");
     expect(serverIndex).toContain('const botProfile = await getValidYoutubeBotProfile()');
     expect(serverIndex).toContain('const streamerChannel = await getYoutubeStreamerChannel(ownerUserId)');
-    expect(connectionPage).toContain('운영자 등록 완료');
+    expect(connectionPage).toContain('운영자 실제 확인');
   });
 
   test('YouTube channel auto-detection uses WebSub plus bounded retries instead of polling', () => {
