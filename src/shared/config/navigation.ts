@@ -9,6 +9,7 @@ import {
   Orbit,
   PlaySquare,
   Settings,
+  ShieldCheck,
   Sparkles,
   Timer,
   UserRound,
@@ -18,6 +19,7 @@ import {
 
 export const adminNav = [
   { href: '/dashboard', label: '홈', icon: Home },
+  { href: '/arubot-admin', label: 'AruBot 관리자', icon: ShieldCheck, adminOnly: true },
   { href: '/connection', label: '플랫폼 연결', icon: Cable },
   { href: '/commands', label: '채팅 명령어', icon: MessageSquare },
   { href: '/macros', label: '자동 알림', icon: Timer },

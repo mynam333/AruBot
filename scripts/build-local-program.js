@@ -53,17 +53,24 @@ function findDistInstallers() {
   return fs.readdirSync(distDir).filter((fileName) => /^AruBot-Local-Program-.+\.exe$/i.test(fileName));
 }
 
+function isUpdateArtifact(fileName) {
+  return /^AruBot-Local-Program-.+\.exe$/i.test(fileName) ||
+    /^AruBot-Local-Program-.+\.exe\.blockmap$/i.test(fileName) ||
+    fileName === 'latest.yml' ||
+    fileName === 'latest.json';
+}
+
 function syncPublicInstallers() {
   fs.mkdirSync(publicDir, { recursive: true });
   for (const fileName of fs.readdirSync(publicDir)) {
-    if (/^AruBot-Local-Program-.+\.exe$/i.test(fileName) || fileName === 'latest.json') {
+    if (isUpdateArtifact(fileName)) {
       fs.rmSync(path.join(publicDir, fileName), { force: true });
     }
   }
   const installers = findDistInstallers();
   if (!installers.length) throw new Error(`No installer was generated in ${distDir}`);
   if (externalMode) return;
-  for (const fileName of installers) {
+  for (const fileName of fs.readdirSync(distDir).filter(isUpdateArtifact)) {
     fs.copyFileSync(path.join(distDir, fileName), path.join(publicDir, fileName));
   }
 }

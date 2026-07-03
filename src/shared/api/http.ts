@@ -19,6 +19,17 @@ export function apiUrl(path: string, base = getBrowserApiBase()) {
   return `${base}${path.startsWith('/') ? '' : '/'}${path}`;
 }
 
+export function apiWsUrl(path: string, base = getBrowserApiBase()) {
+  const url = apiUrl(path, base);
+  if (url.startsWith('https://')) return `wss://${url.slice('https://'.length)}`;
+  if (url.startsWith('http://')) return `ws://${url.slice('http://'.length)}`;
+  if (typeof window !== 'undefined') {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${protocol}//${window.location.host}${path.startsWith('/') ? '' : '/'}${path}`;
+  }
+  return url;
+}
+
 export async function readJson<T>(path: string, init?: RequestInit): Promise<T | null> {
   try {
     const response = await fetch(apiUrl(path), {

@@ -4,6 +4,7 @@ const path = require('path');
 describe('YouTube live chat integration regression', () => {
   const serverIndex = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
   const connectionPage = fs.readFileSync(path.join(__dirname, '..', 'src', 'features', 'admin', 'connection-page.tsx'), 'utf8');
+  const arubotAdminPage = fs.readFileSync(path.join(__dirname, '..', 'src', 'features', 'admin', 'arubot-admin-page.tsx'), 'utf8');
   const dashboardPage = fs.readFileSync(path.join(__dirname, '..', 'src', 'features', 'admin', 'dashboard-page.tsx'), 'utf8');
   const variablesPage = fs.readFileSync(path.join(__dirname, '..', 'src', 'features', 'admin', 'variables-page.tsx'), 'utf8');
   const navigation = fs.readFileSync(path.join(__dirname, '..', 'src', 'shared', 'config', 'navigation.ts'), 'utf8');
@@ -60,6 +61,37 @@ describe('YouTube live chat integration regression', () => {
     expect(connectionPage).toContain("id: 'youtube'");
     expect(connectionPage).toContain("loginPath: '/api/auth/youtube/login'");
     expect(connectionPage).toContain("revokePath: '/api/auth/youtube/revoke'");
+    expect(connectionPage).toContain("window.open('about:blank', '_blank')");
+    expect(connectionPage).toContain("apiUrl('/api/youtube/streamer-channel')");
+    expect(connectionPage).not.toContain("apiUrl('/api/youtube/bot/login')");
+  });
+
+  test('central YouTube bot mode is configured from admin UI without channel-id env pinning', () => {
+    expect(arubotAdminPage).toContain("apiUrl('/api/youtube/bot/login')");
+    expect(arubotAdminPage).toContain("apiUrl('/api/youtube/bot/select-channel')");
+    expect(arubotAdminPage).toContain("apiUrl('/api/youtube/bot/verify')");
+    expect(serverIndex).toContain("const YOUTUBE_BOT_PROFILE_ID = process.env.YOUTUBE_BOT_PROFILE_ID || 'default'");
+    expect(serverIndex).not.toContain('YOUTUBE_BOT_CHANNEL_ID');
+    expect(serverIndex).toContain("app.get('/api/arubot-admin/me'");
+    expect(serverIndex).toContain('requireCurrentAdminUser(req, res)');
+    expect(serverIndex).toContain("app.get('/api/youtube/bot/status'");
+    expect(serverIndex).toContain("app.post('/api/youtube/bot/select-channel'");
+    expect(serverIndex).toContain("app.post('/api/youtube/streamer-channel'");
+    expect(serverIndex).toContain("app.post('/api/youtube/streamer-channel/moderator-confirmed'");
+    expect(serverIndex).toContain("error.code = 'youtube_bot_not_configured'");
+    expect(serverIndex).toContain("lastError: 'youtube_bot_moderator_not_confirmed'");
+    expect(serverIndex).toContain('const botProfile = await getValidYoutubeBotProfile()');
+    expect(serverIndex).toContain('const streamerChannel = await getYoutubeStreamerChannel(ownerUserId)');
+    expect(connectionPage).toContain('운영자 등록 완료');
+  });
+
+  test('YouTube channel auto-detection uses WebSub plus bounded retries instead of polling', () => {
+    expect(serverIndex).toContain('YOUTUBE_WEBSUB_HUB_URL');
+    expect(serverIndex).toContain("app.get(YOUTUBE_WEBSUB_CALLBACK_PATH");
+    expect(serverIndex).toContain("app.post(YOUTUBE_WEBSUB_CALLBACK_PATH");
+    expect(serverIndex).toContain('extractYoutubeWebsubEntries');
+    expect(serverIndex).toContain('YOUTUBE_WEBSUB_RETRY_DELAYS_MS');
+    expect(serverIndex).toContain('scheduleYoutubeWebsubLiveRetry');
   });
 
   test('operational status and health include YouTube sessions', () => {

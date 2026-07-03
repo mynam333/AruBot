@@ -1,14 +1,14 @@
 'use client';
 
 import { GripVertical, Loader2, PlaySquare, RefreshCw, RotateCcw, Trash2, UserRound, Volume2, VolumeX } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState, useTransition } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { toast } from 'sonner';
 import { VideoDonationSettingsDialog } from '@/features/admin/admin-action-dialogs';
 import { ViewerTokenPanel } from '@/features/admin/viewer-token-panel';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { apiUrl, readJson } from '@/shared/api/http';
+import { apiUrl, apiWsUrl, readJson } from '@/shared/api/http';
 
 type VideoDonationItem = {
   id: string;
@@ -30,6 +30,11 @@ type VideoDonationItem = {
 
 type VideoDonationQueueResponse = {
   items?: VideoDonationItem[];
+  currentItem?: VideoDonationItem | null;
+  volume?: number;
+  type?: string;
+  reason?: string;
+  serverNow?: number;
 };
 
 type VideoDonationSettingsResponse = {
@@ -217,12 +222,23 @@ export function VideoDonationQueuePage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [volume, setVolume] = useState(100);
   const [volumePending, setVolumePending] = useState(false);
+  const [realtimeState, setRealtimeState] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const [isPending, startTransition] = useTransition();
+  const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const reconnectAttemptRef = useRef(0);
 
   const currentItem = items[0] || null;
   const waitingItems = useMemo(() => items.slice(1), [items]);
   const totalCost = useMemo(() => items.reduce((sum, item) => sum + Number(item.cost || 0), 0), [items]);
   const totalDuration = useMemo(() => items.reduce((sum, item) => sum + Number(item.durationSec || 0), 0), [items]);
+
+  const applyQueuePayload = useCallback((data: VideoDonationQueueResponse | null) => {
+    setItems(Array.isArray(data?.items) ? data.items : []);
+    if (data?.volume != null) {
+      setVolume(Math.max(0, Math.min(100, Math.round(Number(data.volume)))));
+    }
+  }, []);
 
   const load = useCallback(() => {
     startTransition(async () => {
@@ -230,16 +246,80 @@ export function VideoDonationQueuePage() {
         readJson<VideoDonationQueueResponse>('/api/video-donation/queue'),
         readJson<VideoDonationSettingsResponse>('/api/video-donation/settings').catch(() => null),
       ]);
-      setItems(Array.isArray(data?.items) ? data.items : []);
+      applyQueuePayload(data);
       if (settings?.volume != null) {
         setVolume(Math.max(0, Math.min(100, Math.round(Number(settings.volume)))));
       }
     });
-  }, []);
+  }, [applyQueuePayload]);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    let disposed = false;
+
+    const clearReconnect = () => {
+      if (reconnectTimerRef.current != null) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+    };
+
+    const connect = () => {
+      clearReconnect();
+      if (disposed) return;
+      setRealtimeState('connecting');
+
+      try {
+        const ws = new WebSocket(apiWsUrl('/api/video-donation/admin/ws'));
+        wsRef.current = ws;
+
+        ws.onopen = () => {
+          reconnectAttemptRef.current = 0;
+          setRealtimeState('connected');
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const payload = JSON.parse(String(event.data || '{}')) as VideoDonationQueueResponse;
+            if (payload?.type === 'video-donation.queue') {
+              applyQueuePayload(payload);
+            }
+          } catch {
+            // Ignore malformed realtime messages.
+          }
+        };
+
+        ws.onclose = () => {
+          if (wsRef.current === ws) wsRef.current = null;
+          if (disposed) return;
+          setRealtimeState('disconnected');
+          const attempt = Math.min(6, reconnectAttemptRef.current + 1);
+          reconnectAttemptRef.current = attempt;
+          const delay = Math.min(10000, 600 * 2 ** (attempt - 1));
+          reconnectTimerRef.current = window.setTimeout(connect, delay);
+        };
+
+        ws.onerror = () => {
+          try { ws.close(); } catch { }
+        };
+      } catch {
+        setRealtimeState('disconnected');
+        reconnectTimerRef.current = window.setTimeout(connect, 2000);
+      }
+    };
+
+    connect();
+
+    return () => {
+      disposed = true;
+      clearReconnect();
+      try { wsRef.current?.close(); } catch { }
+      wsRef.current = null;
+    };
+  }, [applyQueuePayload]);
 
   useEffect(() => {
     const refresh = (event: Event) => {
@@ -316,6 +396,9 @@ export function VideoDonationQueuePage() {
               <Badge tone="mint">영상 후원</Badge>
               <Badge tone="sky">{waitingItems.length}개 대기</Badge>
               <Badge tone="lemon">{totalCost.toLocaleString()}P</Badge>
+              <Badge tone={realtimeState === 'connected' ? 'mint' : realtimeState === 'connecting' ? 'sky' : 'neutral'}>
+                {realtimeState === 'connected' ? '실시간 연결' : realtimeState === 'connecting' ? '실시간 연결 중' : '실시간 재연결 대기'}
+              </Badge>
             </div>
             <h1 className="text-3xl font-semibold leading-tight tracking-normal md:text-4xl">영상 후원 큐</h1>
             <p className="mt-3 max-w-3xl text-sm leading-7 text-muted-foreground md:text-base">

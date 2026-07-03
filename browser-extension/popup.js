@@ -32,18 +32,36 @@ function render(state) {
     const serviceRemaining = Math.max(0, Math.ceil(((service.endAt || 0) - Date.now()) / 1000));
     const row = document.createElement('div');
     row.className = 'service';
-    row.innerHTML = `
-      <div class="service-meta">
-        <span class="dot ${service.status || 'idle'}"></span>
-        <span>
-          <span class="name">${label}</span>
-          <span class="message">${service.message || service.status || 'Idle'}</span>
-        </span>
-      </div>
-      <span class="time">${format(serviceRemaining)}</span>
-    `;
+
+    const meta = document.createElement('div');
+    meta.className = 'service-meta';
+
+    const dot = document.createElement('span');
+    dot.className = `dot ${getSafeStatusClass(service.status)}`;
+
+    const text = document.createElement('span');
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = label;
+
+    const message = document.createElement('span');
+    message.className = 'message';
+    message.textContent = service.message || service.status || 'Idle';
+
+    const time = document.createElement('span');
+    time.className = 'time';
+    time.textContent = format(serviceRemaining);
+
+    text.append(name, message);
+    meta.append(dot, text);
+    row.append(meta, time);
     root.appendChild(row);
   }
+}
+
+function getSafeStatusClass(status) {
+  const value = String(status || 'idle');
+  return /^(idle|connected|connecting|reconnecting|error|disabled)$/u.test(value) ? value : 'idle';
 }
 
 async function refresh() {

@@ -11,7 +11,7 @@ Outputs:
 - Chrome Web Store: `dist/browser-extension/aru-pause-chrome-v<version>.zip`
 - Firefox AMO: `dist/browser-extension/aru-pause-firefox-v<version>.zip`
 
-The source `browser-extension/manifest.json` keeps localhost permissions for unpacked local development. The store ZIPs remove localhost and 127.0.0.1 host permissions. Every build increments `browser-extension/version.json` and writes that generated version to both store manifests.
+The source `browser-extension/manifest.json` keeps localhost permissions for unpacked local development. The store ZIPs remove localhost and 127.0.0.1 host permissions. The first package is version `2.0.0`; every build increments the patch version in `browser-extension/version.json` and writes that generated version to both store manifests.
 
 ## Chrome Web Store
 

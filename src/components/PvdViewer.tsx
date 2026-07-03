@@ -28,6 +28,8 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
   const [token, setToken] = useState<string>(viewerToken || '');
   const [volume, setVolume] = useState(100);
   const [externalItem, setExternalItem] = useState<any | null>(null);
+  const [captionsEnabled, setCaptionsEnabled] = useState(false);
+  const [youtubeActive, setYoutubeActive] = useState(false);
   const playerDivRef = useRef<HTMLDivElement | null>(null);
   const externalFrameRef = useRef<HTMLIFrameElement | null>(null);
   const externalVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -46,6 +48,10 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
   const lastEmitRef = useRef<number>(0);
   const lastTimeRef = useRef<number>(0);
   const suppressUntilRef = useRef<number>(0);
+  const externalTargetRef = useRef(0);
+  const externalPausedRef = useRef(false);
+  const tiktokPlayingSeenRef = useRef(false);
+  const tiktokReadyAtRef = useRef(0);
 
   // Parse token from /pvd/:token
   useEffect(() => {
@@ -99,7 +105,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
     const frame = externalFrameRef.current;
     if (!frame?.contentWindow) return;
     try {
-      frame.contentWindow.postMessage({ ...message, 'x-tiktok-player': true }, '*');
+      frame.contentWindow.postMessage({ ...message, 'x-tiktok-player': true }, 'https://www.tiktok.com');
     } catch {}
   }, []);
 
@@ -108,7 +114,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
     let src = String(item?.embedUrl || item?.mediaUrl || '');
     if (!src && provider === 'chzzk_clip' && item?.mediaId) src = `https://chzzk.naver.com/embed/clip/${encodeURIComponent(String(item.mediaId))}`;
     if (!src && provider === 'cime_clip' && item?.mediaId) src = `https://ci.me/clips/${encodeURIComponent(String(item.mediaId))}`;
-    if (!src && provider === 'tiktok' && item?.mediaId) src = `https://www.tiktok.com/player/v1/${encodeURIComponent(String(item.mediaId))}`;
+    if (provider === 'tiktok' && item?.mediaId) src = `https://www.tiktok.com/player/v1/${encodeURIComponent(String(item.mediaId))}`;
     if (!src) return '';
     try {
       const url = new URL(src);
@@ -122,6 +128,12 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
         url.searchParams.set('play_button', '1');
         url.searchParams.set('volume_control', '1');
         url.searchParams.set('fullscreen_button', '1');
+        url.searchParams.set('timestamp', '1');
+        url.searchParams.set('loop', '0');
+        url.searchParams.set('rel', '0');
+        url.searchParams.set('native_context_menu', '0');
+        url.searchParams.set('closed_caption', '0');
+        url.searchParams.set('muted', volumeRef.current <= 0 ? '1' : '0');
       } else if (provider === 'chzzk_clip') {
         url.searchParams.set('autoplay', paused ? 'false' : 'true');
       }
@@ -162,6 +174,20 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
       postToExternalPlayer({ type: normalized <= 0 ? 'mute' : 'unMute' });
     }
   }, [postToExternalPlayer]);
+
+  const applyYouTubeCaptions = useCallback((enabled = captionsEnabled) => {
+    const player = playerRef.current;
+    if (!player) return;
+    try {
+      if (enabled) {
+        if (player.loadModule) player.loadModule('captions');
+        if (player.loadModule) player.loadModule('cc');
+      } else {
+        if (player.unloadModule) player.unloadModule('captions');
+        if (player.unloadModule) player.unloadModule('cc');
+      }
+    } catch {}
+  }, [captionsEnabled]);
 
   const emitControl = useCallback((op: 'pause' | 'play' | 'seek' | 'volume', atSec?: number, nextVolume?: number) => {
     if (!token) return;
@@ -239,8 +265,13 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
     externalVideoRef.current = null;
     externalProviderRef.current = null;
     externalMediaKeyRef.current = null;
+    externalTargetRef.current = 0;
+    externalPausedRef.current = false;
+    tiktokPlayingSeenRef.current = false;
+    tiktokReadyAtRef.current = 0;
     currentVidRef.current = null;
     currentStartRef.current = 0;
+    setYoutubeActive(false);
   }, []);
 
   const report = useCallback((cause: 'error' | 'end') => {
@@ -254,6 +285,94 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
     stopPlayer();
   }, [getViewerApiBase, stopPlayer, token]);
 
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      if (event.source !== externalFrameRef.current?.contentWindow) return;
+      try {
+        if (!/(^|\.)tiktok\.com$/i.test(new URL(event.origin).hostname)) return;
+      } catch {
+        return;
+      }
+      const data = event.data as any;
+      if (!data || typeof data !== 'object' || data['x-tiktok-player'] !== true) return;
+      if (externalProviderRef.current !== 'tiktok') return;
+
+      const type = String(data.type || '');
+      if (type === 'onPlayerReady') {
+        tiktokReadyAtRef.current = Date.now();
+        applyVolume(volumeRef.current);
+        window.setTimeout(() => {
+          applyExternalPlaybackTarget(externalTargetRef.current, externalPausedRef.current);
+        }, 120);
+        return;
+      }
+
+      if (type === 'onStateChange') {
+        const state = Number(data.value);
+        const now = Date.now();
+        if (state === 1) {
+          tiktokPlayingSeenRef.current = true;
+          if (!document.hidden && now > suppressUntilRef.current && now - lastEmitRef.current > 300) {
+            lastEmitRef.current = now;
+            emitControl('play', Math.floor(lastTimeRef.current));
+          }
+          return;
+        }
+        if (state === 0) {
+          if (tiktokPlayingSeenRef.current) report('end');
+          return;
+        }
+        if (state === 2) {
+          if (!document.hidden && now - tiktokReadyAtRef.current > 1000 && now > suppressUntilRef.current && now - lastEmitRef.current > 300) {
+            lastEmitRef.current = now;
+            emitControl('pause', Math.floor(lastTimeRef.current));
+          }
+        }
+        return;
+      }
+
+      if (type === 'onCurrentTime') {
+        const value = data.value;
+        const current = Number(typeof value === 'object' ? value?.currentTime : value);
+        if (Number.isFinite(current)) lastTimeRef.current = current;
+        return;
+      }
+
+      if (type === 'onMute') {
+        if (data.value === true) {
+          volumeRef.current = 0;
+          setVolume(0);
+        }
+        return;
+      }
+
+      if (type === 'onVolumeChange') {
+        const nextVolume = Number(data.value);
+        if (Number.isFinite(nextVolume)) {
+          const normalized = Math.max(0, Math.min(100, Math.round(nextVolume)));
+          volumeRef.current = normalized;
+          setVolume(normalized);
+        }
+        return;
+      }
+
+      if (type === 'onPlayerError') {
+        const value = data.value;
+        const errorCode = Number(typeof value === 'object' ? value?.errorCode : value);
+        if (errorCode === 3002) {
+          window.setTimeout(() => {
+            postToExternalPlayer({ type: 'play' });
+          }, 500);
+          return;
+        }
+        report('error');
+      }
+    };
+
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [applyExternalPlaybackTarget, applyVolume, emitControl, postToExternalPlayer, report]);
+
   const ensurePlayer = useCallback((videoId: string, start: number, opts?: PlaybackTarget) => {
     const seq = ++ensureSeqRef.current;
     const safeStart = Math.max(0, Math.floor(Number(start || 0)));
@@ -262,11 +381,13 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
     void getYouTubeApi().then((YT) => {
       if (seq !== ensureSeqRef.current || !YT || !YT.Player || !playerDivRef.current) return;
       setExternalItem(null);
+      setYoutubeActive(true);
       externalProviderRef.current = null;
       externalMediaKeyRef.current = null;
 
       const sameItem = currentVidRef.current === videoId && currentStartRef.current === safeStart && playerRef.current;
       if (sameItem) {
+        applyYouTubeCaptions(captionsEnabled);
         applyPlaybackTarget(target, opts?.paused, opts?.force);
         return;
       }
@@ -277,7 +398,10 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
         start: target,
         playsinline: 1,
         controls: 0,
+        cc_load_policy: captionsEnabled ? 1 : 0,
+        cc_lang_pref: 'ko',
         disablekb: 1,
+        iv_load_policy: 3,
         rel: 0,
         modestbranding: 1,
         origin: window.location.origin
@@ -299,6 +423,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
         } catch {}
       };
       const onReady = () => {
+        applyYouTubeCaptions(captionsEnabled);
         applyVolume(volumeRef.current);
         applyPlaybackTarget(target, opts?.paused, true);
       };
@@ -313,6 +438,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
         try {
           suppressUntilRef.current = Date.now() + 1000;
           playerRef.current.loadVideoById({ videoId, startSeconds: target });
+          setTimeout(() => applyYouTubeCaptions(captionsEnabled), 200);
         } catch {
           try { playerRef.current.destroy(); } catch {}
           playerRef.current = new YT.Player(playerDivRef.current, {
@@ -328,11 +454,12 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
       lastTimeRef.current = target;
 
       setTimeout(() => {
+        applyYouTubeCaptions(captionsEnabled);
         applyVolume(volumeRef.current);
         applyPlaybackTarget(target, opts?.paused, true);
       }, 250);
     }).catch(() => {});
-  }, [applyPlaybackTarget, applyVolume, emitControl, getYouTubeApi, report]);
+  }, [applyPlaybackTarget, applyVolume, applyYouTubeCaptions, captionsEnabled, emitControl, getYouTubeApi, report]);
 
   const ensureExternalPlayer = useCallback((item: any, opts?: PlaybackTarget) => {
     const provider = getItemProvider(item);
@@ -340,10 +467,17 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
     const target = Math.max(start, Math.floor(Number(opts?.atSec ?? start)));
     const key = getMediaKey(item);
     externalProviderRef.current = provider;
+    externalTargetRef.current = target;
+    externalPausedRef.current = opts?.paused === true;
+    if (provider === 'tiktok') {
+      tiktokPlayingSeenRef.current = false;
+      tiktokReadyAtRef.current = Date.now();
+    }
 
     try { playerRef.current && playerRef.current.stopVideo && playerRef.current.stopVideo(); } catch {}
     try { playerRef.current && playerRef.current.destroy && playerRef.current.destroy(); } catch {}
     playerRef.current = null;
+    setYoutubeActive(false);
     currentVidRef.current = null;
     currentStartRef.current = 0;
 
@@ -369,6 +503,12 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
       applyExternalPlaybackTarget(target, opts?.paused);
     }, 450);
   }, [applyExternalPlaybackTarget, applyVolume, buildExternalSrc, getItemProvider, getMediaKey]);
+
+  const toggleCaptions = useCallback(() => {
+    const next = !captionsEnabled;
+    setCaptionsEnabled(next);
+    applyYouTubeCaptions(next);
+  }, [applyYouTubeCaptions, captionsEnabled]);
 
   const resyncFromServer = useCallback(async (force = false) => {
     if (!token) return;
@@ -633,6 +773,13 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
               allow="autoplay; fullscreen; picture-in-picture; clipboard-write; web-share"
               allowFullScreen
               referrerPolicy="strict-origin-when-cross-origin"
+              onLoad={() => {
+                if (externalItem.provider !== 'tiktok') return;
+                window.setTimeout(() => {
+                  applyVolume(volumeRef.current);
+                  applyExternalPlaybackTarget(Number(externalItem.targetAtSec || 0), externalItem.paused);
+                }, 250);
+              }}
               style={{
                 width: externalItem.provider === 'tiktok' ? 'min(100vw, 56.25vh)' : '100vw',
                 height: '100vh',
@@ -677,12 +824,16 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
           background: 'rgba(15, 23, 42, 0.72)',
           color: 'white',
           font: '600 0.82rem system-ui, sans-serif',
-          opacity: 0.08,
+          opacity: 0,
           transition: 'opacity 160ms ease',
           backdropFilter: 'blur(14px)',
         }}
         onMouseEnter={(event) => { event.currentTarget.style.opacity = '1'; }}
-        onMouseLeave={(event) => { event.currentTarget.style.opacity = '0.08'; }}
+        onMouseLeave={(event) => { event.currentTarget.style.opacity = '0'; }}
+        onFocus={(event) => { event.currentTarget.style.opacity = '1'; }}
+        onBlur={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) event.currentTarget.style.opacity = '0';
+        }}
       >
         <span>소리</span>
         <input
@@ -699,6 +850,26 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
           style={{ width: 'min(28vw, 10rem)' }}
         />
         <span style={{ minWidth: '3ch', textAlign: 'right' }}>{volume}</span>
+        {youtubeActive ? (
+          <button
+            type="button"
+            onClick={toggleCaptions}
+            style={{
+              minHeight: '2rem',
+              border: '1px solid rgba(255,255,255,0.24)',
+              borderRadius: '999px',
+              background: captionsEnabled ? 'rgba(110,231,183,0.28)' : 'rgba(255,255,255,0.12)',
+              color: 'white',
+              padding: '0 0.75rem',
+              font: '700 0.78rem system-ui, sans-serif',
+              cursor: 'pointer',
+            }}
+            aria-pressed={captionsEnabled}
+            aria-label={captionsEnabled ? '유튜브 자막 끄기' : '유튜브 자막 켜기'}
+          >
+            자막 {captionsEnabled ? '켬' : '끔'}
+          </button>
+        ) : null}
       </div>
     </div>
   );

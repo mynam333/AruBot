@@ -57,7 +57,7 @@ import {
   type ReactFlowInstance,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
+import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -241,11 +241,16 @@ type BlueprintNodeFlowData = {
 };
 type BlueprintFlowNode = FlowNode<BlueprintNodeFlowData, 'blueprintNode'>;
 type BlueprintFlowEdge = FlowEdge<{ sourcePort: string; targetPort: string }>;
+type BlueprintTone = NonNullable<React.ComponentProps<typeof Badge>['tone']>;
 
 const FLOW_UNIT = 16;
 const NODE_SIZE = { width: 16.5, height: 8.2 };
 const NODE_WIDTH = NODE_SIZE.width * FLOW_UNIT;
 const NODE_MIN_HEIGHT = NODE_SIZE.height * FLOW_UNIT;
+const PORT_CHIP_HEIGHT = 1.55;
+const PORT_CHIP_GAP = 0.34;
+const PORT_CHIP_BOTTOM = 0.72;
+const PORT_CHIP_SIDE = 0.78;
 const DEFAULT_VIEWPORT: Viewport = { x: 80, y: 80, zoom: 1 };
 const SELECTION_CLIPBOARD_SCHEMA = 'arubot.blueprint.selection';
 const BLUEPRINT_EXPORT_SCHEMA = 'arubot.blueprint';
@@ -257,7 +262,7 @@ const nodeCatalog: Array<{
   body: string;
   group: string;
   icon: typeof Workflow;
-  tone: 'mint' | 'sky' | 'lemon' | 'coral' | 'violet' | 'neutral' | 'rose';
+  tone: BlueprintTone;
   config: Record<string, unknown>;
 }> = [
   { type: 'start', title: '시작', body: '액션의 첫 순간', group: '필수', icon: Play, tone: 'mint', config: {} },
@@ -265,9 +270,9 @@ const nodeCatalog: Array<{
   { type: 'chat', title: '채팅 전송', body: '채팅에 바로 말하기', group: '기본', icon: MessageSquare, tone: 'sky', config: { message: '{user.username}님, 실행되었습니다.' } },
   { type: 'wait', title: '대기', body: '잠깐 쉬어가기', group: '기본', icon: CalendarClock, tone: 'neutral', config: { seconds: 1 } },
   { type: 'condition', title: '조건문', body: '상황에 따라 나누기', group: '기본', icon: GitBranch, tone: 'lemon', config: { left: '{user.points}', operator: 'gte', right: '1000' } },
-  { type: 'setVariable', title: '임시 변수', body: '값을 잠시 보관', group: '기본', icon: Braces, tone: 'violet', config: { key: 'bonusPoint', mode: 'set', value: '100' } },
-  { type: 'readVariable', title: '변수 읽기', body: '필요한 값 꺼내기', group: '기본', icon: Type, tone: 'violet', config: { path: '{user.name}' } },
-  { type: 'action', title: '특수 변수 실행', body: '다른 액션 이어가기', group: '기본', icon: Workflow, tone: 'violet', config: { actionId: '' } },
+  { type: 'setVariable', title: '임시 변수', body: '값을 잠시 보관', group: '기본', icon: Braces, tone: 'amber', config: { key: 'bonusPoint', mode: 'set', value: '100' } },
+  { type: 'readVariable', title: '변수 읽기', body: '필요한 값 꺼내기', group: '기본', icon: Type, tone: 'cyan', config: { path: '{user.name}' } },
+  { type: 'action', title: '다른 블루프린트 실행', body: '다른 액션 이어가기', group: '기본', icon: Workflow, tone: 'sky', config: { actionId: '' } },
   { type: 'loop', title: 'N회 반복', body: '반복 중 true, 완료 후 false', group: '흐름', icon: RefreshCw, tone: 'sky', config: { count: 3, gapMs: 250 } },
   { type: 'random', title: '랜덤 분기', body: '가중치 기반 분기', group: '흐름', icon: Shuffle, tone: 'lemon', config: { options: [{ id: 'a', label: 'A', weight: 1 }, { id: 'b', label: 'B', weight: 1 }] } },
   { type: 'pointsGet', title: '포인트 조회', body: '보유 포인트 가져오기', group: '포인트', icon: Coins, tone: 'mint', config: { userId: '{user.userId}' } },
@@ -282,7 +287,7 @@ const nodeCatalog: Array<{
   { type: 'attendanceGet', title: '출석 조회', body: '누적 출석일 확인', group: '참여', icon: CheckCircle2, tone: 'mint', config: { userId: '{user.userId}' } },
   { type: 'cooldown', title: '쿨다운 확인', body: '사용자별 제한 분기', group: '흐름', icon: CalendarClock, tone: 'lemon', config: { key: '{user.userId}', seconds: 30 } },
   { type: 'join', title: '흐름 합류', body: '여러 입력을 하나로', group: '흐름', icon: GitBranch, tone: 'neutral', config: {} },
-  { type: 'approval', title: '관리자 확인', body: '방송 전 승인 받기', group: '흐름', icon: CheckCircle2, tone: 'rose', config: { message: '이 액션을 실행할까요?' } },
+  { type: 'approval', title: '관리자 확인', body: '방송 전 승인 받기', group: '흐름', icon: CheckCircle2, tone: 'emerald', config: { message: '이 액션을 실행할까요?' } },
   { type: 'timer', title: '타이머 예약', body: '지정 시간 뒤 실행', group: '흐름', icon: CalendarClock, tone: 'sky', config: { seconds: 10 } },
   { type: 'chatVote', title: '채팅 투표 대기', body: '채팅 투표 결과 수집', group: '참여', icon: MessageSquare, tone: 'sky', config: { seconds: 30, options: '1,2' } },
   { type: 'highlight', title: '하이라이트 마커', body: '기억할 순간 기록', group: '참여', icon: BadgeCheck, tone: 'neutral', config: { label: '하이라이트' } },
@@ -295,8 +300,8 @@ const nodeCatalog: Array<{
   { type: 'http', title: 'HTTP 요청', body: '외부 도구 깨우기', group: '연동', icon: Network, tone: 'neutral', config: { method: 'POST', url: '', body: '{}' } },
   { type: 'websocket', title: 'WebSocket', body: '로컬 도구에 메시지', group: '연동', icon: Network, tone: 'neutral', config: { url: '', message: '{}', timeoutMs: 8000 } },
   { type: 'udp', title: 'UDP', body: '장비/효과 실행', group: '연동', icon: Network, tone: 'neutral', config: { host: '127.0.0.1', port: 0, message: '' } },
-  { type: 'tits', title: 'T.I.T.S', body: '아이템/트리거 실행', group: '로컬', icon: Activity, tone: 'rose', config: { triggerId: '', strength: 1, durationMs: 1000 } },
-  { type: 'vtube', title: 'VTube Studio', body: '모델 반응 실행', group: '로컬', icon: Bot, tone: 'rose', config: { hotkeyId: '', parameter: '', value: '' } },
+  { type: 'tits', title: 'T.I.T.S', body: '아이템/트리거 실행', group: '로컬', icon: Activity, tone: 'amber', config: { triggerId: '', strength: 1, durationMs: 1000 } },
+  { type: 'vtube', title: 'VTube Studio', body: '모델 반응 실행', group: '로컬', icon: Bot, tone: 'cyan', config: { hotkeyId: '', parameter: '', value: '' } },
   { type: 'log', title: '로그', body: '실행 기록에 남김', group: '기본', icon: Code2, tone: 'neutral', config: { message: '로그: {flow.bonusPoint}' } },
 ];
 
@@ -317,7 +322,7 @@ const blueprintTemplates: Array<{
   id: string;
   title: string;
   body: string;
-  tone: 'mint' | 'sky' | 'lemon' | 'coral' | 'violet' | 'neutral' | 'rose';
+  tone: BlueprintTone;
   nodes: Array<{ type: NodeType; name?: string; position: { x: number; y: number }; config?: Record<string, unknown> }>;
   edges: Array<{ source: number; sourcePort?: string; target: number; targetPort?: string }>;
 }> = [
@@ -405,6 +410,13 @@ function createNode(type: NodeType, position: { x: number; y: number }): Bluepri
     enabled: true,
     config: JSON.parse(JSON.stringify(spec.config)),
   };
+}
+
+function normalizeNodeName(node: BlueprintNode): BlueprintNode {
+  if (node.type === 'action' && node.name === '특수 변수 실행') {
+    return { ...node, name: nodeSpec('action').title };
+  }
+  return node;
 }
 
 function defaultNodes(): BlueprintNode[] {
@@ -552,34 +564,38 @@ function isDefaultStarterBlueprint(nodes: BlueprintNode[], edges: BlueprintEdge[
 }
 
 function portLabel(port: string) {
-  if (port === 'in') return '입력';
-  if (port === 'out') return '다음';
-  if (port === 'true') return 'true';
-  if (port === 'false') return 'false';
+  if (port === 'in') return '받기';
+  if (port === 'out') return '계속';
+  if (port === 'true') return '참';
+  if (port === 'false') return '거짓';
   return port.replace(/^option:/, '');
 }
 
 function portTone(port: string) {
   if (port === 'false') return {
-    dot: 'bg-destructive',
-    text: 'text-destructive',
-    border: 'border-destructive/30',
+    accent: 'hsl(351 84% 58%)',
+    edge: 'hsl(351 84% 58%)',
   };
   if (port === 'true') return {
-    dot: 'bg-emerald-500',
-    text: 'text-emerald-700 dark:text-emerald-300',
-    border: 'border-emerald-500/30',
+    accent: 'hsl(158 64% 43%)',
+    edge: 'hsl(158 64% 43%)',
   };
   if (port === 'in') return {
-    dot: 'bg-primary',
-    text: 'text-primary',
-    border: 'border-primary/30',
+    accent: 'hsl(var(--primary))',
+    edge: 'hsl(var(--primary))',
+  };
+  if (port.startsWith('option:')) return {
+    accent: 'hsl(262 72% 58%)',
+    edge: 'hsl(262 72% 58%)',
   };
   return {
-    dot: 'bg-sky-500',
-    text: 'text-sky-700 dark:text-sky-300',
-    border: 'border-sky-500/30',
+    accent: 'hsl(202 82% 48%)',
+    edge: 'hsl(202 82% 48%)',
   };
+}
+
+function portEdgeStroke(port: string) {
+  return portTone(port).edge;
 }
 
 function nodeSpec(type: NodeType) {
@@ -607,6 +623,21 @@ function toneClass(tone: (typeof nodeCatalog)[number]['tone']) {
       strip: 'from-rose-300 via-orange-200 to-amber-200 dark:from-rose-500 dark:via-orange-500 dark:to-amber-500',
       icon: 'bg-pastel-coral/85 text-rose-800 ring-rose-500/18 dark:bg-rose-400/18 dark:text-rose-300',
       soft: 'bg-pastel-coral/58 text-rose-900 dark:bg-rose-400/12 dark:text-rose-100',
+    },
+    cyan: {
+      strip: 'from-cyan-300 via-sky-200 to-indigo-200 dark:from-cyan-400 dark:via-sky-500 dark:to-indigo-500',
+      icon: 'bg-cyan-100 text-cyan-800 ring-cyan-500/18 dark:bg-cyan-400/14 dark:text-cyan-200 dark:ring-cyan-300/20',
+      soft: 'bg-cyan-100/70 text-cyan-900 dark:bg-cyan-400/10 dark:text-cyan-100',
+    },
+    emerald: {
+      strip: 'from-emerald-300 via-lime-200 to-teal-200 dark:from-emerald-400 dark:via-lime-500 dark:to-teal-500',
+      icon: 'bg-emerald-100 text-emerald-800 ring-emerald-500/18 dark:bg-emerald-400/14 dark:text-emerald-200 dark:ring-emerald-300/20',
+      soft: 'bg-emerald-100/70 text-emerald-900 dark:bg-emerald-400/10 dark:text-emerald-100',
+    },
+    amber: {
+      strip: 'from-amber-300 via-orange-200 to-yellow-200 dark:from-amber-400 dark:via-orange-500 dark:to-yellow-500',
+      icon: 'bg-amber-100 text-amber-900 ring-amber-500/18 dark:bg-amber-400/14 dark:text-amber-200 dark:ring-amber-300/20',
+      soft: 'bg-amber-100/72 text-amber-950 dark:bg-amber-400/10 dark:text-amber-100',
     },
     violet: {
       strip: 'from-violet-300 via-fuchsia-200 to-sky-200 dark:from-violet-500 dark:via-fuchsia-500 dark:to-sky-500',
@@ -661,7 +692,7 @@ function normalizeBlueprint(payload?: Blueprint | null) {
     ...payload,
     version: {
       ...(payload.version || {}),
-      nodes: payload.version?.nodes?.length ? payload.version.nodes : defaultNodes(),
+      nodes: payload.version?.nodes?.length ? payload.version.nodes.map(normalizeNodeName) : defaultNodes(),
       edges: payload.version?.edges || [],
       viewport: payload.version?.viewport || DEFAULT_VIEWPORT,
     },
@@ -707,7 +738,7 @@ function normalizeImportedNodes(rawNodes: unknown, fallbackToDefault = true) {
     return [{
       id: String(source.id || createId(source.type)),
       type: source.type,
-      name: String(source.name || nodeSpec(source.type).title),
+      name: String(source.type === 'action' && source.name === '특수 변수 실행' ? nodeSpec(source.type).title : source.name || nodeSpec(source.type).title),
       position: normalizePosition(source.position, { x: index * 22, y: 3 }),
       enabled: source.enabled !== false,
       config: source.config && typeof source.config === 'object' ? cloneJson(source.config) : cloneJson(nodeSpec(source.type).config),
@@ -831,46 +862,74 @@ async function jsonRequest<T>(path: string, method: string, body?: unknown): Pro
   return data as T;
 }
 
-function portTop(index: number, total: number) {
-  return 2.4 + index * (Math.max(1, NODE_SIZE.height - 4.6) / Math.max(1, total - 1 || 1));
+function nodeHeightPx(node: BlueprintNode) {
+  const outputCount = outputPorts(node).length;
+  const extraRows = Math.max(0, outputCount - 2);
+  return Math.max(NODE_MIN_HEIGHT, (NODE_SIZE.height + extraRows * (PORT_CHIP_HEIGHT + PORT_CHIP_GAP)) * FLOW_UNIT);
 }
 
-function portPointPx(node: BlueprintNode, kind: 'input' | 'output', port: string, index = 0, total = 1) {
+function inputPortPointRem(index: number) {
   return {
-    x: node.position.x * FLOW_UNIT + (kind === 'input' ? 0 : NODE_WIDTH),
-    y: node.position.y * FLOW_UNIT + portTop(index, total) * FLOW_UNIT,
-    port,
+    x: PORT_CHIP_SIDE + 0.62,
+    y: 0.9 + index * (PORT_CHIP_HEIGHT + PORT_CHIP_GAP) + PORT_CHIP_HEIGHT / 2,
   };
 }
 
-function BlueprintPortBadge({
+function outputPortPointRem(index: number, total: number, nodeHeightRem: number) {
+  return {
+    x: NODE_SIZE.width - PORT_CHIP_SIDE - 0.62,
+    y: nodeHeightRem - PORT_CHIP_BOTTOM - (total - 1 - index) * (PORT_CHIP_HEIGHT + PORT_CHIP_GAP) - PORT_CHIP_HEIGHT / 2,
+  };
+}
+
+function BlueprintPortHandle({
   port,
   kind,
   index,
   total,
+  nodeHeight,
 }: {
   port: string;
   kind: 'input' | 'output';
   index: number;
   total: number;
+  nodeHeight: number;
 }) {
   const tone = portTone(kind === 'input' ? 'in' : port);
-  const label = kind === 'input' ? '입력' : portLabel(port);
+  const label = portLabel(kind === 'input' ? 'in' : port);
+  const top = kind === 'input'
+    ? 0.9 + index * (PORT_CHIP_HEIGHT + PORT_CHIP_GAP)
+    : nodeHeight / FLOW_UNIT - PORT_CHIP_BOTTOM - (total - 1 - index) * (PORT_CHIP_HEIGHT + PORT_CHIP_GAP) - PORT_CHIP_HEIGHT;
+  const sideStyle = kind === 'input'
+    ? { left: `${PORT_CHIP_SIDE}rem`, right: 'auto' }
+    : { left: 'auto', right: `${PORT_CHIP_SIDE}rem` };
+  const handleStyle = {
+    ...sideStyle,
+    top: `${top}rem`,
+    transform: 'none',
+    background: `color-mix(in srgb, ${tone.accent} 12%, hsl(var(--card)) 88%)`,
+    borderColor: `color-mix(in srgb, ${tone.accent} 44%, hsl(var(--border)) 56%)`,
+    color: `color-mix(in srgb, ${tone.accent} 74%, hsl(var(--foreground)) 26%)`,
+    '--port-accent': tone.accent,
+  } as CSSProperties;
   return (
-    <div
-      aria-hidden="true"
+    <Handle
+      id={port}
+      type={kind === 'input' ? 'target' : 'source'}
+      position={kind === 'input' ? Position.Left : Position.Right}
+      title={`${kind === 'input' ? '입력' : '출력'}: ${label}`}
+      aria-label={`${kind === 'input' ? '입력' : '출력'} 포트 ${label}`}
       className={cn(
-        'pointer-events-none absolute z-20 flex h-7 -translate-y-1/2 items-center gap-1.5 rounded-full border bg-card/95 px-2.5 text-[0.64rem] font-extrabold shadow-subtle backdrop-blur-xl',
-        tone.border,
-        tone.text,
-        kind === 'input' ? 'left-[-3.25rem]' : 'right-[-4.85rem] w-[4.55rem] justify-between',
+        'arubot-blueprint-port nodrag nowheel !absolute !z-40 !flex !h-[1.55rem] !min-w-[4.25rem] !items-center !gap-1.5 !rounded-full !border !px-2 !text-[0.63rem] !font-extrabold !opacity-100 !shadow-subtle !backdrop-blur-xl transition hover:!scale-[1.04]',
+        'before:!absolute before:!inset-[-0.28rem] before:!rounded-full before:!content-[""]',
+        kind === 'input' ? '!justify-start' : '!justify-end',
       )}
-      style={{ top: `${portTop(index, total)}rem` }}
+      style={handleStyle}
     >
-      {kind === 'input' ? <span className={cn('h-2 w-2 rounded-full', tone.dot)} /> : null}
-      <span className="min-w-0 truncate">{label}</span>
-      {kind === 'output' ? <span className={cn('h-2 w-2 shrink-0 rounded-full', tone.dot)} /> : null}
-    </div>
+      {kind === 'input' ? <span className="relative z-10 h-2 w-2 rounded-full" style={{ backgroundColor: tone.accent }} /> : null}
+      <span className="relative z-10 min-w-0 truncate">{label}</span>
+      {kind === 'output' ? <span className="relative z-10 h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: tone.accent }} /> : null}
+    </Handle>
   );
 }
 
@@ -882,6 +941,7 @@ function BlueprintCanvasNode({ data, selected }: NodeProps<BlueprintFlowNode>) {
   const outs = outputPorts(node);
   const tone = toneClass(spec.tone);
   const statusTone = latestStep?.status === 'failed' ? 'bg-destructive' : active ? 'bg-primary' : latestStep?.status === 'done' ? 'bg-emerald-500' : node.enabled === false ? 'bg-muted-foreground' : 'bg-primary/65';
+  const nodeHeight = nodeHeightPx(node);
   return (
     <div
       onContextMenu={(event) => {
@@ -907,10 +967,10 @@ function BlueprintCanvasNode({ data, selected }: NodeProps<BlueprintFlowNode>) {
         latestStep?.status === 'failed' && 'border-destructive/70 ring-2 ring-destructive/30',
         node.enabled === false && 'opacity-55',
       )}
-      style={{ width: `${NODE_WIDTH}px`, minHeight: `${NODE_MIN_HEIGHT}px` }}
+      style={{ width: `${NODE_WIDTH}px`, minHeight: `${nodeHeight}px` }}
     >
       <div className={cn('h-[max(0.25rem,0.26vw)] rounded-t-[calc(var(--radius-card)*0.92)] bg-[linear-gradient(90deg,var(--tw-gradient-stops))]', tone.strip)} />
-      <div className="grid gap-3 p-[clamp(0.75rem,1.1vw,0.875rem)]">
+      <div className="grid gap-3 p-[clamp(0.75rem,1.1vw,0.875rem)] pb-[3.35rem] pt-[2.85rem]">
         <div className="flex items-start justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2.5">
             <span className={cn('grid aspect-square w-[2.15rem] shrink-0 place-items-center rounded-[calc(var(--radius-control)*0.82)] ring-1', tone.icon)}>
@@ -939,113 +999,16 @@ function BlueprintCanvasNode({ data, selected }: NodeProps<BlueprintFlowNode>) {
         )}
       </div>
       {ins.map((port, index) => (
-        <Fragment key={`input-${port}`}>
-          <BlueprintPortBadge port={port} kind="input" index={index} total={ins.length} />
-          <Handle
-            id={port}
-            type="target"
-            position={Position.Left}
-            title={`입력: ${portLabel(port)}`}
-            aria-label={`입력 포트 ${portLabel(port)}`}
-            className="!z-30 !grid !h-7 !w-7 !touch-manipulation !place-items-center !rounded-full !border-[max(0.125rem,0.16vw)] !border-card !bg-primary !shadow-subtle transition hover:!scale-110 md:!h-5 md:!w-5"
-            style={{ top: `${portTop(index, ins.length)}rem`, left: '-0.88rem' }}
-          />
-        </Fragment>
+        <BlueprintPortHandle key={`input-${port}`} port={port} kind="input" index={index} total={ins.length} nodeHeight={nodeHeight} />
       ))}
       {outs.map((port, index) => (
-        <Fragment key={`output-${port}`}>
-          <BlueprintPortBadge port={port} kind="output" index={index} total={outs.length} />
-          <Handle
-            id={port}
-            type="source"
-            position={Position.Right}
-            title={`출력: ${portLabel(port)}`}
-            aria-label={`출력 포트 ${portLabel(port)}`}
-            className={cn(
-              '!z-30 !grid !h-7 !w-7 !touch-manipulation !place-items-center !rounded-full !border-[max(0.125rem,0.16vw)] !border-card !shadow-subtle transition hover:!scale-110 md:!h-5 md:!w-5',
-              port === 'false' ? '!bg-destructive' : port === 'true' ? '!bg-emerald-500' : '!bg-sky-500',
-            )}
-            style={{ top: `${portTop(index, outs.length)}rem`, right: '-0.88rem' }}
-          />
-        </Fragment>
+        <BlueprintPortHandle key={`output-${port}`} port={port} kind="output" index={index} total={outs.length} nodeHeight={nodeHeight} />
       ))}
     </div>
   );
 }
 
 const flowNodeTypes = { blueprintNode: BlueprintCanvasNode };
-
-function BlueprintFlowEdgesOverlay({
-  nodes,
-  edges,
-  selectedEdgeId,
-  viewport,
-  onSelect,
-}: {
-  nodes: BlueprintNode[];
-  edges: BlueprintEdge[];
-  selectedEdgeId: string | null;
-  viewport: Viewport;
-  onSelect: (edgeId: string) => void;
-}) {
-  const nodeMap = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
-  return (
-    <svg
-      className="pointer-events-none absolute inset-0 z-[2] h-full w-full overflow-visible"
-      style={{ transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`, transformOrigin: '0 0' }}
-    >
-      <defs>
-        <filter id="blueprint-edge-glow" x="-20%" y="-20%" width="140%" height="140%">
-          <feGaussianBlur stdDeviation="3" result="blur" />
-          <feMerge>
-            <feMergeNode in="blur" />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
-        </filter>
-      </defs>
-      {edges.map((edge) => {
-        const source = nodeMap.get(edge.source);
-        const target = nodeMap.get(edge.target);
-        if (!source || !target) return null;
-        const sourcePorts = outputPorts(source);
-        const targetPorts = inputPorts(target);
-        const start = portPointPx(source, 'output', edge.sourcePort, Math.max(0, sourcePorts.indexOf(edge.sourcePort)), sourcePorts.length);
-        const end = portPointPx(target, 'input', edge.targetPort, Math.max(0, targetPorts.indexOf(edge.targetPort)), targetPorts.length);
-        const c1 = start.x + Math.max(80, Math.abs(end.x - start.x) * 0.45);
-        const c2 = end.x - Math.max(80, Math.abs(end.x - start.x) * 0.45);
-        const selected = selectedEdgeId === edge.id;
-        const stroke = selected ? 'hsl(var(--primary))' : edge.sourcePort === 'false' ? 'hsl(var(--destructive))' : edge.sourcePort === 'true' ? 'hsl(158 64% 46%)' : 'hsl(202 82% 52%)';
-        const path = `M ${start.x} ${start.y} C ${c1} ${start.y}, ${c2} ${end.y}, ${end.x} ${end.y}`;
-        return (
-          <g key={edge.id}>
-            <path
-              d={path}
-              fill="none"
-              stroke="hsl(var(--foreground) / 0.08)"
-              strokeWidth={selected ? 9 : 7}
-              strokeLinecap="round"
-            />
-            <path
-              d={path}
-              fill="none"
-              stroke={stroke}
-              strokeWidth={selected ? 4 : 2.75}
-              strokeLinecap="round"
-              strokeDasharray={edge.sourcePort.startsWith('option:') ? '7 7' : undefined}
-              filter={selected ? 'url(#blueprint-edge-glow)' : undefined}
-              className="pointer-events-auto cursor-pointer transition"
-              style={{ pointerEvents: 'stroke' }}
-              onPointerDown={(event) => {
-                event.stopPropagation();
-                onSelect(edge.id);
-              }}
-            />
-          </g>
-        );
-      })}
-    </svg>
-  );
-}
 
 export function ActionBlueprintPage() {
   const flowWrapperRef = useRef<HTMLDivElement | null>(null);
@@ -1108,13 +1071,18 @@ export function ActionBlueprintPage() {
   }, [runSteps]);
   const flowNodes = useMemo<BlueprintFlowNode[]>(() => {
     return nodes.map((node) => ({
+      ...(() => {
+        const height = nodeHeightPx(node);
+        return {
+          initialHeight: height,
+          height,
+        };
+      })(),
       id: node.id,
       type: 'blueprintNode',
       position: { x: node.position.x * FLOW_UNIT, y: node.position.y * FLOW_UNIT },
       initialWidth: NODE_WIDTH,
-      initialHeight: NODE_MIN_HEIGHT,
       width: NODE_WIDTH,
-      height: NODE_MIN_HEIGHT,
       selected: selectedIds.includes(node.id),
       draggable: node.type !== 'start',
       data: {
@@ -1131,17 +1099,13 @@ export function ActionBlueprintPage() {
       target: edge.target,
       sourceHandle: edge.sourcePort || 'out',
       targetHandle: edge.targetPort || 'in',
-      type: 'smoothstep',
+      type: 'default',
       selected: selectedEdgeId === edge.id,
       data: { sourcePort: edge.sourcePort || 'out', targetPort: edge.targetPort || 'in' },
       style: {
         stroke: selectedEdgeId === edge.id
           ? 'hsl(var(--primary))'
-          : edge.sourcePort === 'false'
-            ? 'hsl(var(--accent-coral))'
-            : edge.sourcePort === 'true'
-              ? 'hsl(var(--accent-mint))'
-              : 'hsl(var(--muted-foreground))',
+          : portEdgeStroke(edge.sourcePort || 'out'),
         strokeWidth: selectedEdgeId === edge.id ? 4 : 2.5,
       },
     }));
@@ -2418,9 +2382,9 @@ export function ActionBlueprintPage() {
               </div>
               <ReactFlow
                 nodes={flowNodes}
-                edges={[]}
+                edges={flowEdges}
                 defaultNodes={flowNodes}
-                defaultEdges={[]}
+                defaultEdges={flowEdges}
                 nodeTypes={flowNodeTypes}
                 defaultViewport={viewport}
                 viewport={liveViewport}
@@ -2470,16 +2434,6 @@ export function ActionBlueprintPage() {
                   className="!hidden !border !border-border !bg-card/88 !shadow-subtle !backdrop-blur-xl md:!block"
                 />
               </ReactFlow>
-              <BlueprintFlowEdgesOverlay
-                nodes={nodes}
-                edges={edges}
-                selectedEdgeId={selectedEdgeId}
-                viewport={liveViewport}
-                onSelect={(edgeId) => {
-                  setSelectedEdgeId(edgeId);
-                  setSelectedIds([]);
-                }}
-              />
             </div>
           </CardContent>
         </Card>

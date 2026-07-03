@@ -49,10 +49,16 @@ function buildManifest(browser) {
   if (browser === 'chrome') {
     delete manifest.browser_specific_settings;
   } else if (browser === 'firefox') {
+    manifest.background = {
+      scripts: ['background.js']
+    };
     manifest.browser_specific_settings = {
       gecko: {
         id: 'aru-pause@yuaru.com',
-        strict_min_version: '121.0'
+        strict_min_version: '142.0',
+        data_collection_permissions: {
+          required: ['none']
+        }
       }
     };
   }
@@ -62,15 +68,10 @@ function buildManifest(browser) {
 
 function nextBuildVersion() {
   const state = readVersionState();
-  state.build += 1;
-  if (state.build > 65535) {
-    const parts = parseBaseVersion(state.base);
-    parts[2] += 1;
-    state.base = parts.join('.');
-    state.build = 1;
-  }
+  const version = state.version;
+  state.version = incrementPatchVersion(version);
   writeFileSync(versionFile, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
-  return `${state.base}.${state.build}`;
+  return version;
 }
 
 function readVersionState() {
@@ -78,18 +79,37 @@ function readVersionState() {
   if (existsSync(versionFile)) {
     state = JSON.parse(readFileSync(versionFile, 'utf8'));
   }
-  const base = typeof state?.base === 'string' ? state.base : '0.1.0';
-  const build = Number.isInteger(state?.build) ? state.build : 0;
-  parseBaseVersion(base);
-  return { base, build: Math.max(0, build) };
+  const legacyBase = typeof state?.base === 'string' ? state.base : '';
+  const version = typeof state?.version === 'string'
+    ? state.version
+    : legacyBase || '2.0.0';
+  parseExtensionVersion(version);
+  return { version };
 }
 
-function parseBaseVersion(base) {
-  const parts = String(base).split('.').map((value) => Number(value));
+function parseExtensionVersion(version) {
+  const parts = String(version).split('.').map((value) => Number(value));
   if (parts.length !== 3 || parts.some((value) => !Number.isInteger(value) || value < 0 || value > 65535)) {
-    throw new Error('browser-extension/version.json base must be three integers between 0 and 65535');
+    throw new Error('browser-extension/version.json version must be three integers between 0 and 65535');
   }
   return parts;
+}
+
+function incrementPatchVersion(version) {
+  const parts = parseExtensionVersion(version);
+  parts[2] += 1;
+  if (parts[2] > 65535) {
+    parts[1] += 1;
+    parts[2] = 0;
+  }
+  if (parts[1] > 65535) {
+    parts[0] += 1;
+    parts[1] = 0;
+  }
+  if (parts[0] > 65535) {
+    throw new Error('browser-extension version major cannot exceed 65535');
+  }
+  return parts.join('.');
 }
 
 function writeManifest(targetDir, browser) {

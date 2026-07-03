@@ -3,15 +3,24 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Cable, Menu, X } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { adminNav } from '@/shared/config/navigation';
 import { cn } from '@/shared/lib/utils';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
 import { Button, LinkButton } from '@/components/ui/button';
 import { Tooltip } from '@/components/ui/tooltip';
+import { readJson } from '@/shared/api/http';
 
-function getActiveLabel(pathname: string) {
-  const active = adminNav.find((item) => pathname === item.href || pathname.startsWith(`${item.href}/`));
+type AdminAccess = {
+  isAdmin?: boolean;
+};
+
+function getVisibleNav(isAdmin: boolean) {
+  return adminNav.filter((item) => !item.adminOnly || isAdmin);
+}
+
+function getActiveLabel(pathname: string, isAdmin: boolean) {
+  const active = getVisibleNav(isAdmin).find((item) => pathname === item.href || pathname.startsWith(`${item.href}/`));
   return active?.label || '방송 관리';
 }
 
@@ -35,11 +44,12 @@ function Brand({ onClick }: { onClick?: () => void }) {
   );
 }
 
-function NavList({ onNavigate }: { onNavigate?: () => void }) {
+function NavList({ onNavigate, isAdmin }: { onNavigate?: () => void; isAdmin: boolean }) {
   const pathname = usePathname();
+  const nav = getVisibleNav(isAdmin);
   return (
     <nav className="grid gap-1">
-      {adminNav.map((item) => {
+      {nav.map((item) => {
         const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
         const Icon = item.icon;
         return (
@@ -65,11 +75,23 @@ function NavList({ onNavigate }: { onNavigate?: () => void }) {
 
 export function AdminShell({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
   const pathname = usePathname();
-  const title = getActiveLabel(pathname);
+  const title = getActiveLabel(pathname, isAdmin);
+
+  useEffect(() => {
+    let alive = true;
+    readJson<AdminAccess>('/api/arubot-admin/me').then((status) => {
+      if (alive) setIsAdmin(status?.isAdmin === true);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   const quickNav = useMemo(
     () =>
-      adminNav
+      getVisibleNav(isAdmin)
         .filter((item) => ['/dashboard', '/connection', '/commands', '/points', '/roulette'].includes(item.href))
         .map((item) => ({
           ...item,
@@ -84,7 +106,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
                     ? '포인트'
                     : '룰렛',
         })),
-    [],
+    [isAdmin],
   );
 
   return (
@@ -92,7 +114,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-[var(--shell-sidebar)] border-r bg-card/90 p-[var(--page-gutter)] backdrop-blur-xl xl:block">
         <Brand />
         <div className="mt-5 max-h-[calc(100vh-7rem)] overflow-y-auto pr-1">
-          <NavList />
+          <NavList isAdmin={isAdmin} />
         </div>
       </aside>
 
@@ -129,7 +151,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
                 </Button>
               </Tooltip>
             </div>
-            <NavList onNavigate={() => setOpen(false)} />
+            <NavList isAdmin={isAdmin} onNavigate={() => setOpen(false)} />
           </aside>
         </div>
       ) : null}

@@ -157,12 +157,17 @@ function renderState(state) {
   $('#failedCount').textContent = String(state.stats?.failed || 0);
   $('#currentVersionText').textContent = state.version || '확인 중';
   if (update.latestVersion) $('#latestVersionText').textContent = update.latestVersion;
-  if (typeof update.updateAvailable === 'boolean') $('#installUpdateButton').disabled = !update.updateAvailable;
+  if (typeof update.updateAvailable === 'boolean') {
+    $('#installUpdateButton').disabled = !update.updateAvailable || !!update.readyToApply || update.status === 'downloading';
+  }
   if (update.status === 'downloading' && update.progress?.percent != null) {
     $('#updateStatusText').textContent = `업데이트를 다운로드하고 있습니다. ${Math.round(Number(update.progress.percent || 0))}%`;
     $('#installUpdateButton').disabled = true;
+  } else if (update.status === 'ready' || update.readyToApply) {
+    $('#updateStatusText').textContent = '업데이트 파일이 준비됐습니다. 프로그램을 종료한 뒤 다시 열면 새 버전으로 시작합니다.';
+    $('#installUpdateButton').disabled = true;
   } else if (update.status === 'installing') {
-    $('#updateStatusText').textContent = '업데이트를 설치하기 위해 프로그램을 재시작합니다.';
+    $('#updateStatusText').textContent = '업데이트를 조용히 적용하고 있습니다.';
     $('#installUpdateButton').disabled = true;
   } else if (update.status === 'error' && update.error) {
     $('#updateStatusText').textContent = `업데이트 확인에 실패했습니다. ${update.error}`;
@@ -346,13 +351,13 @@ $('#installUpdateButton').addEventListener('click', () => run(async () => {
   try {
     latestUpdate = await window.aruLocal.installUpdate();
     $('#latestVersionText').textContent = latestUpdate.latestVersion || '확인 완료';
-    $('#updateStatusText').textContent = latestUpdate.installing
-      ? '다운로드가 끝났습니다. 프로그램을 재시작하며 업데이트를 적용합니다.'
+    $('#updateStatusText').textContent = latestUpdate.readyToApply
+      ? '업데이트 파일이 준비됐습니다. 프로그램을 종료한 뒤 다시 열면 새 버전으로 시작합니다.'
       : latestUpdate.opened
-      ? '자동 업데이트를 사용할 수 없어 수동 설치 파일을 열었습니다.'
+      ? '업데이트 설치 파일을 열었습니다.'
       : '이미 최신 버전을 사용 중입니다.';
   } finally {
-    $('#installUpdateButton').disabled = !latestUpdate?.updateAvailable;
+    $('#installUpdateButton').disabled = !latestUpdate?.updateAvailable || !!latestUpdate?.readyToApply || !!latestUpdate?.downloaded;
   }
 }));
 

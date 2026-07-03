@@ -11,7 +11,7 @@ Chrome/Firefox용 영상 후원 감지 확장 프로그램입니다. CHZZK, CIME
    - `npm run extension:build`
    - Chrome ZIP: `dist/browser-extension/aru-pause-chrome-v<version>.zip`
    - Firefox ZIP: `dist/browser-extension/aru-pause-firefox-v<version>.zip`
-   - 빌드할 때마다 `browser-extension/version.json`의 빌드 번호가 증가하고 매니페스트 버전도 함께 바뀝니다.
+   - 첫 빌드는 `2.0.0`으로 생성되고, 이후 빌드할 때마다 `browser-extension/version.json`의 패치 버전이 `2.0.1`, `2.0.2`처럼 증가하며 매니페스트 버전도 함께 바뀝니다.
 3. 확장 팝업에서 `Overlay URLs`를 열고 네 서비스의 오버레이 주소를 저장합니다.
 4. `Monitoring`을 켭니다.
 

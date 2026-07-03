@@ -7,7 +7,7 @@ import { AlertTriangle, CheckCircle2, Info, XCircle } from 'lucide-react';
 
 export function Providers({ children }: { children: React.ReactNode }) {
   return (
-    <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+    <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false} themes={['light', 'dark']} disableTransitionOnChange>
       <TooltipProvider delayDuration={220} skipDelayDuration={80}>
         {children}
         <Toaster

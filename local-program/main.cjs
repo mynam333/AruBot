@@ -1,5 +1,6 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage } = require('electron');
 const { autoUpdater } = require('electron-updater');
+const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -90,9 +91,11 @@ let updateState = {
   latestVersion: null,
   updateAvailable: false,
   downloaded: false,
+  readyToApply: false,
   progress: null,
   error: null,
 };
+let pendingInstallerUpdate = null;
 let stats = {
   claimed: 0,
   completed: 0,
@@ -103,6 +106,10 @@ let stats = {
 
 function dataPath(fileName) {
   return path.join(app.getPath('userData'), fileName);
+}
+
+function tempUpdatePath(fileName) {
+  return path.join(app.getPath('temp'), 'arubot-local-updates', fileName);
 }
 
 function emitState() {
@@ -236,6 +243,53 @@ function writeJson(fileName, value) {
   fs.writeFileSync(dataPath(fileName), JSON.stringify(value, null, 2), 'utf8');
 }
 
+function deleteJson(fileName) {
+  try {
+    fs.rmSync(dataPath(fileName), { force: true });
+  } catch {}
+}
+
+function loadPendingUpdate() {
+  const pending = readJson('pending-update.json', null);
+  if (!pending?.installerPath || !pending?.latestVersion) return null;
+  if (!fs.existsSync(pending.installerPath)) {
+    deleteJson('pending-update.json');
+    return null;
+  }
+  if (compareVersions(pending.latestVersion, app.getVersion()) <= 0) {
+    deleteJson('pending-update.json');
+    return null;
+  }
+  pendingInstallerUpdate = pending;
+  setUpdateState({
+    status: 'ready',
+    latestVersion: pending.latestVersion,
+    updateAvailable: true,
+    downloaded: true,
+    readyToApply: true,
+    error: null,
+    progress: null,
+  });
+  return pending;
+}
+
+function persistPendingInstallerUpdate(update, installerPath) {
+  const pending = {
+    latestVersion: update.latestVersion,
+    installerPath,
+    sha256: update.sha256 || '',
+    downloadedAt: new Date().toISOString(),
+  };
+  pendingInstallerUpdate = pending;
+  writeJson('pending-update.json', pending);
+  return pending;
+}
+
+function clearPendingInstallerUpdate() {
+  pendingInstallerUpdate = null;
+  deleteJson('pending-update.json');
+}
+
 function loadConfig() {
   const persisted = readJson('config.json', {});
   const vault = readJson('vault.json', {});
@@ -357,7 +411,7 @@ function getUpdaterFeedUrl() {
 
 function configureAutoUpdater() {
   autoUpdater.autoDownload = false;
-  autoUpdater.autoInstallOnAppQuit = false;
+  autoUpdater.autoInstallOnAppQuit = true;
   autoUpdater.allowPrerelease = false;
   autoUpdater.disableWebInstaller = true;
   autoUpdater.setFeedURL({ provider: 'generic', url: getUpdaterFeedUrl() });
@@ -465,12 +519,62 @@ async function downloadInstaller(update) {
     const hash = crypto.createHash('sha256').update(buffer).digest('hex');
     if (hash !== update.sha256) throw new Error('다운로드한 설치 파일의 무결성 확인에 실패했습니다.');
   }
-  const updateDir = path.join(app.getPath('temp'), 'arubot-local-updates');
+  const updateDir = tempUpdatePath('');
   fs.mkdirSync(updateDir, { recursive: true });
+  for (const fileName of fs.readdirSync(updateDir)) {
+    if (/^AruBot-Local-Program-.+\.exe$/i.test(fileName) || /^apply-arubot-update-.+\.(ps1|cmd)$/i.test(fileName)) {
+      fs.rmSync(path.join(updateDir, fileName), { force: true });
+    }
+  }
   const fileName = path.basename(update.fileName || 'AruBot-Local-Program.exe');
   const installerPath = path.join(updateDir, fileName);
   fs.writeFileSync(installerPath, buffer);
   return installerPath;
+}
+
+function quotePowerShellString(value) {
+  return `'${String(value || '').replaceAll("'", "''")}'`;
+}
+
+function scheduleSilentInstallerOnQuit() {
+  const pending = pendingInstallerUpdate;
+  if (!pending?.installerPath || process.platform !== 'win32') return false;
+  if (!fs.existsSync(pending.installerPath)) {
+    clearPendingInstallerUpdate();
+    return false;
+  }
+
+  const helperPath = tempUpdatePath(`apply-arubot-update-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}.ps1`);
+  fs.mkdirSync(path.dirname(helperPath), { recursive: true });
+  const script = [
+    '$ErrorActionPreference = "SilentlyContinue"',
+    `$pidToWait = ${process.pid}`,
+    `$installer = ${quotePowerShellString(pending.installerPath)}`,
+    'while (Get-Process -Id $pidToWait) { Start-Sleep -Milliseconds 500 }',
+    'if (Test-Path -LiteralPath $installer) {',
+    '  $process = Start-Process -FilePath $installer -ArgumentList "/S" -WindowStyle Hidden -Wait -PassThru',
+    '  if ($process.ExitCode -eq 0) { Remove-Item -LiteralPath $installer -Force }',
+    '}',
+    'Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force',
+    '',
+  ].join('\r\n');
+  fs.writeFileSync(helperPath, script, 'utf8');
+  const child = spawn('powershell.exe', [
+    '-NoProfile',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-WindowStyle',
+    'Hidden',
+    '-File',
+    helperPath,
+  ], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  child.unref();
+  clearPendingInstallerUpdate();
+  return true;
 }
 
 async function apiFetch(pathname, options = {}) {
@@ -1369,6 +1473,7 @@ ipcMain.handle('update:check', async () => {
           latestVersion,
           updateAvailable: result.updateAvailable,
           downloaded: false,
+          readyToApply: false,
           error: null,
         });
         addLog(result.updateAvailable ? 'info' : 'success', result.updateAvailable ? `새 버전 ${latestVersion}을 찾았습니다.` : '최신 버전을 사용 중입니다.');
@@ -1383,6 +1488,7 @@ ipcMain.handle('update:check', async () => {
       latestVersion: manifestUpdate.latestVersion,
       updateAvailable: manifestUpdate.updateAvailable,
       downloaded: false,
+      readyToApply: false,
       error: null,
     });
     addLog(manifestUpdate.updateAvailable ? 'info' : 'success', manifestUpdate.updateAvailable ? `새 버전 ${manifestUpdate.latestVersion}을 찾았습니다.` : '최신 버전을 사용 중입니다.');
@@ -1396,31 +1502,29 @@ ipcMain.handle('update:install', async () => {
   const update = await fetchUpdateManifest();
   if (!update.updateAvailable) return { ...update, opened: false };
   if (app.isPackaged) {
-    setUpdateState({ status: 'downloading', checking: false, updateAvailable: true, latestVersion: update.latestVersion, error: null, progress: null });
+    setUpdateState({ status: 'downloading', checking: false, updateAvailable: true, latestVersion: update.latestVersion, downloaded: false, readyToApply: false, error: null, progress: null });
     try {
       await checkForUpdatesWithElectronUpdater();
       const info = await downloadUpdateWithElectronUpdater();
-      setUpdateState({ status: 'installing', downloaded: true, progress: null });
-      addLog('success', '업데이트 다운로드가 끝났습니다. 프로그램을 재시작하며 조용히 적용합니다.');
-      setTimeout(() => {
-        autoUpdater.quitAndInstall(true, true);
-      }, 700);
-      return { ...update, electronUpdater: true, opened: false, installing: true, info };
+      setUpdateState({ status: 'ready', downloaded: true, readyToApply: true, progress: null, error: null });
+      addLog('success', '업데이트 다운로드가 끝났습니다. 프로그램을 종료하면 조용히 적용됩니다.');
+      return { ...update, electronUpdater: true, opened: false, downloaded: true, readyToApply: true, info };
     } catch (error) {
       setUpdateState({ status: 'error', error: error.message || String(error), progress: null });
-      addLog('error', '인앱 업데이트 설치 준비 실패. 설치 파일 실행 방식으로 전환합니다.', error.message || String(error));
+      addLog('error', '인앱 업데이트 준비 실패. 숨김 설치 예약 방식으로 전환합니다.', error.message || String(error));
     }
   }
   addLog('info', `업데이트 ${update.latestVersion} 다운로드를 시작합니다.`);
   const installerPath = await downloadInstaller(update);
-  const openResult = await shell.openPath(installerPath);
-  if (openResult) throw new Error(openResult);
-  addLog('success', '업데이트 설치 파일을 실행했습니다. 설치가 끝나면 프로그램을 다시 열어주세요.');
-  return { ...update, opened: true, installerPath };
+  persistPendingInstallerUpdate(update, installerPath);
+  setUpdateState({ status: 'ready', checking: false, latestVersion: update.latestVersion, updateAvailable: true, downloaded: true, readyToApply: true, progress: null, error: null });
+  addLog('success', '업데이트 파일을 내려받았습니다. 프로그램을 종료하면 설치 화면 없이 적용됩니다.');
+  return { ...update, opened: false, downloaded: true, readyToApply: true, manualInstaller: true };
 });
 
 app.whenReady().then(() => {
   loadConfig();
+  loadPendingUpdate();
   createWindow();
   if (config.autoStart && config.token) {
     setTimeout(() => {
@@ -1429,7 +1533,10 @@ app.whenReady().then(() => {
   }
 });
 
-app.on('before-quit', () => stopAgent());
+app.on('before-quit', () => {
+  scheduleSilentInstallerOnQuit();
+  stopAgent();
+});
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });

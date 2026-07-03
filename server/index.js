@@ -9,7 +9,7 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
-import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, getSessionUserId, listChannelPoints, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, getChannelPoints, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, deletePlatformTokens, deletePlatformAccount, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps, validateSecretEncryptionConfig, getPgPoolStatus } from './supabase.js';
+import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, getSessionUserId, listChannelPoints, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, getChannelPoints, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, deletePlatformTokens, deletePlatformAccount, getAppUserAdminStatus, getYoutubeBotProfile, upsertYoutubeBotProfile, updateYoutubeBotProfileTokens, markYoutubeBotProfileStatus, deleteYoutubeBotProfile, getYoutubeStreamerChannel, upsertYoutubeStreamerChannel, markYoutubeStreamerChannelModeratorRegistered, deleteYoutubeStreamerChannel, listYoutubeStreamerChannelsByYoutubeChannelId, updateYoutubeStreamerChannelLive, updateYoutubeStreamerChannelWebsub, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps, validateSecretEncryptionConfig, getPgPoolStatus } from './supabase.js';
 import { createPlatformProfileService } from './platform-profiles.js';
 import { WebSocketServer, WebSocket } from 'ws';
 
@@ -31,6 +31,7 @@ app.set('trust proxy', 1);
 const PORT = process.env.PORT || process.env.SERVER_PORT || 3001;
 const INSTANCE_ID = 'inst_' + Math.random().toString(16).slice(2) + '_' + Date.now().toString(36);
 const PROCESS_ROLE = process.env.ARUBOT_PROCESS_ROLE || 'api-runtime';
+const youtubeBotOAuthPendingStore = new Map(); // ownerUserId -> { tokens, channels, createdAt }
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'https://arubot.yuaru.com';
 const BACKEND_ORIGIN = process.env.BACKEND_ORIGIN || 'https://arubotapi.yuaru.com';
 const SERVER_STARTED_AT = new Date().toISOString();
@@ -163,6 +164,7 @@ app.use((req, res, next) => {
 app.use(cors(corsOptions));
 // Explicit preflight support for all routes
 app.options('*', cors(corsOptions));
+app.use(process.env.YOUTUBE_WEBSUB_CALLBACK_PATH || '/api/youtube/websub/callback', express.text({ type: ['application/atom+xml', 'application/xml', 'text/xml', '*/*'], limit: '1mb' }));
 app.use(express.json({ limit: '5mb' }));
 app.use(cookieParser());
 app.use(rejectUntrustedBrowserOrigin);
@@ -627,6 +629,7 @@ class ResourceManager {
             (now - channelContext.lastActivity) > this.sessionExpiryThreshold) {
 
             videoDonationQueues.delete(sid);
+            pvdAdminSockets.delete(sid);
 
             const timer = videoDonationTimers.get(sid);
             if (timer) {
@@ -640,6 +643,7 @@ class ResourceManager {
         } catch (error) {
           videoDonationQueues.delete(sid);
           videoDonationTimers.delete(sid);
+          pvdAdminSockets.delete(sid);
           results.sessionsCleanedUp++;
           results.errors.push(`Failed to validate session ${sid}: ${error.message}`);
         }
@@ -690,6 +694,31 @@ class ResourceManager {
           pvdSidSockets.delete(sid);
           results.sessionsCleanedUp++;
           results.errors.push(`Failed to validate PVD session ${sid}: ${error.message}`);
+        }
+      }
+
+      for (const [sid, sockets] of pvdAdminSockets.entries()) {
+        results.sessionsProcessed++;
+
+        try {
+          const channelContext = await getChannelContext(sid);
+          if (!channelContext ||
+            (now - channelContext.lastActivity) > this.sessionExpiryThreshold) {
+
+            for (const ws of sockets) {
+              try {
+                ws.close(1001, 'Session expired');
+              } catch { }
+            }
+
+            pvdAdminSockets.delete(sid);
+            results.sessionsCleanedUp++;
+            console.log(`[ResourceManager] Cleaned up expired PVD admin socket session: ${sid}`);
+          }
+        } catch (error) {
+          pvdAdminSockets.delete(sid);
+          results.sessionsCleanedUp++;
+          results.errors.push(`Failed to validate PVD admin session ${sid}: ${error.message}`);
         }
       }
 
@@ -1579,6 +1608,7 @@ async function broadcastToChannelBySid(sid, tokenType, message, specificToken = 
 const videoDonationQueues = new Map(); // sid -> array of requests
 const videoDonationTimers = new Map(); // sid -> NodeJS.Timeout
 const pvdSidSockets = new Map(); // sid -> Set<WebSocket>
+const pvdAdminSockets = new Map(); // sid -> Set<WebSocket>
 const pvdTokenToSid = new Map(); // token -> sid (in-memory reverse index)
 
 // =============================
@@ -3953,10 +3983,7 @@ setInterval(() => {
 }, 60 * 60 * 1000);
 
 // Determine if a sid is currently considered LIVE for macro purposes.
-// Uses the same logic as isLiveAllowedForSid but optimized for macro system.
-// Policy:
-// - If settings.onlyWhenLive is falsy (default), treat as live.
-// - If settings.onlyWhenLive is true, check actual stream status via Chzzk API.
+// Checks every connected streaming platform instead of assuming CHZZK-only live state.
 async function isSidLive(sid) {
   // Validate input
   if (!sid || typeof sid !== 'string') {
@@ -3973,31 +4000,8 @@ async function isSidLive(sid) {
       return true;
     }
 
-    // onlyWhenLive is true: check actual CHZZK stream status only with CHZZK channel ids.
-    const channelUids = await resolveChzzkChannelUidsForSid(sid, settings);
-
-    if (!channelUids.length) {
-      // No channels configured, can't determine live status
-      return false;
-    }
-
-    // Check if any configured channel is live
-    for (const uid of channelUids) {
-      try {
-        const r = await axiosGetWithRetry(`https://api.chzzk.naver.com/service/v2/channels/${encodeURIComponent(uid)}/live-detail`);
-        const content = r?.data?.content || r?.data || {};
-        const status = String(content?.status || '').toLowerCase();
-        if (status === 'open') {
-          return true; // Found at least one live channel
-        }
-      } catch (e) {
-        console.warn(`[isSidLive] API check failed for channel ${uid}:`, e?.code || e?.message || e);
-        // Continue checking other channels
-      }
-    }
-
-    // No live channels found
-    return false;
+    const info = await getLiveInfoForSid(sid);
+    return !!info?.live;
 
   } catch (error) {
     // If we can't get settings, default to not live for safety
@@ -4014,27 +4018,8 @@ async function isSidActuallyLive(sid) {
   }
 
   try {
-    const settings = await getBotSettings(sid) || {};
-    const channelUids = await resolveChzzkChannelUidsForSid(sid, settings);
-
-    if (!channelUids.length) {
-      return false;
-    }
-
-    for (const uid of channelUids) {
-      try {
-        const r = await axiosGetWithRetry(`https://api.chzzk.naver.com/service/v2/channels/${encodeURIComponent(uid)}/live-detail`);
-        const content = r?.data?.content || r?.data || {};
-        const status = String(content?.status || '').toLowerCase();
-        if (status === 'open') {
-          return true;
-        }
-      } catch (e) {
-        console.warn(`[isSidActuallyLive] API check failed for channel ${uid}:`, e?.code || e?.message || e);
-      }
-    }
-
-    return false;
+    const info = await getLiveInfoForSid(sid);
+    return !!info?.live;
 
   } catch (error) {
     console.warn(`Failed to get bot settings for actual live check (sid: ${sid}):`, error.message);
@@ -4188,50 +4173,111 @@ async function getMacrosCached(sid) {
   }
 }
 
+function getMacroDeliveryTargets() {
+  const targets = [];
+  const seen = new Set();
+  const add = (target) => {
+    if (!target?.sid || !target?.provider || !target?.chatPost) return;
+    const key = `${target.sid}:${target.provider}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    targets.push(target);
+  };
+
+  for (const [sid, entry] of sessionStore.entries()) {
+    if (!entry?.sessionKey) continue;
+    add({
+      sid,
+      provider: 'chzzk',
+      chatPost: makeChzzkChatPost(entry.sessionKey, null, '자동 알림'),
+    });
+  }
+
+  for (const [ownerUserId, entry] of cimeSessionStore.entries()) {
+    if (!entry?.connected) continue;
+    const sid = entry.primarySid || `user:${ownerUserId}`;
+    add({
+      sid,
+      provider: 'cime',
+      ownerUserId,
+      channelId: entry.channelId || null,
+      chatPost: makeCimeChatPost(ownerUserId, '자동 알림'),
+    });
+  }
+
+  for (const [ownerUserId, entry] of youtubeSessionStore.entries()) {
+    if (!entry?.connected && !entry?.liveChatId) continue;
+    const sid = entry.primarySid || `user:${ownerUserId}`;
+    add({
+      sid,
+      provider: 'youtube',
+      ownerUserId,
+      chatPost: makeYoutubeChatPost(ownerUserId, entry.liveChatId || null, '자동 알림'),
+    });
+  }
+
+  return targets;
+}
+
+async function isMacroDeliveryTargetLive(target) {
+  const provider = String(target?.provider || '').toLowerCase();
+  const sid = String(target?.sid || '');
+  if (!sid) return false;
+
+  if (provider === 'cime') {
+    const live = await refreshCimeLiveStatus(target.ownerUserId, sid, target.channelId).catch(() => false);
+    if (live) return true;
+    const cached = liveStatusCache.get(sid);
+    return cached?.provider === 'cime' && cached.live === true && Date.now() - Number(cached.ts || 0) < 2 * 60 * 1000;
+  }
+
+  if (provider === 'youtube') {
+    const state = await refreshYoutubeLiveStatus(target.ownerUserId, sid, { ttlMs: 30 * 1000 }).catch(() => null);
+    return !!state?.live;
+  }
+
+  const info = await getLiveInfoForSid(sid).catch(() => null);
+  return !!info?.live && (!info.provider || info.provider === 'chzzk');
+}
+
 setInterval(async () => {
   try {
-    // Iterate active sessions only
-    for (const [sid, entry] of sessionStore.entries()) {
+    for (const target of getMacroDeliveryTargets()) {
+      const sid = target.sid;
 
-      const live = await getMacroLiveCached(sid);
-      if (!live) continue; // Only run while actually live (regardless of onlyWhenLive setting)
+      const live = await isMacroDeliveryTargetLive(target);
+      if (!live) continue;
       const macros = await getMacrosCached(sid);
       if (!macros.length) continue;
-      if (!entry.sessionKey) continue; // need session to post chat
-      let accessToken = null;
-      try { accessToken = await getValidAccessToken(sid); } catch { accessToken = null; }
-      if (!accessToken) continue;
-
-      const url = `${OPENAPI_BASE}/open/v1/chats/send`;
 
       // Process macros without detailed logging
 
       // Process each macro independently using the new timer manager
       let macrosSentCount = 0;
       for (const m of macros) {
+        const timerMacroId = `${m.id}:${target.provider}`;
         // Check if this specific macro should be sent based on its individual timer
-        if (macroTimerManager.shouldSendMacro(sid, m.id, m.intervalSec)) {
-          const msg = String(m.message || '').slice(0, 1000);
+        if (macroTimerManager.shouldSendMacro(sid, timerMacroId, m.intervalSec)) {
+          let msg = String(m.message || '').slice(0, 1000);
+          try {
+            msg = String(await substituteAllPlaceholders(String(m.message || ''), sid, '', '') || '').slice(0, 1000);
+          } catch { }
           let sendSuccess = false;
           let errorDetails = null;
           const sendStartTime = Date.now();
 
           try {
-            const response = await axios.post(url, { message: msg }, {
-              params: { sessionKey: entry.sessionKey },
-              headers: { Authorization: `Bearer ${accessToken}` },
-              timeout: 5000 // 5 second timeout to prevent hanging
-            });
+            const response = await sendChatByPost(sid, target.chatPost, msg, { timeout: 5000 });
 
             // Check response status for additional validation
-            if (response.status >= 200 && response.status < 300) {
+            if (response != null) {
               sendSuccess = true;
               const responseTime = Date.now() - sendStartTime;
 
               // Mark macro as sent silently
-              macroTimerManager.markMacroSent(sid, m.id);
+              macroTimerManager.markMacroSent(sid, timerMacroId);
             } else {
-              throw new Error(`Unexpected response status: ${response.status}`);
+              throw new Error('Macro chat send returned empty response');
             }
           } catch (error) {
             // Enhanced error handling with categorization
@@ -4246,7 +4292,7 @@ setInterval(async () => {
             sendSuccess = false;
 
             // Record the failure for backoff calculation
-            macroTimerManager.recordFailure(sid, m.id, errorDetails);
+            macroTimerManager.recordFailure(sid, timerMacroId, errorDetails);
 
             // For critical errors, consider invalidating cache to refresh session
             if (errorDetails.status === 401 || errorDetails.status === 403) {
@@ -4590,6 +4636,7 @@ app.post('/api/video-donation/reorder', async (req, res) => {
     }
     try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
     scheduleNextPvdAutoPop(sid);
+    notifyPvdAdminSubscribers(sid, 'reordered').catch(() => null);
     return res.json({ ok: true });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to reorder' });
@@ -4612,6 +4659,8 @@ app.post('/api/video-donation/delete', async (req, res) => {
       try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
       broadcastPvdStart(sid);
       scheduleNextPvdAutoPop(sid);
+    } else {
+      notifyPvdAdminSubscribers(sid, 'deleted').catch(() => null);
     }
     return res.json({ ok: true });
   } catch (e) {
@@ -4655,6 +4704,7 @@ app.post('/api/video-donation/delete-refund', async (req, res) => {
           try { if (ws.readyState === 1) ws.send(msg, { compress: false }); } catch { }
         }
       }
+      notifyPvdAdminSubscribers(sid, 'deleted_refunded').catch(() => null);
     }
     return res.json({ ok: true });
   } catch (e) {
@@ -4666,6 +4716,54 @@ function getVideoQueue(sid) {
   let q = videoDonationQueues.get(sid);
   if (!q) { q = []; videoDonationQueues.set(sid, q); }
   return q;
+}
+
+async function getPvdQueueSnapshot(sid, reason = 'sync') {
+  const q = getVideoQueue(sid);
+  const state = pvdPlaybackState.get(sid) || null;
+  const current = q[0] || null;
+  const volume = await getPvdVolumeForSid(sid).catch(() => 100);
+  return {
+    type: 'video-donation.queue',
+    reason,
+    items: q,
+    currentItem: current,
+    waitingItems: q.slice(1),
+    queueSize: q.length,
+    waitingSize: Math.max(0, q.length - 1),
+    startedAt: current ? state?.baseStartMs || null : null,
+    paused: current ? state?.paused === true : null,
+    atSec: current ? getCurrentAtSec(sid) : 0,
+    elapsedSec: current ? getCurrentPvdElapsedSec(sid) : 0,
+    volume,
+    serverNow: Date.now(),
+  };
+}
+
+async function notifyPvdAdminSubscribers(sid, reason = 'queue_changed') {
+  const set = pvdAdminSockets.get(sid);
+  if (!set || !set.size) return;
+  const payload = await getPvdQueueSnapshot(sid, reason).catch(() => null);
+  if (!payload) return;
+  const text = JSON.stringify(payload);
+  for (const ws of Array.from(set)) {
+    try {
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === 1) ws.send(text, { compress: false });
+      else set.delete(ws);
+    } catch {
+      set.delete(ws);
+    }
+  }
+  if (set.size === 0) pvdAdminSockets.delete(sid);
+}
+
+async function getPvdAdminSidFromRequest(req) {
+  const byKey = await getPartitionIdByApiKey(req).catch(() => null);
+  if (byKey) return byKey;
+  const sidToken = getCookieSid(req);
+  if (!sidToken) return null;
+  const userId = await getSessionUserId(sidToken).catch(() => null);
+  return userId ? `user:${String(userId)}` : null;
 }
 
 // Playback state per sid for sync.
@@ -4737,6 +4835,7 @@ async function broadcastPvdControl(sid, message) {
       try { if (ws.readyState === 1) ws.send(text, { compress: false }); } catch { }
     }
   }
+  notifyPvdAdminSubscribers(sid, payload.op === 'volume' ? 'volume_changed' : 'playback_control').catch(() => null);
   return payload;
 }
 
@@ -4834,6 +4933,7 @@ async function broadcastPvdStart(sid) {
     }
 
     console.log(`[PVD Broadcast] Start message sent to ${result.success} connections in channel`);
+    notifyPvdAdminSubscribers(sid, 'playback_started').catch(() => null);
 
     // Reschedule timer for new head
     try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
@@ -4858,6 +4958,7 @@ async function broadcastPvdStart(sid) {
         try { if (ws.readyState === 1) { ws.send(msg, { compress: false }); } } catch { }
       }
     }
+    notifyPvdAdminSubscribers(sid, 'playback_started').catch(() => null);
   }
 }
 
@@ -5978,11 +6079,23 @@ async function parsePvdMediaInput(input, { allowSearch = true } = {}) {
     } catch { }
   }
   if (tiktokId) {
+    const embed = new URL(`https://www.tiktok.com/player/v1/${tiktokId}`);
+    embed.searchParams.set('autoplay', '1');
+    embed.searchParams.set('controls', '1');
+    embed.searchParams.set('progress_bar', '1');
+    embed.searchParams.set('play_button', '1');
+    embed.searchParams.set('volume_control', '1');
+    embed.searchParams.set('fullscreen_button', '1');
+    embed.searchParams.set('timestamp', '1');
+    embed.searchParams.set('loop', '0');
+    embed.searchParams.set('rel', '0');
+    embed.searchParams.set('native_context_menu', '0');
+    embed.searchParams.set('closed_caption', '0');
     return {
       provider: 'tiktok',
       mediaId: tiktokId,
       originalUrl: tiktokUrl,
-      embedUrl: `https://www.tiktok.com/player/v1/${tiktokId}?autoplay=1&controls=1&progress_bar=1&play_button=1&volume_control=1&fullscreen_button=1`,
+      embedUrl: embed.toString(),
     };
   }
 
@@ -6101,6 +6214,18 @@ async function executeActionVariableTokens(sid, text, context = {}) {
     }
   }
   return jobs;
+}
+
+function stripActionVariableTokens(text) {
+  return String(text || '').replace(/\$\{\s*(?:action|automation|blueprint)::([^}]+)\s*\}/ig, '').trim();
+}
+
+async function executeAndStripActionVariableTokens(sid, text, context = {}) {
+  const source = String(text || '');
+  const hasActionToken = /\$\{\s*(?:action|automation|blueprint)::([^}]+)\s*\}/i.test(source);
+  if (!hasActionToken) return { text: source, used: false, jobs: [] };
+  const jobs = await executeActionVariableTokens(sid, source, context);
+  return { text: stripActionVariableTokens(source), used: true, jobs };
 }
 
 async function startRouletteSpin(sid, rouletteName, userId, username, opts = {}) {
@@ -6484,6 +6609,22 @@ async function executeRouletteResultCommand(sid, commandText, userId, username, 
         }
       }
 
+      if (allowExecute && typeof responseToSend === 'string') {
+        const actionResult = await executeAndStripActionVariableTokens(sid, responseToSend, {
+          source: 'roulette-command',
+          platform: chatPostProvider || 'chzzk',
+          command: { keyword: matchedKeyword || '', text: commandText, ruleId: r.id || null, ruleName: r.name || null },
+          user: { userId, username },
+          chatPost: (isCimeChatPost || isYoutubeChatPost)
+            ? chatPost
+            : makeChzzkChatPost(entry?.sessionKey || null, null, username),
+        });
+        if (actionResult.used) {
+          responseToSend = actionResult.text;
+          ruleUsed = true;
+        }
+      }
+
       if (responseToSend && String(responseToSend).length > 0) {
         try {
           const finalMsg = '[룰렛 결과] ' + String(responseToSend);
@@ -6630,6 +6771,20 @@ async function getLiveInfoForSid(sid) {
   }
   try {
     const info = await fetchLiveDetail(channelUids[0]);
+    if (info?.live) {
+      liveInfoCache.set(sid, { ts: now, info });
+      return info;
+    }
+    const cimeInfo = await fetchCimeLiveInfoForSid(sid);
+    if (cimeInfo?.live) {
+      liveInfoCache.set(sid, { ts: now, info: cimeInfo });
+      return cimeInfo;
+    }
+    const youtubeInfo = await fetchYoutubeLiveInfoForSid(sid);
+    if (youtubeInfo?.live) {
+      liveInfoCache.set(sid, { ts: now, info: youtubeInfo });
+      return youtubeInfo;
+    }
     liveInfoCache.set(sid, { ts: now, info });
     return info;
   } catch {
@@ -6830,6 +6985,31 @@ function readFiniteNumber(...values) {
   return null;
 }
 
+function parseLiveTimestamp(value, fallback = null) {
+  if (value == null || value === '') return fallback;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    return numeric < 1000000000000 ? numeric * 1000 : numeric;
+  }
+  const parsed = Date.parse(String(value));
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function isCimeLiveContentOpen(content) {
+  if (!content || typeof content !== 'object') return false;
+  if (content.live === true || content.isLive === true || content.openLive === true || content.isStreaming === true) return true;
+  const rawStatus = String(content.status || content.liveStatus || content.state || content.broadcastStatus || content.streamStatus || '').trim().toLowerCase();
+  if (!rawStatus) return false;
+  if (['closed', 'close', 'offline', 'end', 'ended', 'stop', 'stopped', 'inactive', 'ready', 'standby', 'scheduled', 'not_open', 'not_live'].includes(rawStatus)) return false;
+  if (rawStatus.includes('offline') || rawStatus.includes('ended') || rawStatus.includes('closed') || rawStatus.includes('not_')) return false;
+  return ['open', 'live', 'onair', 'on_air', 'started', 'start', 'streaming', 'broadcasting'].includes(rawStatus)
+    || rawStatus.includes('live')
+    || rawStatus.includes('onair')
+    || rawStatus.includes('open')
+    || rawStatus.includes('start')
+    || rawStatus.includes('stream');
+}
+
 async function getCimePlatformAccountForSid(sid) {
   const ownerUserId = ownerUserIdFromSid(sid);
   if (!ownerUserId) return null;
@@ -6849,20 +7029,39 @@ async function fetchCimeLiveInfoForSid(sid) {
     const r = await axios.get(`${CIME_OPENAPI_BASE}/v1/${encodeURIComponent(channelId)}/live-status`, { timeout: DEFAULT_TIMEOUT });
     const content = unwrapOpenApiContent(r);
     const status = String(content?.status || content?.liveStatus || content?.state || '').toLowerCase();
-    const live = content?.live === true || content?.isLive === true || ['open', 'live', 'onair', 'on_air'].includes(status);
+    const live = isCimeLiveContentOpen(content);
     const title = content?.liveTitle || content?.title || content?.streamTitle || '';
     const category = content?.categoryName || content?.category || content?.liveCategoryName || '';
     const viewers = Number(content?.viewerCount || content?.currentViewerCount || content?.concurrentUserCount || 0);
-    const startedCandidate = content?.startedAt || content?.openDate || content?.openTime || content?.liveStartAt || null;
-    const startedAtTs = startedCandidate != null && !Number.isNaN(Number(startedCandidate))
-      ? Number(startedCandidate)
-      : (startedCandidate ? Date.parse(String(startedCandidate)) : null);
+    const startedCandidate = content?.startedAt || content?.started_at || content?.openDate || content?.openTime || content?.openedAt || content?.liveStartAt || content?.startTime || content?.createdAt || null;
+    const cached = liveStatusCache.get(sid);
+    const sessionStart = Number(liveSession.get(sid)?.sessionStartTime || 0) || null;
+    const startedAtTs = parseLiveTimestamp(startedCandidate, live ? (cached?.provider === 'cime' ? cached.startTs : null) || sessionStart || Date.now() : null);
     const startedAt = startedAtTs && Number.isFinite(startedAtTs)
       ? new Date(startedAtTs + 9 * 60 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 16)
       : '';
     const channel = content?.channelName || account?.channel_name || account?.channel_handle || '';
     return { status, title, category, viewers, startedAt, startedAtTs, channel, live, raw: content, provider: 'cime' };
   } catch {
+    const cached = liveStatusCache.get(sid);
+    if (cached?.provider === 'cime' && cached.live === true && Date.now() - Number(cached.ts || 0) < 2 * 60 * 1000) {
+      const startedAtTs = Number(cached.startTs || liveSession.get(sid)?.sessionStartTime || Date.now());
+      const startedAt = Number.isFinite(startedAtTs)
+        ? new Date(startedAtTs + 9 * 60 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 16)
+        : '';
+      return {
+        status: 'live',
+        title: '',
+        category: '',
+        viewers: 0,
+        startedAt,
+        startedAtTs,
+        channel: account?.channel_name || account?.channel_handle || '',
+        live: true,
+        raw: { source: 'recent_cime_event' },
+        provider: 'cime'
+      };
+    }
     return null;
   }
 }
@@ -7741,6 +7940,11 @@ const YOUTUBE_AUTH_URL = process.env.YOUTUBE_AUTH_URL || 'https://accounts.googl
 const YOUTUBE_TOKEN_URL = process.env.YOUTUBE_TOKEN_URL || 'https://oauth2.googleapis.com/token';
 const YOUTUBE_REVOKE_URL = process.env.YOUTUBE_REVOKE_URL || 'https://oauth2.googleapis.com/revoke';
 const YOUTUBE_STREAM_PATH = process.env.YOUTUBE_STREAM_PATH || '/liveChat/messages/stream';
+const YOUTUBE_BOT_PROFILE_ID = process.env.YOUTUBE_BOT_PROFILE_ID || 'default';
+const YOUTUBE_WEBSUB_HUB_URL = process.env.YOUTUBE_WEBSUB_HUB_URL || 'https://pubsubhubbub.appspot.com/subscribe';
+const YOUTUBE_WEBSUB_CALLBACK_PATH = process.env.YOUTUBE_WEBSUB_CALLBACK_PATH || '/api/youtube/websub/callback';
+const YOUTUBE_WEBSUB_VERIFY_TOKEN = process.env.YOUTUBE_WEBSUB_VERIFY_TOKEN || '';
+const YOUTUBE_WEBSUB_RETRY_DELAYS_MS = [15 * 1000, 60 * 1000, 3 * 60 * 1000, 5 * 60 * 1000];
 const PLATFORM_PROFILE_TIMEOUT_MS = Number(process.env.PLATFORM_PROFILE_TIMEOUT_MS || 2500);
 const platformProfiles = createPlatformProfileService({
   chzzkApiBase: CHZZK_UNOFFICIAL_API_BASE,
@@ -8196,8 +8400,19 @@ setInterval(() => {
 console.log('[Memory] Periodic cleanup and monitoring started');
 
 function getCookieSid(req) {
-  const sid = req.cookies.sid;
-  return sid;
+  if (req.cookies?.sid) return req.cookies.sid;
+  const rawCookie = String(req.headers?.cookie || '');
+  if (!rawCookie) return null;
+  for (const part of rawCookie.split(';')) {
+    const [rawName, ...rawValue] = part.split('=');
+    if (String(rawName || '').trim() !== 'sid') continue;
+    try {
+      return decodeURIComponent(rawValue.join('=').trim());
+    } catch {
+      return rawValue.join('=').trim();
+    }
+  }
+  return null;
 }
 
 // =============================
@@ -9814,6 +10029,16 @@ function getAuthRedirectUrl(req, params = {}) {
   return redirectUrl.toString();
 }
 
+function getArubotAdminRedirectUrl(req, params = {}) {
+  const base = FRONTEND_ORIGIN || process.env.APP_REDIRECT_AFTER_LOGIN || `${req.protocol}://${req.get('host')}`;
+  const redirectUrl = new URL('/arubot-admin', base);
+  for (const [key, value] of Object.entries(params)) {
+    if (value == null || value === '') redirectUrl.searchParams.delete(key);
+    else redirectUrl.searchParams.set(key, String(value));
+  }
+  return redirectUrl.toString();
+}
+
 function getSameOriginReturnUrl(req, rawReturnTo) {
   const raw = String(rawReturnTo || '').trim();
   if (!raw) return null;
@@ -9882,13 +10107,14 @@ function cleanupOAuthStateStore() {
   }
 }
 
-function createOAuthState(provider, req) {
+function createOAuthState(provider, req, extra = {}) {
   cleanupOAuthStateStore();
   const state = createSignedOAuthState(provider);
   oauthStateStore.set(state, {
     provider: String(provider || ''),
     createdAt: Date.now(),
     sid: getCookieSid(req) || null,
+    extra: extra && typeof extra === 'object' ? { ...extra } : {},
   });
   return state;
 }
@@ -9911,6 +10137,8 @@ function consumeOAuthState(provider, state, cookieState) {
 
   return {
     ok: storeMatches || signedCookieMatches,
+    record: storeMatches ? record : null,
+    extra: storeMatches ? (record.extra || {}) : {},
     cookieMatches,
     storeMatches,
     signedMatches: signedCookieMatches,
@@ -10157,6 +10385,27 @@ async function getCurrentSessionUserId(req) {
   const sidToken = getCookieSid(req);
   if (!sidToken) return null;
   try { return await getSessionUserId(sidToken); } catch { return null; }
+}
+
+async function requireCurrentAdminUser(req, res) {
+  const ownerUserId = await getCurrentSessionUserId(req);
+  if (!ownerUserId) {
+    res.status(401).json({ error: 'Login required' });
+    return null;
+  }
+  const admin = await getAppUserAdminStatus(ownerUserId).catch(() => null);
+  if (admin?.isAdmin !== true) {
+    res.status(403).json({ error: 'AruBot admin required' });
+    return null;
+  }
+  return { ...admin, userId: ownerUserId };
+}
+
+async function getCurrentAdminUserForCallback(req) {
+  const ownerUserId = await getCurrentSessionUserId(req);
+  if (!ownerUserId) return null;
+  const admin = await getAppUserAdminStatus(ownerUserId).catch(() => null);
+  return admin?.isAdmin === true ? { ...admin, userId: ownerUserId } : null;
 }
 
 const AUTOMATION_SOUND_QUOTA_BYTES = Number(process.env.AUTOMATION_SOUND_QUOTA_BYTES || 10 * 1024 * 1024);
@@ -10721,8 +10970,51 @@ async function getValidYoutubeAccessToken(ownerUserId) {
   return tokens.accessToken;
 }
 
-async function youtubeApiGet(pathname, ownerUserId, params = {}, options = {}) {
-  const accessToken = await getValidYoutubeAccessToken(ownerUserId);
+async function getValidYoutubeBotProfile() {
+  let profile = await getYoutubeBotProfile(YOUTUBE_BOT_PROFILE_ID);
+  if (!profile?.accessToken) {
+    const error = new Error('YouTube central bot is not configured');
+    error.code = 'youtube_bot_not_configured';
+    error.status = 409;
+    throw error;
+  }
+  const expiresAt = new Date(profile.expiresAt);
+  if (isNaN(expiresAt.getTime()) || expiresAt <= new Date(Date.now() + 60 * 1000)) {
+    if (!profile.refreshToken) {
+      await markYoutubeBotProfileStatus(profile.id, { status: 'reauth_required', lastError: 'No YouTube bot refresh token stored' }).catch(() => null);
+      const error = new Error('No YouTube bot refresh token stored');
+      error.code = 'youtube_bot_reauth_required';
+      error.status = 401;
+      throw error;
+    }
+    let payload;
+    try {
+      payload = await exchangeYoutubeToken({
+        client_id: YOUTUBE_CLIENT_ID,
+        client_secret: YOUTUBE_CLIENT_SECRET,
+        refresh_token: profile.refreshToken,
+        grant_type: 'refresh_token'
+      });
+    } catch (e) {
+      const message = e?.response?.data?.error_description || e?.response?.data?.error || e?.message || 'youtube_bot_token_refresh_failed';
+      await markYoutubeBotProfileStatus(profile.id, { status: 'reauth_required', lastError: message }).catch(() => null);
+      const error = new Error(String(message));
+      error.code = 'youtube_bot_reauth_required';
+      error.status = e?.response?.status || 401;
+      throw error;
+    }
+    const tokens = normalizeGoogleTokenPayload(payload, profile);
+    profile = await updateYoutubeBotProfileTokens(profile.id, tokens);
+  }
+  return profile;
+}
+
+async function getValidYoutubeBotAccessToken() {
+  const profile = await getValidYoutubeBotProfile();
+  return profile.accessToken;
+}
+
+async function youtubeApiGetWithAccessToken(pathname, accessToken, params = {}, options = {}) {
   const relativePath = String(pathname || '').replace(/^\/+/, '');
   const url = new URL(relativePath, YOUTUBE_API_BASE.endsWith('/') ? YOUTUBE_API_BASE : `${YOUTUBE_API_BASE}/`);
   for (const [key, value] of Object.entries(params || {})) {
@@ -10742,8 +11034,48 @@ async function youtubeApiGet(pathname, ownerUserId, params = {}, options = {}) {
   return response;
 }
 
+async function youtubeApiGetPublic(pathname, params = {}, options = {}) {
+  const relativePath = String(pathname || '').replace(/^\/+/, '');
+  const url = new URL(relativePath, YOUTUBE_API_BASE.endsWith('/') ? YOUTUBE_API_BASE : `${YOUTUBE_API_BASE}/`);
+  for (const [key, value] of Object.entries(params || {})) {
+    if (value == null || value === '') continue;
+    url.searchParams.set(key, String(value));
+  }
+  if (YT_API_KEY) url.searchParams.set('key', YT_API_KEY);
+  const headers = { Accept: 'application/json' };
+  if (!YT_API_KEY) {
+    const token = await getValidYoutubeBotAccessToken();
+    headers.Authorization = `Bearer ${token}`;
+  }
+  return axios.get(url.toString(), {
+    headers,
+    timeout: options.timeout || DEFAULT_TIMEOUT,
+    responseType: options.responseType || 'json',
+    signal: options.signal
+  });
+}
+
+async function youtubeApiGet(pathname, ownerUserId, params = {}, options = {}) {
+  const accessToken = await getValidYoutubeAccessToken(ownerUserId);
+  return youtubeApiGetWithAccessToken(pathname, accessToken, params, options);
+}
+
 async function youtubeApiPost(pathname, ownerUserId, params = {}, body = {}, options = {}) {
   const accessToken = await getValidYoutubeAccessToken(ownerUserId);
+  const relativePath = String(pathname || '').replace(/^\/+/, '');
+  const url = new URL(relativePath, YOUTUBE_API_BASE.endsWith('/') ? YOUTUBE_API_BASE : `${YOUTUBE_API_BASE}/`);
+  for (const [key, value] of Object.entries(params || {})) {
+    if (value != null && value !== '') url.searchParams.set(key, String(value));
+  }
+  const response = await axios.post(url.toString(), body, {
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json', Accept: 'application/json' },
+    timeout: options.timeout || DEFAULT_TIMEOUT
+  });
+  return response;
+}
+
+async function youtubeBotApiPost(pathname, params = {}, body = {}, options = {}) {
+  const accessToken = await getValidYoutubeBotAccessToken();
   const relativePath = String(pathname || '').replace(/^\/+/, '');
   const url = new URL(relativePath, YOUTUBE_API_BASE.endsWith('/') ? YOUTUBE_API_BASE : `${YOUTUBE_API_BASE}/`);
   for (const [key, value] of Object.entries(params || {})) {
@@ -10768,10 +11100,250 @@ async function fetchYoutubeMyChannelWithAccessToken(accessToken) {
   return normalizeYoutubeProfile(item);
 }
 
+async function fetchYoutubeMyChannelsWithAccessToken(accessToken) {
+  const url = new URL('channels', YOUTUBE_API_BASE.endsWith('/') ? YOUTUBE_API_BASE : `${YOUTUBE_API_BASE}/`);
+  url.searchParams.set('part', 'snippet');
+  url.searchParams.set('mine', 'true');
+  url.searchParams.set('maxResults', '50');
+  const response = await axios.get(url.toString(), {
+    headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
+    timeout: DEFAULT_TIMEOUT
+  });
+  return (Array.isArray(response?.data?.items) ? response.data.items : [])
+    .map(normalizeYoutubeProfile)
+    .filter((profile) => profile.channelId);
+}
+
 async function fetchYoutubeMyChannel(ownerUserId) {
   const response = await youtubeApiGet('channels', ownerUserId, { part: 'snippet', mine: 'true' });
   const item = Array.isArray(response?.data?.items) ? response.data.items[0] : null;
   return normalizeYoutubeProfile(item);
+}
+
+function publicYoutubeBotProfile(profile) {
+  if (!profile) return null;
+  return {
+    id: profile.id,
+    selectedChannelId: profile.selectedChannelId,
+    selectedChannelTitle: profile.selectedChannelTitle,
+    selectedChannelHandle: profile.selectedChannelHandle,
+    selectedChannelThumbnailUrl: profile.selectedChannelThumbnailUrl,
+    status: profile.status,
+    lastVerifiedAt: profile.lastVerifiedAt,
+    lastError: profile.lastError,
+    configuredBy: profile.configuredBy,
+    updatedAt: profile.updatedAt,
+    reauthRequired: isYoutubeReauthRequired({ lastError: profile.lastError, status: profile.status === 'reauth_required' ? 401 : 0 })
+  };
+}
+
+function cleanupYoutubeBotPendingStore() {
+  const now = Date.now();
+  for (const [key, pending] of youtubeBotOAuthPendingStore.entries()) {
+    if (!pending || now - Number(pending.createdAt || 0) > 10 * 60 * 1000) youtubeBotOAuthPendingStore.delete(key);
+  }
+}
+
+function normalizeYoutubeChannelInput(input) {
+  const raw = String(input || '').trim();
+  if (!raw) return { inputValue: '', channelId: '', handle: '' };
+  let text = raw;
+  if (!/^https?:\/\//i.test(text) && /^(www\.)?youtube\.com\//i.test(text)) text = `https://${text}`;
+  try {
+    const url = new URL(text);
+    const parts = url.pathname.split('/').map((part) => decodeURIComponent(part)).filter(Boolean);
+    const channelIndex = parts.findIndex((part) => part.toLowerCase() === 'channel');
+    if (channelIndex >= 0 && parts[channelIndex + 1]) {
+      return { inputValue: raw, channelId: parts[channelIndex + 1], handle: '' };
+    }
+    const handlePart = parts.find((part) => part.startsWith('@'));
+    if (handlePart) return { inputValue: raw, channelId: '', handle: handlePart.replace(/^@/, '') };
+    if (url.hostname.toLowerCase().includes('youtube.com') && parts.length === 1 && parts[0].startsWith('@')) {
+      return { inputValue: raw, channelId: '', handle: parts[0].replace(/^@/, '') };
+    }
+  } catch { }
+  if (/^UC[a-zA-Z0-9_-]{20,}$/.test(raw)) return { inputValue: raw, channelId: raw, handle: '' };
+  const handle = raw.replace(/^@/, '').replace(/^https?:\/\/(www\.)?youtube\.com\/@/i, '').trim();
+  return { inputValue: raw, channelId: '', handle };
+}
+
+async function resolveYoutubeChannelFromInput(input) {
+  const parsed = normalizeYoutubeChannelInput(input);
+  if (!parsed.inputValue) throw new Error('YouTube channel URL or handle is required');
+  if (parsed.channelId) {
+    try {
+      const response = await youtubeApiGetPublic('channels', { part: 'snippet', id: parsed.channelId }, { timeout: 5000 });
+      const item = Array.isArray(response?.data?.items) ? response.data.items[0] : null;
+      const profile = normalizeYoutubeProfile(item);
+      return {
+        youtubeChannelId: parsed.channelId,
+        youtubeHandle: profile.channelHandle || null,
+        title: profile.channelName || null,
+        thumbnailUrl: profile.channelImageUrl || null,
+        inputValue: parsed.inputValue,
+        resolved: !!profile.channelId,
+        metadata: { parsed, raw: item || null }
+      };
+    } catch {
+      return {
+        youtubeChannelId: parsed.channelId,
+        youtubeHandle: null,
+        title: null,
+        thumbnailUrl: null,
+        inputValue: parsed.inputValue,
+        resolved: true,
+        metadata: { parsed }
+      };
+    }
+  }
+  if (!parsed.handle) throw new Error('YouTube channel URL or handle is required');
+  const handle = parsed.handle.startsWith('@') ? parsed.handle : `@${parsed.handle}`;
+  let response = await youtubeApiGetPublic('channels', { part: 'snippet', forHandle: handle }, { timeout: 5000 }).catch(() => null);
+  let item = Array.isArray(response?.data?.items) ? response.data.items[0] : null;
+  if (!item) {
+    response = await youtubeApiGetPublic('search', { part: 'snippet', type: 'channel', q: handle, maxResults: 1 }, { timeout: 5000 }).catch(() => null);
+    const found = Array.isArray(response?.data?.items) ? response.data.items[0] : null;
+    const foundId = found?.snippet?.channelId || found?.id?.channelId || null;
+    if (foundId) {
+      const detail = await youtubeApiGetPublic('channels', { part: 'snippet', id: foundId }, { timeout: 5000 }).catch(() => null);
+      item = Array.isArray(detail?.data?.items) ? detail.data.items[0] : null;
+    }
+  }
+  const profile = normalizeYoutubeProfile(item);
+  if (!profile.channelId) {
+    return {
+      youtubeChannelId: null,
+      youtubeHandle: parsed.handle,
+      title: null,
+      thumbnailUrl: null,
+      inputValue: parsed.inputValue,
+      resolved: false,
+      metadata: { parsed, resolutionError: 'channel_not_found' }
+    };
+  }
+  return {
+    youtubeChannelId: profile.channelId,
+    youtubeHandle: profile.channelHandle || parsed.handle,
+    title: profile.channelName,
+    thumbnailUrl: profile.channelImageUrl,
+    inputValue: parsed.inputValue,
+    resolved: true,
+    metadata: { parsed, raw: profile.metadata?.raw || null }
+  };
+}
+
+function getYoutubeWebsubCallbackUrl(req) {
+  const origin = BACKEND_ORIGIN || `${req.protocol}://${req.get('host')}`;
+  return `${String(origin).replace(/\/$/, '')}${YOUTUBE_WEBSUB_CALLBACK_PATH}`;
+}
+
+function getYoutubeStudioModeratorUrl(channelId) {
+  const id = String(channelId || '').trim();
+  return id
+    ? `https://studio.youtube.com/channel/${encodeURIComponent(id)}/settings/community`
+    : 'https://studio.youtube.com/settings/community';
+}
+
+function getYoutubeChannelUrl(channelId) {
+  return channelId ? `https://www.youtube.com/channel/${encodeURIComponent(channelId)}` : null;
+}
+
+function getYoutubeWatchUrl(videoId) {
+  return videoId ? `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}` : null;
+}
+
+async function subscribeYoutubeChannelWebsub(req, streamerChannel) {
+  if (!streamerChannel?.youtubeChannelId) return { ok: false, status: 'unresolved_channel' };
+  const callback = getYoutubeWebsubCallbackUrl(req);
+  const topic = `https://www.youtube.com/feeds/videos.xml?channel_id=${encodeURIComponent(streamerChannel.youtubeChannelId)}`;
+  const leaseSeconds = 864000;
+  const body = new URLSearchParams({
+    'hub.mode': 'subscribe',
+    'hub.topic': topic,
+    'hub.callback': callback,
+    'hub.verify': 'async',
+    'hub.lease_seconds': String(leaseSeconds)
+  });
+  if (YOUTUBE_WEBSUB_VERIFY_TOKEN) body.set('hub.verify_token', YOUTUBE_WEBSUB_VERIFY_TOKEN);
+  await axios.post(YOUTUBE_WEBSUB_HUB_URL, body.toString(), {
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    timeout: DEFAULT_TIMEOUT
+  });
+  const expiresAt = new Date(Date.now() + leaseSeconds * 1000).toISOString();
+  await updateYoutubeStreamerChannelWebsub(streamerChannel.ownerUserId, {
+    websubStatus: 'subscribe_requested',
+    websubLeaseExpiresAt: expiresAt,
+    lastError: null
+  }).catch(() => null);
+  return { ok: true, status: 'subscribe_requested', callback, topic, expiresAt };
+}
+
+async function fetchYoutubeVideoLiveDetails(videoId) {
+  const id = String(videoId || '').trim();
+  if (!id) return null;
+  const response = await youtubeApiGetPublic('videos', {
+    part: 'snippet,liveStreamingDetails',
+    id
+  }, { timeout: 7000 });
+  const item = Array.isArray(response?.data?.items) ? response.data.items[0] : null;
+  if (!item) return null;
+  const details = item.liveStreamingDetails || {};
+  const snippet = item.snippet || {};
+  const startedAt = details.actualStartTime || details.scheduledStartTime || null;
+  return {
+    provider: 'youtube',
+    broadcastId: id,
+    videoId: id,
+    videoUrl: getYoutubeWatchUrl(id),
+    liveChatId: details.activeLiveChatId || null,
+    title: snippet.title || '',
+    channel: snippet.channelTitle || '',
+    channelId: snippet.channelId || null,
+    startedAt,
+    startedAtTs: startedAt ? Date.parse(startedAt) : null,
+    live: !!details.activeLiveChatId,
+    raw: item
+  };
+}
+
+async function fetchYoutubeActiveLiveForChannel(channelId) {
+  const id = String(channelId || '').trim();
+  if (!id) return null;
+  const response = await youtubeApiGetPublic('search', {
+    part: 'snippet',
+    channelId: id,
+    type: 'video',
+    eventType: 'live',
+    maxResults: 1,
+    order: 'date'
+  }, { timeout: 7000 });
+  const item = Array.isArray(response?.data?.items) ? response.data.items[0] : null;
+  const videoId = item?.id?.videoId || null;
+  return videoId ? fetchYoutubeVideoLiveDetails(videoId) : null;
+}
+
+async function refreshYoutubeLiveFromRegisteredChannel(ownerUserId, options = {}) {
+  const streamerChannel = await getYoutubeStreamerChannel(ownerUserId);
+  if (!streamerChannel?.youtubeChannelId) return null;
+  let liveInfo = null;
+  if (streamerChannel.lastDetectedVideoId) {
+    liveInfo = await fetchYoutubeVideoLiveDetails(streamerChannel.lastDetectedVideoId).catch(() => null);
+  }
+  if (!liveInfo?.live && options.allowSearch === true) {
+    liveInfo = await fetchYoutubeActiveLiveForChannel(streamerChannel.youtubeChannelId).catch(() => null);
+  }
+  if (liveInfo?.liveChatId) {
+    await updateYoutubeStreamerChannelLive(ownerUserId, {
+      lastDetectedVideoId: liveInfo.videoId || liveInfo.broadcastId,
+      lastLiveChatId: liveInfo.liveChatId,
+      lastLiveTitle: liveInfo.title,
+      lastLiveStartedAt: liveInfo.startedAt,
+      lastError: null,
+      metadata: { lastVideoUrl: liveInfo.videoUrl }
+    }).catch(() => null);
+    return liveInfo;
+  }
+  return liveInfo;
 }
 
 // GET /api/auth/chzzk/login -> redirect to CHZZK authorize page
@@ -10802,23 +11374,38 @@ app.get('/api/auth/youtube/login', (req, res) => {
     if (!YOUTUBE_CLIENT_ID || !YOUTUBE_CLIENT_SECRET) {
       return res.status(500).json({ error: 'Server not configured with YouTube credentials' });
     }
-    const state = createOAuthState('youtube', req);
-    setOAuthStateCookie(res, 'oauth_state_youtube', state);
+    const mode = String(req.query?.mode || '').trim() === 'central_bot' ? 'central_bot' : 'streamer_oauth';
+    const start = async () => {
+      if (mode === 'central_bot') {
+        const admin = await requireCurrentAdminUser(req, res);
+        if (!admin) return;
+      }
+      const state = createOAuthState('youtube', req, { mode });
+      setOAuthStateCookie(res, 'oauth_state_youtube', state);
 
-    const authUrl = new URL(YOUTUBE_AUTH_URL);
-    authUrl.searchParams.set('client_id', YOUTUBE_CLIENT_ID);
-    authUrl.searchParams.set('redirect_uri', YOUTUBE_REDIRECT_URI);
-    authUrl.searchParams.set('response_type', 'code');
-    authUrl.searchParams.set('scope', YOUTUBE_AUTH_SCOPE);
-    authUrl.searchParams.set('state', state);
-    authUrl.searchParams.set('access_type', 'offline');
-    authUrl.searchParams.set('include_granted_scopes', 'true');
-    authUrl.searchParams.set('prompt', 'consent');
-    return res.redirect(authUrl.toString());
+      const authUrl = new URL(YOUTUBE_AUTH_URL);
+      authUrl.searchParams.set('client_id', YOUTUBE_CLIENT_ID);
+      authUrl.searchParams.set('redirect_uri', YOUTUBE_REDIRECT_URI);
+      authUrl.searchParams.set('response_type', 'code');
+      authUrl.searchParams.set('scope', YOUTUBE_AUTH_SCOPE);
+      authUrl.searchParams.set('state', state);
+      authUrl.searchParams.set('access_type', 'offline');
+      authUrl.searchParams.set('include_granted_scopes', 'true');
+      authUrl.searchParams.set('prompt', 'consent');
+      return res.redirect(authUrl.toString());
+    };
+    return start().catch((e) => {
+      console.error('[YouTube] Login redirect error', e?.message || e);
+      return res.status(500).json({ error: 'YouTube login redirect failed' });
+    });
   } catch (e) {
     console.error('[YouTube] Login redirect error', e?.message || e);
     return res.status(500).json({ error: 'YouTube login redirect failed' });
   }
+});
+
+app.get('/api/youtube/bot/login', (req, res) => {
+  return res.redirect('/api/auth/youtube/login?mode=central_bot');
 });
 
 app.get('/api/auth/youtube/callback', async (req, res) => {
@@ -10863,6 +11450,42 @@ app.get('/api/auth/youtube/callback', async (req, res) => {
     });
     const tokens = normalizeGoogleTokenPayload(tokenPayload);
     if (!tokens.accessToken) throw new Error('YouTube token response did not include access_token');
+
+    const oauthMode = String(stateValidation.extra?.mode || '').trim();
+    if (oauthMode === 'central_bot') {
+      const admin = await getCurrentAdminUserForCallback(req);
+      const ownerUserId = admin?.userId || null;
+      if (!ownerUserId) {
+        return res.redirect(getArubotAdminRedirectUrl(req, { auth: 'error', platform: 'youtube', reason: 'admin_required' }));
+      }
+      const channels = await fetchYoutubeMyChannelsWithAccessToken(tokens.accessToken);
+      if (!channels.length) throw new Error('YouTube channel profile did not include channel id');
+      youtubeBotOAuthPendingStore.set(String(ownerUserId), {
+        tokens,
+        channels,
+        createdAt: Date.now()
+      });
+      if (channels.length === 1) {
+        const channel = channels[0];
+        await upsertYoutubeBotProfile({
+          id: YOUTUBE_BOT_PROFILE_ID,
+          selectedChannelId: channel.channelId,
+          selectedChannelTitle: channel.channelName,
+          selectedChannelHandle: channel.channelHandle,
+          selectedChannelThumbnailUrl: channel.channelImageUrl,
+          accessToken: tokens.accessToken,
+          refreshToken: tokens.refreshToken,
+          tokenType: tokens.tokenType,
+          expiresAt: tokens.expiresAt,
+          scope: tokens.scope,
+          configuredBy: ownerUserId,
+          status: 'active'
+        });
+        youtubeBotOAuthPendingStore.delete(String(ownerUserId));
+        return res.redirect(getArubotAdminRedirectUrl(req, { auth: 'success', platform: 'youtube', reason: 'central_bot_configured' }));
+      }
+      return res.redirect(getArubotAdminRedirectUrl(req, { auth: 'success', platform: 'youtube', reason: 'central_bot_select_channel' }));
+    }
 
     const profile = await fetchYoutubeMyChannelWithAccessToken(tokens.accessToken);
     if (!profile.platformUserId) throw new Error('YouTube channel profile did not include channel id');
@@ -11140,6 +11763,134 @@ app.get('/api/cime/live/me', async (req, res) => {
   }
 });
 
+app.get('/api/arubot-admin/me', async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.json({ userId: null, isAdmin: false });
+    const admin = await getAppUserAdminStatus(ownerUserId).catch(() => null);
+    return res.json({
+      userId: ownerUserId,
+      isAdmin: admin?.isAdmin === true,
+      displayName: admin?.displayName || null,
+      avatarUrl: admin?.avatarUrl || null
+    });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to load AruBot admin status' });
+  }
+});
+
+app.get('/api/youtube/bot/status', async (req, res) => {
+  try {
+    const admin = await requireCurrentAdminUser(req, res);
+    if (!admin) return;
+    const ownerUserId = admin.userId;
+    cleanupYoutubeBotPendingStore();
+    const profile = await getYoutubeBotProfile(YOUTUBE_BOT_PROFILE_ID);
+    const pending = youtubeBotOAuthPendingStore.get(String(ownerUserId)) || null;
+    return res.json({
+      configured: !!profile?.selectedChannelId && profile.status !== 'deleted',
+      profile: publicYoutubeBotProfile(profile),
+      pending: pending ? {
+        channels: (pending.channels || []).map((channel) => ({
+          channelId: channel.channelId,
+          channelName: channel.channelName,
+          channelHandle: channel.channelHandle,
+          channelImageUrl: channel.channelImageUrl
+        })),
+        expiresAt: new Date(Number(pending.createdAt || Date.now()) + 10 * 60 * 1000).toISOString()
+      } : null
+    });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to load YouTube bot status' });
+  }
+});
+
+app.post('/api/youtube/bot/select-channel', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const admin = await requireCurrentAdminUser(req, res);
+    if (!admin) return;
+    const ownerUserId = admin.userId;
+    cleanupYoutubeBotPendingStore();
+    const pending = youtubeBotOAuthPendingStore.get(String(ownerUserId));
+    if (!pending) return res.status(409).json({ error: 'No pending YouTube bot OAuth session' });
+    const requestedChannelId = String(req.body?.channelId || '').trim();
+    const channel = (pending.channels || []).find((item) => String(item.channelId || '') === requestedChannelId);
+    if (!channel) return res.status(400).json({ error: 'Selected channel is not available in the pending OAuth session' });
+    const profile = await upsertYoutubeBotProfile({
+      id: YOUTUBE_BOT_PROFILE_ID,
+      selectedChannelId: channel.channelId,
+      selectedChannelTitle: channel.channelName,
+      selectedChannelHandle: channel.channelHandle,
+      selectedChannelThumbnailUrl: channel.channelImageUrl,
+      accessToken: pending.tokens.accessToken,
+      refreshToken: pending.tokens.refreshToken,
+      tokenType: pending.tokens.tokenType,
+      expiresAt: pending.tokens.expiresAt,
+      scope: pending.tokens.scope,
+      configuredBy: ownerUserId,
+      status: 'active'
+    });
+    youtubeBotOAuthPendingStore.delete(String(ownerUserId));
+    return res.json({ ok: true, profile: publicYoutubeBotProfile(profile) });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to select YouTube bot channel' });
+  }
+});
+
+app.post('/api/youtube/bot/verify', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const admin = await requireCurrentAdminUser(req, res);
+    if (!admin) return;
+    const ownerUserId = admin.userId;
+    const profile = await getValidYoutubeBotProfile();
+    const channels = await fetchYoutubeMyChannelsWithAccessToken(profile.accessToken);
+    const matched = channels.find((channel) => String(channel.channelId || '') === String(profile.selectedChannelId || ''));
+    if (!matched) {
+      const updated = await markYoutubeBotProfileStatus(profile.id, { status: 'reauth_required', lastError: 'Selected bot channel is not available for this OAuth token' });
+      return res.status(409).json({ ok: false, profile: publicYoutubeBotProfile(updated), error: 'Selected bot channel is not available for this OAuth token' });
+    }
+    const updated = await upsertYoutubeBotProfile({
+      id: profile.id,
+      selectedChannelId: matched.channelId,
+      selectedChannelTitle: matched.channelName,
+      selectedChannelHandle: matched.channelHandle,
+      selectedChannelThumbnailUrl: matched.channelImageUrl,
+      accessToken: profile.accessToken,
+      refreshToken: profile.refreshToken,
+      tokenType: profile.tokenType,
+      expiresAt: profile.expiresAt,
+      scope: profile.scope,
+      configuredBy: ownerUserId,
+      status: 'active'
+    });
+    return res.json({ ok: true, profile: publicYoutubeBotProfile(updated) });
+  } catch (e) {
+    const status = e?.status || 500;
+    return res.status(status).json({ error: e?.message || 'Failed to verify YouTube bot channel' });
+  }
+});
+
+app.delete('/api/youtube/bot', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const admin = await requireCurrentAdminUser(req, res);
+    if (!admin) return;
+    const profile = await getYoutubeBotProfile(YOUTUBE_BOT_PROFILE_ID);
+    if (profile?.accessToken) {
+      try {
+        await axios.post(YOUTUBE_REVOKE_URL, new URLSearchParams({ token: profile.accessToken }).toString(), {
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          timeout: DEFAULT_TIMEOUT
+        });
+      } catch { }
+    }
+    await deleteYoutubeBotProfile(YOUTUBE_BOT_PROFILE_ID);
+    for (const key of Array.from(youtubeSessionStore.keys())) closeYoutubeSession(key, 'bot_profile_deleted');
+    return res.json({ ok: true });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to delete YouTube bot profile' });
+  }
+});
+
 app.get('/api/youtube/me', async (req, res) => {
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
@@ -11162,12 +11913,222 @@ app.get('/api/youtube/live/me', async (req, res) => {
   }
 });
 
+app.get('/api/youtube/streamer-channel', async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const botProfile = await getYoutubeBotProfile(YOUTUBE_BOT_PROFILE_ID);
+    const streamerChannel = await getYoutubeStreamerChannel(ownerUserId);
+    return res.json({
+      configured: !!streamerChannel,
+      botConfigured: !!botProfile?.selectedChannelId,
+      botProfile: publicYoutubeBotProfile(botProfile),
+      channel: streamerChannel ? {
+        youtubeChannelId: streamerChannel.youtubeChannelId,
+        youtubeHandle: streamerChannel.youtubeHandle,
+        title: streamerChannel.title,
+        thumbnailUrl: streamerChannel.thumbnailUrl,
+        inputValue: streamerChannel.inputValue,
+        moderatorRegistered: streamerChannel.moderatorRegistered,
+        websubStatus: streamerChannel.websubStatus,
+        lastDetectedVideoId: streamerChannel.lastDetectedVideoId,
+        lastLiveChatId: streamerChannel.lastLiveChatId,
+        lastLiveTitle: streamerChannel.lastLiveTitle,
+        lastError: streamerChannel.lastError,
+        moderatorUrl: getYoutubeStudioModeratorUrl(streamerChannel.youtubeChannelId),
+        botChannelUrl: getYoutubeChannelUrl(botProfile?.selectedChannelId),
+      } : null
+    });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to load YouTube streamer channel' });
+  }
+});
+
+app.post('/api/youtube/streamer-channel', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const botProfile = await getYoutubeBotProfile(YOUTUBE_BOT_PROFILE_ID);
+    if (!botProfile?.selectedChannelId || botProfile.status === 'reauth_required') {
+      return res.status(409).json({ error: 'YouTube central bot is not configured', code: 'youtube_bot_not_configured' });
+    }
+    const input = String(req.body?.channel || req.body?.url || req.body?.handle || '').trim();
+    const resolved = await resolveYoutubeChannelFromInput(input);
+    const websubSecret = `ytws_${crypto.randomBytes(24).toString('base64url')}`;
+    const streamerChannel = await upsertYoutubeStreamerChannel(ownerUserId, {
+      ...resolved,
+      botProfileId: botProfile.id,
+      websubSecret,
+      websubStatus: resolved.youtubeChannelId ? 'pending' : 'unresolved_channel',
+      lastError: resolved.youtubeChannelId ? null : 'channel_id_required_for_websub'
+    });
+    let websub = { ok: false, status: 'unresolved_channel' };
+    if (streamerChannel.youtubeChannelId) {
+      try {
+        websub = await subscribeYoutubeChannelWebsub(req, streamerChannel);
+      } catch (e) {
+        await updateYoutubeStreamerChannelWebsub(ownerUserId, {
+          websubStatus: 'subscribe_failed',
+          websubLeaseExpiresAt: null,
+          lastError: e?.response?.data || e?.message || 'websub_subscribe_failed'
+        }).catch(() => null);
+        websub = { ok: false, status: 'subscribe_failed', error: e?.message || 'websub_subscribe_failed' };
+      }
+    }
+    return res.json({
+      ok: true,
+      resolved: !!streamerChannel.youtubeChannelId,
+      channel: {
+        youtubeChannelId: streamerChannel.youtubeChannelId,
+        youtubeHandle: streamerChannel.youtubeHandle,
+        title: streamerChannel.title,
+        thumbnailUrl: streamerChannel.thumbnailUrl,
+        inputValue: streamerChannel.inputValue,
+        moderatorRegistered: streamerChannel.moderatorRegistered,
+        websubStatus: websub.status || streamerChannel.websubStatus,
+        moderatorUrl: getYoutubeStudioModeratorUrl(streamerChannel.youtubeChannelId),
+        botChannelUrl: getYoutubeChannelUrl(botProfile.selectedChannelId),
+        botChannelTitle: botProfile.selectedChannelTitle || 'AruBot',
+      },
+      instructions: {
+        botChannelUrl: getYoutubeChannelUrl(botProfile.selectedChannelId),
+        botChannelTitle: botProfile.selectedChannelTitle || 'AruBot',
+        moderatorUrl: getYoutubeStudioModeratorUrl(streamerChannel.youtubeChannelId),
+        text: 'YouTube Studio 설정 > 커뮤니티에서 AruBot 채널 URL을 표준 운영자 또는 관리 운영자에 추가한 뒤 저장하세요.'
+      },
+      websub
+    });
+  } catch (e) {
+    const status = e?.status || 500;
+    return res.status(status).json({ error: e?.message || 'Failed to register YouTube streamer channel' });
+  }
+});
+
+app.post('/api/youtube/streamer-channel/moderator-confirmed', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const streamerChannel = await markYoutubeStreamerChannelModeratorRegistered(ownerUserId, true);
+    if (!streamerChannel) return res.status(404).json({ error: 'YouTube streamer channel is not registered' });
+    closeYoutubeSession(ownerUserId, 'moderator_confirmed');
+    ensureYoutubeSession(ownerUserId).catch((e) => {
+      console.warn('[YouTube] Failed to start session after moderator confirmation:', e?.response?.data || e?.message || e);
+    });
+    return res.json({ ok: true, moderatorRegistered: true });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to confirm YouTube moderator registration' });
+  }
+});
+
+app.delete('/api/youtube/streamer-channel', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    closeYoutubeSession(ownerUserId, 'streamer_channel_deleted');
+    await deleteYoutubeStreamerChannel(ownerUserId);
+    return res.json({ ok: true });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to delete YouTube streamer channel' });
+  }
+});
+
+app.get(YOUTUBE_WEBSUB_CALLBACK_PATH, async (req, res) => {
+  const mode = String(req.query['hub.mode'] || '');
+  const challenge = String(req.query['hub.challenge'] || '');
+  const token = String(req.query['hub.verify_token'] || '');
+  if (YOUTUBE_WEBSUB_VERIFY_TOKEN && token !== YOUTUBE_WEBSUB_VERIFY_TOKEN) {
+    return res.status(403).send('invalid verify token');
+  }
+  if ((mode === 'subscribe' || mode === 'unsubscribe') && challenge) {
+    return res.status(200).type('text/plain').send(challenge);
+  }
+  return res.status(400).send('invalid websub verification');
+});
+
+function extractYoutubeWebsubEntries(xml) {
+  const text = String(xml || '');
+  const entries = [];
+  const entryMatches = text.match(/<entry[\s\S]*?<\/entry>/g) || [];
+  for (const entry of entryMatches) {
+    const videoId = (entry.match(/<yt:videoId>([^<]+)<\/yt:videoId>/) || [])[1] || '';
+    const channelId = (entry.match(/<yt:channelId>([^<]+)<\/yt:channelId>/) || [])[1] || '';
+    const title = (entry.match(/<title>([^<]*)<\/title>/) || [])[1] || '';
+    if (videoId && channelId) entries.push({ videoId, channelId, title });
+  }
+  return entries;
+}
+
+function scheduleYoutubeWebsubLiveRetry(ownerUserId, videoId, attempt = 0) {
+  const delay = YOUTUBE_WEBSUB_RETRY_DELAYS_MS[attempt];
+  if (!Number.isFinite(delay)) return;
+  setTimeout(() => {
+    processYoutubeDetectedVideo(ownerUserId, videoId, attempt + 1).catch((e) => {
+      console.warn('[YouTube WebSub] bounded retry failed:', e?.message || e);
+    });
+  }, delay);
+}
+
+async function processYoutubeDetectedVideo(ownerUserId, videoId, nextAttempt = 0) {
+  const liveInfo = await fetchYoutubeVideoLiveDetails(videoId).catch(() => null);
+  if (!liveInfo) {
+    await updateYoutubeStreamerChannelLive(ownerUserId, {
+      lastDetectedVideoId: videoId,
+      lastLiveChatId: null,
+      lastError: 'video_not_found'
+    }).catch(() => null);
+    return null;
+  }
+  if (liveInfo.liveChatId) {
+    await updateYoutubeStreamerChannelLive(ownerUserId, {
+      lastDetectedVideoId: videoId,
+      lastLiveChatId: liveInfo.liveChatId,
+      lastLiveTitle: liveInfo.title,
+      lastLiveStartedAt: liveInfo.startedAt,
+      lastError: null,
+      metadata: { lastVideoUrl: liveInfo.videoUrl }
+    }).catch(() => null);
+    closeYoutubeSession(ownerUserId, 'websub_live_detected');
+    ensureYoutubeSession(ownerUserId).catch((e) => {
+      console.warn('[YouTube WebSub] session start failed:', e?.response?.data || e?.message || e);
+    });
+  } else {
+    await updateYoutubeStreamerChannelLive(ownerUserId, {
+      lastDetectedVideoId: videoId,
+      lastLiveChatId: null,
+      lastLiveTitle: liveInfo.title,
+      lastLiveStartedAt: liveInfo.startedAt,
+      lastError: 'live_chat_not_active_yet',
+      metadata: { lastVideoUrl: liveInfo.videoUrl }
+    }).catch(() => null);
+    scheduleYoutubeWebsubLiveRetry(ownerUserId, videoId, nextAttempt);
+  }
+  return liveInfo;
+}
+
+app.post(YOUTUBE_WEBSUB_CALLBACK_PATH, async (req, res) => {
+  try {
+    const entries = extractYoutubeWebsubEntries(req.body);
+    res.status(204).end();
+    for (const entry of entries) {
+      const streamerChannels = await listYoutubeStreamerChannelsByYoutubeChannelId(entry.channelId).catch(() => []);
+      for (const streamerChannel of streamerChannels) {
+        processYoutubeDetectedVideo(streamerChannel.ownerUserId, entry.videoId).catch((e) => {
+          console.warn('[YouTube WebSub] detected video processing failed:', e?.message || e);
+        });
+      }
+    }
+  } catch (e) {
+    if (!res.headersSent) return res.status(500).send('websub processing failed');
+  }
+});
+
 app.get('/api/youtube/status', async (req, res) => {
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
     const sid = `user:${ownerUserId}`;
-    const account = await getYoutubePlatformAccountForSid(sid);
+    const botProfile = await getYoutubeBotProfile(YOUTUBE_BOT_PROFILE_ID);
+    const streamerChannel = await getYoutubeStreamerChannel(ownerUserId);
     const entry = youtubeSessionStore.get(ownerUserId) || null;
     const shouldRefresh = String(req.query?.refresh || '').toLowerCase() === 'true';
     const liveState = shouldRefresh
@@ -11175,9 +12136,12 @@ app.get('/api/youtube/status', async (req, res) => {
       : (liveStatusCache.get(sid) || null);
     return res.json({
       provider: 'youtube',
-      connected: !!account,
-      channelId: account?.channel_id || account?.platform_user_id || null,
-      channelName: account?.channel_name || null,
+      connected: !!botProfile?.selectedChannelId && !!streamerChannel?.youtubeChannelId,
+      botConfigured: !!botProfile?.selectedChannelId,
+      botProfile: publicYoutubeBotProfile(botProfile),
+      channelId: streamerChannel?.youtubeChannelId || null,
+      channelName: streamerChannel?.title || streamerChannel?.youtubeHandle || null,
+      channelHandle: streamerChannel?.youtubeHandle || null,
       live: !!liveState?.live,
       liveChatId: liveState?.liveChatId || entry?.liveChatId || null,
       broadcastId: liveState?.broadcastId || entry?.broadcastId || null,
@@ -14827,6 +15791,22 @@ async function ensureSession(sid, channelId) {
               }
             }
 
+            if (allowExecute && typeof responseToSend === 'string') {
+              const actionResult = await executeAndStripActionVariableTokens(sid, responseToSend, {
+                source: 'chat-command',
+                platform: 'chzzk',
+                command: { keyword: matchedKeyword || '', text, ruleId: r.id || null, ruleName: r.name || null },
+                user: { userId: resolvedUserId, username: resolvedUsername },
+                chatPost: makeChzzkChatPost(entry.sessionKey, null, resolvedUsername),
+                channelUid: liveState.channelId || entry.channelId || null,
+                channel: { channelUid: liveState.channelId || entry.channelId || null },
+              });
+              if (actionResult.used) {
+                responseToSend = actionResult.text;
+                ruleUsed = true;
+              }
+            }
+
             // Emit WARUDO command event only if execution is allowed (enough points)
             if (allowExecute) {
               try {
@@ -15190,6 +16170,8 @@ const youtubeSessionCreatePromises = new Map(); // ownerUserId -> Promise(entry)
 const youtubeSendQueues = new Map(); // ownerUserId -> Promise
 
 async function getYoutubeChannelId(ownerUserId) {
+  const streamerChannel = await getYoutubeStreamerChannel(ownerUserId).catch(() => null);
+  if (streamerChannel?.youtubeChannelId) return String(streamerChannel.youtubeChannelId);
   const accountChannelId = await resolveChannelIdForOwnerUserId(ownerUserId, { provider: 'youtube', allowFallback: false });
   if (accountChannelId) return accountChannelId;
   const tokens = await getPlatformTokens('youtube', ownerUserId);
@@ -15219,7 +16201,12 @@ function normalizeYoutubeLiveBroadcast(item) {
   };
 }
 
-async function fetchYoutubeActiveLive(ownerUserId) {
+async function fetchYoutubeActiveLive(ownerUserId, options = {}) {
+  const centralLive = await refreshYoutubeLiveFromRegisteredChannel(ownerUserId, { allowSearch: options.allowSearch === true }).catch(() => null);
+  if (centralLive?.liveChatId) return centralLive;
+  const botProfile = await getYoutubeBotProfile(YOUTUBE_BOT_PROFILE_ID).catch(() => null);
+  const streamerChannel = await getYoutubeStreamerChannel(ownerUserId).catch(() => null);
+  if (botProfile?.selectedChannelId || streamerChannel?.youtubeChannelId) return centralLive || null;
   const response = await youtubeApiGet('liveBroadcasts', ownerUserId, {
     part: 'snippet,status,contentDetails',
     mine: 'true',
@@ -15245,7 +16232,7 @@ async function refreshYoutubeLiveStatus(ownerUserId, sid, options = {}) {
 
   let liveInfo = null;
   try {
-    liveInfo = await fetchYoutubeActiveLive(ownerUserId);
+    liveInfo = await fetchYoutubeActiveLive(ownerUserId, { allowSearch: options.force === true || options.allowSearch === true });
   } catch (e) {
     console.warn('[YouTube] Active live lookup failed:', e?.response?.data?.error?.message || e?.message || e);
   }
@@ -15437,7 +16424,7 @@ function rememberYoutubeOutbound(entry, text) {
 }
 
 function isLikelyYoutubeSelfEcho(entry, ev) {
-  if (!entry || String(ev?.userId || '') !== String(entry.channelId || '')) return false;
+  if (!entry || String(ev?.userId || '') !== String(entry.botChannelId || entry.channelId || '')) return false;
   const text = String(ev?.message || '').trim();
   const ts = Number(entry.recentOutboundMessages?.get(text) || 0);
   return !!text && ts > 0 && Date.now() - ts < 2 * 60 * 1000;
@@ -15455,7 +16442,7 @@ async function sendYoutubeChat(ownerUserId, liveChatId, message) {
     }
     if (!targetLiveChatId) throw new Error('No active YouTube liveChatId');
     const messageText = text.slice(0, 200);
-    const response = await youtubeApiPost('liveChat/messages', ownerUserId, { part: 'snippet' }, {
+    const response = await youtubeBotApiPost('liveChat/messages', { part: 'snippet' }, {
       snippet: {
         liveChatId: targetLiveChatId,
         type: 'textMessageEvent',
@@ -15744,6 +16731,19 @@ async function processYoutubeChatAutomation(entry, ev) {
         }
       }
 
+      if (allowExecute) {
+        const actionResult = await executeAndStripActionVariableTokens(sid, cleaned, {
+          source: 'youtube-chat-command',
+          platform: 'youtube',
+          command: { keyword: matchedKeyword || '', text, ruleId: r.id || null, ruleName: r.name || null },
+          user: { userId: resolvedUserId, username: resolvedUsername },
+          chatPost: makeYoutubeChatPost(ownerUserId, entry.liveChatId, resolvedUsername),
+          channelUid: entry.channelId || null,
+          channel: { channelUid: entry.channelId || null },
+        });
+        if (actionResult.used) cleaned = actionResult.text;
+      }
+
       cleaned = String(cleaned || '').trim();
       const replyKey = `${ev.id || ''}:${r.id || matchedKeyword || ''}`;
       if (cleaned && !entry.sentReplies.has(replyKey)) {
@@ -15826,7 +16826,7 @@ function closeYoutubeSession(ownerUserId, reason = 'closed') {
 }
 
 async function openYoutubeChatStream(entry) {
-  const accessToken = await getValidYoutubeAccessToken(entry.ownerUserId);
+  const accessToken = await getValidYoutubeBotAccessToken();
   const path = String(YOUTUBE_STREAM_PATH || '/liveChat/messages/stream').replace(/^\/+/, '');
   const url = new URL(path, YOUTUBE_API_BASE.endsWith('/') ? YOUTUBE_API_BASE : `${YOUTUBE_API_BASE}/`);
   url.searchParams.set('part', 'id,snippet,authorDetails');
@@ -15878,6 +16878,64 @@ async function ensureYoutubeSession(ownerUserId) {
 
   const createPromise = (async () => {
     const sid = `user:${ownerUserId}`;
+    const botProfile = await getValidYoutubeBotProfile();
+    const streamerChannel = await getYoutubeStreamerChannel(ownerUserId);
+    if (!streamerChannel?.youtubeChannelId) {
+      const entry = {
+        provider: 'youtube',
+        ownerUserId,
+        primarySid: sid,
+        channelId: null,
+        botChannelId: botProfile.selectedChannelId,
+        liveChatId: null,
+        broadcastId: null,
+        queue: [],
+        connected: false,
+        processedIds: new Set(),
+        sentReplies: new Set(),
+        recentOutboundMessages: new Map(),
+        nextPageToken: null,
+        abortController: null,
+        stream: null,
+        reconnectTimer: null,
+        reconnectAttempts: 0,
+        lastMessageAt: null,
+        lastError: 'youtube_streamer_channel_not_registered',
+        lastStatus: 409,
+        acceptAfterTs: Date.now() - 2000,
+        closed: false
+      };
+      youtubeSessionStore.set(ownerUserId, entry);
+      return entry;
+    }
+    if (streamerChannel.moderatorRegistered !== true) {
+      const entry = {
+        provider: 'youtube',
+        ownerUserId,
+        primarySid: sid,
+        channelId: streamerChannel.youtubeChannelId,
+        botChannelId: botProfile.selectedChannelId,
+        liveChatId: null,
+        broadcastId: null,
+        queue: [],
+        connected: false,
+        processedIds: new Set(),
+        sentReplies: new Set(),
+        recentOutboundMessages: new Map(),
+        nextPageToken: null,
+        abortController: null,
+        stream: null,
+        reconnectTimer: null,
+        reconnectAttempts: 0,
+        lastMessageAt: null,
+        lastError: 'youtube_bot_moderator_not_confirmed',
+        lastStatus: 409,
+        acceptAfterTs: Date.now() - 2000,
+        closed: false
+      };
+      youtubeSessionStore.set(ownerUserId, entry);
+      return entry;
+    }
     const liveState = await refreshYoutubeLiveStatus(ownerUserId, sid, { force: true });
     const channelId = liveState.channelId || await getYoutubeChannelId(ownerUserId);
     const entry = {
@@ -15885,6 +16943,7 @@ async function ensureYoutubeSession(ownerUserId) {
       ownerUserId,
       primarySid: sid,
       channelId,
+      botChannelId: botProfile.selectedChannelId,
       liveChatId: liveState.liveChatId || null,
       broadcastId: liveState.broadcastId || null,
       queue: [],
@@ -16041,20 +17100,26 @@ async function refreshCimeLiveStatus(ownerUserId, sid, channelId) {
     const r = await axios.get(`${CIME_OPENAPI_BASE}/v1/${encodeURIComponent(cid)}/live-status`);
     const content = unwrapOpenApiContent(r);
     const status = String(content?.status || content?.liveStatus || content?.state || '').toLowerCase();
-    const live = content?.live === true || content?.isLive === true || ['open', 'live', 'onair', 'on_air'].includes(status);
-    liveStatusCache.set(sid, { ts: now, live, provider: 'cime' });
+    const live = isCimeLiveContentOpen(content);
+    const startedCandidate = content?.startedAt || content?.started_at || content?.openDate || content?.openTime || content?.openedAt || content?.liveStartAt || content?.startTime || content?.createdAt || null;
+    const existingStart = cached?.provider === 'cime' ? Number(cached.startTs || 0) || null : null;
+    const sessionStart = Number(liveSession.get(sid)?.sessionStartTime || 0) || null;
+    const startTs = live ? parseLiveTimestamp(startedCandidate, existingStart || sessionStart || now) : null;
+    liveStatusCache.set(sid, { ts: now, live, provider: 'cime', channelId: cid, startTs });
     if (live && !liveSession.get(sid)?.live) {
-      const today = getKstDateString();
-      liveSession.set(sid, { live: true, startDate: today, sessionStartTime: Date.now(), lastUpdate: now });
+      const today = getKstDateString(startTs || now);
+      liveSession.set(sid, { live: true, startDate: today, sessionStartTime: startTs || now, lastUpdate: now });
       try {
         await upsertLiveSessionToDB({
           sid,
           live: true,
           start_date: today,
-          session_start_time: Date.now(),
+          session_start_time: startTs || now,
           last_update: now
         });
       } catch { }
+    } else if (!live && liveSession.get(sid)?.live) {
+      try { await updateSessionState(sid, false, now); } catch { }
     }
     return live;
   } catch {
@@ -16129,6 +17194,8 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
   if (q.length === 1) {
     broadcastPvdStart(sid);
     scheduleNextPvdAutoPop(sid);
+  } else {
+    notifyPvdAdminSubscribers(sid, 'queued').catch(() => null);
   }
   const title = media.title ? (media.title.length > 20 ? media.title.slice(0, 20) + '...' : media.title) : null;
   const baseMsg = title ? `요청을 접수했습니다. ${title}` : '요청을 접수했습니다.';
@@ -16323,6 +17390,18 @@ async function processCimeChatAutomation(entry, ev) {
           cleaned = '룰렛 실행 중 오류가 발생했습니다.';
         }
       }
+      if (allowExecute) {
+        const actionResult = await executeAndStripActionVariableTokens(sid, cleaned, {
+          source: 'cime-chat-command',
+          platform: 'cime',
+          command: { keyword: matchedKeyword || '', text, ruleId: r.id || null, ruleName: r.name || null },
+          user: { userId: resolvedUserId, username: resolvedUsername },
+          chatPost: makeCimeChatPost(ownerUserId, resolvedUsername),
+          channelUid: entry.channelId || null,
+          channel: { channelUid: entry.channelId || null },
+        });
+        if (actionResult.used) cleaned = actionResult.text;
+      }
       cleaned = String(cleaned || '').trim();
       const replyKey = `${ev.id || ''}:${r.id || matchedKeyword || ''}`;
       if (cleaned && !entry.sentReplies.has(replyKey)) {
@@ -16484,12 +17563,14 @@ async function ensureCimeSession(ownerUserId) {
       reconnectTimer: null
     };
     cimeSessionStore.set(ownerUserId, entry);
+    activeSids.set(entry.primarySid, Date.now());
 
     const ws = new WebSocket(url, { handshakeTimeout: 5000 });
     entry.ws = ws;
 
     ws.on('open', async () => {
       entry.connected = true;
+      activeSids.set(entry.primarySid, Date.now());
       try { await ensureCimeSubscribed(entry); } catch (e) { console.error('[CIME] subscribe error', e?.response?.data || e.message); }
       entry.pingTimer = setInterval(() => {
         try {
@@ -16509,6 +17590,7 @@ async function ensureCimeSession(ownerUserId) {
         let i = 0; for (const key of entry.processedIds) { entry.processedIds.delete(key); if (++i >= 200) break; }
       }
       pushEvent(entry, ev);
+      activeSids.set(entry.primarySid, Date.now());
       if (eventName === 'CHAT') {
         processCimeChatAutomation(entry, ev).catch(() => { });
       } else if (eventName === 'DONATION') {
@@ -16809,8 +17891,10 @@ app.get('/api/platforms/status', async (req, res) => {
     }
 
     const youtubeAccount = byProvider.get('youtube') || null;
+    const youtubeBotProfile = await getYoutubeBotProfile(YOUTUBE_BOT_PROFILE_ID).catch(() => null);
+    const youtubeStreamerChannel = await getYoutubeStreamerChannel(ownerUserId).catch(() => null);
     const youtubeEntry = youtubeSessionStore.get(ownerUserId) || null;
-    const youtubeState = refresh && youtubeAccount
+    const youtubeState = refresh && (youtubeAccount || youtubeStreamerChannel)
       ? await refreshYoutubeLiveStatus(ownerUserId, sid, { force: true }).catch(() => liveStatusCache.get(sid))
       : liveStatusCache.get(sid);
 
@@ -16844,15 +17928,16 @@ app.get('/api/platforms/status', async (req, res) => {
       {
         provider: 'youtube',
         label: 'YouTube',
-        connected: !!youtubeAccount,
-        channel: youtubeAccount?.channel_name || youtubeAccount?.channel_id || null,
+        connected: !!youtubeBotProfile?.selectedChannelId && !!youtubeStreamerChannel?.youtubeChannelId,
+        channel: youtubeStreamerChannel?.title || youtubeStreamerChannel?.youtubeChannelId || youtubeAccount?.channel_name || youtubeAccount?.channel_id || null,
         live: youtubeState?.provider === 'youtube' ? !!youtubeState.live : null,
         streamConnected: !!youtubeEntry?.connected,
         queueSize: Array.isArray(youtubeEntry?.queue) ? youtubeEntry.queue.length : 0,
         mode: 'streamList',
         lastError: youtubeEntry?.lastError || null,
         lastStatus: youtubeEntry?.lastStatus || null,
-        reauthRequired: isYoutubeReauthRequired(youtubeEntry),
+        reauthRequired: isYoutubeReauthRequired(youtubeEntry) || youtubeBotProfile?.status === 'reauth_required',
+        botConfigured: !!youtubeBotProfile?.selectedChannelId,
         ignoredDonations: getYoutubeIgnoredDonationSummary(youtubeEntry)
       }
     ];
@@ -17554,6 +18639,7 @@ async function validateWebSocketTokenConnection(token, tokenType, req) {
 
 // WebSocket servers (initialized below)
 let wssPvd; // PVD viewer WS (noServer mode)
+let wssPvdAdmin; // PVD admin queue WS (noServer mode)
 let wssRoulette; // Roulette viewer WS (noServer mode)
 let wssAutomationLocalAgent; // Local automation program WS
 
@@ -17694,6 +18780,65 @@ function registerPvdRoutes() {
 
 // Initialize WebSocket routes (PVD)
 try { registerPvdRoutes(); } catch (e) { console.error('[pvd ws] failed to register routes', e?.message || e); }
+
+function registerPvdAdminRoutes() {
+  console.log('[pvd admin ws] initializing WebSocketServer on /api/video-donation/admin/ws');
+  wssPvdAdmin = new WebSocketServer({
+    noServer: true,
+    maxPayload: 32 * 1024,
+    perMessageDeflate: false,
+  });
+
+  wssPvdAdmin.on('connection', async (ws, req) => {
+    let sid = null;
+    try {
+      sid = await getPvdAdminSidFromRequest(req);
+      if (!sid) {
+        try { ws.close(1008, 'Login required'); } catch { }
+        return;
+      }
+
+      let set = pvdAdminSockets.get(sid);
+      if (!set) { set = new Set(); pvdAdminSockets.set(sid, set); }
+      set.add(ws);
+
+      const keepAlive = setInterval(() => {
+        try { ws.ping(); } catch { }
+      }, 30000);
+
+      const initial = await getPvdQueueSnapshot(sid, 'connected').catch(() => null);
+      if (initial) {
+        try { ws.send(JSON.stringify(initial), { compress: false }); } catch { }
+      }
+
+      ws.on('message', async (raw) => {
+        try {
+          const message = JSON.parse(String(raw || '{}'));
+          if (message?.type === 'ping') {
+            ws.send(JSON.stringify({ type: 'pong', serverNow: Date.now() }), { compress: false });
+          }
+        } catch { }
+      });
+
+      ws.on('close', () => {
+        try { clearInterval(keepAlive); } catch { }
+        const sockets = pvdAdminSockets.get(sid);
+        if (sockets) {
+          sockets.delete(ws);
+          if (sockets.size === 0) pvdAdminSockets.delete(sid);
+        }
+      });
+      ws.on('error', () => {
+        try { ws.close(); } catch { }
+      });
+    } catch (error) {
+      console.error('[pvd admin ws] connection error', error?.message || error);
+      try { ws.close(1011, 'PVD admin websocket error'); } catch { }
+    }
+  });
+}
+
+try { registerPvdAdminRoutes(); } catch (e) { console.error('[pvd admin ws] failed to register routes', e?.message || e); }
 
 // Initialize WebSocket routes (Roulette)
 function registerRouletteRoutes() {
@@ -17998,6 +19143,10 @@ try {
       const upg = req.headers['upgrade'] || '';
       if (u.pathname === '/api/pvd/ws') {
         wssPvd.handleUpgrade(req, socket, head, (ws) => wssPvd.emit('connection', ws, req));
+        return;
+      }
+      if (u.pathname === '/api/video-donation/admin/ws') {
+        wssPvdAdmin.handleUpgrade(req, socket, head, (ws) => wssPvdAdmin.emit('connection', ws, req));
         return;
       }
       if (u.pathname === '/api/roulette/ws') {

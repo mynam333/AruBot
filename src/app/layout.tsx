@@ -3,6 +3,21 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { Providers } from './providers';
 
+const initialThemeScript = `
+(() => {
+  try {
+    const key = 'theme';
+    const stored = window.localStorage.getItem(key);
+    if (stored === 'light' || stored === 'dark') return;
+    const preferred = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    window.localStorage.setItem(key, preferred);
+    document.documentElement.classList.remove('light', 'dark');
+    document.documentElement.classList.add(preferred);
+    document.documentElement.style.colorScheme = preferred;
+  } catch {}
+})();
+`;
+
 export const metadata: Metadata = {
   title: 'AruBot | 방송 참여 관리 콘솔',
   description: 'CHZZK, CIME, YouTube 방송을 위한 명령어, 포인트, 룰렛, 영상 후원 관리 서비스',
@@ -23,6 +38,9 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="ko" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: initialThemeScript }} />
+      </head>
       <body suppressHydrationWarning>
         <Providers>{children}</Providers>
       </body>

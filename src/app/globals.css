@@ -339,13 +339,36 @@ nextjs-portal {
   opacity: 0.92;
 }
 
+.arubot-blueprint-flow .arubot-blueprint-port {
+  background: color-mix(in srgb, var(--port-accent) 12%, hsl(var(--card)) 88%) !important;
+  border-color: color-mix(in srgb, var(--port-accent) 44%, hsl(var(--border)) 56%) !important;
+  color: color-mix(in srgb, var(--port-accent) 74%, hsl(var(--foreground)) 26%) !important;
+}
+
 .arubot-blueprint-flow .react-flow__handle:hover,
 .arubot-blueprint-flow .react-flow__handle.connectingfrom,
 .arubot-blueprint-flow .react-flow__handle.connectingto {
   opacity: 1;
   box-shadow:
-    0 0 0 max(0.25rem, 0.3vw) hsl(var(--primary) / 0.16),
+    0 0 0 max(0.25rem, 0.3vw) color-mix(in srgb, currentColor 18%, transparent),
     0 0.65rem 1.5rem hsl(var(--foreground) / 0.14) !important;
+}
+
+.arubot-blueprint-flow .arubot-blueprint-port:hover,
+.arubot-blueprint-flow .arubot-blueprint-port.connectingfrom,
+.arubot-blueprint-flow .arubot-blueprint-port.connectingto {
+  box-shadow:
+    0 0 0 max(0.22rem, 0.28vw) color-mix(in srgb, var(--port-accent) 18%, transparent),
+    0 0.75rem 1.65rem hsl(var(--foreground) / 0.14) !important;
+}
+
+.arubot-blueprint-flow .react-flow__edge-path {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition:
+    stroke 160ms ease,
+    stroke-width 160ms ease,
+    filter 160ms ease;
 }
 
 .arubot-blueprint-flow .react-flow__connection-path {

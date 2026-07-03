@@ -3,10 +3,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
-import { AlertCircle, Cable, CheckCircle2, ExternalLink, RefreshCw, ShieldCheck, Unlink } from 'lucide-react';
+import { AlertCircle, Cable, CheckCircle2, Copy, ExternalLink, RefreshCw, ShieldCheck, Unlink, X } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
 import { apiUrl, readJson } from '@/shared/api/http';
 import { cn } from '@/shared/lib/utils';
 
@@ -35,6 +36,37 @@ type PlatformAccount = {
       source?: string;
     };
   };
+};
+
+type YoutubeBotProfile = {
+  selectedChannelId?: string | null;
+  selectedChannelTitle?: string | null;
+  selectedChannelHandle?: string | null;
+  selectedChannelThumbnailUrl?: string | null;
+  status?: string | null;
+  lastError?: string | null;
+  updatedAt?: string | null;
+};
+
+type YoutubeStreamerStatus = {
+  configured?: boolean;
+  botConfigured?: boolean;
+  channel?: {
+    youtubeChannelId?: string | null;
+    youtubeHandle?: string | null;
+    title?: string | null;
+    thumbnailUrl?: string | null;
+    inputValue?: string | null;
+    moderatorRegistered?: boolean;
+    websubStatus?: string | null;
+    lastDetectedVideoId?: string | null;
+    lastLiveChatId?: string | null;
+    lastLiveTitle?: string | null;
+    lastError?: string | null;
+    moderatorUrl?: string | null;
+    botChannelUrl?: string | null;
+  } | null;
+  botProfile?: YoutubeBotProfile | null;
 };
 
 const providerConfigs = [
@@ -117,14 +149,22 @@ export function ConnectionPage() {
   const [loading, setLoading] = useState(true);
   const [busyAccount, setBusyAccount] = useState<string | null>(null);
   const [syncingProvider, setSyncingProvider] = useState<ProviderId | 'all' | null>(null);
+  const [youtubeStreamerStatus, setYoutubeStreamerStatus] = useState<YoutubeStreamerStatus | null>(null);
+  const [showYoutubeModal, setShowYoutubeModal] = useState(false);
+  const [youtubeInput, setYoutubeInput] = useState('');
+  const [youtubeBusy, setYoutubeBusy] = useState(false);
 
   const refresh = useCallback(() => {
     const controller = new AbortController();
     let alive = true;
     setLoading(true);
-    readJson<{ platforms?: PlatformAccount[] }>('/api/account/platforms', { signal: controller.signal }).then((platformResult) => {
+    Promise.all([
+      readJson<{ platforms?: PlatformAccount[] }>('/api/account/platforms', { signal: controller.signal }),
+      readJson<YoutubeStreamerStatus>('/api/youtube/streamer-channel', { signal: controller.signal }),
+    ]).then(([platformResult, streamerResult]) => {
       if (!alive) return;
       setPlatforms(Array.isArray(platformResult?.platforms) ? platformResult.platforms : []);
+      setYoutubeStreamerStatus(streamerResult);
       setLoading(false);
     });
     return () => {
@@ -204,6 +244,80 @@ export function ConnectionPage() {
   };
 
   const connectedCount = platforms.length;
+  const youtubeBotConfigured = youtubeStreamerStatus?.botConfigured === true;
+  const youtubeRegistered = youtubeStreamerStatus?.configured === true;
+  const youtubeBotProfile = youtubeStreamerStatus?.botProfile || null;
+
+  const registerYoutubeChannel = async () => {
+    const popup = window.open('about:blank', '_blank');
+    if (popup) popup.opener = null;
+    setYoutubeBusy(true);
+    try {
+      const response = await fetch(apiUrl('/api/youtube/streamer-channel'), {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channel: youtubeInput }),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(data?.error || 'youtube register failed');
+      const moderatorUrl = data?.instructions?.moderatorUrl || data?.channel?.moderatorUrl || 'https://studio.youtube.com/settings/community';
+      if (popup) popup.location.href = moderatorUrl;
+      toast.success('YouTube 채널을 등록했습니다. 새 탭에서 AruBot을 운영자로 추가해 주세요.');
+      setShowYoutubeModal(false);
+      setYoutubeInput('');
+      refresh();
+    } catch (error) {
+      if (popup) popup.close();
+      toast.error(error instanceof Error ? error.message : 'YouTube 채널 등록에 실패했습니다.');
+    } finally {
+      setYoutubeBusy(false);
+    }
+  };
+
+  const removeYoutubeChannel = async () => {
+    setYoutubeBusy(true);
+    try {
+      const response = await fetch(apiUrl('/api/youtube/streamer-channel'), {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      if (!response.ok) throw new Error('delete failed');
+      toast.success('YouTube 채널 등록을 해제했습니다.');
+      refresh();
+    } catch {
+      toast.error('YouTube 채널 등록 해제에 실패했습니다.');
+    } finally {
+      setYoutubeBusy(false);
+    }
+  };
+
+  const confirmYoutubeModerator = async () => {
+    setYoutubeBusy(true);
+    try {
+      const response = await fetch(apiUrl('/api/youtube/streamer-channel/moderator-confirmed'), {
+        method: 'POST',
+        credentials: 'include',
+      });
+      if (!response.ok) throw new Error('moderator confirm failed');
+      toast.success('YouTube 운영자 등록 완료를 확인했습니다.');
+      refresh();
+    } catch {
+      toast.error('운영자 등록 완료 확인에 실패했습니다.');
+    } finally {
+      setYoutubeBusy(false);
+    }
+  };
+
+  const copyText = async (value?: string | null) => {
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      toast.success('복사했습니다.');
+    } catch {
+      toast.error('복사하지 못했습니다.');
+    }
+  };
 
   return (
     <>
@@ -243,7 +357,7 @@ export function ConnectionPage() {
       <section className="grid gap-4 lg:grid-cols-3">
         {providerConfigs.map((config) => {
           const accounts = grouped[config.id];
-          const connected = accounts.length > 0;
+          const connected = config.id === 'youtube' ? youtubeRegistered : accounts.length > 0;
           return (
             <Card key={config.id} className="animate-fade-up overflow-hidden">
               <CardHeader>
@@ -260,7 +374,51 @@ export function ConnectionPage() {
               </CardHeader>
               <CardContent>
                 <div className="grid gap-2">
-                  {accounts.length ? (
+                  {config.id === 'youtube' ? (
+                    youtubeStreamerStatus?.channel ? (
+                      <div className="grid gap-3 rounded-[var(--radius-control)] border bg-background/75 p-[clamp(0.75rem,1.4vw,1rem)]">
+                        <div className="flex min-w-0 items-center gap-3">
+                          {youtubeStreamerStatus.channel.thumbnailUrl ? (
+                            <img
+                              src={youtubeStreamerStatus.channel.thumbnailUrl}
+                              alt=""
+                              className="aspect-square w-[calc(var(--icon-box)*1.22)] shrink-0 rounded-[var(--radius-card)] border object-cover shadow-subtle"
+                              referrerPolicy="no-referrer"
+                            />
+                          ) : (
+                            <ProviderMark label={config.label} color={config.color} iconPath={config.iconPath} />
+                          )}
+                          <div className="min-w-0 max-w-full overflow-hidden">
+                            <div className="max-w-full truncate text-sm font-semibold">{youtubeStreamerStatus.channel.title || youtubeStreamerStatus.channel.inputValue || 'YouTube 채널'}</div>
+                            <div className="mt-1 max-w-full truncate text-xs font-medium text-muted-foreground">
+                              {youtubeStreamerStatus.channel.youtubeHandle || youtubeStreamerStatus.channel.youtubeChannelId || '채널 확인 필요'}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          <Badge tone={youtubeStreamerStatus.channel.moderatorRegistered ? 'mint' : 'amber'}>
+                            {youtubeStreamerStatus.channel.moderatorRegistered ? '운영자 등록 확인됨' : '운영자 등록 확인 필요'}
+                          </Badge>
+                          <Badge tone={youtubeStreamerStatus.channel.lastLiveChatId ? 'mint' : 'neutral'}>
+                            {youtubeStreamerStatus.channel.lastLiveChatId ? '라이브 채팅 감지됨' : '라이브 대기'}
+                          </Badge>
+                          <Badge tone={youtubeStreamerStatus.channel.websubStatus === 'subscribe_requested' || youtubeStreamerStatus.channel.websubStatus === 'verified' ? 'sky' : 'amber'}>
+                            WebSub {youtubeStreamerStatus.channel.websubStatus || 'pending'}
+                          </Badge>
+                        </div>
+                        {youtubeStreamerStatus.channel.lastError ? (
+                          <div className="flex items-center gap-1.5 text-xs text-destructive">
+                            <AlertCircle className="h-3.5 w-3.5" />
+                            {youtubeStreamerStatus.channel.lastError}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <div className="rounded-[var(--radius-control)] border bg-background/75 p-[clamp(1rem,1.8vw,1.25rem)] text-sm leading-6 text-muted-foreground">
+                        아직 등록된 YouTube 채널이 없습니다. 채널 URL이나 핸들을 등록하고 YouTube Studio에서 AruBot을 운영자로 추가하면 라이브 채팅에 참여할 수 있습니다.
+                      </div>
+                    )
+                  ) : accounts.length ? (
                     accounts.map((account) => {
                       const accountKey = `${config.id}:${account.platform_user_id || account.channel_id || account.channel_name || 'account'}`;
                       return (
@@ -321,8 +479,42 @@ export function ConnectionPage() {
                   )}
                 </div>
                 <div className="mt-4 flex flex-wrap gap-2">
-                  <Button asChild variant={connected ? 'secondary' : 'default'}>
-                    <a href={apiUrl(config.loginPath)}>
+                  {config.id === 'youtube' ? (
+                    <>
+                      <Button type="button" variant={youtubeRegistered ? 'secondary' : 'default'} onClick={() => setShowYoutubeModal(true)} disabled={!youtubeBotConfigured}>
+                        <img
+                          src={config.iconPath}
+                          alt=""
+                          aria-hidden="true"
+                          className="h-6 w-6 shrink-0 rounded-[calc(var(--radius-control)*0.35)] object-contain"
+                          draggable={false}
+                        />
+                        {youtubeRegistered ? '채널 다시 등록' : '채널 등록'}
+                      </Button>
+                      {youtubeStreamerStatus?.channel?.moderatorUrl ? (
+                        <Button asChild variant="outline">
+                          <a href={youtubeStreamerStatus.channel.moderatorUrl} target="_blank" rel="noreferrer">
+                            운영자 등록 열기
+                            <ExternalLink className="h-4 w-4" />
+                          </a>
+                        </Button>
+                      ) : null}
+                      {youtubeRegistered && !youtubeStreamerStatus?.channel?.moderatorRegistered ? (
+                        <Button type="button" variant="outline" onClick={confirmYoutubeModerator} disabled={youtubeBusy}>
+                          <CheckCircle2 className="h-4 w-4" />
+                          운영자 등록 완료
+                        </Button>
+                      ) : null}
+                      {youtubeRegistered ? (
+                        <Button type="button" variant="outline" onClick={removeYoutubeChannel} disabled={youtubeBusy}>
+                          <Unlink className="h-4 w-4" />
+                          등록 해제
+                        </Button>
+                      ) : null}
+                    </>
+                  ) : (
+                    <Button asChild variant={connected ? 'secondary' : 'default'}>
+                      <a href={apiUrl(config.loginPath)}>
                       <img
                         src={config.iconPath}
                         alt=""
@@ -332,12 +524,24 @@ export function ConnectionPage() {
                       />
                       {connected ? '추가 연결' : `${config.label}로 로그인`}
                       <ExternalLink className="h-4 w-4" />
-                    </a>
-                  </Button>
+                      </a>
+                    </Button>
+                  )}
                   {connected ? (
-                    <Button type="button" variant="outline" onClick={() => syncProfile(config.id)} disabled={syncingProvider === config.id}>
-                      <RefreshCw className={syncingProvider === config.id ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
-                      최신 정보 보기
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => {
+                        if (config.id === 'youtube') {
+                          refresh();
+                        } else {
+                          void syncProfile(config.id);
+                        }
+                      }}
+                      disabled={config.id === 'youtube' ? loading : syncingProvider === config.id}
+                    >
+                      <RefreshCw className={(config.id === 'youtube' ? loading : syncingProvider === config.id) ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
+                      {config.id === 'youtube' ? '채널 상태 보기' : '최신 정보 보기'}
                     </Button>
                   ) : null}
                 </div>
@@ -365,6 +569,65 @@ export function ConnectionPage() {
           </div>
         </div>
       </section>
+
+      {showYoutubeModal ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/45 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-xl rounded-[var(--radius-panel)] border bg-card p-[clamp(1rem,2vw,1.5rem)] shadow-lift">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <Badge tone="rose">YouTube 채널 등록</Badge>
+                <h2 className="mt-3 text-xl font-semibold">방송 채널 URL 또는 핸들</h2>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                  등록 후 새 탭에서 YouTube Studio 커뮤니티 설정이 열립니다. AruBot 채널 URL을 표준 운영자 또는 관리 운영자에 추가하고 저장하세요.
+                </p>
+              </div>
+              <Button type="button" variant="ghost" size="icon" onClick={() => setShowYoutubeModal(false)} aria-label="닫기">
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+
+            <div className="mt-5 grid gap-3">
+              <Input
+                value={youtubeInput}
+                onChange={(event) => setYoutubeInput(event.target.value)}
+                placeholder="https://www.youtube.com/@handle 또는 https://www.youtube.com/channel/UC..."
+                autoFocus
+              />
+              {youtubeBotProfile?.selectedChannelId ? (
+                <div className="rounded-[var(--radius-control)] border bg-background/80 p-3 text-sm leading-6">
+                  <div className="font-semibold">운영자로 추가할 AruBot 채널</div>
+                  <div className="mt-1 break-all text-muted-foreground">
+                    https://www.youtube.com/channel/{youtubeBotProfile.selectedChannelId}
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="mt-3"
+                    onClick={() => copyText(`https://www.youtube.com/channel/${youtubeBotProfile.selectedChannelId}`)}
+                  >
+                    <Copy className="h-4 w-4" />
+                    URL 복사
+                  </Button>
+                </div>
+              ) : null}
+              <div className="rounded-[var(--radius-control)] bg-muted/60 p-3 text-xs leading-5 text-muted-foreground">
+                등록 버튼을 누르면 브라우저가 새 탭을 즉시 열고, 서버 등록이 끝난 뒤 그 탭을 YouTube Studio 운영자 설정 페이지로 이동시킵니다.
+              </div>
+            </div>
+
+            <div className="mt-5 flex flex-wrap justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setShowYoutubeModal(false)}>
+                취소
+              </Button>
+              <Button type="button" onClick={registerYoutubeChannel} disabled={youtubeBusy || !youtubeInput.trim()}>
+                {youtubeBusy ? '등록 중' : '등록하고 운영자 설정 열기'}
+                <ExternalLink className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }

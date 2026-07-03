@@ -307,10 +307,41 @@ export async function ensureChannelPointsTable(streamerUid) {
 }
 
 export async function listChannelPoints(streamerUid) {
-  const table = await ensureChannelPointsTable(streamerUid);
   return withPgClient(async (pg) => {
-    const { rows } = await pg.query(`select user_id, username, points from ${table} order by points desc, username asc`);
-    return rows || [];
+    const channelIdentity = await resolvePointChannelIdentity(pg, streamerUid);
+    const tables = await listPointTablesForChannelAliases(channelIdentity.channelAliases);
+    const users = new Map();
+    const userIdentityCache = new Map();
+
+    for (const table of tables) {
+      const { rows } = await pg.query(`select user_id, username, points from ${table}`);
+      for (const row of rows || []) {
+        const rawUserId = String(row.user_id || '').trim();
+        if (!rawUserId) continue;
+
+        let userIdentity = userIdentityCache.get(rawUserId);
+        if (!userIdentity) {
+          userIdentity = await resolvePointUserIdentity(pg, rawUserId);
+          userIdentityCache.set(rawUserId, userIdentity);
+        }
+
+        const canonicalUserId = String(userIdentity.canonicalUserId || rawUserId);
+        const existing = users.get(canonicalUserId) || {
+          user_id: canonicalUserId,
+          username: null,
+          points: 0,
+        };
+        existing.username = existing.username || row.username || rawUserId;
+        existing.points += Number(row.points || 0);
+        users.set(canonicalUserId, existing);
+      }
+    }
+
+    return Array.from(users.values()).sort((a, b) => {
+      return Number(b.points || 0) - Number(a.points || 0)
+        || String(a.username || '').localeCompare(String(b.username || ''))
+        || String(a.user_id || '').localeCompare(String(b.user_id || ''));
+    });
   });
 }
 
@@ -325,19 +356,28 @@ export async function listViewerPointBalancesForUserIds(userIds) {
     const tableUidLookup = new Map();
     try {
       const knownChannels = await pg.query(`
-        select distinct provider, platform_user_id, channel_id, channel_name, avatar_url
+        select distinct user_id, provider, platform_user_id, channel_id, channel_name, avatar_url
         from platform_accounts
         where coalesce(channel_id, platform_user_id) is not null
       `);
       for (const row of knownChannels.rows || []) {
         const channelUid = String(row.channel_id || row.platform_user_id || '').trim();
+        const canonicalChannelUid = String(row.user_id || channelUid).trim();
         if (!channelUid) continue;
-        tableUidLookup.set(`channelpoint_${sanitizeTableNameSuffix(channelUid)}`, {
+        const lookup = {
           channelUid,
+          canonicalChannelUid,
           channelName: row.channel_name || null,
           avatarUrl: row.avatar_url || null,
           provider: row.provider || null,
-        });
+        };
+        tableUidLookup.set(`channelpoint_${sanitizeTableNameSuffix(channelUid)}`, lookup);
+        if (canonicalChannelUid) {
+          const canonicalTable = `channelpoint_${sanitizeTableNameSuffix(canonicalChannelUid)}`;
+          if (!tableUidLookup.has(canonicalTable) || row.provider === 'chzzk') {
+            tableUidLookup.set(canonicalTable, lookup);
+          }
+        }
       }
     } catch {
       // Platform account metadata is an optimization for nicer public links.
@@ -370,17 +410,25 @@ export async function listViewerPointBalancesForUserIds(userIds) {
         points: Number(row.points || 0),
       }));
       const channelUid = lookup?.channelUid || table.replace(/^channelpoint_/, '');
-      const existing = balancesByChannel.get(channelUid) || {
+      const channelKey = lookup?.canonicalChannelUid || channelUid;
+      const existing = balancesByChannel.get(channelKey) || {
         channelUid,
+        canonicalChannelUid: channelKey,
         channelName: lookup?.channelName || null,
         avatarUrl: lookup?.avatarUrl || null,
         provider: lookup?.provider || null,
         points: 0,
         identities: [],
       };
+      if (lookup?.provider === 'chzzk' || !existing.provider) {
+        existing.channelUid = lookup?.channelUid || existing.channelUid;
+        existing.channelName = lookup?.channelName || existing.channelName;
+        existing.avatarUrl = lookup?.avatarUrl || existing.avatarUrl;
+        existing.provider = lookup?.provider || existing.provider;
+      }
       existing.points += pointRows.reduce((sum, row) => sum + row.points, 0);
       existing.identities.push(...pointRows);
-      balancesByChannel.set(channelUid, existing);
+      balancesByChannel.set(channelKey, existing);
     }
 
     try {
@@ -396,14 +444,22 @@ export async function listViewerPointBalancesForUserIds(userIds) {
           const channelUid = String(row.channel_uid || '').trim();
           if (!channelUid) continue;
           const lookup = tableUidLookup.get(`channelpoint_${sanitizeTableNameSuffix(channelUid)}`);
-          const existing = balancesByChannel.get(channelUid) || {
+          const channelKey = lookup?.canonicalChannelUid || channelUid;
+          const existing = balancesByChannel.get(channelKey) || {
             channelUid,
+            canonicalChannelUid: channelKey,
             channelName: lookup?.channelName || null,
             avatarUrl: lookup?.avatarUrl || null,
             provider: lookup?.provider || null,
             points: 0,
             identities: [],
           };
+          if (lookup?.provider === 'chzzk' || !existing.provider) {
+            existing.channelUid = lookup?.channelUid || existing.channelUid;
+            existing.channelName = lookup?.channelName || existing.channelName;
+            existing.avatarUrl = lookup?.avatarUrl || existing.avatarUrl;
+            existing.provider = lookup?.provider || existing.provider;
+          }
           const userId = String(row.user_id || '');
           if (!existing.identities.some((identity) => String(identity.userId || '') === userId)) {
             const points = Number(row.points || 0);
@@ -414,7 +470,7 @@ export async function listViewerPointBalancesForUserIds(userIds) {
               points,
             });
           }
-          balancesByChannel.set(channelUid, existing);
+          balancesByChannel.set(channelKey, existing);
         }
       }
     } catch {
@@ -426,71 +482,227 @@ export async function listViewerPointBalancesForUserIds(userIds) {
   });
 }
 
-export async function setChannelPoints(streamerUid, userId, username, points) {
-  const table = await ensureChannelPointsTable(streamerUid);
-  await withPgClient(async (pg) => {
-    await pg.query(
-      `insert into ${table} (user_id, username, points) values ($1, $2, $3)
-       on conflict (user_id) do update set username = excluded.username, points = excluded.points`,
-      [String(userId), username ? String(username) : null, Number(points) || 0]
+function uniqueNonEmpty(values) {
+  return Array.from(new Set((Array.isArray(values) ? values : []).map((value) => String(value || '').trim()).filter(Boolean)));
+}
+
+function pointLookupCandidates(value) {
+  const text = String(value || '').trim();
+  if (!text) return [];
+  const candidates = [text];
+  for (const prefix of ['user:', 'cime:', 'chzzk:', 'youtube:']) {
+    if (text.startsWith(prefix)) candidates.push(text.slice(prefix.length));
+  }
+  return uniqueNonEmpty(candidates);
+}
+
+async function resolvePointChannelIdentity(pg, streamerUid) {
+  const raw = String(streamerUid || '').trim();
+  if (!raw) return { canonicalChannelUid: '', channelAliases: [] };
+  const candidates = pointLookupCandidates(raw);
+  try {
+    const matched = await pg.query(
+      `select user_id
+         from platform_accounts
+        where platform_user_id = any($1::text[])
+           or channel_id = any($1::text[])
+           or user_id = any($1::text[])
+        limit 1`,
+      [candidates]
     );
+    const appUserId = String(matched.rows?.[0]?.user_id || '').trim();
+    if (appUserId) {
+      const accounts = await pg.query(
+        `select user_id, platform_user_id, channel_id
+           from platform_accounts
+          where user_id = $1`,
+        [appUserId]
+      );
+      const aliases = [raw, appUserId];
+      for (const account of accounts.rows || []) {
+        aliases.push(account.user_id, account.platform_user_id, account.channel_id);
+      }
+      return {
+        canonicalChannelUid: appUserId,
+        channelAliases: uniqueNonEmpty(aliases),
+      };
+    }
+  } catch {
+    // Platform identity tables are optional for legacy installs.
+  }
+  return { canonicalChannelUid: raw, channelAliases: [raw] };
+}
+
+async function resolvePointUserIdentity(pg, userId) {
+  const raw = String(userId || '').trim();
+  if (!raw) return { canonicalUserId: '', identityKeys: [] };
+  const candidates = pointLookupCandidates(raw);
+  try {
+    const matched = await pg.query(
+      `select user_id
+         from platform_accounts
+        where platform_user_id = any($1::text[])
+           or channel_id = any($1::text[])
+           or user_id = any($1::text[])
+        limit 1`,
+      [candidates]
+    );
+    const appUserId = String(matched.rows?.[0]?.user_id || '').trim();
+    if (appUserId) {
+      const accounts = await pg.query(
+        `select user_id, provider, platform_user_id, channel_id, channel_name, channel_handle, avatar_url, metadata
+           from platform_accounts
+          where user_id = $1`,
+        [appUserId]
+      );
+      const keys = [raw, ...candidates, appUserId, makeArubotViewerUuid(appUserId)];
+      for (const account of accounts.rows || []) {
+        keys.push(...collectPlatformPointIdentityKeys(account));
+      }
+      return {
+        canonicalUserId: appUserId,
+        identityKeys: uniqueNonEmpty(keys),
+      };
+    }
+  } catch {
+    // Fall back to the raw platform chat id when identity tables are not available.
+  }
+  return { canonicalUserId: raw, identityKeys: uniqueNonEmpty([raw, ...candidates]) };
+}
+
+async function listPointTablesForChannelAliases(channelAliases) {
+  const tables = [];
+  for (const channelUid of uniqueNonEmpty(channelAliases)) {
+    tables.push(await ensureChannelPointsTable(channelUid));
+  }
+  return uniqueNonEmpty(tables);
+}
+
+async function sumPointsForIdentity(pg, channelAliases, identityKeys) {
+  const keys = uniqueNonEmpty(identityKeys);
+  if (!keys.length) return 0;
+  let total = 0;
+  const tables = await listPointTablesForChannelAliases(channelAliases);
+  for (const table of tables) {
+    const { rows } = await pg.query(`select coalesce(sum(points), 0) as points from ${table} where user_id = any($1::text[])`, [keys]);
+    total += Number(rows?.[0]?.points || 0);
+  }
+  return total;
+}
+
+async function deletePointRowsForIdentity(pg, channelAliases, identityKeys) {
+  const keys = uniqueNonEmpty(identityKeys);
+  if (!keys.length) return;
+  const tables = await listPointTablesForChannelAliases(channelAliases);
+  for (const table of tables) {
+    await pg.query(`delete from ${table} where user_id = any($1::text[])`, [keys]);
+  }
+}
+
+async function upsertCanonicalPointDelta(pg, canonicalChannelUid, canonicalUserId, username, delta) {
+  const table = await ensureChannelPointsTable(canonicalChannelUid);
+  await pg.query(
+    `insert into ${table} (user_id, username, points) values ($1, $2, $3)
+     on conflict (user_id) do update set
+       username = coalesce(excluded.username, ${table}.username),
+       points = ${table}.points + excluded.points`,
+    [String(canonicalUserId), username ? String(username) : null, Number(delta) || 0]
+  );
+}
+
+async function setCanonicalPointBalance(pg, channelIdentity, userIdentity, username, points) {
+  await deletePointRowsForIdentity(pg, channelIdentity.channelAliases, userIdentity.identityKeys);
+  const table = await ensureChannelPointsTable(channelIdentity.canonicalChannelUid);
+  await pg.query(
+    `insert into ${table} (user_id, username, points) values ($1, $2, $3)
+     on conflict (user_id) do update set username = excluded.username, points = excluded.points`,
+    [String(userIdentity.canonicalUserId), username ? String(username) : null, Number(points) || 0]
+  );
+}
+
+export async function setChannelPoints(streamerUid, userId, username, points) {
+  await withPgClient(async (pg) => {
+    const channelIdentity = await resolvePointChannelIdentity(pg, streamerUid);
+    const userIdentity = await resolvePointUserIdentity(pg, userId);
+    if (!channelIdentity.canonicalChannelUid || !userIdentity.canonicalUserId) return;
+    await setCanonicalPointBalance(pg, channelIdentity, userIdentity, username, points);
   });
 }
 
 export async function incrChannelPoints(streamerUid, userId, username, delta = 1) {
-  const table = await ensureChannelPointsTable(streamerUid);
   await withPgClient(async (pg) => {
-    await pg.query(
-      `insert into ${table} (user_id, username, points) values ($1, $2, $3)
-       on conflict (user_id) do update set 
-         username = coalesce(excluded.username, ${table}.username),
-         points = ${table}.points + EXCLUDED.points`,
-      [String(userId), username ? String(username) : null, Number(delta) || 0]
-    );
+    const channelIdentity = await resolvePointChannelIdentity(pg, streamerUid);
+    const userIdentity = await resolvePointUserIdentity(pg, userId);
+    if (!channelIdentity.canonicalChannelUid || !userIdentity.canonicalUserId) return;
+    await upsertCanonicalPointDelta(pg, channelIdentity.canonicalChannelUid, userIdentity.canonicalUserId, username, delta);
   });
 }
 
 export async function getChannelPoints(streamerUid, userId) {
-  const table = await ensureChannelPointsTable(streamerUid);
   return withPgClient(async (pg) => {
-    const { rows } = await pg.query(`select points from ${table} where user_id = $1`, [String(userId)]);
-    if (rows && rows.length > 0 && rows[0] && typeof rows[0].points === 'number') return rows[0].points;
-    return 0;
+    const channelIdentity = await resolvePointChannelIdentity(pg, streamerUid);
+    const userIdentity = await resolvePointUserIdentity(pg, userId);
+    return sumPointsForIdentity(pg, channelIdentity.channelAliases, userIdentity.identityKeys);
   });
 }
 
 export async function deleteChannelPoints(streamerUid, userId) {
-  const table = await ensureChannelPointsTable(streamerUid);
   await withPgClient(async (pg) => {
-    await pg.query(`delete from ${table} where user_id = $1`, [String(userId)]);
+    const channelIdentity = await resolvePointChannelIdentity(pg, streamerUid);
+    const userIdentity = await resolvePointUserIdentity(pg, userId);
+    await deletePointRowsForIdentity(pg, channelIdentity.channelAliases, userIdentity.identityKeys);
   });
 }
 
 export async function clearAllChannelPoints(streamerUid) {
-  const table = await ensureChannelPointsTable(streamerUid);
   await withPgClient(async (pg) => {
-    await pg.query(`delete from ${table}`);
+    const channelIdentity = await resolvePointChannelIdentity(pg, streamerUid);
+    const tables = await listPointTablesForChannelAliases(channelIdentity.channelAliases);
+    for (const table of tables) {
+      await pg.query(`delete from ${table}`);
+    }
   });
 }
 
 export async function bulkUpsertChannelPoints(streamerUid, rows) {
   if (!Array.isArray(rows) || rows.length === 0) return;
-  const table = await ensureChannelPointsTable(streamerUid);
   // Insert in batches to avoid very large queries
   const batchSize = 200;
   await withPgClient(async (pg) => {
-    for (let i = 0; i < rows.length; i += batchSize) {
-      const slice = rows.slice(i, i + batchSize);
+    const channelIdentity = await resolvePointChannelIdentity(pg, streamerUid);
+    if (!channelIdentity.canonicalChannelUid) return;
+    const table = await ensureChannelPointsTable(channelIdentity.canonicalChannelUid);
+    const normalizedRowsByUser = new Map();
+    const userIdentityCache = new Map();
+
+    for (const row of rows) {
+      const rawUserId = String(row?.user_id || '').trim();
+      if (!rawUserId) continue;
+      let userIdentity = userIdentityCache.get(rawUserId);
+      if (!userIdentity) {
+        userIdentity = await resolvePointUserIdentity(pg, rawUserId);
+        userIdentityCache.set(rawUserId, userIdentity);
+      }
+      if (!userIdentity.canonicalUserId) continue;
+      await deletePointRowsForIdentity(pg, channelIdentity.channelAliases, userIdentity.identityKeys);
+      normalizedRowsByUser.set(String(userIdentity.canonicalUserId), {
+        user_id: String(userIdentity.canonicalUserId),
+        username: row.username != null ? String(row.username) : null,
+        points: Number(row.points) || 0,
+      });
+    }
+
+    const normalizedRows = Array.from(normalizedRowsByUser.values());
+    for (let i = 0; i < normalizedRows.length; i += batchSize) {
+      const slice = normalizedRows.slice(i, i + batchSize);
       const values = [];
       const params = [];
       slice.forEach((r, idx) => {
-        const u = String(r.user_id);
-        const name = r.username != null ? String(r.username) : null;
-        const pts = Number(r.points) || 0;
-        params.push(u, name, pts);
+        params.push(r.user_id, r.username, r.points);
         const base = idx * 3;
         values.push(`($${base + 1}, $${base + 2}, $${base + 3})`);
       });
+      if (!values.length) continue;
       const sql = `insert into ${table} (user_id, username, points) values ${values.join(', ')}
         on conflict (user_id) do update set username = coalesce(excluded.username, ${table}.username), points = excluded.points`;
       await pg.query(sql, params);
@@ -1036,13 +1248,15 @@ export async function getPredictionForSid(sid, predictionId) {
 export async function getActivePredictionForChannel(channelUid) {
   await ensurePredictionTables();
   return withPgClient(async (pg) => {
+    const channelIdentity = await resolvePointChannelIdentity(pg, channelUid);
+    const channelAliases = channelIdentity.channelAliases.length ? channelIdentity.channelAliases : [String(channelUid)];
     const result = await pg.query(
       `select * from prediction_events
-       where channel_uid = $1
+       where channel_uid = any($1::text[])
          and status in ('open', 'locked')
        order by created_at desc
        limit 1`,
-      [String(channelUid)]
+      [channelAliases]
     );
     let row = result.rows?.[0] || null;
     if (!row) return null;
@@ -1205,15 +1419,21 @@ export async function placePredictionBet({ channelUid, userId, username, optionT
   return withPgClient(async (pg) => {
     await pg.query('begin');
     try {
+      const channelIdentity = await resolvePointChannelIdentity(pg, channelUid);
+      const userIdentity = await resolvePointUserIdentity(pg, userId);
+      if (!channelIdentity.canonicalChannelUid || !userIdentity.canonicalUserId) {
+        throw new Error('invalid_identity');
+      }
+
       const prediction = await pg.query(
         `select * from prediction_events
-         where channel_uid = $1
+         where channel_uid = any($1::text[])
            and status = 'open'
            and (closes_at is null or closes_at > now())
          order by created_at desc
          limit 1
          for update`,
-        [String(channelUid)]
+        [channelIdentity.channelAliases]
       );
       const row = prediction.rows?.[0] || null;
       if (!row) throw new Error('no_open_prediction');
@@ -1229,9 +1449,7 @@ export async function placePredictionBet({ channelUid, userId, username, optionT
       });
       if (!matched) throw new Error('invalid_option');
 
-      const pointsTable = await ensureChannelPointsTable(channelUid);
-      const points = await pg.query(`select points from ${pointsTable} where user_id = $1 for update`, [String(userId)]);
-      const have = Number(points.rows?.[0]?.points || 0);
+      const have = await sumPointsForIdentity(pg, channelIdentity.channelAliases, userIdentity.identityKeys);
       const normalizedAmount = parsePredictionBetAmount(amount, { have, maxBet: Number(row.max_bet || 100000) });
       if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) throw new Error('invalid amount');
       if (normalizedAmount < Number(row.min_bet || 1)) throw new Error('below_min_bet');
@@ -1243,29 +1461,27 @@ export async function placePredictionBet({ channelUid, userId, username, optionT
         throw err;
       }
 
+      const betUserId = String(userIdentity.canonicalUserId);
       const existing = await pg.query(
         `select * from prediction_bets where prediction_id = $1 and user_id = $2 for update`,
-        [row.id, String(userId)]
+        [row.id, betUserId]
       );
       const existingBet = existing.rows?.[0] || null;
       if (existingBet && String(existingBet.option_id) !== matched.id) throw new Error('option_change_not_allowed');
 
-      await pg.query(
-        `update ${pointsTable} set points = points - $2, username = coalesce($3, username) where user_id = $1`,
-        [String(userId), normalizedAmount, username ? String(username) : null]
-      );
+      await setCanonicalPointBalance(pg, channelIdentity, userIdentity, username, have - normalizedAmount);
 
       if (existingBet) {
         await pg.query(
           `update prediction_bets set amount = amount + $3, username = coalesce($4, username), updated_at = now()
            where prediction_id = $1 and user_id = $2`,
-          [row.id, String(userId), normalizedAmount, username ? String(username) : null]
+          [row.id, betUserId, normalizedAmount, username ? String(username) : null]
         );
       } else {
         await pg.query(
           `insert into prediction_bets (id, prediction_id, channel_uid, user_id, username, option_id, amount)
            values ($1, $2, $3, $4, $5, $6, $7)`,
-          [makeId('bet'), row.id, String(channelUid), String(userId), username ? String(username) : null, matched.id, normalizedAmount]
+          [makeId('bet'), row.id, String(row.channel_uid || channelUid), betUserId, username ? String(username) : null, matched.id, normalizedAmount]
         );
       }
       await pg.query('commit');
@@ -2125,10 +2341,13 @@ async function ensurePlatformIdentityTables() {
         primary_platform_user_id text,
         display_name text,
         avatar_url text,
+        is_admin boolean not null default false,
         metadata jsonb not null default '{}'::jsonb,
         created_at timestamptz not null default now(),
         updated_at timestamptz not null default now()
       );
+      alter table app_users add column if not exists is_admin boolean not null default false;
+      create index if not exists idx_app_users_is_admin on app_users(is_admin) where is_admin = true;
       create table if not exists platform_accounts (
         id uuid primary key default gen_random_uuid(),
         user_id text not null references app_users(id) on delete cascade,
@@ -2162,6 +2381,28 @@ async function ensurePlatformIdentityTables() {
       alter table sessions add column if not exists account_user_id text;
       create index if not exists idx_sessions_account_user_id on sessions(account_user_id);
     `);
+  });
+}
+
+export async function getAppUserAdminStatus(userId) {
+  const id = String(userId || '').replace(/^user:/, '').trim();
+  if (!id || !process.env.SUPABASE_DB_URL) return { userId: id || null, isAdmin: false };
+  await ensurePlatformIdentityTables();
+  return withPgClient(async (pg) => {
+    const { rows } = await pg.query(
+      `select id, is_admin, display_name, avatar_url
+         from app_users
+        where id = $1
+        limit 1`,
+      [id]
+    );
+    const row = rows[0] || null;
+    return {
+      userId: id,
+      isAdmin: row?.is_admin === true,
+      displayName: row?.display_name || null,
+      avatarUrl: row?.avatar_url || null,
+    };
   });
 }
 
@@ -2532,6 +2773,365 @@ export async function deletePlatformAccount(provider, userId, platformUserId = n
       tokensDeleted: tokenResult.rowCount || 0,
       accountsDeleted: accountResult.rowCount || 0
     };
+  });
+}
+
+async function ensureYoutubeCentralBotTables() {
+  if (!process.env.SUPABASE_DB_URL) return;
+  await ensurePlatformIdentityTables();
+  await withPgClient(async (pg) => {
+    await pg.query(`
+      create table if not exists youtube_bot_profiles (
+        id text primary key,
+        selected_channel_id text not null,
+        selected_channel_title text,
+        selected_channel_handle text,
+        selected_channel_thumbnail_url text,
+        google_subject_hash text,
+        access_token text not null,
+        refresh_token text,
+        token_type text,
+        expires_at timestamptz,
+        scope text,
+        status text not null default 'active',
+        last_verified_at timestamptz,
+        last_error text,
+        configured_by text,
+        created_at timestamptz not null default now(),
+        updated_at timestamptz not null default now()
+      );
+
+      create table if not exists youtube_streamer_channels (
+        owner_user_id text primary key references app_users(id) on delete cascade,
+        youtube_channel_id text,
+        youtube_handle text,
+        title text,
+        thumbnail_url text,
+        input_value text,
+        bot_profile_id text references youtube_bot_profiles(id) on delete set null,
+        moderator_registered boolean not null default false,
+        websub_status text not null default 'pending',
+        websub_secret text,
+        websub_lease_expires_at timestamptz,
+        last_detected_video_id text,
+        last_live_chat_id text,
+        last_live_title text,
+        last_live_started_at timestamptz,
+        last_error text,
+        metadata jsonb not null default '{}'::jsonb,
+        created_at timestamptz not null default now(),
+        updated_at timestamptz not null default now()
+      );
+
+      create index if not exists idx_youtube_streamer_channels_channel_id
+        on youtube_streamer_channels (youtube_channel_id);
+      create index if not exists idx_youtube_streamer_channels_bot_profile
+        on youtube_streamer_channels (bot_profile_id);
+    `);
+  });
+}
+
+function normalizeYoutubeBotProfileRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    selectedChannelId: row.selected_channel_id,
+    selectedChannelTitle: row.selected_channel_title,
+    selectedChannelHandle: row.selected_channel_handle,
+    selectedChannelThumbnailUrl: row.selected_channel_thumbnail_url,
+    googleSubjectHash: row.google_subject_hash,
+    accessToken: revealSecret(row.access_token),
+    refreshToken: revealSecret(row.refresh_token),
+    tokenType: row.token_type || 'Bearer',
+    expiresAt: row.expires_at,
+    scope: row.scope,
+    status: row.status || 'active',
+    lastVerifiedAt: row.last_verified_at,
+    lastError: row.last_error,
+    configuredBy: row.configured_by,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function normalizeYoutubeStreamerChannelRow(row) {
+  if (!row) return null;
+  return {
+    ownerUserId: row.owner_user_id,
+    youtubeChannelId: row.youtube_channel_id,
+    youtubeHandle: row.youtube_handle,
+    title: row.title,
+    thumbnailUrl: row.thumbnail_url,
+    inputValue: row.input_value,
+    botProfileId: row.bot_profile_id,
+    moderatorRegistered: row.moderator_registered === true,
+    websubStatus: row.websub_status || 'pending',
+    websubSecret: revealSecret(row.websub_secret),
+    websubLeaseExpiresAt: row.websub_lease_expires_at,
+    lastDetectedVideoId: row.last_detected_video_id,
+    lastLiveChatId: row.last_live_chat_id,
+    lastLiveTitle: row.last_live_title,
+    lastLiveStartedAt: row.last_live_started_at,
+    lastError: row.last_error,
+    metadata: normalizeJsonObject(row.metadata),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export async function upsertYoutubeBotProfile(profile) {
+  if (!profile?.selectedChannelId || !profile?.accessToken) throw new Error('selectedChannelId and accessToken are required');
+  await ensureYoutubeCentralBotTables();
+  return withPgClient(async (pg) => {
+    const id = String(profile.id || 'default');
+    const { rows } = await pg.query(
+      `insert into youtube_bot_profiles
+        (id, selected_channel_id, selected_channel_title, selected_channel_handle, selected_channel_thumbnail_url,
+         google_subject_hash, access_token, refresh_token, token_type, expires_at, scope, status,
+         last_verified_at, last_error, configured_by, updated_at)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, coalesce($12, 'active'), now(), null, $13, now())
+       on conflict (id) do update set
+         selected_channel_id = excluded.selected_channel_id,
+         selected_channel_title = excluded.selected_channel_title,
+         selected_channel_handle = excluded.selected_channel_handle,
+         selected_channel_thumbnail_url = excluded.selected_channel_thumbnail_url,
+         google_subject_hash = excluded.google_subject_hash,
+         access_token = excluded.access_token,
+         refresh_token = coalesce(excluded.refresh_token, youtube_bot_profiles.refresh_token),
+         token_type = excluded.token_type,
+         expires_at = excluded.expires_at,
+         scope = excluded.scope,
+         status = excluded.status,
+         last_verified_at = now(),
+         last_error = null,
+         configured_by = excluded.configured_by,
+         updated_at = now()
+       returning *`,
+      [
+        id,
+        String(profile.selectedChannelId),
+        profile.selectedChannelTitle || null,
+        profile.selectedChannelHandle || null,
+        profile.selectedChannelThumbnailUrl || null,
+        profile.googleSubjectHash || null,
+        protectSecret(profile.accessToken),
+        protectSecret(profile.refreshToken || null),
+        profile.tokenType || 'Bearer',
+        profile.expiresAt || null,
+        profile.scope || null,
+        profile.status || 'active',
+        profile.configuredBy || null,
+      ]
+    );
+    return normalizeYoutubeBotProfileRow(rows[0]);
+  });
+}
+
+export async function getYoutubeBotProfile(id = 'default') {
+  if (!process.env.SUPABASE_DB_URL) return null;
+  await ensureYoutubeCentralBotTables();
+  return withPgClient(async (pg) => {
+    const { rows } = await pg.query(`select * from youtube_bot_profiles where id = $1 limit 1`, [String(id || 'default')]);
+    return normalizeYoutubeBotProfileRow(rows[0]);
+  });
+}
+
+export async function updateYoutubeBotProfileTokens(id, tokens) {
+  if (!id || !tokens?.accessToken) throw new Error('id and accessToken are required');
+  await ensureYoutubeCentralBotTables();
+  return withPgClient(async (pg) => {
+    const { rows } = await pg.query(
+      `update youtube_bot_profiles
+          set access_token = $2,
+              refresh_token = coalesce($3, refresh_token),
+              token_type = $4,
+              expires_at = $5,
+              scope = coalesce($6, scope),
+              status = 'active',
+              last_error = null,
+              last_verified_at = now(),
+              updated_at = now()
+        where id = $1
+        returning *`,
+      [
+        String(id),
+        protectSecret(tokens.accessToken),
+        tokens.refreshToken ? protectSecret(tokens.refreshToken) : null,
+        tokens.tokenType || 'Bearer',
+        tokens.expiresAt || null,
+        tokens.scope || null,
+      ]
+    );
+    return normalizeYoutubeBotProfileRow(rows[0]);
+  });
+}
+
+export async function markYoutubeBotProfileStatus(id, { status = 'error', lastError = null } = {}) {
+  if (!id) return null;
+  await ensureYoutubeCentralBotTables();
+  return withPgClient(async (pg) => {
+    const { rows } = await pg.query(
+      `update youtube_bot_profiles
+          set status = $2,
+              last_error = $3,
+              updated_at = now()
+        where id = $1
+        returning *`,
+      [String(id), String(status || 'error'), lastError ? String(lastError).slice(0, 1000) : null]
+    );
+    return normalizeYoutubeBotProfileRow(rows[0]);
+  });
+}
+
+export async function deleteYoutubeBotProfile(id = 'default') {
+  await ensureYoutubeCentralBotTables();
+  return withPgClient(async (pg) => {
+    await pg.query(`delete from youtube_bot_profiles where id = $1`, [String(id || 'default')]);
+    return true;
+  });
+}
+
+export async function upsertYoutubeStreamerChannel(ownerUserId, channel) {
+  const ownerId = String(ownerUserId || '').replace(/^user:/, '');
+  if (!ownerId) throw new Error('ownerUserId is required');
+  await ensureYoutubeCentralBotTables();
+  return withPgClient(async (pg) => {
+    await pg.query(
+      `insert into app_users (id, primary_provider, primary_platform_user_id, display_name, metadata)
+       values ($1, 'youtube-central', $1, $2, '{}'::jsonb)
+       on conflict (id) do nothing`,
+      [ownerId, ownerId]
+    );
+    const { rows } = await pg.query(
+      `insert into youtube_streamer_channels
+        (owner_user_id, youtube_channel_id, youtube_handle, title, thumbnail_url, input_value,
+         bot_profile_id, moderator_registered, websub_status, websub_secret, last_error, metadata, updated_at)
+       values ($1, $2, $3, $4, $5, $6, coalesce($7, 'default'), false, coalesce($8, 'pending'), $9, $10, $11::jsonb, now())
+       on conflict (owner_user_id) do update set
+         youtube_channel_id = excluded.youtube_channel_id,
+         youtube_handle = excluded.youtube_handle,
+         title = excluded.title,
+         thumbnail_url = excluded.thumbnail_url,
+         input_value = excluded.input_value,
+         bot_profile_id = excluded.bot_profile_id,
+         moderator_registered = false,
+         websub_status = excluded.websub_status,
+         websub_secret = excluded.websub_secret,
+         last_error = excluded.last_error,
+         metadata = excluded.metadata,
+         updated_at = now()
+       returning *`,
+      [
+        ownerId,
+        channel.youtubeChannelId || null,
+        channel.youtubeHandle || null,
+        channel.title || null,
+        channel.thumbnailUrl || null,
+        channel.inputValue || null,
+        channel.botProfileId || 'default',
+        channel.websubStatus || 'pending',
+        protectSecret(channel.websubSecret || null),
+        channel.lastError || null,
+        JSON.stringify(channel.metadata || {}),
+      ]
+    );
+    return normalizeYoutubeStreamerChannelRow(rows[0]);
+  });
+}
+
+export async function getYoutubeStreamerChannel(ownerUserId) {
+  const ownerId = String(ownerUserId || '').replace(/^user:/, '');
+  if (!ownerId || !process.env.SUPABASE_DB_URL) return null;
+  await ensureYoutubeCentralBotTables();
+  return withPgClient(async (pg) => {
+    const { rows } = await pg.query(`select * from youtube_streamer_channels where owner_user_id = $1 limit 1`, [ownerId]);
+    return normalizeYoutubeStreamerChannelRow(rows[0]);
+  });
+}
+
+export async function listYoutubeStreamerChannelsByYoutubeChannelId(youtubeChannelId) {
+  const channelId = String(youtubeChannelId || '').trim();
+  if (!channelId || !process.env.SUPABASE_DB_URL) return [];
+  await ensureYoutubeCentralBotTables();
+  return withPgClient(async (pg) => {
+    const { rows } = await pg.query(`select * from youtube_streamer_channels where youtube_channel_id = $1`, [channelId]);
+    return (rows || []).map(normalizeYoutubeStreamerChannelRow).filter(Boolean);
+  });
+}
+
+export async function updateYoutubeStreamerChannelLive(ownerUserId, patch = {}) {
+  const ownerId = String(ownerUserId || '').replace(/^user:/, '');
+  if (!ownerId) return null;
+  await ensureYoutubeCentralBotTables();
+  return withPgClient(async (pg) => {
+    const { rows } = await pg.query(
+      `update youtube_streamer_channels
+          set last_detected_video_id = coalesce($2, last_detected_video_id),
+              last_live_chat_id = $3,
+              last_live_title = coalesce($4, last_live_title),
+              last_live_started_at = $5,
+              last_error = $6,
+              metadata = coalesce($7::jsonb, metadata),
+              updated_at = now()
+        where owner_user_id = $1
+        returning *`,
+      [
+        ownerId,
+        patch.lastDetectedVideoId || null,
+        patch.lastLiveChatId || null,
+        patch.lastLiveTitle || null,
+        patch.lastLiveStartedAt || null,
+        patch.lastError || null,
+        patch.metadata ? JSON.stringify(patch.metadata) : null,
+      ]
+    );
+    return normalizeYoutubeStreamerChannelRow(rows[0]);
+  });
+}
+
+export async function updateYoutubeStreamerChannelWebsub(ownerUserId, patch = {}) {
+  const ownerId = String(ownerUserId || '').replace(/^user:/, '');
+  if (!ownerId) return null;
+  await ensureYoutubeCentralBotTables();
+  return withPgClient(async (pg) => {
+    const { rows } = await pg.query(
+      `update youtube_streamer_channels
+          set websub_status = coalesce($2, websub_status),
+              websub_lease_expires_at = $3,
+              last_error = $4,
+              updated_at = now()
+        where owner_user_id = $1
+        returning *`,
+      [ownerId, patch.websubStatus || null, patch.websubLeaseExpiresAt || null, patch.lastError || null]
+    );
+    return normalizeYoutubeStreamerChannelRow(rows[0]);
+  });
+}
+
+export async function markYoutubeStreamerChannelModeratorRegistered(ownerUserId, registered = true) {
+  const ownerId = String(ownerUserId || '').replace(/^user:/, '');
+  if (!ownerId) return null;
+  await ensureYoutubeCentralBotTables();
+  return withPgClient(async (pg) => {
+    const { rows } = await pg.query(
+      `update youtube_streamer_channels
+          set moderator_registered = $2,
+              updated_at = now()
+        where owner_user_id = $1
+        returning *`,
+      [ownerId, registered === true]
+    );
+    return normalizeYoutubeStreamerChannelRow(rows[0]);
+  });
+}
+
+export async function deleteYoutubeStreamerChannel(ownerUserId) {
+  const ownerId = String(ownerUserId || '').replace(/^user:/, '');
+  if (!ownerId) return false;
+  await ensureYoutubeCentralBotTables();
+  return withPgClient(async (pg) => {
+    await pg.query(`delete from youtube_streamer_channels where owner_user_id = $1`, [ownerId]);
+    return true;
   });
 }
 
