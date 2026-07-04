@@ -63,6 +63,7 @@ describe('database provider regression', () => {
     expect(packageJson).toContain('"db:switch-to-postgres": "node scripts/db-switch-to-postgres.js"');
     expect(packageJson).toContain('"db:provider-smoke": "node scripts/db-provider-smoke.js"');
     expect(packageJson).toContain('"api:smoke": "node scripts/api-smoke.js"');
+    expect(packageJson).toContain('"pm2:stop": "pm2 stop arubot-api"');
     expect(envExample).toContain('ARUBOT_ALLOW_SUPABASE_ENV_WITH_POSTGRES=false');
     expect(envExample).toContain('ARUBOT_ALLOW_SUPABASE_POSTGRES_URL=false');
   });
@@ -148,6 +149,8 @@ describe('database provider regression', () => {
     expect(switchToPostgres).toContain("upsertEnvValue(lines, 'ARUBOT_DB_PROVIDER', 'postgres')");
     expect(switchToPostgres).toContain("blankEnvValue(lines, 'SUPABASE_DB_URL')");
     expect(switchToPostgres).toContain("blankEnvValue(lines, 'SUPABASE_URL')");
+    expect(switchToPostgres).toContain("hasFlag('skip-runtime-stop')");
+    expect(switchToPostgres).toContain("npmCommand(), ['run', 'pm2:stop']");
     expect(switchToPostgres).toContain('function npmCommand()');
     expect(switchToPostgres).toContain("npmCommand(), ['run', 'pm2:reload']");
     expect(switchToPostgres).toContain('scripts/api-smoke.js');

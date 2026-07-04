@@ -108,7 +108,7 @@ npm run db:switch-to-postgres -- --execute --confirm=switch-to-postgres --base=h
 npm run api:smoke -- --base=http://localhost:3001 --expect-provider=postgres
 ```
 
-`db:switch-to-postgres`는 Supabase public schema dump, Postgres restore, migration, sequence repair, count/checksum 검증, `.env`의 `ARUBOT_DB_PROVIDER=postgres` 전환, PM2 reload, API smoke까지 한 번에 수행한다. 기본은 dry-run이며 실제 실행에는 `--execute --confirm=switch-to-postgres`가 필요하다.
+`db:switch-to-postgres`는 PM2 백엔드 중지, Supabase public schema dump, Postgres restore, migration, sequence repair, count/checksum 검증, `.env`의 `ARUBOT_DB_PROVIDER=postgres` 전환, PM2 reload, API smoke까지 한 번에 수행한다. 기본은 dry-run이며 실제 실행에는 `--execute --confirm=switch-to-postgres`가 필요하다. dump 중에도 운영 백엔드를 계속 실행해야 하는 특수 상황에서만 `--skip-runtime-stop`을 사용한다.
 
 Windows 설치 파일 빌드:
 

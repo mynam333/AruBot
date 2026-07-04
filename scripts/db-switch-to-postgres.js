@@ -94,6 +94,8 @@ async function main() {
   const confirm = parseArg('confirm');
   const skipApiSmoke = hasFlag('skip-api-smoke');
   const skipPm2Reload = hasFlag('skip-pm2-reload');
+  const skipRuntimeStop = hasFlag('skip-runtime-stop') || skipPm2Reload;
+  const stopRuntimeBeforeDump = !skipRuntimeStop;
   const envFile = path.resolve(parseArg('env-file', '.env'));
   const dumpFile = parseArg('dump', path.join('backups', `supabase-to-postgres-${timestamp()}.dump`));
   const baseUrl = parseArg('base') || process.env.API_SMOKE_BASE_URL || `http://localhost:${process.env.SERVER_PORT || process.env.PORT || 3001}`;
@@ -118,9 +120,11 @@ async function main() {
     baseUrl,
     skipApiSmoke,
     skipPm2Reload,
+    stopRuntimeBeforeDump,
     supabase: maskUrl(supabaseUrl),
     postgres: maskUrl(postgresUrl),
     steps: [
+      stopRuntimeBeforeDump ? commandText(npmCommand(), ['run', 'pm2:stop']) : 'skip runtime stop before dump',
       commandText('node', rehearsalArgs),
       `update ${envFile} to ARUBOT_DB_PROVIDER=postgres and blank Supabase REST keys`,
       skipPm2Reload ? 'skip pm2 reload' : commandText(npmCommand(), ['run', 'pm2:reload']),
@@ -137,23 +141,43 @@ async function main() {
     throw new Error('Refusing to switch without --confirm=switch-to-postgres.');
   }
 
-  await run('node', rehearsalArgs, {
-    ...process.env,
-    ARUBOT_ALLOW_SUPABASE_ENV_WITH_POSTGRES: 'true',
-  });
+  let runtimeStopped = false;
+  let envSwitched = false;
+  try {
+    if (stopRuntimeBeforeDump) {
+      await run(npmCommand(), ['run', 'pm2:stop'], process.env);
+      runtimeStopped = true;
+    }
 
-  const backupFile = writePostgresEnv(envFile);
-  console.log(`[db:switch-to-postgres] Updated ${envFile}. Backup: ${backupFile}`);
-
-  if (!skipPm2Reload) {
-    await run(npmCommand(), ['run', 'pm2:reload'], process.env);
-  }
-
-  if (!skipApiSmoke) {
-    await run('node', ['scripts/api-smoke.js', `--base=${baseUrl}`, '--expect-provider=postgres'], {
+    await run('node', rehearsalArgs, {
       ...process.env,
-      ARUBOT_DB_PROVIDER: 'postgres',
+      ARUBOT_ALLOW_SUPABASE_ENV_WITH_POSTGRES: 'true',
     });
+
+    const backupFile = writePostgresEnv(envFile);
+    envSwitched = true;
+    console.log(`[db:switch-to-postgres] Updated ${envFile}. Backup: ${backupFile}`);
+
+    if (!skipPm2Reload) {
+      await run(npmCommand(), ['run', 'pm2:reload'], process.env);
+    }
+
+    if (!skipApiSmoke) {
+      await run('node', ['scripts/api-smoke.js', `--base=${baseUrl}`, '--expect-provider=postgres'], {
+        ...process.env,
+        ARUBOT_DB_PROVIDER: 'postgres',
+      });
+    }
+  } catch (error) {
+    if (runtimeStopped && !envSwitched && !skipPm2Reload) {
+      console.warn('[db:switch-to-postgres] Switch failed before .env update. Restarting original PM2 runtime.');
+      try {
+        await run(npmCommand(), ['run', 'pm2:reload'], process.env);
+      } catch (restartError) {
+        console.error('[db:switch-to-postgres] Failed to restart original PM2 runtime:', restartError?.message || restartError);
+      }
+    }
+    throw error;
   }
 
   console.log('[db:switch-to-postgres] Supabase to Postgres switch completed.');
