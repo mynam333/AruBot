@@ -69,6 +69,21 @@ type YoutubeStreamerStatus = {
   botProfile?: YoutubeBotProfile | null;
 };
 
+type YoutubeModeratorVerification = {
+  reason?: string;
+  message?: string;
+  checkedBy?: string;
+  botChannelId?: string | null;
+  observedChannelId?: string | null;
+  moderatorListError?: string | null;
+  authorDetails?: {
+    displayName?: string | null;
+    channelId?: string | null;
+    isChatOwner?: boolean;
+    isChatModerator?: boolean;
+  };
+};
+
 const providerConfigs = [
   {
     id: 'chzzk' as const,
@@ -103,6 +118,18 @@ const compactNumberFormatter = new Intl.NumberFormat('ko-KR', { notation: 'compa
 
 function normalizeProvider(provider?: string) {
   return provider?.toLowerCase() as ProviderId | undefined;
+}
+
+function formatYoutubeModeratorError(verification?: YoutubeModeratorVerification | null, fallback = '운영자 등록 완료 확인에 실패했습니다.') {
+  if (!verification) return fallback;
+  const parts = [verification.message || fallback];
+  if (verification.reason) parts.push(`원인: ${verification.reason}`);
+  if (verification.checkedBy) parts.push(`확인: ${verification.checkedBy}`);
+  if (verification.moderatorListError) parts.push(`목록 조회: ${verification.moderatorListError}`);
+  if (verification.botChannelId && verification.observedChannelId && verification.botChannelId !== verification.observedChannelId) {
+    parts.push('AruBot에 저장된 봇 채널과 실제 채팅 작성 채널이 다릅니다.');
+  }
+  return parts.join(' · ');
 }
 
 function ProviderMark({ label, color, iconPath }: { label: string; color: string; iconPath: string }) {
@@ -311,7 +338,10 @@ export function ConnectionPage() {
         credentials: 'include',
       });
       const data = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(data?.verification?.message || data?.error || 'moderator confirm failed');
+      if (!response.ok) {
+        console.warn('[YouTube] Moderator confirmation failed', data?.verification || data);
+        throw new Error(formatYoutubeModeratorError(data?.verification, data?.error || '운영자 등록 완료 확인에 실패했습니다.'));
+      }
       toast.success(data?.verification?.message || 'YouTube 운영자 등록 완료를 확인했습니다.');
       refresh();
     } catch (error) {

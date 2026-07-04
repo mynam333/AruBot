@@ -11,7 +11,7 @@ import { ThemeToggle } from '@/components/ui/theme-toggle';
 import { apiUrl, readJson } from '@/shared/api/http';
 import { cn } from '@/shared/lib/utils';
 
-type ProviderId = 'chzzk' | 'cime';
+type ProviderId = 'chzzk' | 'cime' | 'youtube';
 
 type PlatformAccount = {
   provider?: string;
@@ -58,6 +58,15 @@ const providers = [
     tone: 'sky' as const,
     description: 'CIME에서 쌓은 참여 흔적도 같은 시청자 경험으로 자연스럽게 이어집니다.',
   },
+  {
+    id: 'youtube' as const,
+    label: 'YouTube',
+    loginPath: '/api/auth/youtube/login',
+    revokePath: '/api/auth/youtube/revoke',
+    iconPath: '/brands/youtube.svg',
+    tone: 'rose' as const,
+    description: 'YouTube에서 쓰는 계정도 같은 시청자로 묶어 채팅 참여와 포인트 경험을 이어갑니다.',
+  },
 ] as const;
 
 const compactNumberFormatter = new Intl.NumberFormat('ko-KR', { notation: 'compact', maximumFractionDigits: 1 });
@@ -66,6 +75,7 @@ function providerLabel(provider?: string | null) {
   const value = String(provider || '').toLowerCase();
   if (value === 'chzzk') return 'CHZZK';
   if (value === 'cime') return 'CIME';
+  if (value === 'youtube') return 'YouTube';
   return '플랫폼';
 }
 
@@ -100,6 +110,7 @@ function ProviderMark({ provider }: { provider: typeof providers[number] }) {
         'grid aspect-square w-[calc(var(--icon-box)*1.2)] shrink-0 place-items-center overflow-hidden rounded-[var(--radius-card)] border shadow-subtle',
         provider.tone === 'mint' && 'bg-pastel-mint/80 text-teal-950 dark:bg-primary/20 dark:text-teal-50',
         provider.tone === 'sky' && 'bg-pastel-sky/85 text-sky-950 dark:bg-sky-500/20 dark:text-sky-50',
+        provider.tone === 'rose' && 'bg-rose-500/10 text-rose-950 dark:bg-rose-500/20 dark:text-rose-50',
       )}
     >
       <img src={provider.iconPath} alt="" aria-hidden="true" className="h-[78%] w-[78%] object-contain" draggable={false} />
@@ -147,10 +158,10 @@ export function ViewerConnectPage() {
     return platforms.reduce<Record<ProviderId, PlatformAccount[]>>(
       (acc, account) => {
         const provider = String(account.provider || '').toLowerCase() as ProviderId;
-        if (provider === 'chzzk' || provider === 'cime') acc[provider].push(account);
+        if (provider === 'chzzk' || provider === 'cime' || provider === 'youtube') acc[provider].push(account);
         return acc;
       },
-      { chzzk: [], cime: [] },
+      { chzzk: [], cime: [], youtube: [] },
     );
   }, [platforms]);
 
@@ -203,7 +214,7 @@ export function ViewerConnectPage() {
                 어디서 보든 내 참여가 이어지게.
               </h1>
               <p className="mt-4 max-w-2xl break-keep text-sm leading-7 text-muted-foreground md:text-base">
-                CHZZK와 CIME 중 어디에서 보더라도 같은 시청자로 포인트와 참여 경험을 이어가세요.
+                CHZZK, CIME, YouTube 중 어디에서 보더라도 같은 시청자로 포인트와 참여 경험을 이어가세요.
               </p>
               <div className="mt-6 flex flex-wrap gap-2">
                 {providers.map((provider) => {
@@ -248,7 +259,7 @@ export function ViewerConnectPage() {
         </div>
       </section>
 
-      <section className="mx-auto mt-5 grid max-w-7xl gap-4 lg:grid-cols-2">
+      <section className="mx-auto mt-5 grid max-w-7xl gap-4 lg:grid-cols-2 xl:grid-cols-3">
         {providers.map((provider) => {
           const accounts = grouped[provider.id];
           const connected = accounts.length > 0;

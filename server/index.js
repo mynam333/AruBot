@@ -17505,6 +17505,17 @@ function serializeYoutubeAuthorDetails(author = {}) {
   };
 }
 
+function serializeYoutubeModeratorDetails(item = {}) {
+  const details = item?.snippet?.moderatorDetails || {};
+  return {
+    id: item?.id || null,
+    channelId: details.channelId || null,
+    channelUrl: details.channelUrl || null,
+    displayName: details.displayName || null,
+    profileImageUrl: details.profileImageUrl || null
+  };
+}
+
 function getYoutubeLiveChatMessageText(item = {}) {
   const snippet = item.snippet || {};
   return String(snippet.textMessageDetails?.messageText || snippet.displayMessage || '');
@@ -17538,6 +17549,35 @@ async function fetchYoutubeLiveChatMessages(liveChatId, accessToken) {
     timeout: 7000
   });
   return Array.isArray(response?.data?.items) ? response.data.items : [];
+}
+
+async function fetchYoutubeLiveChatModerators(ownerUserId, liveChatId) {
+  const accessToken = await getValidYoutubeAccessToken(ownerUserId);
+  const items = [];
+  let pageToken = null;
+
+  for (let page = 0; page < 10; page += 1) {
+    const response = await youtubeApiGetWithAccessToken('liveChat/moderators', accessToken, {
+      part: 'id,snippet',
+      liveChatId,
+      maxResults: 50,
+      ...(pageToken ? { pageToken } : {})
+    }, { timeout: 7000 });
+    const data = response?.data || {};
+    if (Array.isArray(data.items)) items.push(...data.items);
+    pageToken = data.nextPageToken || null;
+    if (!pageToken) break;
+  }
+
+  return items;
+}
+
+function findYoutubeModeratorByChannelId(items, channelId) {
+  if (!channelId) return null;
+  return (Array.isArray(items) ? items : []).find((item) => {
+    const details = item?.snippet?.moderatorDetails || {};
+    return String(details.channelId || '') === String(channelId);
+  }) || null;
 }
 
 async function waitForYoutubeModeratorVerificationMessage(liveChatId, accessToken, options = {}) {
@@ -17585,6 +17625,27 @@ async function verifyYoutubeBotModeratorRegistration(ownerUserId) {
   const accessToken = await getValidYoutubeBotAccessToken();
   const marker = `AruBot moderator check ${crypto.randomBytes(4).toString('hex')}`;
   let sentMessageId = null;
+  let moderatorListError = null;
+
+  try {
+    const moderators = await fetchYoutubeLiveChatModerators(ownerUserId, liveChatId);
+    const moderator = findYoutubeModeratorByChannelId(moderators, botProfile.selectedChannelId);
+    if (moderator) {
+      return {
+        verified: true,
+        reason: 'moderator_list_verified',
+        message: 'AruBot 중앙 봇이 이 라이브 채팅의 운영자로 확인되었습니다.',
+        liveChatId,
+        botChannelId: botProfile.selectedChannelId,
+        checkedBy: 'liveChatModerators.list',
+        moderatorDetails: serializeYoutubeModeratorDetails(moderator),
+        moderatorsChecked: moderators.length
+      };
+    }
+  } catch (e) {
+    moderatorListError = e;
+    console.warn('[YouTube] Moderator list verification failed:', e?.response?.data?.error?.message || e?.message || e);
+  }
 
   try {
     const sent = await youtubeBotApiPost('liveChat/messages', { part: 'snippet' }, {
@@ -17611,7 +17672,7 @@ async function verifyYoutubeBotModeratorRegistration(ownerUserId) {
   });
 
   if (!observed.match) {
-    return {
+    const result = {
       verified: false,
       reason: observed.lastError ? 'verification_lookup_failed' : 'verification_message_not_observed',
       message: observed.lastError
@@ -17623,6 +17684,11 @@ async function verifyYoutubeBotModeratorRegistration(ownerUserId) {
       checkedBy: 'liveChatMessages.list',
       attempts: observed.attempts
     };
+    if (moderatorListError) {
+      result.moderatorListError = moderatorListError?.response?.data?.error?.message || moderatorListError?.message || 'unknown error';
+    }
+    console.warn('[YouTube] Moderator verification failed:', result);
+    return result;
   }
 
   const author = observed.match.author || {};
@@ -17638,7 +17704,7 @@ async function verifyYoutubeBotModeratorRegistration(ownerUserId) {
     message = 'AruBot 중앙 봇 메시지는 확인했지만 YouTube API에서 운영자 또는 채널 소유자 권한이 확인되지 않았습니다.';
   }
 
-  return {
+  const result = {
     verified,
     reason,
     message,
@@ -17650,6 +17716,13 @@ async function verifyYoutubeBotModeratorRegistration(ownerUserId) {
     attempts: observed.attempts,
     authorDetails
   };
+  if (!verified || moderatorListError) {
+    result.moderatorListError = moderatorListError
+      ? moderatorListError?.response?.data?.error?.message || moderatorListError?.message || 'unknown error'
+      : null;
+    console.warn('[YouTube] Moderator verification result:', result);
+  }
+  return result;
 }
 
 async function sendYoutubeChat(ownerUserId, liveChatId, message) {

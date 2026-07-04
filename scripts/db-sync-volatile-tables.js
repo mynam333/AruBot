@@ -25,10 +25,15 @@ async function getColumns(client, tableName) {
   return rows.map((row) => String(row.column_name));
 }
 
+async function normalizeSession(client) {
+  await client.query(`set time zone 'UTC'`);
+  await client.query(`set datestyle to ISO, YMD`);
+}
+
 async function readSourceRows(client, tableName, columns) {
   const orderSql = columns.map((column) => quoteIdent(column)).join(', ');
   const { rows } = await client.query(
-    `select ${columns.map((column) => quoteIdent(column)).join(', ')}
+    `select ${columns.map((column) => `${quoteIdent(column)}::text as ${quoteIdent(column)}`).join(', ')}
        from public.${quoteIdent(tableName)}
       order by ${orderSql}`
   );
@@ -67,6 +72,7 @@ async function replaceTargetRows(client, tableName, columns, rows) {
 async function syncTable(tableName) {
   return Promise.all([
     withPgClient('supabase', async (client) => {
+      await normalizeSession(client);
       if (!(await tableExists(client, tableName))) return { exists: false, columns: [], rows: [] };
       const columns = await getColumns(client, tableName);
       return { exists: true, columns, rows: await readSourceRows(client, tableName, columns) };
