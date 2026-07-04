@@ -61,7 +61,7 @@ const providers = [
   {
     id: 'youtube' as const,
     label: 'YouTube',
-    loginPath: '/api/auth/youtube/login',
+    loginPath: '/api/auth/youtube/login?mode=viewer',
     revokePath: '/api/auth/youtube/revoke',
     iconPath: '/brands/youtube.svg',
     tone: 'rose' as const,
@@ -124,6 +124,35 @@ function AccountAvatar({ account, provider }: { account: PlatformAccount; provid
     return <img src={imageUrl} alt="" referrerPolicy="no-referrer" className="aspect-square w-[calc(var(--icon-box)*1.2)] shrink-0 rounded-[var(--radius-card)] border object-cover shadow-subtle" />;
   }
   return <ProviderMark provider={provider} />;
+}
+
+function ProviderLoginButton({
+  provider,
+  connected,
+  compact = false,
+}: {
+  provider: typeof providers[number];
+  connected: boolean;
+  compact?: boolean;
+}) {
+  return (
+    <Button
+      asChild
+      variant="outline"
+      className={cn(
+        'border-border/80 bg-background/82 text-foreground shadow-subtle hover:border-primary/35 hover:bg-muted/80 dark:bg-card/82 dark:hover:bg-muted/70',
+        compact && 'w-fit',
+      )}
+    >
+      <a href={apiUrl(provider.loginPath)}>
+        <span className="grid aspect-square h-7 w-7 shrink-0 place-items-center rounded-[calc(var(--radius-control)*0.55)] border bg-white shadow-[inset_0_0_0_1px_rgba(15,23,42,0.04)]">
+          <img src={provider.iconPath} alt="" aria-hidden="true" className="max-h-[70%] max-w-[70%] object-contain" draggable={false} />
+        </span>
+        <span>{connected ? `${provider.label} 추가 연결` : `${provider.label}로 로그인`}</span>
+        <ExternalLink className="h-4 w-4 text-muted-foreground" />
+      </a>
+    </Button>
+  );
 }
 
 export function ViewerConnectPage() {
@@ -219,15 +248,7 @@ export function ViewerConnectPage() {
               <div className="mt-6 flex flex-wrap gap-2">
                 {providers.map((provider) => {
                   const connected = connectedProviders.has(provider.id);
-                  return (
-                    <Button key={provider.id} asChild variant={connected ? 'secondary' : 'default'}>
-                      <a href={apiUrl(provider.loginPath)}>
-                        <img src={provider.iconPath} alt="" aria-hidden="true" className="h-6 w-6 shrink-0 rounded-[calc(var(--radius-control)*0.35)] object-contain" />
-                        {connected ? `${provider.label} 추가 연결` : `${provider.label}로 로그인`}
-                        <ExternalLink className="h-4 w-4" />
-                      </a>
-                    </Button>
-                  );
+                  return <ProviderLoginButton key={provider.id} provider={provider} connected={connected} />;
                 })}
               </div>
             </div>
@@ -316,13 +337,7 @@ export function ViewerConnectPage() {
                     아직 연결된 {provider.label} 계정이 없습니다. 로그인하면 이 플랫폼에서 쌓은 참여도 함께 볼 수 있습니다.
                   </div>
                 )}
-                <Button asChild variant={connected ? 'secondary' : 'default'} className="w-fit">
-                  <a href={apiUrl(provider.loginPath)}>
-                    <img src={provider.iconPath} alt="" aria-hidden="true" className="h-6 w-6 shrink-0 rounded-[calc(var(--radius-control)*0.35)] object-contain" />
-                    {connected ? '추가 연결' : `${provider.label}로 로그인`}
-                    <ExternalLink className="h-4 w-4" />
-                  </a>
-                </Button>
+                <ProviderLoginButton provider={provider} connected={connected} compact />
               </CardContent>
             </Card>
           );

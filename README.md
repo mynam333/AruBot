@@ -52,6 +52,8 @@ cp .env.example .env
 - `CHZZK_CLIENT_ID`, `CHZZK_CLIENT_SECRET`, `CHZZK_REDIRECT_URI`
 - `CIME_CLIENT_ID`, `CIME_CLIENT_SECRET`, `CIME_REDIRECT_URI`
 - `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, `YOUTUBE_REDIRECT_URI`
+- `YOUTUBE_VIEWER_AUTH_SCOPE`: 시청자 YouTube 연결용 읽기 전용 scope. 기본값은 `https://www.googleapis.com/auth/youtube.readonly`
+- `YOUTUBE_BOT_AUTH_SCOPE`: 중앙 봇 계정용 scope. 채팅 발송 때문에 기본값은 `https://www.googleapis.com/auth/youtube.force-ssl`
 - `ARUBOT_DB_PROVIDER`: `supabase` 또는 `postgres`
 - `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_URL`: `ARUBOT_DB_PROVIDER=supabase`일 때 사용
 - `POSTGRES_URL`: `ARUBOT_DB_PROVIDER=postgres`일 때 사용. 운영 Postgres 모드에서는 Supabase 공식 서버 URL/key에 의존하지 않습니다.
@@ -59,7 +61,7 @@ cp .env.example .env
 선택 환경 변수:
 
 - `CIME_OPENAPI_BASE`: CIME OpenAPI base URL. 기본값은 `https://ci.me/api/openapi`
-- `YOUTUBE_AUTH_SCOPE`: YouTube OAuth scope. 기본값은 `https://www.googleapis.com/auth/youtube.force-ssl`
+- `YOUTUBE_AUTH_SCOPE`: 구버전 배포 호환용 중앙 봇 scope fallback. 새 설정에서는 `YOUTUBE_BOT_AUTH_SCOPE`를 사용합니다.
 - `YOUTUBE_API_BASE`: YouTube Data API base URL. 기본값은 `https://www.googleapis.com/youtube/v3`
 - `YOUTUBE_STREAM_PATH`: Live Chat streaming endpoint. 기본값은 `/liveChat/messages/stream`
 - `REDIS_URL`: 실시간 이벤트 fanout을 보조할 Redis 인스턴스

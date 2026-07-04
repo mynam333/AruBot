@@ -8541,9 +8541,18 @@ const YOUTUBE_REDIRECT_URI = normalizeYoutubeRedirectUri(
   process.env.YOUTUBE_REDIRECT_URI ||
   (BACKEND_ORIGIN ? `${String(BACKEND_ORIGIN).replace(/\/$/, '')}/api/auth/youtube/callback` : '')
 );
-const YOUTUBE_AUTH_SCOPE = String(
+const YOUTUBE_BOT_AUTH_SCOPE = String(
+  process.env.YOUTUBE_BOT_AUTH_SCOPE ||
   process.env.YOUTUBE_AUTH_SCOPE ||
   'https://www.googleapis.com/auth/youtube.force-ssl'
+).trim();
+const YOUTUBE_VIEWER_AUTH_SCOPE = String(
+  process.env.YOUTUBE_VIEWER_AUTH_SCOPE ||
+  'https://www.googleapis.com/auth/youtube.readonly'
+).trim();
+const YOUTUBE_STREAMER_AUTH_SCOPE = String(
+  process.env.YOUTUBE_STREAMER_AUTH_SCOPE ||
+  YOUTUBE_VIEWER_AUTH_SCOPE
 ).trim();
 const YOUTUBE_API_BASE = process.env.YOUTUBE_API_BASE || 'https://www.googleapis.com/youtube/v3';
 const YOUTUBE_AUTH_URL = process.env.YOUTUBE_AUTH_URL || 'https://accounts.google.com/o/oauth2/v2/auth';
@@ -11187,14 +11196,14 @@ function normalizeYoutubeProfile(channel) {
   };
 }
 
-function normalizeGoogleTokenPayload(payload, previousTokens = {}) {
+function normalizeGoogleTokenPayload(payload, previousTokens = {}, fallbackScope = YOUTUBE_BOT_AUTH_SCOPE) {
   const expiresIn = Number(payload?.expires_in || payload?.expiresIn || 3600);
   return {
     accessToken: payload?.access_token || payload?.accessToken || previousTokens.accessToken || null,
     refreshToken: payload?.refresh_token || payload?.refreshToken || previousTokens.refreshToken || null,
     tokenType: payload?.token_type || payload?.tokenType || previousTokens.tokenType || 'Bearer',
     expiresAt: computeExpiresAt(Number.isFinite(expiresIn) ? expiresIn : 3600),
-    scope: payload?.scope || previousTokens.scope || YOUTUBE_AUTH_SCOPE
+    scope: payload?.scope || previousTokens.scope || fallbackScope
   };
 }
 
@@ -12085,7 +12094,17 @@ app.get('/api/auth/youtube/login', (req, res) => {
     if (!YOUTUBE_CLIENT_ID || !YOUTUBE_CLIENT_SECRET) {
       return res.status(500).json({ error: 'Server not configured with YouTube credentials' });
     }
-    const mode = String(req.query?.mode || '').trim() === 'central_bot' ? 'central_bot' : 'streamer_oauth';
+    const requestedMode = String(req.query?.mode || '').trim();
+    const mode = requestedMode === 'central_bot'
+      ? 'central_bot'
+      : requestedMode === 'viewer'
+        ? 'viewer'
+        : 'streamer_oauth';
+    const scope = mode === 'central_bot'
+      ? YOUTUBE_BOT_AUTH_SCOPE
+      : mode === 'viewer'
+        ? YOUTUBE_VIEWER_AUTH_SCOPE
+        : YOUTUBE_STREAMER_AUTH_SCOPE;
     const start = async () => {
       if (mode === 'central_bot') {
         const admin = await requireCurrentAdminUser(req, res);
@@ -12098,10 +12117,10 @@ app.get('/api/auth/youtube/login', (req, res) => {
       authUrl.searchParams.set('client_id', YOUTUBE_CLIENT_ID);
       authUrl.searchParams.set('redirect_uri', YOUTUBE_REDIRECT_URI);
       authUrl.searchParams.set('response_type', 'code');
-      authUrl.searchParams.set('scope', YOUTUBE_AUTH_SCOPE);
+      authUrl.searchParams.set('scope', scope);
       authUrl.searchParams.set('state', state);
       authUrl.searchParams.set('access_type', 'offline');
-      authUrl.searchParams.set('include_granted_scopes', 'true');
+      if (mode === 'central_bot') authUrl.searchParams.set('include_granted_scopes', 'true');
       authUrl.searchParams.set('prompt', 'consent');
       return res.redirect(authUrl.toString());
     };
@@ -12159,10 +12178,15 @@ app.get('/api/auth/youtube/callback', async (req, res) => {
       grant_type: 'authorization_code',
       redirect_uri: YOUTUBE_REDIRECT_URI
     });
-    const tokens = normalizeGoogleTokenPayload(tokenPayload);
+    const oauthMode = String(stateValidation.extra?.mode || '').trim();
+    const tokenFallbackScope = oauthMode === 'viewer'
+      ? YOUTUBE_VIEWER_AUTH_SCOPE
+      : oauthMode === 'streamer_oauth'
+        ? YOUTUBE_STREAMER_AUTH_SCOPE
+        : YOUTUBE_BOT_AUTH_SCOPE;
+    const tokens = normalizeGoogleTokenPayload(tokenPayload, {}, tokenFallbackScope);
     if (!tokens.accessToken) throw new Error('YouTube token response did not include access_token');
 
-    const oauthMode = String(stateValidation.extra?.mode || '').trim();
     if (oauthMode === 'central_bot') {
       const admin = await getCurrentAdminUserForCallback(req);
       const ownerUserId = admin?.userId || null;
@@ -12208,9 +12232,11 @@ app.get('/api/auth/youtube/callback', async (req, res) => {
     const sidToken = getCookieSid(req) || ('rt_' + crypto.randomBytes(32).toString('hex'));
     await upsertSession(sidToken, userId, 30);
     if (!getCookieSid(req)) setCookieSid(res, sidToken);
-    ensureYoutubeSession(userId).catch((err) => {
-      console.warn('[YouTube] Failed to start live chat session after OAuth callback:', err?.response?.data || err?.message || err);
-    });
+    if (oauthMode !== 'viewer') {
+      ensureYoutubeSession(userId).catch((err) => {
+        console.warn('[YouTube] Failed to start live chat session after OAuth callback:', err?.response?.data || err?.message || err);
+      });
+    }
 
     return res.redirect(getAuthRedirectUrl(req, { auth: 'success', platform: 'youtube', reason: null }));
   } catch (e) {

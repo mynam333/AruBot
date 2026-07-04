@@ -90,6 +90,19 @@ describe('YouTube live chat integration regression', () => {
     expect(connectionPage).toContain("searchParams.get('platform') !== 'youtube'");
   });
 
+  test('separates viewer and central bot YouTube OAuth scopes', () => {
+    expect(serverIndex).toContain('const YOUTUBE_BOT_AUTH_SCOPE = String(');
+    expect(serverIndex).toContain('const YOUTUBE_VIEWER_AUTH_SCOPE = String(');
+    expect(serverIndex).toContain("'https://www.googleapis.com/auth/youtube.readonly'");
+    expect(serverIndex).toContain("'https://www.googleapis.com/auth/youtube.force-ssl'");
+    expect(serverIndex).toContain("requestedMode === 'viewer'");
+    expect(serverIndex).toContain("mode === 'viewer'");
+    expect(serverIndex).toContain('authUrl.searchParams.set(\'scope\', scope)');
+    expect(serverIndex).toContain("if (mode === 'central_bot') authUrl.searchParams.set('include_granted_scopes', 'true')");
+    expect(serverIndex).toContain("if (oauthMode !== 'viewer')");
+    expect(serverIndex).toContain('normalizeGoogleTokenPayload(tokenPayload, {}, tokenFallbackScope)');
+  });
+
   test('YouTube channel auto-detection uses WebSub plus bounded retries instead of polling', () => {
     expect(serverIndex).toContain('YOUTUBE_WEBSUB_HUB_URL');
     expect(serverIndex).toContain("app.get(YOUTUBE_WEBSUB_CALLBACK_PATH");
