@@ -30,6 +30,7 @@
     "db:counts": "node scripts/db-row-counts.js",
     "db:compare-counts": "node scripts/db-compare-counts.js",
     "db:compare-checksums": "node scripts/db-compare-checksums.js",
+    "db:diff-table": "node scripts/db-diff-table.js",
     "db:cutover-preflight": "node scripts/db-cutover-preflight.js",
     "db:cutover-verify": "node scripts/db-cutover-verify.js",
     "db:cutover-rehearsal": "node scripts/db-cutover-rehearsal.js",

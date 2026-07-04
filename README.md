@@ -97,6 +97,7 @@ npm run db:repair-sequences -- --target=postgres
 npm run db:counts
 npm run db:compare-counts
 npm run db:compare-checksums
+npm run db:diff-table -- --table=sessions
 npm run db:provider-smoke
 npm run db:cutover-preflight
 npm run db:cutover-verify

@@ -32,6 +32,11 @@ function parseLimit() {
   return Math.max(1, Math.min(200000, Number(arg ? arg.slice('--limit='.length) : 50000)));
 }
 
+async function normalizeComparisonSession(client) {
+  await client.query(`set time zone 'UTC'`);
+  await client.query(`set datestyle to ISO, YMD`);
+}
+
 async function getPrimaryKeyColumns(client, tableName) {
   const { rows } = await client.query(
     `select kcu.column_name
@@ -90,11 +95,13 @@ async function main() {
   const limit = parseLimit();
   const [supabase, postgres] = await Promise.all([
     withPgClient('supabase', async (client) => {
+      await normalizeComparisonSession(client);
       const result = {};
       for (const tableName of tables) result[tableName] = await checksumTable(client, tableName, limit);
       return result;
     }),
     withPgClient('postgres', async (client) => {
+      await normalizeComparisonSession(client);
       const result = {};
       for (const tableName of tables) result[tableName] = await checksumTable(client, tableName, limit);
       return result;

@@ -8,6 +8,8 @@ describe('database provider regression', () => {
   const packageJson = fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8');
   const dbCommon = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'db-common.js'), 'utf8');
   const compareCounts = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'db-compare-counts.js'), 'utf8');
+  const compareChecksums = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'db-compare-checksums.js'), 'utf8');
+  const diffTable = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'db-diff-table.js'), 'utf8');
   const cutoverRehearsal = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'db-cutover-rehearsal.js'), 'utf8');
   const cutoverPreflight = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'db-cutover-preflight.js'), 'utf8');
   const switchToPostgres = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'db-switch-to-postgres.js'), 'utf8');
@@ -54,6 +56,7 @@ describe('database provider regression', () => {
     expect(packageJson).toContain('"db:counts": "node scripts/db-row-counts.js"');
     expect(packageJson).toContain('"db:compare-counts": "node scripts/db-compare-counts.js"');
     expect(packageJson).toContain('"db:compare-checksums": "node scripts/db-compare-checksums.js"');
+    expect(packageJson).toContain('"db:diff-table": "node scripts/db-diff-table.js"');
     expect(packageJson).toContain('"db:cutover-preflight": "node scripts/db-cutover-preflight.js"');
     expect(packageJson).toContain('"db:cutover-verify": "node scripts/db-cutover-verify.js"');
     expect(packageJson).toContain('"db:cutover-rehearsal": "node scripts/db-cutover-rehearsal.js"');
@@ -87,6 +90,14 @@ describe('database provider regression', () => {
     expect(compareCounts).toContain("const DEFAULT_IGNORED_TABLES = ['migration_log']");
     expect(compareCounts).toContain("parseListArg('ignore', DEFAULT_IGNORED_TABLES)");
     expect(compareCounts).toContain('ignoredTables');
+  });
+
+  test('checksum and table diff comparison normalize timestamp rendering', () => {
+    expect(compareChecksums).toContain("set time zone 'UTC'");
+    expect(compareChecksums).toContain('set datestyle to ISO, YMD');
+    expect(compareChecksums).toContain('normalizeComparisonSession(client)');
+    expect(diffTable).toContain("set time zone 'UTC'");
+    expect(diffTable).toContain('show-values');
   });
 
   test('cutover rehearsal is dry-run by default and requires restore confirmation', () => {
