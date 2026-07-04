@@ -57,4 +57,14 @@ describe('룰렛 뷰어 토큰 회귀 방지', () => {
     expect(roulettePage).not.toContain('href="/roulette/viewer"');
     expect(navigation).not.toContain("href: '/roulette/viewer'");
   });
+
+  test('룰렛 WebSocket effect는 debug 상태 변경으로 재연결 루프를 만들면 안 됨', () => {
+    expect(rouletteViewer).toContain('const reconnectAttemptsRef = React.useRef(0)');
+    expect(rouletteViewer).toContain('connectionAttempts: prev.connectionAttempts + 1');
+    expect(rouletteViewer).toContain('messageCount: prev.messageCount + 1');
+    expect(rouletteViewer).toContain('reconnectAttemptsRef.current += 1');
+    expect(rouletteViewer).not.toContain('debugInfo.connectionAttempts');
+    expect(rouletteViewer).not.toContain('debugInfo.messageCount');
+    expect(rouletteViewer).not.toContain('debugInfo.reconnectAttempts');
+  });
 });

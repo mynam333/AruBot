@@ -406,7 +406,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
   const finalLabelRef = React.useRef<string | null>(null);
 
   // WebSocket 디버깅 정보 상태
-  const [debugInfo, setDebugInfo] = React.useState<WebSocketDebugInfo>({
+  const [, setDebugInfo] = React.useState<WebSocketDebugInfo>({
     connectionAttempts: 0,
     lastConnectionTime: 0,
     lastMessageTime: 0,
@@ -422,6 +422,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
   });
   const wsRef = React.useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = React.useRef<number | null>(null);
+  const reconnectAttemptsRef = React.useRef(0);
 
   // Deterministic label provider for any integer index (prevents blanks)
   const labelFor = React.useCallback((idx: number) => {
@@ -584,9 +585,10 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
   }, []);
 
   // 디버깅 정보 업데이트 함수
-  const updateDebugInfo = React.useCallback((updates: Partial<WebSocketDebugInfo>) => {
+  const updateDebugInfo = React.useCallback((updates: Partial<WebSocketDebugInfo> | ((prev: WebSocketDebugInfo) => Partial<WebSocketDebugInfo>)) => {
     setDebugInfo(prev => {
-      const newInfo = { ...prev, ...updates };
+      const patch = typeof updates === 'function' ? updates(prev) : updates;
+      const newInfo = { ...prev, ...patch };
       return newInfo;
     });
   }, []);
@@ -744,15 +746,16 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       
       updateDebugInfo({ 
         connectionState: 'connecting',
-        connectionAttempts: debugInfo.connectionAttempts + 1,
         lastConnectionTime: Date.now()
       });
+      updateDebugInfo((prev) => ({ connectionAttempts: prev.connectionAttempts + 1 }));
 
       const ws = new WebSocket(url);
       wsRef.current = ws;
 
       ws.onopen = () => {
         setError(null);
+        reconnectAttemptsRef.current = 0;
         connectionEstablishedAtRef.current = Date.now();
         firstValidMessageReceivedRef.current = false;
         
@@ -770,10 +773,10 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
 
       ws.onmessage = async (ev) => {
         try {
-          updateDebugInfo({ 
+          updateDebugInfo((prev) => ({ 
             lastMessageTime: Date.now(),
-            messageCount: debugInfo.messageCount + 1
-          });
+            messageCount: prev.messageCount + 1
+          }));
 
           const data = JSON.parse(ev.data) as WsPayload;
           if (data && data.type === 'roulette') {
@@ -824,9 +827,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
             );
             
             if (isLikelyInitialMessage && !firstValidMessageReceivedRef.current) {
-              updateDebugInfo({ 
-                initialMessagesSkipped: debugInfo.initialMessagesSkipped + 1
-              });
+              updateDebugInfo((prev) => ({ initialMessagesSkipped: prev.initialMessagesSkipped + 1 }));
               return;
             }
             
@@ -835,9 +836,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
               firstValidMessageReceivedRef.current = true;
             }
             
-            updateDebugInfo({ 
-              validMessagesReceived: debugInfo.validMessagesReceived + 1
-            });
+            updateDebugInfo((prev) => ({ validMessagesReceived: prev.validMessagesReceived + 1 }));
             
             // If autoplay not yet enabled, try one more prime attempt just-in-time
             if (!canAutoPlayRef.current && sfxOn) {
@@ -993,11 +992,10 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
         });
 
         // 비정상 종료인 경우 재연결 시도
-        if (!event.wasClean && debugInfo.reconnectAttempts < 3) {
-          const delay = Math.min(1000 * Math.pow(2, debugInfo.reconnectAttempts), 10000); // 지수 백오프
-          updateDebugInfo({ 
-            reconnectAttempts: debugInfo.reconnectAttempts + 1
-          });
+        if (!event.wasClean && reconnectAttemptsRef.current < 3) {
+          const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 10000); // 지수 백오프
+          reconnectAttemptsRef.current += 1;
+          updateDebugInfo({ reconnectAttempts: reconnectAttemptsRef.current });
 
           reconnectTimeoutRef.current = window.setTimeout(() => {
             connectWebSocket();
@@ -1027,7 +1025,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     }
   // Keep this callback stable enough to avoid reconnect churn during roulette animation state updates.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, validateToken, validateMessageChannelId, updateDebugInfo, debugInfo.connectionAttempts, debugInfo.messageCount, debugInfo.reconnectAttempts, sfxOn, channelValidationOn, primeAudio]);
+  }, [token, validateToken, validateMessageChannelId, updateDebugInfo, sfxOn, channelValidationOn, primeAudio]);
 
   React.useEffect(() => {
     const cleanup = connectWebSocket();
