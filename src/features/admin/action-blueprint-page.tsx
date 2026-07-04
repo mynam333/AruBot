@@ -57,7 +57,7 @@ import {
   type ReactFlowInstance,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
+import { type CSSProperties, useCallback, useEffect, useId, useMemo, useRef, useState, useTransition } from 'react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -96,6 +96,7 @@ type NodeType =
   | 'overlay'
   | 'overlayUpdate'
   | 'overlayHide'
+  | 'fx'
   | 'tts'
   | 'sound'
   | 'obs'
@@ -187,6 +188,7 @@ type AutomationOverview = {
   soundStorage?: {
     files?: Array<{ id: string; name: string; size?: number; updatedAt?: string; url?: string }>;
   };
+  fxAssets?: Array<{ id: string; name: string; kind: 'image' | 'sticker' | 'video' | 'sound'; previewDataUrl?: string | null }>;
   localAgents?: Array<{
     id: string;
     name: string;
@@ -296,7 +298,7 @@ const nodeCatalog: Array<{
   { type: 'overlayUpdate', title: '오버레이 수정', body: '표시 내용/진행률 수정', group: '연출', icon: Layers3, tone: 'sky', config: { overlayId: '{node.overlay.overlayId}', text: '', progress: '' } },
   { type: 'overlayHide', title: '오버레이 숨김', body: '표시 중인 오버레이 닫기', group: '연출', icon: Layers3, tone: 'neutral', config: { overlayId: '{node.overlay.overlayId}' } },
   { type: 'tts', title: 'TTS', body: '말할 내용 입력', group: '연출', icon: Volume2, tone: 'coral', config: { text: '{user.name}님 축하합니다!', voice: '', rate: 1, pitch: 1 } },
-  { type: 'sound', title: '사운드', body: '서버/로컬 사운드 재생', group: '연출', icon: Volume2, tone: 'coral', config: { fileId: '', volume: 1 } },
+  { type: 'fx', title: 'FX 오버레이', body: '이미지/스티커/비디오/사운드', group: '연출', icon: Volume2, tone: 'coral', config: { kind: 'image', assetId: '', x: 50, y: 50, width: 28, height: 28, durationMs: 4000, enterCss: 'fx-pop-in 360ms ease-out both', exitCss: 'fx-fade-out 280ms ease-in both', chromaKey: false, chromaKeyColor: '#00ff00', volume: 1 } },
   { type: 'obs', title: 'OBS', body: '장면/소스/필터 제어', group: '연동', icon: Radio, tone: 'mint', config: { action: 'scene.switch', sceneName: '' } },
   { type: 'http', title: 'HTTP 요청', body: '외부 도구 깨우기', group: '연동', icon: Network, tone: 'neutral', config: { method: 'POST', url: '', body: '{}' } },
   { type: 'websocket', title: 'WebSocket', body: '로컬 도구에 메시지', group: '연동', icon: Network, tone: 'neutral', config: { url: '', message: '{}', timeoutMs: 8000 } },
@@ -386,7 +388,7 @@ const blueprintTemplates: Array<{
     nodes: [
       { type: 'random', name: '반응 선택', position: { x: 0, y: 0 }, config: { options: [{ id: 'chat', label: '채팅', weight: 2 }, { id: 'sound', label: '사운드', weight: 1 }, { id: 'overlay', label: '오버레이', weight: 1 }] } },
       { type: 'chat', name: '채팅 반응', position: { x: 24, y: -8 }, config: { message: '{user.username}님 반가워요!' } },
-      { type: 'sound', name: '사운드 재생', position: { x: 24, y: 2 }, config: { fileId: '', volume: 1 } },
+      { type: 'fx', name: 'FX 사운드', position: { x: 24, y: 2 }, config: { kind: 'sound', assetId: '', volume: 1, durationMs: 1000 } },
       { type: 'overlay', name: '오버레이 반응', position: { x: 24, y: 12 }, config: { text: '{user.username}님 등장!', durationMs: 3500, animation: 'pop' } },
     ],
     edges: [
@@ -479,6 +481,7 @@ function requiredConfigErrors(node: BlueprintNode) {
   if (node.type === 'pointsEnough') need('required', '필요 포인트');
   if (node.type === 'rouletteRun') need('name', '룰렛 이름 또는 ID');
   if (node.type === 'rouletteDisplay' || node.type === 'overlay') need('text', '표시 내용');
+  if (node.type === 'fx' && !(String(node.config.kind || '') === 'video' && String(node.config.youtubeUrl || '').trim())) need('assetId', 'FX 에셋');
   if (node.type === 'tts') need('text', '말할 내용');
   if (node.type === 'http') need('url', 'URL');
   if (node.type === 'websocket') {
@@ -678,6 +681,7 @@ function nodePreview(node: BlueprintNode) {
   if (node.type === 'pointsAdjust') return `${String(node.config.delta || 0)} 포인트`;
   if (node.type === 'rouletteRun') return String(node.config.name || '룰렛 미선택');
   if (node.type === 'action') return String(node.config.actionId || '블루프린트 미선택');
+  if (node.type === 'fx') return `${String(node.config.kind || 'image')} · ${String(node.config.assetName || node.config.assetId || node.config.youtubeUrl || '에셋 미선택')}`;
   if (node.type === 'sound') return String(node.config.fileId || '사운드 미선택');
   if (node.type === 'tits') return String(node.config.triggerName || node.config.triggerId || '트리거 미선택');
   if (node.type === 'vtube') {
@@ -2741,6 +2745,7 @@ function ConfigFields({
   const vtubeConnection = automationConnections.find((item) => item.type === 'vtube_studio') || null;
   const hasOnlineLocalAgent = (automationOverview?.localAgents || []).some((agent) => agent.status === 'online');
   const soundFiles = automationOverview?.soundStorage?.files || [];
+  const fxAssets = automationOverview?.fxAssets || [];
   if (node.type === 'condition' || node.type === 'rouletteCompare') {
     return (
       <div className="grid gap-3">
@@ -2799,6 +2804,90 @@ function ConfigFields({
         <Field label="목소리" value={String(cfg.voice || '')} onChange={(value) => onChange('voice', value)} />
         <Field label="속도" value={String(cfg.rate || 1)} onChange={(value) => onChange('rate', value)} />
         <Field label="높낮이" value={String(cfg.pitch || 1)} onChange={(value) => onChange('pitch', value)} />
+      </div>
+    );
+  }
+  if (node.type === 'fx') {
+    const kind = String(cfg.kind || 'image');
+    const assets = fxAssets.filter((asset) => asset.kind === kind || (kind === 'sticker' && asset.kind === 'image'));
+    const selectedAsset = fxAssets.find((asset) => asset.id === cfg.assetId);
+    const chromaKeyColor = String(cfg.chromaKeyColor || '#00ff00');
+    const pickColor = async () => {
+      type EyeDropperConstructor = new () => { open: () => Promise<{ sRGBHex: string }> };
+      const EyeDropper = (window as unknown as { EyeDropper?: EyeDropperConstructor }).EyeDropper;
+      if (!EyeDropper) return;
+      const result = await new EyeDropper().open().catch(() => null);
+      if (result?.sRGBHex) onChange('chromaKeyColor', result.sRGBHex);
+    };
+    return (
+      <div className="grid gap-3">
+        <ExampleField
+          label="FX 종류"
+          value={kind}
+          onChange={(value) => {
+            onChange('kind', value);
+            onChange('assetId', '');
+            onChange('assetName', '');
+          }}
+          placeholder="image, sticker, video, sound"
+          examples={['image', 'sticker', 'video', 'sound']}
+        />
+        {kind === 'video' ? <Field label="YouTube 링크" value={String(cfg.youtubeUrl || '')} onChange={(value) => onChange('youtubeUrl', value)} /> : null}
+        <SelectField
+          label={kind === 'sound' ? '사운드 에셋' : kind === 'video' ? '로컬 비디오 에셋' : '이미지/스티커 에셋'}
+          value={String(cfg.assetId || '')}
+          onChange={(value) => {
+            const asset = fxAssets.find((item) => item.id === value);
+            onChange('assetId', value);
+            onChange('assetName', asset?.name || '');
+          }}
+          placeholder={assets.length ? '로컬 에셋 선택' : '로컬 프로그램에서 에셋 목록을 불러오세요'}
+          options={assets.map((asset) => ({ value: asset.id, label: asset.name || asset.id }))}
+        />
+        {selectedAsset?.previewDataUrl ? (
+          <div className="rounded-[var(--radius-control)] border bg-background/70 p-3">
+            <img src={selectedAsset.previewDataUrl} alt="" className="max-h-36 max-w-full rounded-[calc(var(--radius-control)*0.8)] object-contain" />
+          </div>
+        ) : null}
+        {kind !== 'sound' ? (
+          <>
+            <div className="grid gap-3 md:grid-cols-2">
+              <Field label="위치 X(%)" value={String(cfg.x ?? 50)} onChange={(value) => onChange('x', value)} />
+              <Field label="위치 Y(%)" value={String(cfg.y ?? 50)} onChange={(value) => onChange('y', value)} />
+              <Field label="너비(%)" value={String(cfg.width ?? 28)} onChange={(value) => onChange('width', value)} />
+              <Field label="높이(%)" value={String(cfg.height ?? 28)} onChange={(value) => onChange('height', value)} />
+            </div>
+            <ExampleField
+              label="등장 CSS animation"
+              value={String(cfg.enterCss || 'fx-pop-in 360ms ease-out both')}
+              onChange={(value) => onChange('enterCss', value)}
+              placeholder="fx-pop-in 360ms ease-out both"
+              examples={['fx-pop-in 360ms ease-out both', 'fx-slide-up 420ms ease-out both', 'fx-spin-in 520ms cubic-bezier(.2,.8,.2,1) both', 'fade-in 280ms ease-out both']}
+            />
+            <ExampleField
+              label="퇴장 CSS animation"
+              value={String(cfg.exitCss || 'fx-fade-out 280ms ease-in both')}
+              onChange={(value) => onChange('exitCss', value)}
+              placeholder="fx-fade-out 280ms ease-in both"
+              examples={['fx-fade-out 280ms ease-in both', 'fade-out 280ms ease-in both', 'fx-slide-up 260ms ease-in reverse both', 'fx-pop-in 240ms ease-in reverse both']}
+            />
+            <label className="flex items-center gap-2 rounded-[var(--radius-control)] border bg-background/70 p-3 text-sm font-semibold">
+              <input type="checkbox" checked={cfg.chromaKey === true} onChange={(event) => onChange('chromaKey', event.target.checked)} />
+              크로마키 사용
+            </label>
+            {cfg.chromaKey === true ? (
+              <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+                <label className="grid gap-2 text-sm font-semibold">
+                  크로마키 색
+                  <input type="color" value={chromaKeyColor} onChange={(event) => onChange('chromaKeyColor', event.target.value)} className="min-h-[var(--control-height)] w-full rounded-[var(--radius-control)] border bg-background p-1" />
+                </label>
+                <Button type="button" variant="outline" onClick={pickColor}>스포이드</Button>
+                <Field label="허용 오차" value={String(cfg.chromaKeyTolerance ?? 42)} onChange={(value) => onChange('chromaKeyTolerance', value)} />
+              </div>
+            ) : null}
+          </>
+        ) : null}
+        <Field label={kind === 'sound' ? '볼륨(0-1)' : '유지 시간(ms)'} value={String(kind === 'sound' ? cfg.volume ?? 1 : cfg.durationMs ?? 4000)} onChange={(value) => onChange(kind === 'sound' ? 'volume' : 'durationMs', value)} />
       </div>
     );
   }
@@ -3163,6 +3252,41 @@ function Field({ label, value, onChange }: { label: string; value: string; onCha
     <label className="grid min-w-0 gap-2 text-sm font-semibold">
       {label}
       <Input value={value} onChange={(event) => onChange(event.target.value)} className="w-full min-w-0" />
+    </label>
+  );
+}
+
+function ExampleField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  examples,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  examples: string[];
+}) {
+  const reactId = useId();
+  const datalistId = `example-${reactId.replace(/:/g, '-')}`;
+  return (
+    <label className="grid min-w-0 gap-2 text-sm font-semibold">
+      {label}
+      <Input
+        value={value}
+        list={datalistId}
+        placeholder={placeholder}
+        onChange={(event) => onChange(event.target.value)}
+        className="w-full min-w-0"
+      />
+      <datalist id={datalistId}>
+        {examples.map((example) => (
+          <option key={example} value={example} />
+        ))}
+      </datalist>
+      <span className="text-xs font-medium text-muted-foreground">예: {examples.join(' / ')}</span>
     </label>
   );
 }

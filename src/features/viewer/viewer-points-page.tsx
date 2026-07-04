@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import * as Dialog from '@radix-ui/react-dialog';
 import {
   Coins,
   ExternalLink,
@@ -13,7 +14,11 @@ import {
   SearchX,
   SlidersHorizontal,
   Sparkles,
+  Tv,
+  Trophy,
   UserRoundPlus,
+  WalletCards,
+  X,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button, LinkButton } from '@/components/ui/button';
@@ -34,13 +39,32 @@ type PlatformAccount = {
   profile_image_url?: string;
 };
 
+type StationChannel = {
+  provider?: string;
+  platformUserId?: string;
+  platform_user_id?: string;
+  channelId?: string;
+  channel_id?: string;
+  channelName?: string;
+  channel_name?: string;
+  channelHandle?: string | null;
+  channel_handle?: string | null;
+  avatarUrl?: string | null;
+  avatar_url?: string | null;
+  profileImageUrl?: string | null;
+  profile_image_url?: string | null;
+  url?: string | null;
+};
+
 type ViewerBalance = {
   channelUid: string;
+  canonicalChannelUid?: string | null;
   channelName?: string | null;
   avatarUrl?: string | null;
   provider?: string | null;
   points: number;
   identities?: Array<{ userId?: string; username?: string | null; points?: number }>;
+  stationChannels?: StationChannel[];
   publicLinks?: {
     home?: string;
     commands?: string;
@@ -78,7 +102,16 @@ function providerLabel(provider?: string | null) {
   const value = String(provider || '').toLowerCase();
   if (value === 'chzzk') return 'CHZZK';
   if (value === 'cime') return 'CIME';
+  if (value === 'youtube') return 'YouTube';
   return '방송';
+}
+
+function providerTone(provider?: string | null): 'neutral' | 'mint' | 'sky' | 'rose' {
+  const value = String(provider || '').toLowerCase();
+  if (value === 'chzzk') return 'mint';
+  if (value === 'cime') return 'sky';
+  if (value === 'youtube') return 'rose';
+  return 'neutral';
 }
 
 function ViewerShell({ children }: { children: React.ReactNode }) {
@@ -130,11 +163,140 @@ function BalanceAvatar({ balance }: { balance: ViewerBalance }) {
   );
 }
 
-function stationUrl(balance: ViewerBalance) {
-  const uid = encodeURIComponent(balance.channelUid);
-  const provider = String(balance.provider || '').toLowerCase();
-  if (provider === 'cime') return `https://ci.me/channels/${uid}`;
-  return `https://chzzk.naver.com/${uid}`;
+function stationChannelUrl(channel: StationChannel, fallbackBalance?: ViewerBalance) {
+  const provider = String(channel.provider || fallbackBalance?.provider || '').toLowerCase();
+  const channelId = String(channel.channelId || channel.channel_id || channel.platformUserId || channel.platform_user_id || fallbackBalance?.channelUid || '').trim();
+  const handle = String(channel.channelHandle || channel.channel_handle || '').trim();
+  if (channel.url) return String(channel.url);
+  if (provider === 'cime' && channelId) return `https://ci.me/channels/${encodeURIComponent(channelId)}`;
+  if (provider === 'youtube') {
+    if (handle) {
+      const normalizedHandle = handle.startsWith('@') ? handle : `@${handle}`;
+      return `https://www.youtube.com/${encodeURIComponent(normalizedHandle).replace('%40', '@')}`;
+    }
+    if (channelId) return `https://www.youtube.com/channel/${encodeURIComponent(channelId)}`;
+  }
+  if (channelId) return `https://chzzk.naver.com/${encodeURIComponent(channelId)}`;
+  return '';
+}
+
+function getStationChannelName(channel: StationChannel, fallbackBalance?: ViewerBalance) {
+  return String(
+    channel.channelName ||
+    channel.channel_name ||
+    channel.channelHandle ||
+    channel.channel_handle ||
+    channel.channelId ||
+    channel.channel_id ||
+    fallbackBalance?.channelName ||
+    fallbackBalance?.channelUid ||
+    '방송국',
+  );
+}
+
+function getStationChannelAvatar(channel: StationChannel, fallbackBalance?: ViewerBalance) {
+  return String(channel.avatarUrl || channel.avatar_url || channel.profileImageUrl || channel.profile_image_url || fallbackBalance?.avatarUrl || '');
+}
+
+function getStationChannels(balance: ViewerBalance | null) {
+  if (!balance) return [];
+  const fallback: StationChannel = {
+    provider: balance.provider || 'chzzk',
+    channelId: balance.channelUid,
+    channelName: balance.channelName || balance.channelUid,
+    avatarUrl: balance.avatarUrl || null,
+  };
+  const channels = (balance.stationChannels?.length ? balance.stationChannels : [fallback])
+    .map((channel) => ({ ...channel, url: stationChannelUrl(channel, balance) }))
+    .filter((channel) => Boolean(channel.url));
+  const seen = new Set<string>();
+  return channels.filter((channel) => {
+    const key = `${String(channel.provider || '').toLowerCase()}:${channel.url}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function StationChannelDialog({
+  balance,
+  open,
+  onOpenChange,
+}: {
+  balance: ViewerBalance | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const channels = getStationChannels(balance);
+  return (
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-foreground/24 backdrop-blur-[clamp(0.5rem,1.4vw,1rem)] data-[state=open]:animate-fade-in" />
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 grid max-h-[min(90svh,44rem)] w-[min(94vw,42rem)] -translate-x-1/2 -translate-y-1/2 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-[var(--radius-panel)] border bg-card/96 shadow-lift outline-none backdrop-blur-2xl data-[state=open]:animate-modal-in">
+          <div className="border-b bg-[linear-gradient(135deg,hsl(var(--card)),hsl(var(--accent-mint)/0.32),hsl(var(--accent-sky)/0.24))] p-[clamp(1rem,3vw,1.6rem)]">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <Badge tone="mint">
+                  <Tv className="mr-1 h-3 w-3" />
+                  방송국 선택
+                </Badge>
+                <Dialog.Title className="mt-3 break-keep text-[clamp(1.45rem,4vw,2.3rem)] font-semibold leading-tight">
+                  {balance?.channelName || balance?.channelUid || '방송'}의 채널로 이동하기
+                </Dialog.Title>
+                <Dialog.Description className="mt-2 max-w-[60ch] break-keep text-sm leading-7 text-muted-foreground">
+                  스트리머가 연결해 둔 플랫폼 중 보고 싶은 방송국을 선택하세요.
+                </Dialog.Description>
+              </div>
+              <Dialog.Close asChild>
+                <Button type="button" variant="ghost" size="icon" aria-label="방송국 선택 닫기" className="shrink-0 bg-background/60">
+                  <X className="h-4 w-4" />
+                </Button>
+              </Dialog.Close>
+            </div>
+          </div>
+          <div className="arubot-modal-scroll overflow-y-auto p-[clamp(1rem,3vw,1.5rem)]">
+            <div className="grid gap-3">
+              {channels.map((channel) => {
+                const provider = channel.provider || balance?.provider || 'chzzk';
+                const url = String(channel.url || '#');
+                const avatar = getStationChannelAvatar(channel, balance || undefined);
+                const title = getStationChannelName(channel, balance || undefined);
+                const subtitle = channel.channelHandle || channel.channel_handle || channel.channelId || channel.channel_id || channel.platformUserId || channel.platform_user_id || '';
+                return (
+                  <article key={`${provider}-${url}`} className="group rounded-[var(--radius-panel)] border bg-background/70 p-[clamp(0.9rem,2.4vw,1.15rem)] shadow-subtle transition hover:-translate-y-0.5 hover:border-primary/35 hover:bg-card">
+                    <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+                      <div className="flex min-w-0 items-center gap-3">
+                        {avatar ? (
+                          <img src={avatar} alt="" referrerPolicy="no-referrer" className="aspect-square w-[clamp(2.75rem,7vw,3.4rem)] rounded-[var(--radius-control)] border object-cover" />
+                        ) : (
+                          <span className="grid aspect-square w-[clamp(2.75rem,7vw,3.4rem)] place-items-center rounded-[var(--radius-control)] bg-pastel-mint/65 text-primary">
+                            <Tv className="h-5 w-5" />
+                          </span>
+                        )}
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="min-w-0 truncate text-base font-semibold">{title}</h3>
+                            <Badge tone={providerTone(provider)}>{providerLabel(provider)}</Badge>
+                          </div>
+                          {subtitle ? <p className="mt-1 truncate text-sm text-muted-foreground">{subtitle}</p> : null}
+                        </div>
+                      </div>
+                      <Button asChild variant="soft" className="w-full justify-center sm:w-auto">
+                        <a href={url} target="_blank" rel="noreferrer">
+                          열기
+                          <ExternalLink className="h-4 w-4" />
+                        </a>
+                      </Button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
 }
 
 function LoadingState() {
@@ -160,6 +322,7 @@ export function ViewerPointsPage() {
   const [sortBy, setSortBy] = useState<'points' | 'name' | 'live'>('points');
   const [page, setPage] = useState(1);
   const [liveByChannel, setLiveByChannel] = useState<Record<string, LiveStatus>>({});
+  const [stationBalance, setStationBalance] = useState<ViewerBalance | null>(null);
 
   const load = useCallback(async (silent = false) => {
     if (silent) setRefreshing(true);
@@ -223,6 +386,12 @@ export function ViewerPointsPage() {
   const connectedProviders = new Set(platforms.map((account) => String(account.provider || '').toLowerCase()));
   const hasBothPlatforms = connectedProviders.has('chzzk') && connectedProviders.has('cime');
   const hasArubotIdentity = Boolean(data?.viewerIdentity?.arubotUuid);
+  const liveBalances = useMemo(() => balances.filter((balance) => liveByChannel[balance.channelUid]?.live === true), [balances, liveByChannel]);
+  const topBalance = useMemo(() => (
+    balances.reduce<ViewerBalance | null>((best, current) => (
+      !best || Number(current.points || 0) > Number(best.points || 0) ? current : best
+    ), null)
+  ), [balances]);
 
   useEffect(() => {
     setPage(1);
@@ -341,6 +510,78 @@ export function ViewerPointsPage() {
         </div>
       </section>
 
+      <section className="mx-auto mt-5 grid max-w-7xl gap-4 md:grid-cols-3">
+        <Card className="bg-card/85">
+          <CardContent className="grid h-full gap-4 p-[clamp(1rem,2vw,1.25rem)]">
+            <div className="flex items-start justify-between gap-3">
+              <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-pastel-coral/65 text-rose-700 dark:text-rose-100">
+                <Radio className="h-5 w-5" />
+              </span>
+              <Badge tone={liveBalances.length ? 'rose' : 'neutral'}>{liveBalances.length ? '라이브 중' : '대기 중'}</Badge>
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold">지금 볼 수 있는 방송</h2>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                {liveBalances.length ? `${liveBalances.length}개 방송이 라이브 중입니다. 라이브 우선 정렬로 바로 찾아보세요.` : '라이브 상태가 확인되면 이곳에서 먼저 보여줍니다.'}
+              </p>
+            </div>
+            <Button type="button" variant="outline" className="mt-auto justify-center" onClick={() => setSortBy('live')}>
+              <Radio className="h-4 w-4" />
+              라이브 우선 보기
+            </Button>
+          </CardContent>
+        </Card>
+
+        <Card className="bg-card/85">
+          <CardContent className="grid h-full gap-4 p-[clamp(1rem,2vw,1.25rem)]">
+            <div className="flex items-start justify-between gap-3">
+              <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-pastel-lemon/75 text-amber-700 dark:text-amber-100">
+                <Trophy className="h-5 w-5" />
+              </span>
+              <Badge tone="lemon">{topBalance ? `${formatNumber(topBalance.points)}P` : '준비 중'}</Badge>
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold">가장 많이 쌓인 방송</h2>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                {topBalance ? `${topBalance.channelName || topBalance.channelUid}에서 가장 많은 포인트를 가지고 있습니다.` : '포인트가 쌓이면 자주 참여한 방송을 바로 보여줍니다.'}
+              </p>
+            </div>
+            {topBalance ? (
+              <LinkButton href={topBalance.publicLinks?.commands || `/c/${topBalance.channelUid}/commands`} variant="soft" className="mt-auto justify-center">
+                <MessageSquare className="h-4 w-4" />
+                명령어로 참여하기
+              </LinkButton>
+            ) : (
+              <LinkButton href="/viewer/connect" variant="soft" className="mt-auto justify-center">
+                <UserRoundPlus className="h-4 w-4" />
+                계정 연결하기
+              </LinkButton>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="bg-card/85">
+          <CardContent className="grid h-full gap-4 p-[clamp(1rem,2vw,1.25rem)]">
+            <div className="flex items-start justify-between gap-3">
+              <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-pastel-sky/75 text-sky-700 dark:text-sky-100">
+                <WalletCards className="h-5 w-5" />
+              </span>
+              <Badge tone={platforms.length ? 'mint' : 'amber'}>{platforms.length}개 플랫폼</Badge>
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold">내 참여 계정</h2>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                {hasBothPlatforms ? 'CHZZK와 CIME 계정이 함께 연결되어 참여 기록을 이어볼 수 있습니다.' : '자주 보는 플랫폼을 더 연결하면 방송별 포인트를 더 정확히 모아볼 수 있습니다.'}
+              </p>
+            </div>
+            <LinkButton href="/viewer/connect" variant="outline" className="mt-auto justify-center">
+              <UserRoundPlus className="h-4 w-4" />
+              계정 연결 관리
+            </LinkButton>
+          </CardContent>
+        </Card>
+      </section>
+
       <section className="mx-auto mt-5 grid max-w-7xl gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(26%,0.34fr)]">
         <div className="grid gap-3">
           <Card className="bg-card/85">
@@ -416,11 +657,9 @@ export function ViewerPointsPage() {
                       공개 페이지
                       <ExternalLink className="h-4 w-4" />
                     </LinkButton>
-                    <Button asChild variant="ghost">
-                      <a href={stationUrl(balance)} target="_blank" rel="noreferrer">
-                        방송국 바로가기
-                        <ExternalLink className="h-4 w-4" />
-                      </a>
+                    <Button type="button" variant="ghost" onClick={() => setStationBalance(balance)}>
+                      방송국 바로가기
+                      <Tv className="h-4 w-4" />
                     </Button>
                   </div>
                 </CardContent>
@@ -480,6 +719,13 @@ export function ViewerPointsPage() {
           </Card>
         </aside>
       </section>
+      <StationChannelDialog
+        balance={stationBalance}
+        open={Boolean(stationBalance)}
+        onOpenChange={(open) => {
+          if (!open) setStationBalance(null);
+        }}
+      />
     </ViewerShell>
   );
 }

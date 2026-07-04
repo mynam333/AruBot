@@ -9,7 +9,7 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
-import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, getSessionUserId, listChannelPoints, listChannelPointsPage, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, getChannelPoints, getChannelPointBalanceSummary, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, deletePlatformTokens, deletePlatformAccount, getAppUserAdminStatus, getYoutubeBotProfile, upsertYoutubeBotProfile, updateYoutubeBotProfileTokens, markYoutubeBotProfileStatus, deleteYoutubeBotProfile, getYoutubeStreamerChannel, upsertYoutubeStreamerChannel, markYoutubeStreamerChannelModeratorRegistered, deleteYoutubeStreamerChannel, listYoutubeStreamerChannelsByYoutubeChannelId, updateYoutubeStreamerChannelLive, updateYoutubeStreamerChannelWebsub, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps, validateSecretEncryptionConfig, getPgPoolStatus } from './supabase.js';
+import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, getSessionUserId, listChannelPoints, listChannelPointsPage, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, getChannelPoints, getChannelPointBalanceSummary, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, findSidByChannelViewerTokenSupabase, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, deletePlatformTokens, deletePlatformAccount, getAppUserAdminStatus, getYoutubeBotProfile, upsertYoutubeBotProfile, updateYoutubeBotProfileTokens, markYoutubeBotProfileStatus, deleteYoutubeBotProfile, getYoutubeStreamerChannel, upsertYoutubeStreamerChannel, markYoutubeStreamerChannelModeratorRegistered, deleteYoutubeStreamerChannel, listYoutubeStreamerChannelsByYoutubeChannelId, updateYoutubeStreamerChannelLive, updateYoutubeStreamerChannelWebsub, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps, recordBotEventLog, listBotEventLogs, validateSecretEncryptionConfig, getPgPoolStatus } from './supabase.js';
 import { createPlatformProfileService } from './platform-profiles.js';
 import { WebSocketServer, WebSocket } from 'ws';
 
@@ -36,6 +36,30 @@ const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'https://arubot.yuaru.com
 const BACKEND_ORIGIN = process.env.BACKEND_ORIGIN || 'https://arubotapi.yuaru.com';
 const SERVER_STARTED_AT = new Date().toISOString();
 const RELEASE_SHA = process.env.ARUBOT_RELEASE_SHA || process.env.RELEASE_SHA || 'local';
+const DB_PROVIDER = String(process.env.ARUBOT_DB_PROVIDER || 'supabase').trim().toLowerCase() === 'postgres' ? 'postgres' : 'supabase';
+const USE_POSTGRES_PROVIDER = DB_PROVIDER === 'postgres';
+const ALLOW_SUPABASE_ENV_WITH_POSTGRES = String(process.env.ARUBOT_ALLOW_SUPABASE_ENV_WITH_POSTGRES || '').trim().toLowerCase() === 'true';
+function hasDirectDatabaseUrl() {
+  return USE_POSTGRES_PROVIDER ? !!process.env.POSTGRES_URL : !!process.env.SUPABASE_DB_URL;
+}
+function shouldRefreshPostgRESTSchema() {
+  return !USE_POSTGRES_PROVIDER && !!process.env.SUPABASE_URL && !!process.env.SUPABASE_SERVICE_ROLE_KEY;
+}
+function shouldRunDatabaseMaintenance() {
+  return hasDirectDatabaseUrl() && process.env.ARUBOT_SUPABASE_PERF_MONITORING !== 'false';
+}
+function validateDatabaseProviderConfig() {
+  if (!USE_POSTGRES_PROVIDER || ALLOW_SUPABASE_ENV_WITH_POSTGRES) return;
+  const forbiddenSupabaseEnv = [
+    'SUPABASE_URL',
+    'SUPABASE_SERVICE_ROLE_KEY',
+    'SUPABASE_ANON_KEY',
+    'SUPABASE_DB_URL',
+  ].filter((name) => String(process.env[name] || '').trim());
+  if (forbiddenSupabaseEnv.length > 0) {
+    throw new Error(`ARUBOT_DB_PROVIDER=postgres must not run with Supabase environment variables: ${forbiddenSupabaseEnv.join(', ')}. Remove them from the backend runtime, or set ARUBOT_ALLOW_SUPABASE_ENV_WITH_POSTGRES=true only for a one-off migration command.`);
+  }
+}
 const ALLOWED_ORIGINS = [
   FRONTEND_ORIGIN,
   BACKEND_ORIGIN,
@@ -2090,6 +2114,7 @@ async function processRouletteQueue(sid) {
             batchId: item?.chatPost?.batchId || null,
             batchCount: Math.max(1, Number(item?.chatPost?.batchCount ?? 1)),
             chatPost: item?.chatPost || null,
+            eventContext: item?.eventContext || null,
           }
         );
         // Strict serialization: wait for viewer animation; for instant items, use a very short delay
@@ -4444,6 +4469,171 @@ function normalizeRouletteDefinition(input = {}) {
   };
 }
 
+function makeQuickStartCommandRules() {
+  return [
+    {
+      id: 'tpl_cmd_points',
+      name: '포인트 확인',
+      keywords: ['!포인트', '!point', '!points'],
+      responses: ['{user.username}님은 현재 {user.points}P를 가지고 있어요.'],
+      enabled: true,
+      adminOnly: false,
+      requiredRoleLevel: 1,
+      pointsCost: 0,
+      cooldown: 5000,
+      lastUsed: 0,
+    },
+    {
+      id: 'tpl_cmd_commands',
+      name: '명령어 안내',
+      keywords: ['!명령어', '!commands'],
+      responses: ['사용 가능한 명령어와 참여 정보는 {live.channel}의 공개 페이지에서 확인할 수 있어요.'],
+      enabled: true,
+      adminOnly: false,
+      requiredRoleLevel: 1,
+      pointsCost: 0,
+      cooldown: 5000,
+      lastUsed: 0,
+    },
+    {
+      id: 'tpl_cmd_roulette',
+      name: '오늘의 룰렛',
+      keywords: ['!룰렛'],
+      responses: ['{user.username}님이 오늘의 룰렛을 돌립니다. ${roulette::오늘의 룰렛}'],
+      enabled: true,
+      adminOnly: false,
+      requiredRoleLevel: 1,
+      pointsCost: 100,
+      cooldown: 10000,
+      lastUsed: 0,
+    },
+    {
+      id: 'tpl_cmd_video_donation',
+      name: '영상 후원 신청',
+      keywords: ['!영상', '!영도'],
+      responses: ['${video_donation}'],
+      enabled: true,
+      adminOnly: false,
+      requiredRoleLevel: 1,
+      pointsCost: 0,
+      cooldown: 5000,
+      lastUsed: 0,
+    },
+  ];
+}
+
+function makeQuickStartRouletteDefinition() {
+  return normalizeRouletteDefinition({
+    id: 'tpl_rlt_today',
+    name: '오늘의 룰렛',
+    type: 'items',
+    theme: 'pastel',
+    items: [
+      { label: '칭찬 한마디', value: '채팅으로 칭찬 한마디!', weight: 3 },
+      { label: '보너스 100P', value: '보너스 100P', weight: 2 },
+      { label: '다음 기회', value: '아쉽지만 다음 기회!', weight: 4 },
+      { label: '특별 리액션', value: '방송 리액션!', weight: 1 },
+    ],
+  });
+}
+
+function hasAnyKeyword(rules, keywords) {
+  const wanted = new Set((keywords || []).map((keyword) => String(keyword || '').trim().toLowerCase()).filter(Boolean));
+  return (rules || []).some((rule) => (
+    Array.isArray(rule?.keywords) &&
+    rule.keywords.some((keyword) => wanted.has(String(keyword || '').trim().toLowerCase()))
+  ));
+}
+
+function hasNamedItem(items, name) {
+  const target = String(name || '').trim().toLowerCase();
+  return (items || []).some((item) => String(item?.name || '').trim().toLowerCase() === target);
+}
+
+app.post('/api/setup/templates/apply', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const sid = await getPartitionId(req, res);
+    if (!sid) return res.status(401).json({ error: 'Login required' });
+    const template = String(req.body?.template || 'quick-start').trim();
+    if (template !== 'quick-start') return res.status(400).json({ error: 'Unknown template' });
+
+    const settings = await getBotSettings(sid) || {};
+    const currentRules = await getBotRules(sid).catch(() => []);
+    const applied = [];
+    const skipped = [];
+
+    for (const rule of makeQuickStartCommandRules()) {
+      if (hasAnyKeyword(currentRules, rule.keywords)) {
+        skipped.push({ type: 'command', name: rule.name, reason: 'keyword_exists' });
+        continue;
+      }
+      await upsertBotRule(sid, rule);
+      currentRules.push(rule);
+      applied.push({ type: 'command', name: rule.name });
+    }
+
+    const rouletteDefs = Array.isArray(settings.rouletteDefs) ? settings.rouletteDefs.slice() : [];
+    const starterRoulette = makeQuickStartRouletteDefinition();
+    if (hasNamedItem(rouletteDefs, starterRoulette.name)) {
+      skipped.push({ type: 'roulette', name: starterRoulette.name, reason: 'name_exists' });
+    } else {
+      rouletteDefs.push(starterRoulette);
+      applied.push({ type: 'roulette', name: starterRoulette.name });
+    }
+
+    const macros = Array.isArray(settings.macros) ? settings.macros.slice() : [];
+    const starterMacroMessage = '!포인트로 내 포인트를 확인하고, !룰렛으로 오늘의 룰렛에 참여해 보세요.';
+    if (macros.some((macro) => String(macro?.message || '').trim() === starterMacroMessage)) {
+      skipped.push({ type: 'macro', name: '참여 안내 알림', reason: 'message_exists' });
+    } else {
+      macros.push({
+        id: 'tpl_macro_participation',
+        message: starterMacroMessage,
+        intervalSec: 600,
+        enabled: true,
+      });
+      applied.push({ type: 'macro', name: '참여 안내 알림' });
+    }
+
+    const nextSettings = {
+      ...settings,
+      botEnabled: true,
+      attendanceAnnounce: settings.attendanceAnnounce ?? true,
+      attendanceMessage: settings.attendanceMessage || '{user.name}님 출석체크 완료! (연속 {attendance.streak}일, 누적 {attendance.totalDays}일)',
+      channelPointsPerChat: Number.isFinite(Number(settings.channelPointsPerChat)) ? Number(settings.channelPointsPerChat) : 1,
+      channelPointsPerAttendance: Number.isFinite(Number(settings.channelPointsPerAttendance)) ? Number(settings.channelPointsPerAttendance) : 50,
+      videoDonationAcceptEnabled: settings.videoDonationAcceptEnabled === true,
+      videoDonationPointsPerSecond: Number.isFinite(Number(settings.videoDonationPointsPerSecond)) ? Number(settings.videoDonationPointsPerSecond) : 1,
+      videoDonationMaxDurationSec: Number.isFinite(Number(settings.videoDonationMaxDurationSec)) ? Number(settings.videoDonationMaxDurationSec) : 600,
+      rouletteDefs,
+      macros,
+      setupTemplates: {
+        ...(settings.setupTemplates && typeof settings.setupTemplates === 'object' ? settings.setupTemplates : {}),
+        quickStart: {
+          appliedAt: new Date().toISOString(),
+          version: 1,
+        },
+      },
+    };
+    await setBotSettings(sid, nextSettings);
+    try { macroCache.delete(sid); } catch { }
+
+    return res.json({
+      ok: true,
+      template,
+      applied,
+      skipped,
+      counts: {
+        applied: applied.length,
+        skipped: skipped.length,
+      },
+    });
+  } catch (e) {
+    console.error('[Setup Template] apply error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to apply quick start template' });
+  }
+});
+
 app.get('/api/roulette/definitions', async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
@@ -4709,7 +4899,29 @@ app.post('/api/video-donation/delete-refund', async (req, res) => {
     try {
       const uid = await resolveStreamerUidForSid(sid);
       if (uid && item?.userId && item?.cost) {
+        const before = await getChannelPoints(uid, String(item.userId)).catch(() => null);
         await incrChannelPoints(uid, String(item.userId), item.username ? String(item.username) : null, Number(item.cost));
+        await recordBotEventLogSafe(sid, {
+          category: 'video_donation',
+          eventType: 'video_donation_refund_delete',
+          provider: 'admin',
+          channelUid: uid,
+          viewerUserId: String(item.userId),
+          viewerName: item.username ? String(item.username) : null,
+          pointDelta: Number(item.cost || 0),
+          pointBefore: Number.isFinite(Number(before)) ? Number(before) : null,
+          pointAfter: Number.isFinite(Number(before)) ? Number(before) + Number(item.cost || 0) : null,
+          status: 'refunded',
+          targetName: item.title || item.mediaId || item.mediaUrl || '영상 후원',
+          summary: `영상 후원 삭제 후 포인트 반환: ${item.title || item.mediaId || '영상'} (+${Number(item.cost || 0)}P)`,
+          metadata: {
+            queueItemId: item.id || null,
+            mediaProvider: item.mediaProvider || null,
+            mediaId: item.mediaId || item.videoId || null,
+            cost: Number(item.cost || 0),
+            removedHead: removingHead,
+          },
+        });
       }
     } catch (e) {
       console.warn('[pvd:delete-refund] refund failed', e?.message || e);
@@ -5039,6 +5251,7 @@ app.get('/api/version', (req, res) => {
   res.json({
     ok: true,
     role: PROCESS_ROLE,
+    dbProvider: DB_PROVIDER,
     releaseSha: RELEASE_SHA,
     startedAt: SERVER_STARTED_AT,
     wsPvdPerMessageDeflate: false,
@@ -5049,6 +5262,7 @@ app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
     role: PROCESS_ROLE,
+    dbProvider: DB_PROVIDER,
     releaseSha: RELEASE_SHA,
     uptimeSec: Math.round(process.uptime()),
     startedAt: SERVER_STARTED_AT,
@@ -5060,6 +5274,7 @@ app.get(['/healthz', '/readyz'], (req, res) => {
   res.json({
     ok: true,
     role: PROCESS_ROLE,
+    dbProvider: DB_PROVIDER,
     releaseSha: RELEASE_SHA,
     uptimeSec: Math.round(process.uptime()),
     startedAt: SERVER_STARTED_AT,
@@ -5609,6 +5824,10 @@ function validateBlueprintNodeConfig(node = {}) {
   if (node.type === 'pointsEnough') need('required', '필요 포인트');
   if (node.type === 'rouletteRun') need('name', '룰렛 이름 또는 ID');
   if (node.type === 'rouletteDisplay' || node.type === 'overlay') need('text', '표시 내용');
+  if (node.type === 'fx') {
+    const kind = String(config.kind || 'image');
+    if (kind !== 'video' || !String(config.youtubeUrl || '').trim()) need('assetId', 'FX 에셋');
+  }
   if (node.type === 'tts') need('text', '말할 내용');
   if (node.type === 'http') need('url', 'URL');
   if (node.type === 'websocket') {
@@ -5921,7 +6140,20 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}) {
         output = { queued: !dryRun && !!edge, delayMs, dryRun };
         await recordStep(node, 'done', incoming, output, startedAt);
         return output;
-      } else if (['overlay', 'overlayUpdate', 'overlayHide', 'rouletteDisplay', 'tts', 'sound', 'obs', 'http', 'websocket', 'udp', 'tits', 'vtube', 'chatVote'].includes(node.type)) {
+      } else if (node.type === 'fx' || node.type === 'sound') {
+        const payload = normalizeFxPayload({
+          ...(config || {}),
+          kind: node.type === 'sound' ? 'sound' : config.kind,
+          assetId: config.assetId || config.fileId,
+          assetName: config.assetName || config.fileName
+        });
+        const job = dryRun ? null : await queueAutomationJob(ownerUserId, {
+          connectionId: config.connectionId || null,
+          jobType: 'fx.play',
+          payload: { nodeId: node.id, blueprintId: blueprint.id, runId: run.id, ...payload }
+        });
+        output = { queued: !dryRun, jobId: job?.id || null, type: 'fx', payload, dryRun };
+      } else if (['overlay', 'overlayUpdate', 'overlayHide', 'rouletteDisplay', 'tts', 'obs', 'http', 'websocket', 'udp', 'tits', 'vtube', 'chatVote'].includes(node.type)) {
         const payload = renderBlueprintValueDeep(config || {}, scope);
         const job = dryRun ? null : await queueAutomationJob(ownerUserId, {
           connectionId: config.connectionId || null,
@@ -6374,6 +6606,32 @@ async function startRouletteSpin(sid, rouletteName, userId, username, opts = {})
 
     console.error(`[Roulette] Database save failed for channel: ${channelContext.channelId}, user: ${username}, roulette: ${def.name}`);
   }
+
+  await recordBotEventLogSafe(sid, {
+    category: 'roulette',
+    eventType: 'roulette_result',
+    provider: providerFromLogContext(opts),
+    channelUid: channelContext.channelId,
+    viewerUserId: userId ? String(userId) : null,
+    viewerName: username ? String(username) : null,
+    pointDelta: Number(opts?.eventContext?.pointDelta || 0) || 0,
+    pointBefore: opts?.eventContext?.pointBefore ?? null,
+    pointAfter: opts?.eventContext?.pointAfter ?? null,
+    triggerName: opts?.eventContext?.triggerName || opts?.source || null,
+    targetName: def.name,
+    summary: `룰렛 결과: ${def.name} · ${picked.label || '결과 없음'}`,
+    resultLabel: picked.label || null,
+    resultValue: picked.value != null ? String(picked.value) : null,
+    metadata: {
+      rouletteId: def.id || null,
+      rouletteName: def.name,
+      token,
+      instant: opts?.instant === true,
+      batchId: opts?.batchId || null,
+      batchCount: Math.max(1, Number(opts?.batchCount ?? 1)),
+      source: opts?.eventContext?.source || opts?.source || null,
+    },
+  });
 
   if (picked.value && typeof picked.value === 'string' && picked.value.trim()) {
     await executeActionVariableTokens(sid, picked.value, {
@@ -6985,6 +7243,9 @@ async function substituteAllPlaceholders(text, sid, userId, username) {
       .replace(/\{user\.username\}/g, String(username))
       .replace(/\{user\.nickname\}/g, String(username));
   }
+  if (userId && /\{user\.id\}/.test(out)) {
+    out = out.replace(/\{user\.id\}/g, String(userId));
+  }
   // User subscription months
   if (userId && /\{user\.subscriptionMonths\}/.test(out)) {
     try {
@@ -7044,6 +7305,128 @@ const userSubMonthsCache = new Map(); // key `${sid}:${userId}` -> { ts, months 
 function ownerUserIdFromSid(sid) {
   const text = String(sid || '').trim();
   return text.startsWith('user:') ? text.slice(5) : text;
+}
+
+function compactLogText(value, limit = 240) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  return text.length > limit ? `${text.slice(0, Math.max(0, limit - 1))}…` : text;
+}
+
+function providerFromLogContext(context = {}) {
+  return String(context.provider || context.platform || context.chatPost?.provider || 'chzzk').toLowerCase();
+}
+
+async function recordBotEventLogSafe(sid, event = {}) {
+  try {
+    const ownerUserId = event.ownerUserId || ownerUserIdFromSid(sid);
+    if (!ownerUserId) return null;
+    return await recordBotEventLog({
+      ...event,
+      ownerUserId,
+      sid,
+      summary: compactLogText(event.summary, 1000),
+      metadata: event.metadata && typeof event.metadata === 'object' ? event.metadata : {},
+    });
+  } catch (error) {
+    console.warn('[Bot Event Log] record skipped:', error?.message || error);
+    return null;
+  }
+}
+
+async function recordPredictionEventLogs(sid, prediction, context = {}) {
+  const changes = Array.isArray(prediction?._eventLogs) ? prediction._eventLogs : [];
+  if (!changes.length) return;
+  const optionById = new Map((prediction?.options || []).map((option) => [String(option.id), option]));
+  await Promise.all(changes.map((change) => {
+    const option = optionById.get(String(change.optionId || '')) || null;
+    const eventType = String(change.eventType || 'prediction_event');
+    const label = option?.label || change.optionLabel || change.optionId || '';
+    const actionLabel = eventType === 'prediction_bet'
+      ? '예측 참여'
+      : eventType === 'prediction_payout'
+        ? '예측 정산 지급'
+        : '예측 포인트 반환';
+    return recordBotEventLogSafe(sid, {
+      category: 'prediction',
+      eventType,
+      provider: context.provider || providerFromLogContext(context),
+      channelUid: prediction?.channelUid || context.channelUid || null,
+      viewerUserId: change.userId,
+      viewerName: change.username,
+      pointDelta: Number(change.pointDelta || 0),
+      pointBefore: change.pointBefore ?? null,
+      pointAfter: change.pointAfter ?? null,
+      triggerName: prediction?.question || null,
+      targetName: label,
+      status: eventType === 'prediction_refund' ? 'refunded' : 'success',
+      summary: `${actionLabel}: ${prediction?.question || '예측'}${label ? ` · ${label}` : ''}`,
+      resultLabel: label || null,
+      metadata: {
+        predictionId: prediction?.id || null,
+        optionId: change.optionId || null,
+        amount: change.amount ?? null,
+        payout: change.payout ?? null,
+        status: prediction?.status || null,
+      },
+    });
+  }));
+}
+
+async function recordCommandExecutionLog(sid, context = {}) {
+  if (!context.executed) return;
+  await recordBotEventLogSafe(sid, {
+    category: context.category || 'command',
+    eventType: context.eventType || 'command_execute',
+    provider: providerFromLogContext(context),
+    channelUid: context.channelUid || null,
+    viewerUserId: context.userId || null,
+    viewerName: context.username || null,
+    pointDelta: Number(context.pointDelta || 0) || 0,
+    pointBefore: context.pointBefore ?? null,
+    pointAfter: context.pointAfter ?? null,
+    triggerName: context.triggerName || null,
+    targetName: context.targetName || null,
+    status: context.status || 'success',
+    summary: context.summary || `${context.triggerName || '명령어'} 실행${context.targetName ? ` · ${context.targetName}` : ''}`,
+    resultLabel: context.resultLabel || null,
+    resultValue: context.resultValue || null,
+    metadata: {
+      ruleId: context.ruleId || null,
+      ruleName: context.ruleName || null,
+      args: Array.isArray(context.args) ? context.args.slice(0, 10) : [],
+      actionJobs: Array.isArray(context.actionJobs) ? context.actionJobs.map((job) => ({
+        actionId: job.actionId || null,
+        jobId: job.job?.id || job.jobId || null,
+      })) : [],
+      features: context.features || [],
+      source: context.source || null,
+    },
+  });
+}
+
+async function recordDonationRuleExecutionLog(sid, context = {}) {
+  await recordBotEventLogSafe(sid, {
+    category: 'donation',
+    eventType: 'donation_rule_execute',
+    provider: providerFromLogContext(context),
+    channelUid: context.channelUid || null,
+    viewerUserId: context.userId || null,
+    viewerName: context.username || null,
+    pointDelta: Number(context.pointDelta || 0) || 0,
+    pointBefore: context.pointBefore ?? null,
+    pointAfter: context.pointAfter ?? null,
+    triggerName: context.ruleName || context.triggerName || null,
+    targetName: context.targetName || null,
+    summary: context.summary || `후원 반응 실행${context.ruleName ? ` · ${context.ruleName}` : ''}`,
+    metadata: {
+      ruleId: context.ruleId || null,
+      ruleName: context.ruleName || null,
+      amount: context.amount ?? null,
+      message: compactLogText(context.message, 240),
+      features: context.features || [],
+      source: context.source || null,
+    },
+  });
 }
 
 function readFiniteNumber(...values) {
@@ -8191,10 +8574,12 @@ app.get('/api/warudo/debug/ws', async (req, res) => {
 });
 
 validateSecretEncryptionConfig();
+validateDatabaseProviderConfig();
 await initDb();
 
 async function refreshPostgRESTSchema() {
   try {
+    if (!shouldRefreshPostgRESTSchema()) return;
     const supabaseUrl = process.env.SUPABASE_URL;
     const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
     
@@ -8227,7 +8612,7 @@ try {
 try {
   console.log('[Server] Starting channel ID migration...');
 
-  if (process.env.SUPABASE_URL && process.env.SUPABASE_DB_URL) {
+  if (hasDirectDatabaseUrl()) {
     const { runMigrations, migrateChannelIdData, verifyChannelIdIntegrity } = await import('./supabase.js');
 
     await runMigrations();
@@ -8245,7 +8630,7 @@ try {
 
   startPerformanceMonitoringScheduler();
 
-  if (process.env.SUPABASE_URL && process.env.SUPABASE_DB_URL) {
+  if (shouldRunDatabaseMaintenance()) {
     const { startPerformanceMonitoringSchedulerSupabase } = await import('./supabase.js');
     await startPerformanceMonitoringSchedulerSupabase();
   }
@@ -10528,6 +10913,94 @@ function listAutomationSoundFiles(ownerUserId) {
   };
 }
 
+const FX_ASSET_KINDS = new Set(['image', 'sticker', 'video', 'sound']);
+
+function listLocalFxAssetsFromConnections(connections = []) {
+  const connection = connections.find((item) => item.type === 'fx_assets' && item.enabled !== false);
+  const cache = connection?.discoveryCache || connection?.discovery_cache || {};
+  const assets = Array.isArray(cache.assets) ? cache.assets : [];
+  return {
+    connection,
+    assets: assets
+      .filter((asset) => asset && FX_ASSET_KINDS.has(String(asset.kind || '').toLowerCase()))
+      .map((asset) => ({
+        id: String(asset.id || asset.fileName || '').trim(),
+        name: String(asset.name || asset.fileName || asset.id || '').trim(),
+        kind: String(asset.kind || '').toLowerCase(),
+        size: Number(asset.size || 0),
+        updatedAt: asset.updatedAt || null,
+        previewDataUrl: typeof asset.previewDataUrl === 'string' && asset.previewDataUrl.startsWith('data:image/')
+          ? asset.previewDataUrl.slice(0, 512 * 1024)
+          : null
+      }))
+      .filter((asset) => asset.id && asset.name)
+  };
+}
+
+function normalizeFxPercent(value, fallback, min = 0, max = 100) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(min, Math.min(max, number));
+}
+
+function normalizeFxCss(value, fallback = '') {
+  return String(value || fallback)
+    .replace(/[{}<>]/g, '')
+    .slice(0, 240);
+}
+
+function normalizeFxColor(value, fallback = '#00ff00') {
+  const text = String(value || '').trim();
+  return /^#[0-9a-f]{6}$/i.test(text) ? text.toLowerCase() : fallback;
+}
+
+function normalizeFxPayload(input = {}) {
+  const kind = String(input.kind || input.type || 'image').toLowerCase();
+  const normalizedKind = FX_ASSET_KINDS.has(kind) ? kind : 'image';
+  return {
+    id: String(input.id || `fx_${Date.now().toString(36)}_${crypto.randomBytes(3).toString('hex')}`),
+    kind: normalizedKind,
+    assetId: path.basename(String(input.assetId || input.fileId || input.name || '')),
+    assetName: String(input.assetName || input.fileName || input.name || '').slice(0, 120),
+    assetUrl: typeof input.assetUrl === 'string' ? input.assetUrl.slice(0, 4096) : '',
+    youtubeUrl: typeof input.youtubeUrl === 'string' ? input.youtubeUrl.slice(0, 2048) : '',
+    x: normalizeFxPercent(input.x ?? input.left, 50),
+    y: normalizeFxPercent(input.y ?? input.top, 50),
+    width: normalizeFxPercent(input.width, normalizedKind === 'sound' ? 0 : 30, 1, 100),
+    height: normalizeFxPercent(input.height, normalizedKind === 'sound' ? 0 : 30, 1, 100),
+    durationMs: Math.max(250, Math.min(60000, Number(input.durationMs ?? Number(input.durationSec || 4) * 1000) || 4000)),
+    enterCss: normalizeFxCss(input.enterCss, 'fx-pop-in 360ms ease-out both'),
+    exitCss: normalizeFxCss(input.exitCss, 'fx-fade-out 280ms ease-in both'),
+    chromaKey: input.chromaKey === true,
+    chromaKeyColor: normalizeFxColor(input.chromaKeyColor),
+    chromaKeyTolerance: Math.max(0, Math.min(160, Number(input.chromaKeyTolerance ?? 42) || 42)),
+    volume: Math.max(0, Math.min(1, Number(input.volume ?? 1) || 0)),
+    createdAt: new Date().toISOString()
+  };
+}
+
+function broadcastFxToSid(sid, payload) {
+  const key = String(sid || '').trim();
+  const sockets = fxSidSockets?.get(key);
+  if (!sockets?.size) return 0;
+  const event = { type: 'fx:play', sid: key, payload: normalizeFxPayload(payload), serverNow: Date.now() };
+  let sent = 0;
+  for (const ws of Array.from(sockets)) {
+    try {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(event), { compress: false });
+        sent += 1;
+      } else {
+        sockets.delete(ws);
+      }
+    } catch {
+      try { sockets.delete(ws); } catch { }
+    }
+  }
+  if (sockets.size === 0) fxSidSockets.delete(key);
+  return sent;
+}
+
 function pickYoutubeThumbnail(thumbnails = {}) {
   const candidates = [thumbnails.high, thumbnails.medium, thumbnails.default].filter(Boolean);
   return candidates.find((item) => item?.url)?.url || null;
@@ -12280,6 +12753,70 @@ app.get('/api/account/platforms', async (req, res) => {
   }
 });
 
+function stationChannelUrl(provider, channelId, handle) {
+  const normalizedProvider = String(provider || '').toLowerCase();
+  const normalizedChannelId = String(channelId || '').trim();
+  const normalizedHandle = String(handle || '').trim();
+  if (normalizedProvider === 'cime' && normalizedChannelId) return `https://ci.me/channels/${encodeURIComponent(normalizedChannelId)}`;
+  if (normalizedProvider === 'youtube') {
+    if (normalizedHandle) {
+      const handlePath = normalizedHandle.startsWith('@') ? normalizedHandle : `@${normalizedHandle}`;
+      return `https://www.youtube.com/${encodeURIComponent(handlePath).replace('%40', '@')}`;
+    }
+    if (normalizedChannelId) return `https://www.youtube.com/channel/${encodeURIComponent(normalizedChannelId)}`;
+  }
+  if (normalizedChannelId) return `https://chzzk.naver.com/${encodeURIComponent(normalizedChannelId)}`;
+  return null;
+}
+
+function normalizeStationChannel(account, fallbackProvider = null) {
+  const provider = String(account?.provider || fallbackProvider || '').toLowerCase();
+  const channelId = String(account?.channel_id || account?.channelId || account?.platform_user_id || account?.platformUserId || '').trim();
+  const channelHandle = String(account?.channel_handle || account?.channelHandle || '').trim();
+  const url = account?.url || stationChannelUrl(provider, channelId, channelHandle);
+  if (!url) return null;
+  return {
+    provider: provider || 'chzzk',
+    platformUserId: account?.platform_user_id || account?.platformUserId || channelId,
+    channelId,
+    channelName: account?.channel_name || account?.channelName || channelHandle || channelId,
+    channelHandle: channelHandle || null,
+    avatarUrl: account?.avatar_url || account?.avatarUrl || account?.profile_image_url || account?.profileImageUrl || null,
+    url,
+  };
+}
+
+async function listStationChannelsForViewerBalance(balance) {
+  const ownerCandidates = Array.from(new Set([
+    balance?.canonicalChannelUid,
+    balance?.channelUid,
+    String(balance?.canonicalChannelUid || '').replace(/^user:/, ''),
+    String(balance?.channelUid || '').replace(/^user:/, ''),
+  ].map((value) => String(value || '').trim()).filter(Boolean)));
+
+  for (const ownerId of ownerCandidates) {
+    const accounts = await listPlatformAccounts(ownerId).catch(() => []);
+    const channels = (accounts || []).map((account) => normalizeStationChannel(account)).filter(Boolean);
+    if (channels.length) {
+      const seen = new Set();
+      return channels.filter((channel) => {
+        const key = `${channel.provider}:${channel.channelId || channel.url}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    }
+  }
+
+  const fallback = normalizeStationChannel({
+    provider: balance?.provider || 'chzzk',
+    channel_id: balance?.channelUid,
+    channel_name: balance?.channelName,
+    avatar_url: balance?.avatarUrl,
+  });
+  return fallback ? [fallback] : [];
+}
+
 app.get('/api/viewer/points', async (req, res) => {
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
@@ -12288,8 +12825,13 @@ app.get('/api/viewer/points', async (req, res) => {
     const platforms = await listPlatformAccounts(ownerUserId).catch(() => []);
     const identityKeys = collectViewerPointIdentityKeys(ownerUserId, platforms);
     const balances = await listViewerPointBalancesForUserIds(identityKeys);
+    const stationChannelEntries = await Promise.all(
+      balances.map(async (balance) => [balance.channelUid, await listStationChannelsForViewerBalance(balance)])
+    );
+    const stationChannelsByChannel = new Map(stationChannelEntries);
     const normalizedBalances = balances.map((balance) => ({
       ...balance,
+      stationChannels: stationChannelsByChannel.get(balance.channelUid) || [],
       publicLinks: {
         home: `/c/${encodeURIComponent(balance.channelUid)}`,
         commands: `/c/${encodeURIComponent(balance.channelUid)}/commands`,
@@ -12386,6 +12928,7 @@ app.get('/api/automations/overview', async (req, res) => {
     ]);
     const localAgents = await listAutomationLocalAgents(ownerUserId).catch(() => []);
     const soundStorage = listAutomationSoundFiles(ownerUserId);
+    const fxAssets = listLocalFxAssetsFromConnections(connections);
     return res.json({
       settings: {
         integrationMode: settings.integrationMode === 'local_program' ? 'local_program' : 'oracle_direct',
@@ -12404,7 +12947,8 @@ app.get('/api/automations/overview', async (req, res) => {
       connections,
       localAgents,
       soundStorage,
-      supportedConnectors: ['tits', 'vtube_studio', 'tts', 'stream_deck_touch_portal', 'http', 'websocket', 'udp', 'sound'],
+      fxAssets: fxAssets.assets,
+      supportedConnectors: ['tits', 'vtube_studio', 'tts', 'stream_deck_touch_portal', 'http', 'websocket', 'udp', 'fx'],
       disabledConnectors: ['soop', 'ssapi', 'twip']
     });
   } catch (e) {
@@ -12657,7 +13201,7 @@ app.post('/api/automations/local-agent/discovery-sync', requireAutomationLocalAg
     const ownerUserId = req.automationLocalAgent?.ownerUserId;
     if (!ownerUserId) return res.status(401).json({ error: 'Invalid local program token' });
     const type = String(req.body?.type || '').toLowerCase();
-    if (!['tits', 'vtube_studio'].includes(type)) return res.status(400).json({ error: 'Unsupported discovery type' });
+    if (!['tits', 'vtube_studio', 'fx_assets'].includes(type)) return res.status(400).json({ error: 'Unsupported discovery type' });
     const discoveryCache = req.body?.discoveryCache && typeof req.body.discoveryCache === 'object'
       ? req.body.discoveryCache
       : {};
@@ -12670,7 +13214,7 @@ app.post('/api/automations/local-agent/discovery-sync', requireAutomationLocalAg
     const connection = await upsertAutomationConnection(ownerUserId, {
       id: req.body?.connectionId || req.body?.id || existing?.id,
       type,
-      name: req.body?.name || existing?.name || (type === 'vtube_studio' ? 'VTube Studio' : 'T.I.T.S.'),
+      name: req.body?.name || existing?.name || (type === 'vtube_studio' ? 'VTube Studio' : type === 'fx_assets' ? 'FX 로컬 에셋' : 'T.I.T.S.'),
       enabled: true,
       executionMode: 'local_program',
       endpoint: req.body?.endpoint || discoveryCache.endpoint || existing?.endpoint || '',
@@ -12733,6 +13277,20 @@ app.post('/api/automations/local-agent/jobs/:jobId/complete', requireAutomationL
     return res.json({ job });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to complete automation job' });
+  }
+});
+
+app.post('/api/automations/local-agent/fx/push', requireAutomationLocalAgent, async (req, res) => {
+  try {
+    const ownerUserId = req.automationLocalAgent?.ownerUserId;
+    if (!ownerUserId) return res.status(401).json({ error: 'Invalid local program token' });
+    const sid = `user:${ownerUserId}`;
+    const payload = normalizeFxPayload(req.body?.payload || req.body || {});
+    const sent = broadcastFxToSid(sid, payload);
+    return res.json({ ok: true, sent, payload: { ...payload, assetUrl: payload.assetUrl ? '[local-url]' : '' } });
+  } catch (e) {
+    console.error('[FX] local push error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to push FX event' });
   }
 });
 
@@ -13141,8 +13699,10 @@ app.post('/api/automations/sounds/test', rateLimiters.userWrite, async (req, res
     const fileId = path.basename(String(req.body?.fileId || req.body?.name || ''));
     if (!fileId) return res.status(400).json({ error: 'fileId is required' });
     const job = await queueAutomationJob(ownerUserId, {
-      jobType: 'sound.play',
+      jobType: 'fx.play',
       payload: {
+        kind: 'sound',
+        assetId: fileId,
         fileId,
         volume: Math.min(1, Math.max(0, Number(req.body?.volume ?? 1)))
       }
@@ -13150,6 +13710,41 @@ app.post('/api/automations/sounds/test', rateLimiters.userWrite, async (req, res
     return res.json({ queued: true, jobId: job?.id });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to queue sound test' });
+  }
+});
+
+app.get('/api/fx/viewer-url', async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const sid = `user:${ownerUserId}`;
+    const token = await getOrCreateViewerTokenSupabase(ownerUserId, 'fx', sid, 'fx').catch(() => null);
+    let finalToken = token;
+    if (!finalToken) {
+      const settings = await getBotSettings(sid).catch(() => null) || {};
+      finalToken = settings.fxViewerToken || `fx_${crypto.randomBytes(18).toString('base64url')}`;
+      if (settings.fxViewerToken !== finalToken) {
+        await setBotSettings(sid, { ...settings, fxViewerToken: finalToken }).catch(() => null);
+      }
+    }
+    return res.json({ token: finalToken, path: `/fx/${encodeURIComponent(finalToken)}` });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to get FX viewer URL' });
+  }
+});
+
+app.post('/api/automations/fx/test', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const payload = normalizeFxPayload(req.body || {});
+    const job = await queueAutomationJob(ownerUserId, {
+      jobType: 'fx.play',
+      payload: { ...payload, manualRun: true, requestedAt: new Date().toISOString() }
+    });
+    return res.json({ queued: true, jobId: job?.id });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to queue FX test' });
   }
 });
 
@@ -13165,7 +13760,8 @@ app.post('/api/automations/run', rateLimiters.userWrite, async (req, res) => {
       udp: 'blueprint.udp',
       vtube: 'blueprint.vtube',
       tts: 'tts.speak',
-      sound: 'sound.play'
+      sound: 'sound.play',
+      fx: 'fx.play'
     };
     const jobType = jobTypes[type];
     if (!jobType) return res.status(400).json({ error: 'Unsupported automation run type' });
@@ -13431,6 +14027,7 @@ app.post('/api/bot/settings', async (req, res) => {
 const BOT_VARIABLE_PROVIDERS = ['chzzk', 'cime', 'youtube'];
 const BOT_VARIABLES = [
   { key: '{user.name}', label: '시청자 이름', description: '채팅을 보낸 시청자의 표시 이름입니다.', group: '시청자', providers: BOT_VARIABLE_PROVIDERS },
+  { key: '{user.id}', label: '시청자 ID', description: '채팅을 보낸 시청자의 플랫폼/아루봇 식별자입니다.', group: '시청자', providers: BOT_VARIABLE_PROVIDERS },
   { key: '{user.username}', label: '시청자 이름', description: '시청자 이름과 같은 값입니다.', group: '시청자', providers: BOT_VARIABLE_PROVIDERS },
   { key: '{user.nickname}', label: '시청자 닉네임', description: '시청자 이름과 같은 값입니다.', group: '시청자', providers: BOT_VARIABLE_PROVIDERS },
   { key: '{user.points}', label: '보유 포인트', description: '현재 채널에서 시청자가 보유한 통합 포인트입니다.', group: '시청자', providers: BOT_VARIABLE_PROVIDERS },
@@ -13451,6 +14048,25 @@ const BOT_VARIABLES = [
   { key: '{live.elapsed_ko}', label: '방송 진행 시간', description: '한국어 형식으로 표시되는 방송 진행 시간입니다.', group: '방송', providers: BOT_VARIABLE_PROVIDERS },
   { key: '{live.channel}', label: '방송 채널', description: '현재 방송 채널 이름 또는 식별자입니다.', group: '방송', providers: BOT_VARIABLE_PROVIDERS },
   { key: '{channel.followers}', label: '팔로워 수', description: '확인 가능한 현재 채널 팔로워 수입니다.', group: '채널', providers: ['chzzk', 'cime'], caveat: '씨미는 프로필 동기화로 저장된 공개 수치를 사용합니다.' },
+  { key: '${video_donation}', label: '영상 후원 신청 실행', description: '명령어 인자로 받은 링크나 검색어를 영상 후원 대기열에 넣고 포인트를 차감합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, caveat: '명령어 응답에 넣으면 채팅에 그대로 출력되지 않고 영상 후원 신청 동작으로 실행됩니다.' },
+  { key: '${roulette::룰렛이름}', label: '룰렛 실행', description: '지정한 룰렛을 즉시 실행하고 결과를 채팅/오버레이 흐름에 반영합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, caveat: '룰렛 이름 또는 ID를 :: 뒤에 입력하세요. 예: ${roulette::오늘의 벌칙}' },
+  { key: '${action::액션이름}', label: '블루프린트 실행', description: '게시된 실행 액션 블루프린트를 명령어 응답 중 실행합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, caveat: '채팅으로 출력되지 않고 액션이 실행됩니다. 액션 이름, slug 또는 ID를 사용할 수 있습니다.' },
+  { key: '${automation::액션이름}', label: '블루프린트 실행 별칭', description: '${action::...}과 같은 방식으로 게시된 실행 액션을 실행합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS },
+  { key: '${blueprint::액션이름}', label: '블루프린트 실행 별칭', description: '${action::...}과 같은 방식으로 게시된 실행 액션을 실행합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS },
+  { key: '{trigger.message}', label: '트리거 메시지', description: '블루프린트를 실행시킨 채팅 메시지나 입력 문구입니다.', group: '블루프린트 컨텍스트', providers: BOT_VARIABLE_PROVIDERS },
+  { key: '{trigger.keyword}', label: '트리거 키워드', description: '명령어 실행에 매칭된 키워드입니다.', group: '블루프린트 컨텍스트', providers: BOT_VARIABLE_PROVIDERS },
+  { key: '{trigger.platform}', label: '트리거 플랫폼', description: '블루프린트를 실행시킨 플랫폼입니다.', group: '블루프린트 컨텍스트', providers: BOT_VARIABLE_PROVIDERS },
+  { key: '{user.userId}', label: '시청자 ID', description: '블루프린트와 자동화에서 사용하는 시청자 식별자입니다.', group: '블루프린트 컨텍스트', providers: BOT_VARIABLE_PROVIDERS },
+  { key: '{channel.channelUid}', label: '채널 ID', description: '현재 방송인 채널 식별자입니다.', group: '블루프린트 컨텍스트', providers: BOT_VARIABLE_PROVIDERS },
+  { key: '{donation.amount}', label: '후원 금액', description: '후원 이벤트로 실행된 블루프린트에서 사용할 수 있는 후원 금액입니다.', group: '블루프린트 컨텍스트', providers: BOT_VARIABLE_PROVIDERS },
+  { key: '{roulette.result.label}', label: '룰렛 결과 이름', description: '룰렛 실행 결과의 항목 이름입니다.', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS },
+  { key: '{roulette.result.value}', label: '룰렛 결과 값', description: '룰렛 항목에 설정한 실행 액션 또는 값입니다.', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS },
+  { key: '{node.rouletteRun.result.label}', label: '룰렛 노드 결과 이름', description: '블루프린트의 룰렛 실행 노드가 만든 결과 항목 이름입니다.', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS },
+  { key: '{node.rouletteRun.result.value}', label: '룰렛 노드 결과 값', description: '블루프린트의 룰렛 실행 노드가 만든 결과 값입니다.', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS },
+  { key: '{node.attendanceGet.totalDays}', label: '출석 조회 노드 누적일', description: '블루프린트 출석 조회 노드의 누적 출석일 결과입니다.', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS },
+  { key: '{node.pointsGet.points}', label: '포인트 조회 노드 결과', description: '블루프린트 포인트 조회 노드가 가져온 포인트입니다.', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS },
+  { key: '{node.overlay.overlayId}', label: '오버레이 ID', description: '블루프린트 오버레이 표시 노드가 만든 오버레이 식별자입니다.', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS },
+  { key: '{flow.변수이름}', label: '임시 변수', description: '블루프린트 임시 변수 노드에서 저장한 값을 읽습니다. 예: {flow.bonusPoint}', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS },
 ];
 
 app.get('/api/bot/variables', async (req, res) => {
@@ -13868,7 +14484,7 @@ function formatPredictionBetError(error) {
   return '예측 베팅 처리 중 오류가 발생했습니다.';
 }
 
-async function handlePredictionBetCommand({ channelUid, userId, username, text }) {
+async function handlePredictionBetCommand({ sid, channelUid, userId, username, text, provider }) {
   const parsed = parsePredictionBetCommand(text);
   if (!parsed) return null;
   if (!channelUid) return '채널 정보를 확인할 수 없어 예측 베팅을 처리할 수 없습니다.';
@@ -13884,6 +14500,9 @@ async function handlePredictionBetCommand({ channelUid, userId, username, text }
       optionToken: parsed.option,
       amount: parsed.amount,
     });
+    if (sid) {
+      await recordPredictionEventLogs(sid, prediction, { provider, channelUid });
+    }
     broadcastPredictionSnapshot(prediction?.channelUid || channelUid, prediction, 'prediction:update');
     const optionToken = String(parsed.option || '').trim().toLowerCase();
     const selected = prediction?.options?.find((option, index) => (
@@ -13997,6 +14616,27 @@ app.get('/api/channelpoints/get', async (req, res) => {
   } catch (e) {
     console.error('[channelpoints:get] error', e?.message || e);
     return res.status(500).json({ error: 'Failed to get channel points' });
+  }
+});
+
+app.get('/api/bot/event-logs', async (req, res) => {
+  const sid = await getPartitionId(req, res);
+  if (!sid) return res.status(401).json({ error: 'Login required' });
+  try {
+    const ownerUserId = ownerUserIdFromSid(sid);
+    const result = await listBotEventLogs(ownerUserId, {
+      page: req.query.page,
+      limit: req.query.limit,
+      category: req.query.category,
+      provider: req.query.provider,
+      q: req.query.q,
+      from: req.query.from,
+      to: req.query.to,
+    });
+    return res.json(result);
+  } catch (e) {
+    console.error('[bot-event-logs:list] error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to list event logs' });
   }
 });
 
@@ -14175,6 +14815,7 @@ app.post('/api/predictions/:id/cancel', async (req, res) => {
   try {
     const prediction = await cancelPredictionForSid(sid, req.params.id);
     if (!prediction) return res.status(404).json({ error: 'Prediction not found' });
+    await recordPredictionEventLogs(sid, prediction, { provider: 'admin', channelUid: prediction.channelUid });
     if (predictionAutoLockTimers.has(prediction.id)) {
       clearTimeout(predictionAutoLockTimers.get(prediction.id));
       predictionAutoLockTimers.delete(prediction.id);
@@ -14195,6 +14836,7 @@ app.post('/api/predictions/:id/settle', async (req, res) => {
     if (!winningOptionId) return res.status(400).json({ error: 'winningOptionId is required' });
     const prediction = await settlePredictionForSid(sid, req.params.id, winningOptionId);
     if (!prediction) return res.status(404).json({ error: 'Prediction not found' });
+    await recordPredictionEventLogs(sid, prediction, { provider: 'admin', channelUid: prediction.channelUid });
     if (predictionAutoLockTimers.has(prediction.id)) {
       clearTimeout(predictionAutoLockTimers.get(prediction.id));
       predictionAutoLockTimers.delete(prediction.id);
@@ -14690,7 +15332,7 @@ app.get('/api/channel/performance', requireOpsAuth, async (req, res) => {
     const sqliteStats = getChannelPerformanceStats(channelContext.channelId);
 
     let supabaseStats = null;
-    if (process.env.SUPABASE_URL && process.env.SUPABASE_DB_URL) {
+    if (hasDirectDatabaseUrl()) {
       try {
         const { getChannelPerformanceStatsSupabase } = await import('./supabase.js');
         supabaseStats = await getChannelPerformanceStatsSupabase(channelContext.channelId);
@@ -14732,7 +15374,7 @@ app.get('/api/admin/database/performance', requireOpsAuth, async (req, res) => {
     const sqliteAnalysis = analyzeDatabasePerformance();
 
     let supabaseAnalysis = null;
-    if (process.env.SUPABASE_URL && process.env.SUPABASE_DB_URL) {
+    if (hasDirectDatabaseUrl()) {
       try {
         const {
           analyzeQueryPerformanceSupabase,
@@ -14784,7 +15426,7 @@ app.post('/api/admin/database/optimize', requireOpsAuth, async (req, res) => {
     const sqliteResult = optimizeDatabase();
 
     let supabaseResult = null;
-    if (process.env.SUPABASE_URL && process.env.SUPABASE_DB_URL) {
+    if (hasDirectDatabaseUrl()) {
       try {
         const { updateChannelStatisticsSupabase } = await import('./supabase.js');
         const success = await updateChannelStatisticsSupabase();
@@ -15020,7 +15662,7 @@ app.get('/api/channel/tokens/stats', requireOpsAuth, async (req, res) => {
     }
 
     let supabaseStats = null;
-    if (process.env.SUPABASE_URL) {
+    if (hasDirectDatabaseUrl()) {
       try {
         const { getChannelTokenStatsSupabase } = await import('./supabase.js');
         supabaseStats = await getChannelTokenStatsSupabase(channelContext.channelId);
@@ -15871,9 +16513,11 @@ async function ensureSession(sid, channelId) {
             try {
               const channelUid = await resolveStreamerUidForSid(sid);
               const predictionReply = await handlePredictionBetCommand({
+                sid,
                 channelUid,
                 userId: resolvedUserId,
                 username: resolvedUsername,
+                provider: 'chzzk',
                 text,
               });
               if (predictionReply) {
@@ -15940,6 +16584,10 @@ async function ensureSession(sid, channelId) {
             const commandCost = Math.max(0, Number(r.pointsCost || 0));
             // Some rules (roulette) handle cost after parsing count; detect roulette token in responses
             const isRouletteRule = (Array.isArray(r.responses) ? r.responses : []).some((s) => typeof s === 'string' && /\$\{\s*roulette::/i.test(s));
+            let commandPointDelta = 0;
+            let commandPointBefore = null;
+            let commandPointAfter = null;
+            const commandFeatures = [];
 
             const executionContext = msg?.executionContext || { source: 'chat', shouldDeductPoints: true };
             const shouldSkipPointsDeduction = executionContext.source === 'roulette' || !executionContext.shouldDeductPoints;
@@ -15960,6 +16608,9 @@ async function ensureSession(sid, channelId) {
                   } else {
                     // Deduct cost now
                     await incrChannelPoints(channelUid, String(resolvedUserId), String(resolvedUsername || ''), -commandCost);
+                    commandPointDelta -= commandCost;
+                    commandPointBefore = Number(have || 0);
+                    commandPointAfter = Number(have || 0) - commandCost;
                   }
                 }
               } catch { }
@@ -15998,7 +16649,13 @@ async function ensureSession(sid, channelId) {
                     args: argsVd,
                     response,
                     vdReAll,
+                    context: {
+                      source: 'chat-command',
+                      provider: 'chzzk',
+                      command: { keyword: matchedKeyword || '', ruleId: r.id || null, ruleName: r.name || null },
+                    },
                   });
+                  commandFeatures.push('video_donation');
                 } catch (e) {
                   responseToSend = '요청 처리 중 오류가 발생했습니다.';
                 }
@@ -16059,6 +16716,9 @@ async function ensureSession(sid, channelId) {
                           } else {
                             try {
                               await incrChannelPoints(channelUid, String(resolvedUserId), String(resolvedUsername || ''), -need);
+                              commandPointDelta -= need;
+                              commandPointBefore = haveNum;
+                              commandPointAfter = haveNum - need;
                             } catch (e) {
                               responseToSend = '포인트 차감에 실패했습니다. 잠시 후 다시 시도해 주세요.';
                               allowExecute = false;
@@ -16109,16 +16769,27 @@ async function ensureSession(sid, channelId) {
                       console.log(`[Roulette] Enqueueing ${count} spins for roulette: ${name}, user: ${resolvedUsername}`);
 
                       // First spin: normal animation (instant=false)
-                      const queuePosition = enqueueRouletteSpin(sid, { ...base, instant: false });
+                      const queuePosition = enqueueRouletteSpin(sid, {
+                        ...base,
+                        instant: false,
+                        eventContext: {
+                          source: 'chat-command',
+                          triggerName: matchedKeyword || '',
+                          pointDelta: commandPointDelta,
+                          pointBefore: commandPointBefore,
+                          pointAfter: commandPointAfter,
+                        },
+                      });
                       console.log(`[Roulette] First spin enqueued at position: ${queuePosition}`);
 
                       // Remaining spins (if any): instant display on viewer
                       for (let i = 1; i < count; i++) {
-                        const pos = enqueueRouletteSpin(sid, { ...base, instant: true });
+                        const pos = enqueueRouletteSpin(sid, { ...base, instant: true, eventContext: { source: 'chat-command', triggerName: matchedKeyword || '' } });
                         console.log(`[Roulette] Spin ${i + 1} enqueued at position: ${pos}`);
                       }
 
                       responseToSend = '';
+                      commandFeatures.push('roulette');
 
                     } catch (e) {
                       console.error('[Roulette] Execution error:', e);
@@ -16145,6 +16816,7 @@ async function ensureSession(sid, channelId) {
               if (actionResult.used) {
                 responseToSend = actionResult.text;
                 ruleUsed = true;
+                commandFeatures.push('action');
               }
             }
 
@@ -16236,6 +16908,24 @@ async function ensureSession(sid, channelId) {
               if (ruleUsed || (finalMsg && String(finalMsg).length > 0)) {
                 try { await upsertBotRule(sid, { ...r, lastUsed: now }); } catch { }
               }
+              await recordCommandExecutionLog(sid, {
+                executed: allowExecute && (ruleUsed || (finalMsg && String(finalMsg).length > 0)),
+                provider: 'chzzk',
+                channelUid: liveState.channelId || entry.channelId || null,
+                userId: resolvedUserId,
+                username: resolvedUsername,
+                triggerName: matchedKeyword || '',
+                targetName: r.name || null,
+                ruleId: r.id || null,
+                ruleName: r.name || null,
+                args: argsVd,
+                pointDelta: commandPointDelta,
+                pointBefore: commandPointBefore,
+                pointAfter: commandPointAfter,
+                features: commandFeatures,
+                source: executionContext.source || 'chat',
+                summary: `명령어 실행: ${matchedKeyword || ''}${r.name ? ` · ${r.name}` : ''}`,
+              });
             } catch (e) {
               console.error('Backend auto-reply send error', e?.response?.data || e.message);
             }
@@ -16374,6 +17064,7 @@ async function ensureSession(sid, channelId) {
               try {
                 built = await substituteAllPlaceholders(built, sid, donorId ? String(donorId) : '', donorName || '');
               } catch { }
+              const donationFeatures = [];
               // Handle optional roulette trigger inside response
               const rlRe = /\$\{\s*roulette::([^}]+)\s*\}/i;
               const rlReAll = /\$\{\s*roulette::([^}]+)\s*\}/ig;
@@ -16391,10 +17082,25 @@ async function ensureSession(sid, channelId) {
                       username: donorName,
                       chatPost: { sessionKey: entry.sessionKey, accessToken, resolvedUsername: donorName }
                     };
-                    enqueueRouletteSpin(sid, { ...base, instant: false });
+                    enqueueRouletteSpin(sid, { ...base, instant: false, eventContext: { source: 'donation-rule', triggerName: r.name || null } });
+                    donationFeatures.push('roulette');
                   }
                 } catch { }
               }
+              await recordDonationRuleExecutionLog(sid, {
+                provider: 'chzzk',
+                channelUid: liveState.channelId || null,
+                userId: donorId ? String(donorId) : null,
+                username: donorName,
+                ruleId: r.id || null,
+                ruleName: r.name || null,
+                targetName: donationFeatures.includes('roulette') ? '룰렛 실행' : '채팅 반응',
+                amount,
+                message: donorMessage,
+                features: donationFeatures,
+                source: 'donation-rule',
+                summary: `후원 반응 실행: ${r.name || '이름 없음'} · ${amount.toLocaleString('ko-KR')}원`,
+              });
               if (built && built.length > 0) responsesToSend.push(built);
             }
           } catch { }
@@ -16993,6 +17699,7 @@ async function processYoutubeDonationAutomation(entry, ev) {
       const vars = { username: donorName, amount, message: donorMessage };
       let built = tmpl.replace(/\$\{\s*(username|amount|message)\s*\}/g, (_, k) => String(vars[k]));
       try { built = await substituteAllPlaceholders(built, sid, donorId, donorName); } catch { }
+      const donationFeatures = [];
       const rlRe = /\$\{\s*roulette::([^}]+)\s*\}/i;
       const rlReAll = /\$\{\s*roulette::([^}]+)\s*\}/ig;
       if (rlRe.test(String(built || ''))) {
@@ -17006,11 +17713,27 @@ async function processYoutubeDonationAutomation(entry, ev) {
               userId: donorId,
               username: donorName,
               chatPost: makeYoutubeChatPost(ownerUserId, entry.liveChatId, donorName),
-              instant: false
+              instant: false,
+              eventContext: { source: 'youtube-super-chat-rule', triggerName: r.name || null }
             });
+            donationFeatures.push('roulette');
           }
         } catch { }
       }
+      await recordDonationRuleExecutionLog(sid, {
+        provider: 'youtube',
+        channelUid: entry.channelId || null,
+        userId: donorId,
+        username: donorName,
+        ruleId: r.id || null,
+        ruleName: r.name || null,
+        targetName: donationFeatures.includes('roulette') ? '룰렛 실행' : '채팅 반응',
+        amount,
+        message: donorMessage,
+        features: donationFeatures,
+        source: 'youtube-super-chat-rule',
+        summary: `후원 반응 실행: ${r.name || '이름 없음'} · ${amount.toLocaleString('ko-KR')}원`,
+      });
       built = String(built || '').trim();
       if (built) responsesToSend.push(built);
     }
@@ -17084,9 +17807,11 @@ async function processYoutubeChatAutomation(entry, ev) {
     if (isBotSelf || settings.botEnabled === false) return;
     try {
       const predictionReply = await handlePredictionBetCommand({
+        sid,
         channelUid: entry.channelId,
         userId: resolvedUserId,
         username: resolvedUsername,
+        provider: 'youtube',
         text,
       });
       if (predictionReply) {
@@ -17127,6 +17852,10 @@ async function processYoutubeChatAutomation(entry, ev) {
       let allowExecute = true;
       const commandCost = Math.max(0, Number(r.pointsCost || 0));
       const isRouletteRule = responses.some((s) => typeof s === 'string' && /\$\{\s*roulette::/i.test(s));
+      let commandPointDelta = 0;
+      let commandPointBefore = null;
+      let commandPointAfter = null;
+      const commandFeatures = [];
       if (!isRouletteRule && commandCost > 0 && entry.channelId && resolvedUserId) {
         const have = await getChannelPoints(entry.channelId, resolvedUserId).catch(() => 0);
         if (Number(have || 0) < commandCost) {
@@ -17134,6 +17863,9 @@ async function processYoutubeChatAutomation(entry, ev) {
           allowExecute = false;
         } else {
           await incrChannelPoints(entry.channelId, resolvedUserId, resolvedUsername, -commandCost).catch(() => { });
+          commandPointDelta -= commandCost;
+          commandPointBefore = Number(have || 0);
+          commandPointAfter = Number(have || 0) - commandCost;
         }
       }
 
@@ -17167,8 +17899,14 @@ async function processYoutubeChatAutomation(entry, ev) {
             username: resolvedUsername,
             args,
             response: cleaned,
-            vdReAll
+            vdReAll,
+            context: {
+              source: 'youtube-chat-command',
+              provider: 'youtube',
+              command: { keyword: matchedKeyword || '', ruleId: r.id || null, ruleName: r.name || null },
+            },
           });
+          commandFeatures.push('video_donation');
         } catch {
           cleaned = '영상 요청 처리 중 오류가 발생했습니다.';
         }
@@ -17193,6 +17931,9 @@ async function processYoutubeChatAutomation(entry, ev) {
                 allowExecute = false;
               } else {
                 await incrChannelPoints(entry.channelId, resolvedUserId, resolvedUsername, -need).catch(() => { });
+                commandPointDelta -= need;
+                commandPointBefore = Number(have || 0);
+                commandPointAfter = Number(have || 0) - need;
               }
             }
           }
@@ -17205,9 +17946,20 @@ async function processYoutubeChatAutomation(entry, ev) {
                 ? makeYoutubeChatPost(ownerUserId, entry.liveChatId, resolvedUsername, { suppressResultChat: true, batchId: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, batchCount: count })
                 : makeYoutubeChatPost(ownerUserId, entry.liveChatId, resolvedUsername)
             };
-            enqueueRouletteSpin(sid, { ...base, instant: false });
-            for (let i = 1; i < count; i++) enqueueRouletteSpin(sid, { ...base, instant: true });
+            enqueueRouletteSpin(sid, {
+              ...base,
+              instant: false,
+              eventContext: {
+                source: 'youtube-chat-command',
+                triggerName: matchedKeyword || '',
+                pointDelta: commandPointDelta,
+                pointBefore: commandPointBefore,
+                pointAfter: commandPointAfter,
+              },
+            });
+            for (let i = 1; i < count; i++) enqueueRouletteSpin(sid, { ...base, instant: true, eventContext: { source: 'youtube-chat-command', triggerName: matchedKeyword || '' } });
             cleaned = '';
+            commandFeatures.push('roulette');
           }
         } catch {
           cleaned = '룰렛 실행 중 오류가 발생했습니다.';
@@ -17224,7 +17976,10 @@ async function processYoutubeChatAutomation(entry, ev) {
           channelUid: entry.channelId || null,
           channel: { channelUid: entry.channelId || null },
         });
-        if (actionResult.used) cleaned = actionResult.text;
+        if (actionResult.used) {
+          cleaned = actionResult.text;
+          commandFeatures.push('action');
+        }
       }
 
       cleaned = String(cleaned || '').trim();
@@ -17239,6 +17994,24 @@ async function processYoutubeChatAutomation(entry, ev) {
         });
       }
       try { await upsertBotRule(sid, { ...r, lastUsed: now }); } catch { }
+      await recordCommandExecutionLog(sid, {
+        executed: allowExecute,
+        provider: 'youtube',
+        channelUid: entry.channelId || null,
+        userId: resolvedUserId,
+        username: resolvedUsername,
+        triggerName: matchedKeyword || '',
+        targetName: r.name || null,
+        ruleId: r.id || null,
+        ruleName: r.name || null,
+        args,
+        pointDelta: commandPointDelta,
+        pointBefore: commandPointBefore,
+        pointAfter: commandPointAfter,
+        features: commandFeatures,
+        source: 'youtube-chat',
+        summary: `명령어 실행: ${matchedKeyword || ''}${r.name ? ` · ${r.name}` : ''}`,
+      });
       break;
     }
   } catch (e) {
@@ -17665,7 +18438,7 @@ async function isCimeLiveAllowed(ownerUserId, sid, channelId) {
   return !settings.onlyWhenLive || live;
 }
 
-async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username, args, response, vdReAll }) {
+async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username, args, response, vdReAll, context = {} }) {
   const firstArg = Array.isArray(args) ? (args[0] || '') : '';
   const startArgRaw = Array.isArray(args) ? args[1] : undefined;
   const playArgRaw = Array.isArray(args) ? args[2] : undefined;
@@ -17707,7 +18480,7 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
 
   await incrChannelPoints(channelUid, String(userId), String(username || ''), -cost);
   const q = getVideoQueue(sid);
-  q.push({
+  const queueItem = {
     id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     ts: Date.now(),
     mediaProvider: media.provider,
@@ -17725,6 +18498,31 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
     userId: String(userId),
     username: String(username || ''),
     status: 'queued'
+  };
+  q.push(queueItem);
+  await recordBotEventLogSafe(sid, {
+    category: 'video_donation',
+    eventType: 'video_donation_request',
+    provider: providerFromLogContext(context),
+    channelUid,
+    viewerUserId: String(userId),
+    viewerName: String(username || ''),
+    pointDelta: -cost,
+    pointBefore: Number(have || 0),
+    pointAfter: Number(have || 0) - cost,
+    triggerName: context.command?.keyword || context.triggerName || null,
+    targetName: media.title || media.mediaId || media.mediaUrl || '영상 후원',
+    summary: `영상 후원 신청: ${media.title || media.mediaId || media.mediaUrl || '영상'} (${cost}P 사용)`,
+    metadata: {
+      mediaProvider: media.provider,
+      mediaId: media.mediaId,
+      durationSec: dur,
+      startSec: start,
+      cost,
+      queueItemId: queueItem.id,
+      source: context.source || null,
+      command: context.command || null,
+    },
   });
   if (q.length === 1) {
     broadcastPvdStart(sid);
@@ -17805,9 +18603,11 @@ async function processCimeChatAutomation(entry, ev) {
     if (settings.botEnabled === false) return;
     try {
       const predictionReply = await handlePredictionBetCommand({
+        sid,
         channelUid: pointChannelUid || entry.channelId,
         userId: resolvedUserId,
         username: resolvedUsername,
+        provider: 'cime',
         text,
       });
       if (predictionReply) {
@@ -17849,6 +18649,10 @@ async function processCimeChatAutomation(entry, ev) {
       let allowExecute = true;
       const commandCost = Math.max(0, Number(r.pointsCost || 0));
       const isRouletteRule = responses.some((s) => typeof s === 'string' && /\$\{\s*roulette::/i.test(s));
+      let commandPointDelta = 0;
+      let commandPointBefore = null;
+      let commandPointAfter = null;
+      const commandFeatures = [];
       if (!isRouletteRule && commandCost > 0 && pointChannelUid && resolvedUserId) {
         const have = await getChannelPoints(pointChannelUid, resolvedUserId).catch(() => 0);
         if (Number(have || 0) < commandCost) {
@@ -17856,6 +18660,9 @@ async function processCimeChatAutomation(entry, ev) {
           allowExecute = false;
         } else {
           await incrChannelPoints(pointChannelUid, resolvedUserId, resolvedUsername, -commandCost).catch(() => { });
+          commandPointDelta -= commandCost;
+          commandPointBefore = Number(have || 0);
+          commandPointAfter = Number(have || 0) - commandCost;
         }
       }
 
@@ -17889,8 +18696,14 @@ async function processCimeChatAutomation(entry, ev) {
             username: resolvedUsername,
             args,
             response: cleaned,
-            vdReAll
+            vdReAll,
+            context: {
+              source: 'cime-chat-command',
+              provider: 'cime',
+              command: { keyword: matchedKeyword || '', ruleId: r.id || null, ruleName: r.name || null },
+            },
           });
+          commandFeatures.push('video_donation');
         } catch (e) {
           cleaned = '영상 요청 처리 중 오류가 발생했습니다.';
         }
@@ -17915,6 +18728,9 @@ async function processCimeChatAutomation(entry, ev) {
                 allowExecute = false;
               } else {
                 await incrChannelPoints(pointChannelUid, resolvedUserId, resolvedUsername, -need).catch(() => { });
+                commandPointDelta -= need;
+                commandPointBefore = Number(have || 0);
+                commandPointAfter = Number(have || 0) - need;
               }
             }
           }
@@ -17927,9 +18743,20 @@ async function processCimeChatAutomation(entry, ev) {
                 ? makeCimeChatPost(ownerUserId, resolvedUsername, { suppressResultChat: true, batchId: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, batchCount: count })
                 : makeCimeChatPost(ownerUserId, resolvedUsername)
             };
-            enqueueRouletteSpin(sid, { ...base, instant: false });
-            for (let i = 1; i < count; i++) enqueueRouletteSpin(sid, { ...base, instant: true });
+            enqueueRouletteSpin(sid, {
+              ...base,
+              instant: false,
+              eventContext: {
+                source: 'cime-chat-command',
+                triggerName: matchedKeyword || '',
+                pointDelta: commandPointDelta,
+                pointBefore: commandPointBefore,
+                pointAfter: commandPointAfter,
+              },
+            });
+            for (let i = 1; i < count; i++) enqueueRouletteSpin(sid, { ...base, instant: true, eventContext: { source: 'cime-chat-command', triggerName: matchedKeyword || '' } });
             cleaned = '';
+            commandFeatures.push('roulette');
           }
         } catch (e) {
           cleaned = '룰렛 실행 중 오류가 발생했습니다.';
@@ -17959,6 +18786,24 @@ async function processCimeChatAutomation(entry, ev) {
         });
       }
       try { await upsertBotRule(sid, { ...r, lastUsed: now }); } catch { }
+      await recordCommandExecutionLog(sid, {
+        executed: allowExecute,
+        provider: 'cime',
+        channelUid: pointChannelUid || entry.channelId || null,
+        userId: resolvedUserId,
+        username: resolvedUsername,
+        triggerName: matchedKeyword || '',
+        targetName: r.name || null,
+        ruleId: r.id || null,
+        ruleName: r.name || null,
+        args,
+        pointDelta: commandPointDelta,
+        pointBefore: commandPointBefore,
+        pointAfter: commandPointAfter,
+        features: commandFeatures,
+        source: 'cime-chat',
+        summary: `명령어 실행: ${matchedKeyword || ''}${r.name ? ` · ${r.name}` : ''}`,
+      });
       break;
     }
   } catch (e) {
@@ -18017,6 +18862,7 @@ async function processCimeDonationAutomation(entry, ev) {
       const vars = { username: donorName, amount, message: donorMessage };
       let built = tmpl.replace(/\$\{\s*(username|amount|message)\s*\}/g, (_, k) => String(vars[k]));
       try { built = await substituteAllPlaceholders(built, sid, donorId, donorName); } catch { }
+      const donationFeatures = [];
       const rlRe = /\$\{\s*roulette::([^}]+)\s*\}/i;
       const rlReAll = /\$\{\s*roulette::([^}]+)\s*\}/ig;
       if (rlRe.test(String(built || ''))) {
@@ -18030,11 +18876,27 @@ async function processCimeDonationAutomation(entry, ev) {
               userId: donorId,
               username: donorName,
               chatPost: makeCimeChatPost(ownerUserId, donorName),
-              instant: false
+              instant: false,
+              eventContext: { source: 'cime-donation-rule', triggerName: r.name || null }
             });
+            donationFeatures.push('roulette');
           }
         } catch { }
       }
+      await recordDonationRuleExecutionLog(sid, {
+        provider: 'cime',
+        channelUid: entry.channelId || null,
+        userId: donorId,
+        username: donorName,
+        ruleId: r.id || null,
+        ruleName: r.name || null,
+        targetName: donationFeatures.includes('roulette') ? '룰렛 실행' : '채팅 반응',
+        amount,
+        message: donorMessage,
+        features: donationFeatures,
+        source: 'cime-donation-rule',
+        summary: `후원 반응 실행: ${r.name || '이름 없음'} · ${amount.toLocaleString('ko-KR')}원`,
+      });
       built = String(built || '').trim();
       if (built) responsesToSend.push(built);
     }
@@ -19188,7 +20050,9 @@ let wssPvdAdmin; // PVD admin queue WS (noServer mode)
 let wssRoulette; // Roulette viewer WS (noServer mode)
 let wssPrediction; // Prediction overlay WS (noServer mode)
 let wssAutomationLocalAgent; // Local automation program WS
+let wssFx; // FX overlay WS (noServer mode)
 const predictionChannelSockets = new Map(); // channelUid -> Set<WebSocket>
+const fxSidSockets = new Map(); // sid -> Set<WebSocket>
 const predictionAutoLockTimers = new Map(); // predictionId -> timeout
 
 function registerPvdRoutes() {
@@ -19703,6 +20567,73 @@ function registerRouletteRoutes() {
 
 try { registerRouletteRoutes(); } catch (e) { console.error('[roulette ws] failed to register routes', e?.message || e); }
 
+function registerFxRoutes() {
+  console.log('[fx ws] initializing WebSocketServer on /api/fx/ws');
+  wssFx = new WebSocketServer({
+    noServer: true,
+    maxPayload: 128 * 1024,
+    perMessageDeflate: false,
+  });
+  wssFx.on('connection', async (ws, req) => {
+    let sid = null;
+    try {
+      const url = new URL(req.url, `http://localhost:${PORT}`);
+      const token = String(url.searchParams.get('token') || '').trim();
+      if (!token) {
+        try { ws.close(1008, 'Missing FX token'); } catch { }
+        return;
+      }
+      sid = await findSidByChannelViewerTokenSupabase(token, 'fx').catch(() => null);
+      if (!sid) {
+        try {
+          const { data } = await getBotSettingsByFxTokenFallback(token);
+          sid = data;
+        } catch { }
+      }
+      if (!sid) {
+        try { ws.close(1008, 'Invalid FX token'); } catch { }
+        return;
+      }
+      let sockets = fxSidSockets.get(sid);
+      if (!sockets) {
+        sockets = new Set();
+        fxSidSockets.set(sid, sockets);
+      }
+      sockets.add(ws);
+      try { ws.send(JSON.stringify({ type: 'hello', sid, serverNow: Date.now() }), { compress: false }); } catch { }
+      const keepAlive = setInterval(() => { try { ws.ping(); } catch { } }, 30000);
+      ws.on('message', (raw) => {
+        try {
+          const message = JSON.parse(String(raw));
+          if (message?.type === 'ping') ws.send(JSON.stringify({ type: 'pong', serverNow: Date.now() }), { compress: false });
+        } catch { }
+      });
+      ws.on('close', () => {
+        try { clearInterval(keepAlive); } catch { }
+        const set = fxSidSockets.get(sid);
+        if (set) {
+          set.delete(ws);
+          if (set.size === 0) fxSidSockets.delete(sid);
+        }
+      });
+      ws.on('error', () => { try { ws.close(); } catch { } });
+    } catch (error) {
+      console.error('[fx ws] connection error', error?.message || error);
+      try { ws.close(1011, 'FX websocket error'); } catch { }
+    }
+  });
+}
+
+async function getBotSettingsByFxTokenFallback(token) {
+  for (const sid of Array.from(activeSids.keys())) {
+    const settings = await getBotSettings(sid).catch(() => null) || {};
+    if (settings.fxViewerToken === token) return { data: sid };
+  }
+  return { data: null };
+}
+
+try { registerFxRoutes(); } catch (e) { console.error('[fx ws] failed to register routes', e?.message || e); }
+
 function registerAutomationLocalAgentRoutes() {
   console.log('[automation local ws] initializing WebSocketServer on /api/automations/local-agent/ws');
   wssAutomationLocalAgent = new WebSocketServer({
@@ -19864,6 +20795,10 @@ try {
       }
       if (u.pathname === '/api/prediction/ws') {
         wssPrediction.handleUpgrade(req, socket, head, (ws) => wssPrediction.emit('connection', ws, req));
+        return;
+      }
+      if (u.pathname === '/api/fx/ws') {
+        wssFx.handleUpgrade(req, socket, head, (ws) => wssFx.emit('connection', ws, req));
         return;
       }
       if (u.pathname === '/api/desktop/ws') {

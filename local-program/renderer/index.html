@@ -34,8 +34,8 @@
             <small>모델 핫키와 표정</small>
           </button>
           <button class="nav-item" type="button" data-page="sound">
-            <span>사운드</span>
-            <small>로컬 폴더</small>
+            <span>FX 에셋</span>
+            <small>이미지 · 영상 · 사운드</small>
           </button>
           <button class="nav-item" type="button" data-page="updates">
             <span>업데이트</span>
@@ -104,6 +104,17 @@
           <div class="actions">
             <button class="button primary" id="saveConfigButton">설정 저장</button>
             <button class="button ghost" id="openDashboardButton">웹 대시보드 열기</button>
+          </div>
+          <div class="diagnostic-card">
+            <div class="panel-head compact">
+              <div>
+                <span class="chip sky">원클릭 점검</span>
+                <h2>방송 PC 연결 상태 확인</h2>
+              </div>
+              <button class="button secondary" id="runDiagnosticsButton">점검 실행</button>
+            </div>
+            <div class="folder-path" id="diagnosticSummary">아직 점검하지 않았습니다.</div>
+            <div class="diagnostic-list" id="diagnosticList"></div>
           </div>
         </article>
         <aside class="panel support-panel">
@@ -262,20 +273,20 @@
         <article class="panel feature-panel" id="sound">
           <div class="panel-head compact">
             <div>
-              <span class="chip mint">사운드 폴더</span>
-              <h2>대용량 파일은 내 PC에서 호스팅</h2>
+              <span class="chip mint">FX 에셋 폴더</span>
+              <h2>화면 효과 파일은 내 PC에서 호스팅</h2>
             </div>
             <div class="actions">
-              <button class="button secondary" id="chooseSoundFolderButton">폴더 선택</button>
+              <button class="button secondary" id="chooseSoundFolderButton">FX 폴더 선택</button>
               <button class="button ghost" id="openSoundFolderButton">폴더 열기</button>
             </div>
           </div>
           <div class="folder-path" id="soundFolderText">선택된 폴더 없음</div>
         </article>
         <aside class="panel support-panel">
-          <span class="chip mint">대용량 사운드</span>
-          <h2>10MB를 넘는 사운드는 내 PC에서 바로 재생하세요.</h2>
-          <p class="hint">폴더를 지정하면 자동화 액션의 파일 이름과 같은 로컬 파일을 우선 재생합니다. 없으면 서버 저장소의 파일을 임시 폴더에 내려받아 재생합니다.</p>
+          <span class="chip mint">로컬 FX</span>
+          <h2>이미지, 스티커, 비디오, 사운드를 한 폴더에서 관리하세요.</h2>
+          <p class="hint">폴더를 지정하면 로컬 프로그램이 목록만 웹에 동기화하고, 실제 파일은 방송 PC에서 OBS FX 오버레이로 전달합니다.</p>
         </aside>
           </div>
         </section>

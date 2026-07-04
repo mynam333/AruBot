@@ -29,3 +29,8 @@ server/data.sqlite
 
 tsconfig.tsbuildinfo
 tmp
+
+backups/
+*.dump
+*.sql.gz
+.env.local-supabase

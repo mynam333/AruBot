@@ -548,6 +548,61 @@ textarea:focus {
   font-size: 0.95rem;
 }
 
+.diagnostic-card {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  border-top: 1px solid var(--line);
+  padding-top: 1rem;
+}
+
+.diagnostic-list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.diagnostic-row {
+  display: grid;
+  grid-template-columns: 5.5rem minmax(9rem, 0.42fr) minmax(0, 1fr);
+  gap: 0.65rem;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.58);
+  padding: 0.72rem 0.85rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.diagnostic-row strong {
+  color: var(--text);
+  font-size: 0.84rem;
+}
+
+.diagnostic-state {
+  border-radius: 999px;
+  padding: 0.25rem 0.5rem;
+  text-align: center;
+  font-size: 0.72rem;
+  font-weight: 850;
+}
+
+.diagnostic-row.pass .diagnostic-state {
+  background: var(--mint);
+  color: #0e6158;
+}
+
+.diagnostic-row.warn .diagnostic-state {
+  background: var(--lemon);
+  color: #6c5512;
+}
+
+.diagnostic-row.fail .diagnostic-state {
+  background: var(--coral);
+  color: #7b342a;
+}
+
 .mini-list div,
 .folder-path {
   border: 1px solid var(--line);
@@ -670,6 +725,11 @@ textarea:focus {
   .log-row {
     grid-template-columns: 1fr;
     gap: 0.45rem;
+    align-items: start;
+  }
+
+  .diagnostic-row {
+    grid-template-columns: 1fr;
     align-items: start;
   }
 

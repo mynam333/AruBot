@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('aruLocal', {
   chooseSoundFolder: () => ipcRenderer.invoke('folder:chooseSound'),
   openSoundFolder: () => ipcRenderer.invoke('folder:openSound'),
   openDashboard: () => ipcRenderer.invoke('dashboard:open'),
+  runDiagnostics: () => ipcRenderer.invoke('diagnostics:run'),
   checkUpdate: () => ipcRenderer.invoke('update:check'),
   installUpdate: () => ipcRenderer.invoke('update:install'),
   remoteOverview: () => ipcRenderer.invoke('remote:overview'),

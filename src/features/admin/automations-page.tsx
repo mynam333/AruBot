@@ -308,6 +308,7 @@ export function AutomationsPage() {
   const [selectedVtubeHotkey, setSelectedVtubeHotkey] = useState('');
   const [controlLabel, setControlLabel] = useState('방송 액션 실행');
   const [controlUrl, setControlUrl] = useState('');
+  const [fxViewerUrl, setFxViewerUrl] = useState('');
   const [selectedControlActionId, setSelectedControlActionId] = useState('');
   const [localProgramName, setLocalProgramName] = useState('방송 PC');
   const [localProgramToken, setLocalProgramToken] = useState('');
@@ -746,6 +747,24 @@ export function AutomationsPage() {
     setBrowserBridgeStatus('메시지 전송됨');
   };
 
+  const loadFxViewerUrl = async () => {
+    setBusyAction('fx-viewer-url');
+    try {
+      const data = await readJson<{ path?: string }>('/api/fx/viewer-url');
+      const path = data?.path || '';
+      const url = path ? new URL(path, window.location.origin).toString() : '';
+      setFxViewerUrl(url);
+      if (url) {
+        await navigator.clipboard?.writeText(url).catch(() => undefined);
+        toast.success('FX OBS 주소를 복사했습니다.');
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'FX OBS 주소를 만들지 못했습니다.');
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
   const renderLocalTab = () => (
     <div className="grid gap-5 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
       <Card>
@@ -794,6 +813,22 @@ export function AutomationsPage() {
             ))}
             {!localAgents.length ? <div className="rounded-[var(--radius-control)] border bg-background/70 p-4 text-sm text-muted-foreground">등록된 로컬 프로그램이 없습니다.</div> : null}
           </div>
+        </CardContent>
+      </Card>
+      <Card className="xl:col-span-2">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><Sparkles className="h-5 w-5 text-primary" />FX 오버레이</CardTitle>
+          <CardDescription>OBS 브라우저 소스에 추가하면 실행 액션의 이미지, 비디오, 사운드 효과가 실시간으로 표시됩니다.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" onClick={loadFxViewerUrl} disabled={busyAction === 'fx-viewer-url'}>
+              {busyAction === 'fx-viewer-url' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Copy className="h-4 w-4" />}
+              OBS 주소 만들기
+            </Button>
+            <LinkButton href="/actions" variant="outline">FX 액션 편집</LinkButton>
+          </div>
+          <SecretCopyBlock value={fxViewerUrl} empty="OBS 주소를 만들면 여기에 표시됩니다." />
         </CardContent>
       </Card>
     </div>

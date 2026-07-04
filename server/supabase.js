@@ -10,28 +10,108 @@ let columnCache = new Map(); // key: table, value: Set of column names
 let pgPool = null;
 let pgPoolUrl = null;
 
-const PG_CONNECT_TIMEOUT_MS = Math.max(1000, Number(process.env.SUPABASE_DB_CONNECT_TIMEOUT_MS || 5000));
-const PG_STATEMENT_TIMEOUT_MS = Math.max(1000, Number(process.env.SUPABASE_DB_STATEMENT_TIMEOUT_MS || 15000));
-const PG_IDLE_TIMEOUT_MS = Math.max(1000, Number(process.env.SUPABASE_DB_IDLE_TIMEOUT_MS || 30000));
-const PG_POOL_MAX = Math.max(1, Number(process.env.SUPABASE_DB_POOL_MAX || 10));
+const DB_PROVIDER_SUPABASE = 'supabase';
+const DB_PROVIDER_POSTGRES = 'postgres';
+
+export function getDbProvider() {
+  const provider = String(process.env.ARUBOT_DB_PROVIDER || DB_PROVIDER_SUPABASE).trim().toLowerCase();
+  return provider === DB_PROVIDER_POSTGRES ? DB_PROVIDER_POSTGRES : DB_PROVIDER_SUPABASE;
+}
+
+export function isPostgresProvider() {
+  return getDbProvider() === DB_PROVIDER_POSTGRES;
+}
+
+function looksLikeOfficialSupabaseDatabaseUrl(dbUrl) {
+  try {
+    const parsed = new URL(dbUrl);
+    const host = parsed.hostname.toLowerCase();
+    return host.includes('supabase.co') || host.includes('supabase.com');
+  } catch {
+    return false;
+  }
+}
+
+function validateDatabaseUrlForProvider(provider, dbUrl) {
+  if (
+    provider === DB_PROVIDER_POSTGRES &&
+    dbUrl &&
+    looksLikeOfficialSupabaseDatabaseUrl(dbUrl) &&
+    String(process.env.ARUBOT_ALLOW_SUPABASE_POSTGRES_URL || '').trim().toLowerCase() !== 'true'
+  ) {
+    throw new Error('POSTGRES_URL points to an official Supabase host. Use a local/self-hosted Postgres URL for ARUBOT_DB_PROVIDER=postgres, or set ARUBOT_ALLOW_SUPABASE_POSTGRES_URL=true only for an explicit one-off diagnostic shell.');
+  }
+  return dbUrl;
+}
+
+const PG_CONNECT_TIMEOUT_MS = Math.max(1000, Number(
+  process.env.POSTGRES_CONNECT_TIMEOUT_MS ||
+  process.env.SUPABASE_DB_CONNECT_TIMEOUT_MS ||
+  5000
+));
+const PG_STATEMENT_TIMEOUT_MS = Math.max(1000, Number(
+  process.env.POSTGRES_STATEMENT_TIMEOUT_MS ||
+  process.env.SUPABASE_DB_STATEMENT_TIMEOUT_MS ||
+  15000
+));
+const PG_IDLE_TIMEOUT_MS = Math.max(1000, Number(
+  process.env.POSTGRES_IDLE_TIMEOUT_MS ||
+  process.env.SUPABASE_DB_IDLE_TIMEOUT_MS ||
+  30000
+));
+const PG_POOL_MAX = Math.max(1, Number(
+  process.env.POSTGRES_POOL_MAX ||
+  process.env.SUPABASE_DB_POOL_MAX ||
+  10
+));
 
 function getDbUrl() {
-  return process.env.SUPABASE_DB_URL || '';
+  const provider = getDbProvider();
+  const dbUrl = provider === DB_PROVIDER_POSTGRES
+    ? (process.env.POSTGRES_URL || '')
+    : (process.env.SUPABASE_DB_URL || '');
+  return validateDatabaseUrlForProvider(provider, dbUrl);
+}
+
+function providerSslEnv(provider) {
+  return provider === DB_PROVIDER_POSTGRES
+    ? process.env.POSTGRES_SSL
+    : process.env.SUPABASE_DB_SSL;
+}
+
+function shouldUsePgSsl(dbUrl = getDbUrl()) {
+  const provider = getDbProvider();
+  const explicit = String(providerSslEnv(provider) || '').trim().toLowerCase();
+  if (['false', '0', 'no', 'disable', 'disabled'].includes(explicit)) return false;
+  if (['true', '1', 'yes', 'require', 'required'].includes(explicit)) return { rejectUnauthorized: false };
+  try {
+    const parsed = new URL(dbUrl);
+    const sslMode = String(parsed.searchParams.get('sslmode') || '').toLowerCase();
+    if (sslMode === 'disable') return false;
+    if (['require', 'prefer', 'verify-ca', 'verify-full'].includes(sslMode)) return { rejectUnauthorized: false };
+    const host = parsed.hostname.toLowerCase();
+    if (['localhost', '127.0.0.1', '::1', 'host.docker.internal'].includes(host)) return false;
+  } catch {
+    // Fall through to the production-safe default.
+  }
+  return isPostgresProvider() ? false : { rejectUnauthorized: false };
 }
 
 function pgClientOptions(dbUrl = getDbUrl()) {
-  return {
+  const options = {
     connectionString: dbUrl,
-    ssl: { rejectUnauthorized: false },
     connectionTimeoutMillis: PG_CONNECT_TIMEOUT_MS,
     statement_timeout: PG_STATEMENT_TIMEOUT_MS,
     query_timeout: PG_STATEMENT_TIMEOUT_MS,
   };
+  const ssl = shouldUsePgSsl(dbUrl);
+  if (ssl) options.ssl = ssl;
+  return options;
 }
 
 function getPgPool() {
   const dbUrl = getDbUrl();
-  if (!dbUrl) throw new Error('SUPABASE_DB_URL is required for database operations');
+  if (!dbUrl) throw new Error('A direct database URL is required for database operations. Set POSTGRES_URL for ARUBOT_DB_PROVIDER=postgres or SUPABASE_DB_URL for ARUBOT_DB_PROVIDER=supabase.');
   if (!pgPool || pgPoolUrl !== dbUrl) {
     if (pgPool) {
       pgPool.end().catch(() => {});
@@ -52,6 +132,305 @@ function getPgPool() {
 
 function createPgClient(dbUrl = getDbUrl()) {
   return new Client(pgClientOptions(dbUrl));
+}
+
+function quoteIdent(value) {
+  return String(value).split('.').map((part) => `"${part.replace(/"/g, '""')}"`).join('.');
+}
+
+function normalizeColumnName(column) {
+  return String(column || '').trim();
+}
+
+function buildColumnExpression(column, values, forOrder = false) {
+  const name = normalizeColumnName(column);
+  const jsonMatch = name.match(/^([A-Za-z_][A-Za-z0-9_]*)->>'([^']+)'$/);
+  if (jsonMatch) {
+    const keyParam = values.push(jsonMatch[2]);
+    return `${quoteIdent(jsonMatch[1])}->>$${keyParam}`;
+  }
+  if (!/^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$/.test(name)) {
+    if (forOrder) throw new Error(`Unsafe order column: ${name}`);
+    throw new Error(`Unsafe column: ${name}`);
+  }
+  return quoteIdent(name);
+}
+
+function parseSelectColumns(columns) {
+  const text = String(columns || '*').trim();
+  if (!text || text === '*') return '*';
+  return text.split(',')
+    .map((column) => column.trim())
+    .filter(Boolean)
+    .map((column) => buildColumnExpression(column, [], false))
+    .join(', ');
+}
+
+function normalizeFilterValue(value) {
+  if (value === 'null') return null;
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return value;
+}
+
+const DEFAULT_UPSERT_CONFLICT_COLUMNS = {
+  sessions: ['sid'],
+  tokens: ['sid'],
+  bot_settings: ['sid'],
+  bot_stats: ['sid'],
+  live_sessions: ['sid'],
+  live_days: ['sid', 'date'],
+  attendance_state: ['sid', 'user_id'],
+  bot_rules: ['sid', 'id'],
+};
+
+class PgQueryBuilder {
+  constructor(table) {
+    this.table = table;
+    this.action = 'select';
+    this.selectColumns = '*';
+    this.selectOptions = {};
+    this.filters = [];
+    this.orFilters = [];
+    this.orderings = [];
+    this.limitCount = null;
+    this.offsetCount = null;
+    this.payload = null;
+    this.conflictColumns = [];
+    this.returning = false;
+    this.singleMode = null;
+  }
+
+  select(columns = '*', options = {}) {
+    this.action = this.action || 'select';
+    this.selectColumns = columns || '*';
+    this.selectOptions = options || {};
+    if (this.action !== 'select') this.returning = true;
+    return this;
+  }
+
+  insert(row) {
+    this.action = 'insert';
+    this.payload = row;
+    return this;
+  }
+
+  upsert(row, options = {}) {
+    this.action = 'upsert';
+    this.payload = row;
+    const configuredColumns = String(options?.onConflict || '')
+      .split(',')
+      .map((column) => column.trim())
+      .filter(Boolean);
+    this.conflictColumns = configuredColumns.length
+      ? configuredColumns
+      : (DEFAULT_UPSERT_CONFLICT_COLUMNS[this.table] || []);
+    return this;
+  }
+
+  update(row) {
+    this.action = 'update';
+    this.payload = row || {};
+    return this;
+  }
+
+  delete() {
+    this.action = 'delete';
+    return this;
+  }
+
+  eq(column, value) { this.filters.push({ column, op: '=', value }); return this; }
+  neq(column, value) { this.filters.push({ column, op: '<>', value }); return this; }
+  gt(column, value) { this.filters.push({ column, op: '>', value }); return this; }
+  gte(column, value) { this.filters.push({ column, op: '>=', value }); return this; }
+  lt(column, value) { this.filters.push({ column, op: '<', value }); return this; }
+  lte(column, value) { this.filters.push({ column, op: '<=', value }); return this; }
+  like(column, value) { this.filters.push({ column, op: 'like', value }); return this; }
+  ilike(column, value) { this.filters.push({ column, op: 'ilike', value }); return this; }
+  is(column, value) { this.filters.push({ column, op: 'is', value }); return this; }
+  in(column, values) { this.filters.push({ column, op: 'in', value: Array.isArray(values) ? values : [] }); return this; }
+
+  or(expression) {
+    const parts = String(expression || '').split(',').map((part) => part.trim()).filter(Boolean);
+    const parsed = [];
+    for (const part of parts) {
+      const match = part.match(/^(.+?)\.(is|eq|neq|gt|gte|lt|lte|like|ilike)\.(.*)$/);
+      if (!match) continue;
+      const [, column, op, rawValue] = match;
+      const opMap = {
+        is: 'is',
+        eq: '=',
+        neq: '<>',
+        gt: '>',
+        gte: '>=',
+        lt: '<',
+        lte: '<=',
+        like: 'like',
+        ilike: 'ilike',
+      };
+      parsed.push({ column, op: opMap[op], value: normalizeFilterValue(rawValue) });
+    }
+    if (parsed.length) this.orFilters.push(parsed);
+    return this;
+  }
+
+  order(column, options = {}) {
+    this.orderings.push({ column, ascending: options?.ascending !== false });
+    return this;
+  }
+
+  limit(count) {
+    this.limitCount = Math.max(0, Number(count || 0));
+    return this;
+  }
+
+  range(from, to) {
+    const start = Math.max(0, Number(from || 0));
+    const end = Math.max(start, Number(to || start));
+    this.offsetCount = start;
+    this.limitCount = end - start + 1;
+    return this;
+  }
+
+  single() {
+    this.singleMode = 'single';
+    return this._execute();
+  }
+
+  maybeSingle() {
+    this.singleMode = 'maybeSingle';
+    return this._execute();
+  }
+
+  then(resolve, reject) {
+    return this._execute().then(resolve, reject);
+  }
+
+  catch(reject) {
+    return this._execute().catch(reject);
+  }
+
+  _addFilterSql(filter, values) {
+    const columnSql = buildColumnExpression(filter.column, values);
+    if (filter.op === 'is') {
+      if (filter.value === null || filter.value === 'null') return `${columnSql} is null`;
+      return `${columnSql} is not distinct from $${values.push(filter.value)}`;
+    }
+    if (filter.op === 'in') {
+      if (!filter.value.length) return 'false';
+      const placeholders = filter.value.map((value) => `$${values.push(value)}`).join(', ');
+      return `${columnSql} in (${placeholders})`;
+    }
+    return `${columnSql} ${filter.op} $${values.push(filter.value)}`;
+  }
+
+  _whereSql(values) {
+    const clauses = this.filters.map((filter) => this._addFilterSql(filter, values));
+    for (const group of this.orFilters) {
+      const parts = group.map((filter) => this._addFilterSql(filter, values));
+      if (parts.length) clauses.push(`(${parts.join(' or ')})`);
+    }
+    return clauses.length ? ` where ${clauses.join(' and ')}` : '';
+  }
+
+  _orderLimitSql(values) {
+    const orderSql = this.orderings.length
+      ? ` order by ${this.orderings.map(({ column, ascending }) => `${buildColumnExpression(column, values, true)} ${ascending ? 'asc' : 'desc'}`).join(', ')}`
+      : '';
+    const limitSql = this.limitCount != null ? ` limit ${Math.max(0, Number(this.limitCount))}` : '';
+    const offsetSql = this.offsetCount != null ? ` offset ${Math.max(0, Number(this.offsetCount))}` : '';
+    return `${orderSql}${limitSql}${offsetSql}`;
+  }
+
+  _insertSql(rows, values, upsert = false) {
+    if (!rows.length) return { sql: 'select null where false', values };
+    const columns = [...new Set(rows.flatMap((row) => Object.keys(row || {})))];
+    if (!columns.length) return { sql: 'select null where false', values };
+    const tuples = rows.map((row) => `(${columns.map((column) => `$${values.push(row[column] ?? null)}`).join(', ')})`);
+    let sql = `insert into ${quoteIdent(this.table)} (${columns.map(quoteIdent).join(', ')}) values ${tuples.join(', ')}`;
+    if (upsert) {
+      if (!this.conflictColumns.length) {
+        sql += ' on conflict do nothing';
+      } else {
+        const updateColumns = columns.filter((column) => !this.conflictColumns.includes(column));
+        sql += ` on conflict (${this.conflictColumns.map(quoteIdent).join(', ')})`;
+        sql += updateColumns.length
+          ? ` do update set ${updateColumns.map((column) => `${quoteIdent(column)} = excluded.${quoteIdent(column)}`).join(', ')}`
+          : ' do nothing';
+      }
+    }
+    if (this.returning || this.singleMode) sql += ' returning *';
+    return { sql, values };
+  }
+
+  _buildSql() {
+    const values = [];
+    const table = quoteIdent(this.table);
+    if (this.action === 'insert') {
+      const rows = Array.isArray(this.payload) ? this.payload : [this.payload];
+      return this._insertSql(rows, values, false);
+    }
+    if (this.action === 'upsert') {
+      const rows = Array.isArray(this.payload) ? this.payload : [this.payload];
+      return this._insertSql(rows, values, true);
+    }
+    if (this.action === 'update') {
+      const entries = Object.entries(this.payload || {});
+      if (!entries.length) return { sql: 'select null where false', values };
+      const setSql = entries.map(([column, value]) => `${quoteIdent(column)} = $${values.push(value)}`).join(', ');
+      const returningSql = this.returning || this.singleMode ? ' returning *' : '';
+      return {
+        sql: `update ${table} set ${setSql}${this._whereSql(values)}${returningSql}`,
+        values,
+      };
+    }
+    if (this.action === 'delete') {
+      const returningSql = this.returning || this.singleMode ? ' returning *' : '';
+      return {
+        sql: `delete from ${table}${this._whereSql(values)}${returningSql}`,
+        values,
+      };
+    }
+    if (this.selectOptions?.count === 'exact' && this.selectOptions?.head) {
+      return {
+        sql: `select count(*)::bigint as count from ${table}${this._whereSql(values)}`,
+        values,
+        countOnly: true,
+      };
+    }
+    return {
+      sql: `select ${parseSelectColumns(this.selectColumns)} from ${table}${this._whereSql(values)}${this._orderLimitSql(values)}`,
+      values,
+    };
+  }
+
+  async _execute() {
+    try {
+      const built = this._buildSql();
+      const result = await withPgClient((pg) => pg.query(built.sql, built.values));
+      if (built.countOnly) {
+        return { data: null, error: null, count: Number(result.rows?.[0]?.count || 0) };
+      }
+      let data = result.rows || [];
+      if (this.singleMode === 'single') {
+        if (data.length !== 1) return { data: data[0] || null, error: data.length ? null : { message: 'No rows returned' } };
+        data = data[0];
+      } else if (this.singleMode === 'maybeSingle') {
+        data = data[0] || null;
+      }
+      return { data, error: null };
+    } catch (error) {
+      return { data: this.singleMode ? null : [], error };
+    }
+  }
+}
+
+function createPostgresProviderClient() {
+  return {
+    from(table) {
+      return new PgQueryBuilder(table);
+    },
+  };
 }
 
 export function getPgPoolStatus() {
@@ -136,7 +515,7 @@ function secretHash(value) {
 
 // Ensure 'tokens' table exists using direct PG connection (for PostgREST cache heal)
 async function ensureTokensTableExists() {
-  const dbUrl = process.env.SUPABASE_DB_URL;
+  const dbUrl = getDbUrl();
   if (!dbUrl) return; // cannot heal without direct DB access
   const client = createPgClient(dbUrl);
   await client.connect();
@@ -261,8 +640,8 @@ function sanitizeTableNameSuffix(s) {
 
 function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
 async function withPgClient(fn, retries = 2) {
-  const dbUrl = process.env.SUPABASE_DB_URL;
-  if (!dbUrl) throw new Error('SUPABASE_DB_URL is required for channel points operations');
+  const dbUrl = getDbUrl();
+  if (!dbUrl) throw new Error('A direct database URL is required for channel points operations');
   let lastErr;
   for (let i=0;i<=retries;i++) {
     const pool = getPgPool();
@@ -914,6 +1293,23 @@ export async function getSessionUserId(sid) {
 }
 
 export async function initDb() {
+  if (isPostgresProvider()) {
+    const dbUrl = getDbUrl();
+    if (!dbUrl) {
+      console.warn('[Postgres] POSTGRES_URL missing. Database features will be disabled.');
+      return;
+    }
+    supabase = createPostgresProviderClient();
+    try {
+      await ensureTokensTableExists();
+      await ensureSchema();
+      console.log('[Postgres] Direct Postgres provider initialized.');
+    } catch (e) {
+      console.warn('[Postgres] ensureSchema failed:', e?.message || e);
+    }
+    return;
+  }
+
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
   if (!url || !key) {
@@ -924,7 +1320,7 @@ export async function initDb() {
     auth: { persistSession: false }
   });
   // Optionally bootstrap schema if direct DB URL is provided
-  if (process.env.SUPABASE_DB_URL) {
+  if (getDbUrl()) {
     try {
       // Pre-create tokens early so OAuth callback doesn't fail on first write
       await ensureTokensTableExists();
@@ -936,14 +1332,55 @@ export async function initDb() {
 }
 
 function ensure() {
-  if (!supabase) throw new Error('Supabase client not initialized. Call initDb() and set SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY.');
+  if (!supabase) throw new Error('Database client not initialized. Call initDb() and set provider-specific database environment variables.');
+}
+
+async function ensureMigrationLogTable(client) {
+  await client.query(`
+    create table if not exists migration_log (
+      id bigint generated always as identity primary key,
+      migration_name text not null,
+      executed_at timestamptz default now(),
+      status text not null,
+      details jsonb,
+      execution_time_ms integer
+    );
+  `);
+  await client.query(`create index if not exists idx_migration_log_name on migration_log(migration_name);`);
+  await client.query(`create index if not exists idx_migration_log_status on migration_log(status);`);
+  await client.query(`create index if not exists idx_migration_log_executed on migration_log(executed_at desc);`);
+}
+
+function migrationNameAliases(fileName) {
+  const baseName = String(fileName || '').replace(/\.sql$/i, '');
+  return [String(fileName || ''), baseName].filter(Boolean);
+}
+
+async function getSuccessfulMigrationNames(client) {
+  await ensureMigrationLogTable(client);
+  const { rows } = await client.query(
+    `select distinct migration_name
+       from migration_log
+      where status = 'success'
+        and migration_name is not null`
+  );
+  return new Set((rows || []).map((row) => String(row.migration_name || '').trim()).filter(Boolean));
+}
+
+async function recordMigrationResult(client, fileName, status, details = {}, executionTimeMs = null) {
+  await ensureMigrationLogTable(client);
+  await client.query(
+    `insert into migration_log (migration_name, status, details, execution_time_ms)
+     values ($1, $2, $3::jsonb, $4)`,
+    [String(fileName), String(status), JSON.stringify(details || {}), executionTimeMs]
+  );
 }
 
 // 마이그레이션 실행 함수
 export async function runMigrations() {
-  const dbUrl = process.env.SUPABASE_DB_URL;
+  const dbUrl = getDbUrl();
   if (!dbUrl) {
-    console.warn('[Migration] SUPABASE_DB_URL not available, skipping migrations');
+    console.warn('[Migration] Direct database URL not available, skipping migrations');
     return;
   }
 
@@ -952,6 +1389,8 @@ export async function runMigrations() {
 
   try {
     console.log('[Migration] Starting database migrations...');
+    await ensureMigrationLogTable(client);
+    const successfulMigrations = await getSuccessfulMigrationNames(client);
 
     const migrationsDir = path.join(process.cwd(), 'server', 'migrations');
     const migrationFiles = fs.existsSync(migrationsDir)
@@ -964,15 +1403,27 @@ export async function runMigrations() {
       const filePath = path.join(migrationsDir, fileName);
       
       if (fs.existsSync(filePath)) {
+        const aliases = migrationNameAliases(fileName);
+        if (aliases.some((name) => successfulMigrations.has(name))) {
+          console.log(`[Migration] Skipping already successful ${fileName}`);
+          continue;
+        }
+
         console.log(`[Migration] Executing ${fileName}...`);
         const sql = fs.readFileSync(filePath, 'utf8');
+        const startedAt = Date.now();
         
         try {
           await client.query(sql);
+          const executionTimeMs = Date.now() - startedAt;
+          await recordMigrationResult(client, fileName, 'success', { source: 'runner' }, executionTimeMs);
+          successfulMigrations.add(fileName);
+          successfulMigrations.add(fileName.replace(/\.sql$/i, ''));
           console.log(`[Migration] Successfully executed ${fileName}`);
         } catch (error) {
           console.error(`[Migration] Failed to execute ${fileName}:`, error.message);
-          // 일부 마이그레이션은 이미 실행되었을 수 있으므로 계속 진행
+          await recordMigrationResult(client, fileName, 'failed', { source: 'runner', error: error.message }, Date.now() - startedAt);
+          throw error;
         }
       } else {
         console.warn(`[Migration] Migration file not found: ${fileName}`);
@@ -991,9 +1442,9 @@ export async function runMigrations() {
 
 // 채널 ID 데이터 마이그레이션 함수
 export async function migrateChannelIdData() {
-  const dbUrl = process.env.SUPABASE_DB_URL;
+  const dbUrl = getDbUrl();
   if (!dbUrl) {
-    console.warn('[Migration] SUPABASE_DB_URL not available, skipping channel ID migration');
+    console.warn('[Migration] Direct database URL not available, skipping channel ID migration');
     return;
   }
   
@@ -1083,9 +1534,9 @@ export async function migrateChannelIdData() {
 
 // 채널 토큰 생성
 export async function generateChannelTokenSupabase(channelId, tokenType, sid, expiresHours = null) {
-  const dbUrl = process.env.SUPABASE_DB_URL;
+  const dbUrl = getDbUrl();
   if (!dbUrl) {
-    throw new Error('SUPABASE_DB_URL is required for token generation');
+    throw new Error('A direct database URL is required for token generation');
   }
   
   return withPgClient(async (pg) => {
@@ -1100,9 +1551,9 @@ export async function generateChannelTokenSupabase(channelId, tokenType, sid, ex
 
 // 채널 토큰 검증
 export async function validateChannelTokenSupabase(tokenValue, expectedChannelId = null) {
-  const dbUrl = process.env.SUPABASE_DB_URL;
+  const dbUrl = getDbUrl();
   if (!dbUrl) {
-    throw new Error('SUPABASE_DB_URL is required for token validation');
+    throw new Error('A direct database URL is required for token validation');
   }
   
   return withPgClient(async (pg) => {
@@ -1178,7 +1629,7 @@ function makeViewerToken(prefix) {
 
 export async function getOrCreateViewerTokenSupabase(channelId, tokenType, sid, prefix) {
   if (!channelId || !tokenType || !sid) return null;
-  const dbUrl = process.env.SUPABASE_DB_URL;
+  const dbUrl = getDbUrl();
   if (!dbUrl) return null;
 
   return withPgClient(async (pg) => {
@@ -1385,6 +1836,175 @@ export async function listPredictionsForSid(sid, limit = 20) {
   });
 }
 
+async function ensureBotEventLogTables() {
+  await withPgClient(async (pg) => {
+    await pg.query(`
+      create table if not exists public.bot_event_logs (
+        id text primary key,
+        owner_user_id text not null,
+        sid text,
+        channel_uid text,
+        provider text,
+        category text not null
+          check (category in ('command', 'donation', 'roulette', 'video_donation', 'prediction')),
+        event_type text not null,
+        source text,
+        trigger_name text,
+        target_name text,
+        viewer_user_id text,
+        viewer_name text,
+        point_delta integer not null default 0,
+        point_before integer,
+        point_after integer,
+        status text not null default 'success'
+          check (status in ('success', 'failed', 'cancelled', 'refunded')),
+        summary text,
+        result_label text,
+        result_value text,
+        metadata jsonb not null default '{}'::jsonb,
+        created_at timestamptz not null default now()
+      );
+      create index if not exists idx_bot_event_logs_owner_created
+        on public.bot_event_logs(owner_user_id, created_at desc);
+      create index if not exists idx_bot_event_logs_owner_category_created
+        on public.bot_event_logs(owner_user_id, category, created_at desc);
+      create index if not exists idx_bot_event_logs_owner_provider_created
+        on public.bot_event_logs(owner_user_id, provider, created_at desc);
+      create index if not exists idx_bot_event_logs_owner_viewer_created
+        on public.bot_event_logs(owner_user_id, viewer_user_id, created_at desc);
+    `);
+  });
+}
+
+function normalizeBotEventCategory(category) {
+  const value = String(category || '').trim().toLowerCase();
+  return ['command', 'donation', 'roulette', 'video_donation', 'prediction'].includes(value) ? value : 'command';
+}
+
+function normalizeBotEventStatus(status) {
+  const value = String(status || '').trim().toLowerCase();
+  return ['success', 'failed', 'cancelled', 'refunded'].includes(value) ? value : 'success';
+}
+
+export async function recordBotEventLog(event = {}) {
+  const ownerUserId = String(event.ownerUserId || event.owner_user_id || '').replace(/^user:/, '').trim();
+  if (!ownerUserId) return null;
+  await ensureBotEventLogTables();
+  const metadata = event.metadata && typeof event.metadata === 'object' ? event.metadata : {};
+  const id = event.id ? String(event.id) : makeId('evt');
+  return withPgClient(async (pg) => {
+    const result = await pg.query(
+      `insert into public.bot_event_logs (
+         id, owner_user_id, sid, channel_uid, provider, category, event_type, source,
+         trigger_name, target_name, viewer_user_id, viewer_name,
+         point_delta, point_before, point_after, status, summary, result_label, result_value, metadata, created_at
+       ) values (
+         $1, $2, $3, $4, $5, $6, $7, $8,
+         $9, $10, $11, $12,
+         $13, $14, $15, $16, $17, $18, $19, $20::jsonb, coalesce($21::timestamptz, now())
+       )
+       returning *`,
+      [
+        id,
+        ownerUserId,
+        event.sid ? String(event.sid) : null,
+        event.channelUid || event.channel_uid ? String(event.channelUid || event.channel_uid) : null,
+        event.provider ? String(event.provider).toLowerCase() : null,
+        normalizeBotEventCategory(event.category),
+        String(event.eventType || event.event_type || 'event').slice(0, 80),
+        event.source ? String(event.source).slice(0, 120) : null,
+        event.triggerName || event.trigger_name ? String(event.triggerName || event.trigger_name).slice(0, 160) : null,
+        event.targetName || event.target_name ? String(event.targetName || event.target_name).slice(0, 200) : null,
+        event.viewerUserId || event.viewer_user_id ? String(event.viewerUserId || event.viewer_user_id).slice(0, 200) : null,
+        event.viewerName || event.viewer_name ? String(event.viewerName || event.viewer_name).slice(0, 200) : null,
+        Number(event.pointDelta ?? event.point_delta ?? 0) || 0,
+        event.pointBefore ?? event.point_before ?? null,
+        event.pointAfter ?? event.point_after ?? null,
+        normalizeBotEventStatus(event.status),
+        event.summary ? String(event.summary).slice(0, 1000) : null,
+        event.resultLabel || event.result_label ? String(event.resultLabel || event.result_label).slice(0, 300) : null,
+        event.resultValue || event.result_value ? String(event.resultValue || event.result_value).slice(0, 1000) : null,
+        JSON.stringify(metadata),
+        event.createdAt || event.created_at ? new Date(event.createdAt || event.created_at).toISOString() : null,
+      ]
+    );
+    return result.rows?.[0] || null;
+  });
+}
+
+function parseEventLogDate(value, endOfDay = false) {
+  const text = String(value || '').trim();
+  if (!text) return null;
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(text)
+    ? new Date(`${text}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}+09:00`)
+    : new Date(text);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+}
+
+export async function listBotEventLogs(ownerUserId, options = {}) {
+  const owner = String(ownerUserId || '').replace(/^user:/, '').trim();
+  if (!owner) return { logs: [], total: 0, page: 1, limit: 25, totalPages: 1 };
+  await ensureBotEventLogTables();
+
+  const page = Math.max(1, Number(options.page || 1) || 1);
+  const limit = Math.max(1, Math.min(100, Number(options.limit || 25) || 25));
+  const offset = (page - 1) * limit;
+  const params = [owner];
+  const where = ['owner_user_id = $1'];
+
+  const addParam = (value) => {
+    params.push(value);
+    return `$${params.length}`;
+  };
+
+  const category = String(options.category || '').trim().toLowerCase();
+  if (category && category !== 'all') where.push(`category = ${addParam(category)}`);
+
+  const provider = String(options.provider || '').trim().toLowerCase();
+  if (provider && provider !== 'all') where.push(`provider = ${addParam(provider)}`);
+
+  const from = parseEventLogDate(options.from || options.startDate || options.start);
+  if (from) where.push(`created_at >= ${addParam(from)}::timestamptz`);
+
+  const to = parseEventLogDate(options.to || options.endDate || options.end, true);
+  if (to) where.push(`created_at <= ${addParam(to)}::timestamptz`);
+
+  const query = String(options.q || options.query || '').trim();
+  if (query) {
+    const needle = `%${query.replace(/[%_\\]/g, '\\$&')}%`;
+    const slot = addParam(needle);
+    where.push(`(
+      viewer_user_id ilike ${slot} escape '\\'
+      or viewer_name ilike ${slot} escape '\\'
+      or trigger_name ilike ${slot} escape '\\'
+      or target_name ilike ${slot} escape '\\'
+      or summary ilike ${slot} escape '\\'
+    )`);
+  }
+
+  const whereSql = where.join(' and ');
+  return withPgClient(async (pg) => {
+    const countResult = await pg.query(`select count(*)::int as total from public.bot_event_logs where ${whereSql}`, params);
+    const rowParams = [...params, limit, offset];
+    const rowsResult = await pg.query(
+      `select *
+         from public.bot_event_logs
+        where ${whereSql}
+        order by created_at desc, id desc
+        limit $${rowParams.length - 1} offset $${rowParams.length}`,
+      rowParams
+    );
+    const total = Number(countResult.rows?.[0]?.total || 0);
+    return {
+      logs: rowsResult.rows || [],
+      total,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+    };
+  });
+}
+
 export async function getPredictionForSid(sid, predictionId) {
   await ensurePredictionTables();
   return withPgClient(async (pg) => {
@@ -1492,6 +2112,7 @@ export async function cancelPredictionForSid(sid, predictionId) {
     if (row.status === 'settled' || row.status === 'cancelled') return fetchPredictionWithBets(pg, predictionId);
     const table = await ensureChannelPointsTable(row.channel_uid);
     const bets = await pg.query(`select * from prediction_bets where prediction_id = $1 and refunded = false`, [row.id]);
+    const eventLogs = [];
     for (const bet of bets.rows || []) {
       await pg.query(
         `insert into ${table} (user_id, username, points) values ($1, $2, $3)
@@ -1500,6 +2121,13 @@ export async function cancelPredictionForSid(sid, predictionId) {
            points = ${table}.points + excluded.points`,
         [String(bet.user_id), bet.username ? String(bet.username) : null, Number(bet.amount || 0)]
       );
+      eventLogs.push({
+        eventType: 'prediction_refund',
+        userId: String(bet.user_id),
+        username: bet.username || null,
+        pointDelta: Number(bet.amount || 0),
+        optionId: bet.option_id || null,
+      });
     }
     await pg.query(`update prediction_bets set refunded = true, updated_at = now() where prediction_id = $1`, [row.id]);
     await pg.query(
@@ -1507,7 +2135,9 @@ export async function cancelPredictionForSid(sid, predictionId) {
        where id = $1 and sid = $2`,
       [row.id, String(sid), 'cancelled_refunded']
     );
-    return fetchPredictionWithBets(pg, predictionId);
+    const normalized = await fetchPredictionWithBets(pg, predictionId);
+    if (normalized) normalized._eventLogs = eventLogs;
+    return normalized;
   });
 }
 
@@ -1529,6 +2159,7 @@ export async function settlePredictionForSid(sid, predictionId, winningOptionId)
     const table = await ensureChannelPointsTable(row.channel_uid);
     const bets = await pg.query(`select * from prediction_bets where prediction_id = $1 order by created_at asc`, [row.id]);
     const allBets = bets.rows || [];
+    const eventLogs = [];
     const total = allBets.reduce((sum, bet) => sum + Math.max(0, Number(bet.amount || 0)), 0);
     const winners = allBets.filter((bet) => String(bet.option_id) === winning.id);
     const winnerTotal = winners.reduce((sum, bet) => sum + Math.max(0, Number(bet.amount || 0)), 0);
@@ -1542,6 +2173,13 @@ export async function settlePredictionForSid(sid, predictionId, winningOptionId)
              points = ${table}.points + excluded.points`,
           [String(bet.user_id), bet.username ? String(bet.username) : null, Number(bet.amount || 0)]
         );
+        eventLogs.push({
+          eventType: 'prediction_refund',
+          userId: String(bet.user_id),
+          username: bet.username || null,
+          pointDelta: Number(bet.amount || 0),
+          optionId: bet.option_id || null,
+        });
       }
       await pg.query(`update prediction_bets set refunded = true, updated_at = now() where prediction_id = $1`, [row.id]);
       await pg.query(
@@ -1550,7 +2188,9 @@ export async function settlePredictionForSid(sid, predictionId, winningOptionId)
          where id = $1 and sid = $2`,
         [row.id, String(sid), winning.id]
       );
-      return fetchPredictionWithBets(pg, predictionId);
+      const normalized = await fetchPredictionWithBets(pg, predictionId);
+      if (normalized) normalized._eventLogs = eventLogs;
+      return normalized;
     }
 
     for (const bet of winners) {
@@ -1563,6 +2203,14 @@ export async function settlePredictionForSid(sid, predictionId, winningOptionId)
         [String(bet.user_id), bet.username ? String(bet.username) : null, payout]
       );
       await pg.query(`update prediction_bets set payout = $2, updated_at = now() where id = $1`, [bet.id, payout]);
+      eventLogs.push({
+        eventType: 'prediction_payout',
+        userId: String(bet.user_id),
+        username: bet.username || null,
+        pointDelta: payout,
+        optionId: bet.option_id || null,
+        payout,
+      });
     }
     await pg.query(
       `update prediction_events
@@ -1570,7 +2218,9 @@ export async function settlePredictionForSid(sid, predictionId, winningOptionId)
        where id = $1 and sid = $2`,
       [row.id, String(sid), winning.id]
     );
-    return fetchPredictionWithBets(pg, predictionId);
+    const normalized = await fetchPredictionWithBets(pg, predictionId);
+    if (normalized) normalized._eventLogs = eventLogs;
+    return normalized;
   });
 }
 
@@ -1647,7 +2297,21 @@ export async function placePredictionBet({ channelUid, userId, username, optionT
         );
       }
       await pg.query('commit');
-      return fetchPredictionWithBets(pg, row.id);
+      const normalized = await fetchPredictionWithBets(pg, row.id);
+      if (normalized) {
+        normalized._eventLogs = [{
+          eventType: 'prediction_bet',
+          userId: betUserId,
+          username: username ? String(username) : null,
+          pointDelta: -normalizedAmount,
+          pointBefore: have,
+          pointAfter: have - normalizedAmount,
+          optionId: matched.id,
+          optionLabel: matched.label,
+          amount: normalizedAmount,
+        }];
+      }
+      return normalized;
     } catch (error) {
       try { await pg.query('rollback'); } catch {}
       throw error;
@@ -1657,7 +2321,7 @@ export async function placePredictionBet({ channelUid, userId, username, optionT
 
 export async function rotateViewerTokenSupabase(channelId, tokenType, sid, prefix) {
   if (!channelId || !tokenType || !sid) return null;
-  const dbUrl = process.env.SUPABASE_DB_URL;
+  const dbUrl = getDbUrl();
   if (!dbUrl) return null;
 
   return withPgClient(async (pg) => {
@@ -1682,7 +2346,7 @@ export async function rotateViewerTokenSupabase(channelId, tokenType, sid, prefi
 
 export async function findSidByChannelViewerTokenSupabase(tokenValue, tokenType) {
   if (!tokenValue || !tokenType) return null;
-  const dbUrl = process.env.SUPABASE_DB_URL;
+  const dbUrl = getDbUrl();
   if (!dbUrl) return null;
 
   return withPgClient(async (pg) => {
@@ -1703,9 +2367,9 @@ export async function findSidByChannelViewerTokenSupabase(tokenValue, tokenType)
 
 // 만료된 토큰 정리
 export async function cleanupExpiredTokensSupabase() {
-  const dbUrl = process.env.SUPABASE_DB_URL;
+  const dbUrl = getDbUrl();
   if (!dbUrl) {
-    console.warn('[Token Cleanup] SUPABASE_DB_URL not available, skipping cleanup');
+    console.warn('[Token Cleanup] Direct database URL not available, skipping cleanup');
     return { deactivated: 0, deleted: 0 };
   }
   
@@ -1744,9 +2408,9 @@ export async function getChannelTokenStatsSupabase(channelId = null) {
 
 // 채널 성능 통계 조회
 export async function getChannelPerformanceStatsSupabase(channelId = null) {
-  const dbUrl = process.env.SUPABASE_DB_URL;
+  const dbUrl = getDbUrl();
   if (!dbUrl) {
-    throw new Error('SUPABASE_DB_URL is required for performance stats');
+    throw new Error('A direct database URL is required for performance stats');
   }
   
   return withPgClient(async (pg) => {
@@ -1791,9 +2455,9 @@ export async function getChannelPerformanceStatsSupabase(channelId = null) {
 
 // 쿼리 성능 분석
 export async function analyzeQueryPerformanceSupabase() {
-  const dbUrl = process.env.SUPABASE_DB_URL;
+  const dbUrl = getDbUrl();
   if (!dbUrl) {
-    throw new Error('SUPABASE_DB_URL is required for query analysis');
+    throw new Error('A direct database URL is required for query analysis');
   }
   
   return withPgClient(async (pg) => {
@@ -1831,9 +2495,9 @@ export async function analyzeQueryPerformanceSupabase() {
 
 // 인덱스 사용률 모니터링
 export async function monitorIndexUsageSupabase() {
-  const dbUrl = process.env.SUPABASE_DB_URL;
+  const dbUrl = getDbUrl();
   if (!dbUrl) {
-    throw new Error('SUPABASE_DB_URL is required for index monitoring');
+    throw new Error('A direct database URL is required for index monitoring');
   }
   
   return withPgClient(async (pg) => {
@@ -1877,9 +2541,9 @@ export async function monitorIndexUsageSupabase() {
 
 // 성능 최적화 권장사항
 export async function getPerformanceRecommendationsSupabase() {
-  const dbUrl = process.env.SUPABASE_DB_URL;
+  const dbUrl = getDbUrl();
   if (!dbUrl) {
-    throw new Error('SUPABASE_DB_URL is required for performance recommendations');
+    throw new Error('A direct database URL is required for performance recommendations');
   }
   
   try {
@@ -1908,9 +2572,9 @@ export async function getPerformanceRecommendationsSupabase() {
 
 // 데이터베이스 통계 업데이트
 export async function updateChannelStatisticsSupabase() {
-  const dbUrl = process.env.SUPABASE_DB_URL;
+  const dbUrl = getDbUrl();
   if (!dbUrl) {
-    console.warn('[Statistics] SUPABASE_DB_URL not available, skipping statistics update');
+    console.warn('[Statistics] Direct database URL not available, skipping statistics update');
     return false;
   }
   
@@ -1984,9 +2648,9 @@ export async function startPerformanceMonitoringSchedulerSupabase() {
 
 // 데이터 무결성 검증 함수
 export async function verifyChannelIdIntegrity() {
-  const dbUrl = process.env.SUPABASE_DB_URL;
+  const dbUrl = getDbUrl();
   if (!dbUrl) {
-    console.warn('[Verification] SUPABASE_DB_URL not available, skipping integrity check');
+    console.warn('[Verification] Direct database URL not available, skipping integrity check');
     return null;
   }
   
@@ -2020,7 +2684,7 @@ export async function verifyChannelIdIntegrity() {
 }
 
 export async function ensureSchema() {
-  const dbUrl = process.env.SUPABASE_DB_URL;
+  const dbUrl = getDbUrl();
   if (!dbUrl) return; // optional
   const client = createPgClient(dbUrl);
   await client.connect();
@@ -2395,7 +3059,7 @@ async function tableHasColumn(table, column) {
   const key = `public.${table}`;
   const cached = columnCache.get(key);
   if (cached) return cached.has(column);
-  const dbUrl = process.env.SUPABASE_DB_URL;
+  const dbUrl = getDbUrl();
   if (!dbUrl) {
     // Be conservative: assume column is NOT available to avoid PostgREST schema cache errors
     return false;
@@ -2433,7 +3097,7 @@ export async function upsertTokens(sid, { accessToken, refreshToken, tokenType, 
     lastError = error;
     const msg = String(error.message || '');
     if (msg.includes("table 'public.tokens'")) {
-      if (process.env.SUPABASE_DB_URL) {
+      if (getDbUrl()) {
         // Heal via direct PG and retry
         await ensureTokensTableExists();
       } else {
@@ -2494,7 +3158,7 @@ export async function updateTokens(sid, tokensOrNull) {
 }
 
 async function ensurePlatformIdentityTables() {
-  if (!process.env.SUPABASE_DB_URL) return;
+  if (!getDbUrl()) return;
   await withPgClient(async (pg) => {
     await pg.query(`
       create table if not exists app_users (
@@ -2548,7 +3212,7 @@ async function ensurePlatformIdentityTables() {
 
 export async function getAppUserAdminStatus(userId) {
   const id = String(userId || '').replace(/^user:/, '').trim();
-  if (!id || !process.env.SUPABASE_DB_URL) return { userId: id || null, isAdmin: false };
+  if (!id || !getDbUrl()) return { userId: id || null, isAdmin: false };
   await ensurePlatformIdentityTables();
   return withPgClient(async (pg) => {
     const { rows } = await pg.query(
@@ -2714,7 +3378,7 @@ export async function listPointViewerIdentitySummaries(userIds) {
   const ids = Array.from(
     new Set((Array.isArray(userIds) ? userIds : []).map((id) => String(id || '').trim()).filter(Boolean))
   );
-  if (!ids.length || !process.env.SUPABASE_DB_URL) return {};
+  if (!ids.length || !getDbUrl()) return {};
   await ensurePlatformIdentityTables();
   return withPgClient(async (pg) => {
     const direct = await pg.query(
@@ -2892,7 +3556,7 @@ export async function getPlatformTokens(provider, userId) {
 
 export async function listPlatformTokenUsers(provider) {
   const p = normalizeProvider(provider);
-  if (!p || !process.env.SUPABASE_DB_URL) return [];
+  if (!p || !getDbUrl()) return [];
   await ensurePlatformIdentityTables();
   return withPgClient(async (pg) => {
     const { rows } = await pg.query(
@@ -2924,7 +3588,7 @@ export async function deletePlatformTokens(provider, userId) {
 export async function deletePlatformAccount(provider, userId, platformUserId = null) {
   const p = normalizeProvider(provider);
   if (!p || !userId) return { tokensDeleted: 0, accountsDeleted: 0 };
-  if (!process.env.SUPABASE_DB_URL) return { tokensDeleted: 0, accountsDeleted: 0 };
+  if (!getDbUrl()) return { tokensDeleted: 0, accountsDeleted: 0 };
   await ensurePlatformIdentityTables();
   return withPgClient(async (pg) => {
     const normalizedUserId = String(userId).replace(/^user:/, '');
@@ -2958,7 +3622,7 @@ export async function deletePlatformAccount(provider, userId, platformUserId = n
 }
 
 async function ensureYoutubeCentralBotTables() {
-  if (!process.env.SUPABASE_DB_URL) return;
+  if (!getDbUrl()) return;
   await ensurePlatformIdentityTables();
   await withPgClient(async (pg) => {
     await pg.query(`
@@ -3109,7 +3773,7 @@ export async function upsertYoutubeBotProfile(profile) {
 }
 
 export async function getYoutubeBotProfile(id = 'default') {
-  if (!process.env.SUPABASE_DB_URL) return null;
+  if (!getDbUrl()) return null;
   await ensureYoutubeCentralBotTables();
   return withPgClient(async (pg) => {
     const { rows } = await pg.query(`select * from youtube_bot_profiles where id = $1 limit 1`, [String(id || 'default')]);
@@ -3222,7 +3886,7 @@ export async function upsertYoutubeStreamerChannel(ownerUserId, channel) {
 
 export async function getYoutubeStreamerChannel(ownerUserId) {
   const ownerId = String(ownerUserId || '').replace(/^user:/, '');
-  if (!ownerId || !process.env.SUPABASE_DB_URL) return null;
+  if (!ownerId || !getDbUrl()) return null;
   await ensureYoutubeCentralBotTables();
   return withPgClient(async (pg) => {
     const { rows } = await pg.query(`select * from youtube_streamer_channels where owner_user_id = $1 limit 1`, [ownerId]);
@@ -3232,7 +3896,7 @@ export async function getYoutubeStreamerChannel(ownerUserId) {
 
 export async function listYoutubeStreamerChannelsByYoutubeChannelId(youtubeChannelId) {
   const channelId = String(youtubeChannelId || '').trim();
-  if (!channelId || !process.env.SUPABASE_DB_URL) return [];
+  if (!channelId || !getDbUrl()) return [];
   await ensureYoutubeCentralBotTables();
   return withPgClient(async (pg) => {
     const { rows } = await pg.query(`select * from youtube_streamer_channels where youtube_channel_id = $1`, [channelId]);
@@ -3582,7 +4246,7 @@ function memoryOwnerBlueprints(owner) {
 export async function listActionBlueprints(ownerUserId) {
   const owner = normalizeAutomationOwner(ownerUserId);
   if (!owner) return [];
-  if (!process.env.SUPABASE_DB_URL) {
+  if (!getDbUrl()) {
     return memoryOwnerBlueprints(owner)
       .sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')))
       .map((blueprint) => normalizeBlueprintRow(blueprint, blueprint.current_version_id ? memoryBlueprintVersions.get(blueprint.current_version_id) : null));
@@ -3618,7 +4282,7 @@ export async function getActionBlueprint(ownerUserId, idOrSlug) {
   const owner = normalizeAutomationOwner(ownerUserId);
   const key = String(idOrSlug || '').trim();
   if (!owner || !key) return null;
-  if (!process.env.SUPABASE_DB_URL) {
+  if (!getDbUrl()) {
     const blueprint = memoryOwnerBlueprints(owner).find((item) => item.id === key || item.slug === key);
     if (!blueprint) return null;
     return normalizeBlueprintRow(blueprint, blueprint.current_version_id ? memoryBlueprintVersions.get(blueprint.current_version_id) : null);
@@ -3663,7 +4327,7 @@ export async function upsertActionBlueprint(ownerUserId, blueprint) {
   const edges = Array.isArray(blueprint?.edges) ? blueprint.edges : [];
   const viewport = normalizeJsonObject(blueprint?.viewport, { x: 0, y: 0, zoom: 1 });
   const now = new Date().toISOString();
-  if (!process.env.SUPABASE_DB_URL) {
+  if (!getDbUrl()) {
     const existing = memoryBlueprints.get(id);
     const versionNumber = Math.max(0, ...Array.from(memoryBlueprintVersions.values()).filter((item) => item.blueprint_id === id).map((item) => Number(item.version || 0))) + 1;
     const versionId = makeId('bpv');
@@ -3732,7 +4396,7 @@ export async function upsertActionBlueprint(ownerUserId, blueprint) {
 export async function publishActionBlueprint(ownerUserId, id) {
   const owner = normalizeAutomationOwner(ownerUserId);
   if (!owner || !id) return null;
-  if (!process.env.SUPABASE_DB_URL) {
+  if (!getDbUrl()) {
     const blueprint = memoryBlueprints.get(String(id));
     if (!blueprint || blueprint.owner_user_id !== owner) return null;
     const version = blueprint.current_version_id ? memoryBlueprintVersions.get(blueprint.current_version_id) : null;
@@ -3760,7 +4424,7 @@ export async function publishActionBlueprint(ownerUserId, id) {
 export async function listActionBlueprintVersions(ownerUserId, blueprintId, limit = 20) {
   const owner = normalizeAutomationOwner(ownerUserId);
   if (!owner || !blueprintId) return [];
-  if (!process.env.SUPABASE_DB_URL) {
+  if (!getDbUrl()) {
     return Array.from(memoryBlueprintVersions.values())
       .filter((version) => version.owner_user_id === owner && version.blueprint_id === String(blueprintId))
       .sort((a, b) => Number(b.version || 0) - Number(a.version || 0))
@@ -3783,7 +4447,7 @@ export async function listActionBlueprintVersions(ownerUserId, blueprintId, limi
 export async function restoreActionBlueprintVersion(ownerUserId, blueprintId, versionId) {
   const owner = normalizeAutomationOwner(ownerUserId);
   if (!owner || !blueprintId || !versionId) return null;
-  if (!process.env.SUPABASE_DB_URL) {
+  if (!getDbUrl()) {
     const blueprint = memoryBlueprints.get(String(blueprintId));
     const version = memoryBlueprintVersions.get(String(versionId));
     if (!blueprint || !version || blueprint.owner_user_id !== owner || version.owner_user_id !== owner || version.blueprint_id !== String(blueprintId)) return null;
@@ -3823,7 +4487,7 @@ export async function restoreActionBlueprintVersion(ownerUserId, blueprintId, ve
 export async function deleteActionBlueprint(ownerUserId, id) {
   const owner = normalizeAutomationOwner(ownerUserId);
   if (!owner || !id) return false;
-  if (!process.env.SUPABASE_DB_URL) {
+  if (!getDbUrl()) {
     const blueprint = memoryBlueprints.get(String(id));
     if (!blueprint || blueprint.owner_user_id !== owner) return false;
     memoryBlueprints.delete(String(id));
@@ -3856,7 +4520,7 @@ export async function insertActionBlueprintRun(ownerUserId, run) {
     finished_at: null,
     error: null
   };
-  if (!process.env.SUPABASE_DB_URL) {
+  if (!getDbUrl()) {
     memoryBlueprintRuns.set(id, row);
     return normalizeBlueprintRunRow(row);
   }
@@ -3876,7 +4540,7 @@ export async function insertActionBlueprintRun(ownerUserId, run) {
 export async function finishActionBlueprintRun(ownerUserId, runId, { status = 'done', error = null } = {}) {
   const owner = normalizeAutomationOwner(ownerUserId);
   if (!owner || !runId) return null;
-  if (!process.env.SUPABASE_DB_URL) {
+  if (!getDbUrl()) {
     const row = memoryBlueprintRuns.get(String(runId));
     if (!row || row.owner_user_id !== owner) return null;
     const next = { ...row, status, error, finished_at: new Date().toISOString() };
@@ -3912,7 +4576,7 @@ export async function insertActionBlueprintRunStep(ownerUserId, step) {
     started_at: new Date().toISOString(),
     finished_at: new Date().toISOString()
   };
-  if (!process.env.SUPABASE_DB_URL) {
+  if (!getDbUrl()) {
     memoryBlueprintRunSteps.set(row.id, row);
     return row;
   }
@@ -3932,7 +4596,7 @@ export async function insertActionBlueprintRunStep(ownerUserId, step) {
 export async function listActionBlueprintRuns(ownerUserId, blueprintId, limit = 20) {
   const owner = normalizeAutomationOwner(ownerUserId);
   if (!owner) return [];
-  if (!process.env.SUPABASE_DB_URL) {
+  if (!getDbUrl()) {
     return Array.from(memoryBlueprintRuns.values())
       .filter((row) => row.owner_user_id === owner && (!blueprintId || row.blueprint_id === String(blueprintId)))
       .sort((a, b) => String(b.started_at || '').localeCompare(String(a.started_at || '')))
@@ -3955,7 +4619,7 @@ export async function listActionBlueprintRuns(ownerUserId, blueprintId, limit = 
 export async function listActionBlueprintRunSteps(ownerUserId, runId) {
   const owner = normalizeAutomationOwner(ownerUserId);
   if (!owner || !runId) return [];
-  if (!process.env.SUPABASE_DB_URL) {
+  if (!getDbUrl()) {
     const run = memoryBlueprintRuns.get(String(runId));
     if (!run || run.owner_user_id !== owner) return [];
     return Array.from(memoryBlueprintRunSteps.values())
@@ -3980,7 +4644,7 @@ export async function listActionBlueprintRunSteps(ownerUserId, runId) {
 
 export async function getAutomationSettings(ownerUserId) {
   const owner = normalizeAutomationOwner(ownerUserId);
-  if (!owner || !process.env.SUPABASE_DB_URL) return {};
+  if (!owner || !getDbUrl()) return {};
   await ensureAutomationTables();
   return withPgClient(async (pg) => {
     const { rows } = await pg.query(`select settings from automation_settings where owner_user_id = $1`, [owner]);
@@ -3991,7 +4655,7 @@ export async function getAutomationSettings(ownerUserId) {
 export async function setAutomationSettings(ownerUserId, settings) {
   const owner = normalizeAutomationOwner(ownerUserId);
   if (!owner) throw new Error('ownerUserId is required');
-  if (!process.env.SUPABASE_DB_URL) return normalizeJsonObject(settings);
+  if (!getDbUrl()) return normalizeJsonObject(settings);
   await ensureAutomationTables();
   const safeSettings = normalizeJsonObject(settings, {});
   return withPgClient(async (pg) => {
@@ -4009,7 +4673,7 @@ export async function setAutomationSettings(ownerUserId, settings) {
 
 export async function listAutomationConnections(ownerUserId) {
   const owner = normalizeAutomationOwner(ownerUserId);
-  if (!owner || !process.env.SUPABASE_DB_URL) return [];
+  if (!owner || !getDbUrl()) return [];
   await ensureAutomationTables();
   return withPgClient(async (pg) => {
     const { rows } = await pg.query(
@@ -4021,7 +4685,7 @@ export async function listAutomationConnections(ownerUserId) {
 }
 
 export async function findAutomationConnectionByControlTokenHash(tokenHash) {
-  if (!tokenHash || !process.env.SUPABASE_DB_URL) return null;
+  if (!tokenHash || !getDbUrl()) return null;
   await ensureAutomationTables();
   return withPgClient(async (pg) => {
     const { rows } = await pg.query(
@@ -4040,7 +4704,7 @@ export async function findAutomationConnectionByControlTokenHash(tokenHash) {
 export async function upsertAutomationConnection(ownerUserId, connection) {
   const owner = normalizeAutomationOwner(ownerUserId);
   if (!owner) throw new Error('ownerUserId is required');
-  if (!process.env.SUPABASE_DB_URL) {
+  if (!getDbUrl()) {
     return normalizeAutomationConnection({
       id: connection?.id || makeId('auto_conn'),
       owner_user_id: owner,
@@ -4103,7 +4767,7 @@ export async function upsertAutomationConnection(ownerUserId, connection) {
 
 export async function deleteAutomationConnection(ownerUserId, id) {
   const owner = normalizeAutomationOwner(ownerUserId);
-  if (!owner || !id || !process.env.SUPABASE_DB_URL) return false;
+  if (!owner || !id || !getDbUrl()) return false;
   await ensureAutomationTables();
   return withPgClient(async (pg) => {
     const result = await pg.query(`delete from automation_connections where owner_user_id = $1 and id = $2`, [owner, String(id)]);
@@ -4115,7 +4779,7 @@ export async function enqueueAutomationJob(ownerUserId, job) {
   const owner = normalizeAutomationOwner(ownerUserId);
   if (!owner) throw new Error('ownerUserId is required');
   const payload = normalizeJsonObject(job?.payload);
-  if (!process.env.SUPABASE_DB_URL) {
+  if (!getDbUrl()) {
     return { id: makeId('auto_job'), owner_user_id: owner, status: 'queued', payload };
   }
   await ensureAutomationTables();
@@ -4164,7 +4828,7 @@ export async function createAutomationLocalAgent(ownerUserId, name = 'AruBot Loc
   if (!owner) throw new Error('ownerUserId is required');
   const id = makeId('auto_agent');
   const token = `alp_${crypto.randomBytes(32).toString('base64url')}`;
-  if (!process.env.SUPABASE_DB_URL) {
+  if (!getDbUrl()) {
     return {
       token,
       agent: normalizeAutomationLocalAgent({
@@ -4193,7 +4857,7 @@ export async function createAutomationLocalAgent(ownerUserId, name = 'AruBot Loc
 export async function getOrCreateAutomationLocalAgent(ownerUserId, name = 'AruBot Local Program', { rotate = false } = {}) {
   const owner = normalizeAutomationOwner(ownerUserId);
   if (!owner) throw new Error('ownerUserId is required');
-  if (!process.env.SUPABASE_DB_URL) {
+  if (!getDbUrl()) {
     return createAutomationLocalAgent(owner, name);
   }
   await ensureAutomationTables();
@@ -4239,7 +4903,7 @@ export async function getOrCreateAutomationLocalAgent(ownerUserId, name = 'AruBo
 
 export async function listAutomationLocalAgents(ownerUserId) {
   const owner = normalizeAutomationOwner(ownerUserId);
-  if (!owner || !process.env.SUPABASE_DB_URL) return [];
+  if (!owner || !getDbUrl()) return [];
   await ensureAutomationTables();
   return withPgClient(async (pg) => {
     const { rows } = await pg.query(
@@ -4266,7 +4930,7 @@ export async function listAutomationLocalAgents(ownerUserId) {
 }
 
 export async function authenticateAutomationLocalAgent(token) {
-  if (!token || !process.env.SUPABASE_DB_URL) return null;
+  if (!token || !getDbUrl()) return null;
   await ensureAutomationTables();
   return withPgClient(async (pg) => {
     const { rows } = await pg.query(
@@ -4280,7 +4944,7 @@ export async function authenticateAutomationLocalAgent(token) {
 }
 
 export async function touchAutomationLocalAgent(agentId, capabilities = {}) {
-  if (!agentId || !process.env.SUPABASE_DB_URL) return null;
+  if (!agentId || !getDbUrl()) return null;
   await ensureAutomationTables();
   return withPgClient(async (pg) => {
     const { rows } = await pg.query(
@@ -4298,7 +4962,7 @@ export async function touchAutomationLocalAgent(agentId, capabilities = {}) {
 }
 
 export async function claimAutomationJobsForAgent(agent, limit = 5) {
-  if (!agent?.id || !agent?.ownerUserId || !process.env.SUPABASE_DB_URL) return [];
+  if (!agent?.id || !agent?.ownerUserId || !getDbUrl()) return [];
   await ensureAutomationTables();
   return withPgClient(async (pg) => {
     await pg.query('begin');
@@ -4353,7 +5017,7 @@ export async function claimAutomationJobsForAgent(agent, limit = 5) {
 }
 
 export async function completeAutomationJobForAgent(agent, jobId, { status = 'done', result = {}, errorMessage = null } = {}) {
-  if (!agent?.id || !agent?.ownerUserId || !jobId || !process.env.SUPABASE_DB_URL) return null;
+  if (!agent?.id || !agent?.ownerUserId || !jobId || !getDbUrl()) return null;
   const nextStatus = status === 'failed' ? 'failed' : 'done';
   await ensureAutomationTables();
   return withPgClient(async (pg) => {
@@ -4535,7 +5199,7 @@ export async function getBotRules(sid) {
 // =============================
 export async function ensureRouletteSessionsPg() {
   // Prefer direct PG to avoid PostgREST schema cache issues
-  const dbUrl = process.env.SUPABASE_DB_URL;
+  const dbUrl = getDbUrl();
   if (!dbUrl) return false;
   await withPgClient(async (pg) => {
     const sql = `

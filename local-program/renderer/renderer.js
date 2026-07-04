@@ -35,8 +35,8 @@ const pageMeta = {
     description: '표정, 모델 전환, 아이템 핫키를 불러와 채팅과 후원 순간에 자연스럽게 실행합니다.',
   },
   sound: {
-    title: '사운드 파일은 방송 PC에서 빠르게 재생하세요.',
-    description: '서버 저장소 제한을 넘는 파일은 로컬 폴더에서 직접 호스팅하고, 자동화 액션의 지연을 줄입니다.',
+    title: 'FX 에셋은 방송 PC에서 관리하세요.',
+    description: '이미지, 스티커, 비디오, 사운드를 로컬 폴더에서 직접 호스팅하고 FX 오버레이로 실시간 실행합니다.',
   },
   updates: {
     title: '로컬 프로그램을 최신 상태로 유지하세요.',
@@ -174,7 +174,7 @@ function renderState(state) {
   }
   $('#encryptionState').textContent = state.encryptionAvailable ? 'OS 보호' : '기본 보호';
   $('#vtubeState').textContent = cfg.hasVtubeAuthToken ? '인증됨' : '미인증';
-  $('#soundFolderText').textContent = cfg.soundFolder || '선택된 폴더 없음';
+  $('#soundFolderText').textContent = cfg.fxFolder || cfg.soundFolder || '선택된 폴더 없음';
 
   if (!fields.token.dataset.dirty) fields.token.placeholder = cfg.hasToken ? cfg.token : '웹 대시보드에서 발급한 토큰';
   fields.autoStart.checked = !!cfg.autoStart;
@@ -219,6 +219,36 @@ function renderRemote(data) {
   $('#remotePvdNow').textContent = current ? `${current.title || current.videoId || '영상'} · ${current.username || '시청자'}` : '현재 재생 항목 없음';
   fields.remotePvdVolume.value = String(nextVolume);
   $('#remotePvdVolumeText').textContent = `${nextVolume}%`;
+}
+
+function diagnosticStatusLabel(status) {
+  if (status === 'pass') return '정상';
+  if (status === 'warn') return '확인 필요';
+  return '실패';
+}
+
+function renderDiagnostics(result) {
+  const summary = result?.summary || {};
+  const checks = Array.isArray(result?.checks) ? result.checks : [];
+  const summaryEl = $('#diagnosticSummary');
+  const listEl = $('#diagnosticList');
+  if (!summaryEl || !listEl) return;
+  if (!checks.length) {
+    summaryEl.textContent = '점검 결과가 없습니다.';
+    listEl.innerHTML = '';
+    return;
+  }
+  summaryEl.innerHTML = `
+    <strong>${summary.status === 'fail' ? '실패 항목이 있습니다' : summary.status === 'warn' ? '확인할 항목이 있습니다' : '방송 PC 연결 준비 완료'}</strong>
+    <span>정상 ${Number(summary.passed || 0)} · 확인 필요 ${Number(summary.warnings || 0)} · 실패 ${Number(summary.failed || 0)}</span>
+  `;
+  listEl.innerHTML = checks.map((check) => `
+    <div class="diagnostic-row ${escapeHtml(check.status || 'fail')}">
+      <span class="diagnostic-state">${diagnosticStatusLabel(check.status)}</span>
+      <strong>${escapeHtml(check.label || '')}</strong>
+      <span>${escapeHtml(check.detail || '')}</span>
+    </div>
+  `).join('');
 }
 
 async function loadRemote() {
@@ -326,6 +356,20 @@ $('#openSoundFolderButton').addEventListener('click', () => run(async () => {
 
 $('#openDashboardButton').addEventListener('click', () => run(async () => {
   await window.aruLocal.openDashboard();
+}));
+
+$('#runDiagnosticsButton').addEventListener('click', () => run(async () => {
+  await window.aruLocal.saveConfig(collectConfig());
+  const button = $('#runDiagnosticsButton');
+  button.disabled = true;
+  button.textContent = '점검 중';
+  try {
+    const result = await window.aruLocal.runDiagnostics();
+    renderDiagnostics(result);
+  } finally {
+    button.disabled = false;
+    button.textContent = '점검 실행';
+  }
 }));
 
 $('#checkUpdateButton').addEventListener('click', () => run(async () => {

@@ -2,6 +2,7 @@
 
 import {
   Cable,
+  CheckCircle2,
   ChevronRight,
   Coins,
   HeartHandshake,
@@ -11,8 +12,10 @@ import {
   Settings,
   Sparkles,
   Timer,
+  Wand2,
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useTransition } from 'react';
+import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button, LinkButton } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -56,6 +59,16 @@ type YoutubeStreamerStatus = {
     thumbnailUrl?: string | null;
     moderatorRegistered?: boolean;
   } | null;
+};
+
+type SetupTemplateResult = {
+  ok?: boolean;
+  applied?: Array<{ type?: string; name?: string }>;
+  skipped?: Array<{ type?: string; name?: string; reason?: string }>;
+  counts?: {
+    applied?: number;
+    skipped?: number;
+  };
 };
 
 const providers = [
@@ -180,6 +193,81 @@ function ChannelAvatar({ account }: { account: PlatformAccount }) {
     );
   }
   return <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-muted text-xs font-semibold text-primary">{providerLabel(account.provider).slice(0, 2)}</span>;
+}
+
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(apiUrl(path), {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(data?.error || 'request_failed');
+  return data as T;
+}
+
+function refreshSetupResources() {
+  ['/api/bot/rules', '/api/roulette/definitions', '/api/macros', '/api/bot/settings'].forEach((endpoint) => {
+    window.dispatchEvent(new CustomEvent('arubot:resource-refresh', { detail: { endpoint } }));
+  });
+}
+
+function QuickStartTemplatePanel() {
+  const [result, setResult] = useState<SetupTemplateResult | null>(null);
+  const [isPending, startTransition] = useTransition();
+
+  const applyTemplate = () => {
+    startTransition(async () => {
+      try {
+        const payload = await postJson<SetupTemplateResult>('/api/setup/templates/apply', { template: 'quick-start' });
+        setResult(payload);
+        refreshSetupResources();
+        const applied = Number(payload.counts?.applied || payload.applied?.length || 0);
+        const skipped = Number(payload.counts?.skipped || payload.skipped?.length || 0);
+        toast.success(applied ? `빠른 시작 항목 ${applied}개를 추가했습니다.` : `이미 빠른 시작 항목이 준비되어 있습니다.`, {
+          description: skipped ? `${skipped}개 항목은 기존 설정을 유지했습니다.` : undefined,
+        });
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : '빠른 시작 세트를 적용하지 못했습니다.');
+      }
+    });
+  };
+
+  return (
+    <Card className="overflow-hidden bg-[linear-gradient(135deg,hsl(var(--card)),hsl(var(--accent-mint)/0.24),hsl(var(--accent-sky)/0.18))]">
+      <CardContent className="grid gap-4 p-[clamp(1rem,2vw,1.35rem)] lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+        <div className="min-w-0">
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-primary/12 text-primary">
+              <Wand2 className="h-5 w-5" />
+            </span>
+            <Badge tone="mint">빠른 시작</Badge>
+            {result ? <Badge tone="sky">{Number(result.counts?.applied || 0)}개 추가</Badge> : null}
+          </div>
+          <h2 className="break-keep text-xl font-semibold">방송 참여 기본 세트를 한 번에 준비합니다.</h2>
+          <p className="mt-2 max-w-3xl break-keep text-sm leading-6 text-muted-foreground">
+            포인트 확인, 명령어 안내, 기본 룰렛, 영상 후원 명령어와 참여 안내 알림을 추가합니다. 이미 있는 항목은 그대로 둡니다.
+          </p>
+          {result ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {(result.applied || []).slice(0, 5).map((item) => (
+                <Badge key={`${item.type}-${item.name}`} tone="mint">
+                  <CheckCircle2 className="mr-1 h-3.5 w-3.5" />
+                  {item.name}
+                </Badge>
+              ))}
+              {Number(result.counts?.skipped || 0) ? <Badge tone="neutral">{result.counts?.skipped}개 기존 항목 유지</Badge> : null}
+            </div>
+          ) : null}
+        </div>
+        <Button type="button" onClick={applyTemplate} disabled={isPending} className="justify-center">
+          <Wand2 className={isPending ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
+          {isPending ? '준비 중' : '빠른 시작 세트 적용'}
+        </Button>
+      </CardContent>
+    </Card>
+  );
 }
 
 export function DashboardPage() {
@@ -430,6 +518,8 @@ export function DashboardPage() {
           );
         })}
       </section>
+
+      <QuickStartTemplatePanel />
 
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {featureCards.map((item, index) => {

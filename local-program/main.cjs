@@ -4,6 +4,7 @@ const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const http = require('http');
 const dns = require('dns').promises;
 const net = require('net');
 const dgram = require('dgram');
@@ -71,6 +72,7 @@ const DEFAULT_CONFIG = {
   titsEndpoint: 'ws://localhost:42069',
   vtubeEndpoint: 'ws://localhost:8001',
   vtubeAuthToken: '',
+  fxFolder: '',
   soundFolder: '',
   autoStart: false,
 };
@@ -84,6 +86,9 @@ let agentPollingTimer = null;
 let reconnectAttempt = 0;
 let processingJobs = false;
 let startupDiscoverySyncRunning = false;
+let fxAssetServer = null;
+let fxAssetServerPort = 0;
+let fxAssetServerKey = crypto.randomBytes(16).toString('hex');
 let config = { ...DEFAULT_CONFIG };
 let logs = [];
 let updateState = {
@@ -390,6 +395,7 @@ function loadConfig() {
     token: normalizeLocalProgramToken(decryptText(vault.token)),
     vtubeAuthToken: decryptText(vault.vtubeAuthToken),
   };
+  config.fxFolder = String(config.fxFolder || config.soundFolder || '').trim();
   return config;
 }
 
@@ -404,12 +410,14 @@ function saveConfig(next) {
     titsEndpoint: String(next.titsEndpoint ?? config.titsEndpoint ?? '').trim() || DEFAULT_CONFIG.titsEndpoint,
     vtubeEndpoint: String(next.vtubeEndpoint ?? config.vtubeEndpoint ?? '').trim() || DEFAULT_CONFIG.vtubeEndpoint,
     vtubeAuthToken: String(next.vtubeAuthToken ?? config.vtubeAuthToken ?? '').trim(),
-    soundFolder: String(next.soundFolder ?? config.soundFolder ?? '').trim(),
+    fxFolder: String(next.fxFolder ?? next.soundFolder ?? config.fxFolder ?? config.soundFolder ?? '').trim(),
+    soundFolder: String(next.soundFolder ?? next.fxFolder ?? config.soundFolder ?? config.fxFolder ?? '').trim(),
     autoStart: !!(next.autoStart ?? config.autoStart),
   };
   writeJson('config.json', {
     titsEndpoint: config.titsEndpoint,
     vtubeEndpoint: config.vtubeEndpoint,
+    fxFolder: config.fxFolder,
     soundFolder: config.soundFolder,
     autoStart: config.autoStart,
   });
@@ -432,6 +440,7 @@ function getPublicState() {
       vtubeEndpoint: config.vtubeEndpoint,
       vtubeAuthToken: config.vtubeAuthToken ? `${config.vtubeAuthToken.slice(0, 8)}...` : '',
       hasVtubeAuthToken: !!config.vtubeAuthToken,
+      fxFolder: config.fxFolder,
       soundFolder: config.soundFolder,
       autoStart: config.autoStart,
       connectionMode: 'websocket',
@@ -1075,8 +1084,123 @@ async function discoverVtubeStudio(options = {}) {
   }
 }
 
+const FX_EXTENSIONS = {
+  image: new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.avif']),
+  video: new Set(['.mp4', '.webm', '.mov', '.m4v']),
+  sound: new Set(['.mp3', '.wav', '.ogg', '.webm', '.m4a', '.flac']),
+};
+
+function getFxFolder() {
+  return String(config.fxFolder || config.soundFolder || '').trim();
+}
+
+function getFxKindForFile(fileName) {
+  const ext = path.extname(String(fileName || '')).toLowerCase();
+  if (FX_EXTENSIONS.image.has(ext)) return 'image';
+  if (FX_EXTENSIONS.video.has(ext)) return 'video';
+  if (FX_EXTENSIONS.sound.has(ext)) return 'sound';
+  return null;
+}
+
+function getFxAssetPath(assetId) {
+  const folder = getFxFolder();
+  if (!folder) return '';
+  const root = path.resolve(folder);
+  const candidate = path.resolve(root, path.basename(String(assetId || '')));
+  if (!candidate.startsWith(root)) return '';
+  if (!fs.existsSync(candidate) || !fs.statSync(candidate).isFile()) return '';
+  return candidate;
+}
+
+function makeFxPreviewDataUrl(fullPath, kind) {
+  if (kind !== 'image') return null;
+  try {
+    const stat = fs.statSync(fullPath);
+    if (stat.size > 384 * 1024) return null;
+    const ext = path.extname(fullPath).toLowerCase();
+    const mime = ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : ext === '.webp' ? 'image/webp' : ext === '.gif' ? 'image/gif' : ext === '.bmp' ? 'image/bmp' : ext === '.avif' ? 'image/avif' : 'image/png';
+    return `data:${mime};base64,${fs.readFileSync(fullPath).toString('base64')}`;
+  } catch {
+    return null;
+  }
+}
+
+function scanFxAssets() {
+  const folder = getFxFolder();
+  if (!folder || !fs.existsSync(folder)) return { source: 'fx_assets', assets: [], folderConfigured: !!folder, fetchedAt: new Date().toISOString() };
+  const root = path.resolve(folder);
+  const assets = fs.readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => {
+      const kind = getFxKindForFile(entry.name);
+      if (!kind) return null;
+      const fullPath = path.join(root, entry.name);
+      const stat = fs.statSync(fullPath);
+      return {
+        id: entry.name,
+        name: entry.name,
+        kind,
+        size: stat.size,
+        updatedAt: stat.mtime.toISOString(),
+        previewDataUrl: makeFxPreviewDataUrl(fullPath, kind),
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name));
+  return { source: 'fx_assets', assets, folderConfigured: true, fetchedAt: new Date().toISOString() };
+}
+
+async function syncLocalFxAssets(options = {}) {
+  const discovery = scanFxAssets();
+  await syncLocalDiscovery('fx_assets', discovery, options);
+  if (!options.silent) addLog('success', `FX 에셋 목록 동기화 완료: ${discovery.assets.length}개`);
+  return discovery;
+}
+
+function startFxAssetServer() {
+  if (fxAssetServer) return fxAssetServerPort;
+  fxAssetServerKey = crypto.randomBytes(16).toString('hex');
+  fxAssetServer = http.createServer((req, res) => {
+    try {
+      const url = new URL(req.url, 'http://127.0.0.1');
+      if (url.pathname !== '/fx-asset' || url.searchParams.get('k') !== fxAssetServerKey) {
+        res.writeHead(404);
+        res.end('not found');
+        return;
+      }
+      const fullPath = getFxAssetPath(url.searchParams.get('id'));
+      if (!fullPath) {
+        res.writeHead(404);
+        res.end('not found');
+        return;
+      }
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Cache-Control', 'no-store');
+      fs.createReadStream(fullPath).pipe(res);
+    } catch {
+      res.writeHead(500);
+      res.end('error');
+    }
+  });
+  fxAssetServer.listen(0, '127.0.0.1');
+  fxAssetServerPort = fxAssetServer.address()?.port || 0;
+  fxAssetServer.on('error', (error) => addLog('error', 'FX 로컬 파일 서버 오류', error.message || String(error)));
+  return fxAssetServerPort;
+}
+
+function getFxAssetUrl(assetId) {
+  const fullPath = getFxAssetPath(assetId);
+  if (!fullPath) return '';
+  const port = startFxAssetServer();
+  if (!port) return pathToFileURL(fullPath).href;
+  const url = new URL(`http://127.0.0.1:${port}/fx-asset`);
+  url.searchParams.set('id', path.basename(fullPath));
+  url.searchParams.set('k', fxAssetServerKey);
+  return url.toString();
+}
+
 async function syncLocalDiscovery(type, discovery, options = {}) {
-  const normalizedType = type === 'vtube_studio' ? 'vtube_studio' : type === 'tits' ? 'tits' : '';
+  const normalizedType = type === 'vtube_studio' ? 'vtube_studio' : type === 'tits' ? 'tits' : type === 'fx_assets' ? 'fx_assets' : '';
   if (!normalizedType || !discovery || typeof discovery !== 'object') return null;
   if (!normalizeLocalProgramToken(config.token)) return null;
   try {
@@ -1084,8 +1208,8 @@ async function syncLocalDiscovery(type, discovery, options = {}) {
       method: 'POST',
       body: JSON.stringify({
         type: normalizedType,
-        name: normalizedType === 'vtube_studio' ? 'VTube Studio' : 'T.I.T.S.',
-        endpoint: discovery.endpoint || (normalizedType === 'vtube_studio' ? config.vtubeEndpoint : config.titsEndpoint),
+        name: normalizedType === 'vtube_studio' ? 'VTube Studio' : normalizedType === 'fx_assets' ? 'FX 로컬 에셋' : 'T.I.T.S.',
+        endpoint: discovery.endpoint || (normalizedType === 'vtube_studio' ? config.vtubeEndpoint : normalizedType === 'tits' ? config.titsEndpoint : 'local-fx-assets'),
         discoveryCache: discovery,
       }),
     });
@@ -1119,6 +1243,9 @@ async function runStartupDiscoverySync() {
       discoverAndSyncVtubeStudio({ silent: true, timeoutMs: 7000 })
         .then((discovery) => addLog('success', `VTube Studio 목록 자동 동기화 완료: 모델 ${discovery.models.length}개, 핫키 ${discovery.hotkeys.length}개`))
         .catch((error) => addLog('info', 'VTube Studio 자동 동기화를 건너뜁니다.', error.message || String(error))),
+      syncLocalFxAssets({ silent: true })
+        .then((discovery) => addLog('success', `FX 에셋 자동 동기화 완료: ${discovery.assets?.length || 0}개`))
+        .catch((error) => addLog('info', 'FX 에셋 자동 동기화를 건너뜁니다.', error.message || String(error))),
     ];
     await Promise.allSettled(tasks);
   } finally {
@@ -1195,28 +1322,25 @@ async function processJob(job) {
       pitch: Math.max(0.5, Math.min(2, Number(payload.pitch || 1))),
     });
   }
-  if (type === 'sound.play' || type === 'blueprint.sound') {
-    const fileId = path.basename(String(payload.fileId || payload.name || ''));
-    if (!fileId) throw new Error('재생할 사운드 파일이 없습니다.');
-    let fullPath = '';
-    if (config.soundFolder) {
-      const soundDir = path.resolve(config.soundFolder);
-      const candidate = path.resolve(soundDir, fileId);
-      if (candidate.startsWith(soundDir) && fs.existsSync(candidate)) fullPath = candidate;
+  if (type === 'fx.play' || type === 'blueprint.fx' || type === 'sound.play' || type === 'blueprint.sound') {
+    const kind = String(payload.kind || (type.includes('sound') ? 'sound' : 'image')).toLowerCase();
+    const assetId = path.basename(String(payload.assetId || payload.fileId || payload.name || ''));
+    const assetUrl = payload.youtubeUrl ? '' : String(payload.assetUrl || getFxAssetUrl(assetId) || '');
+    if (kind !== 'video' || !payload.youtubeUrl) {
+      if (!assetId && !assetUrl) throw new Error('실행할 FX 에셋이 없습니다.');
     }
-    if (!fullPath) {
-      const cacheDir = path.join(app.getPath('temp'), 'arubot-local-sounds');
-      fs.mkdirSync(cacheDir, { recursive: true });
-      fullPath = path.join(cacheDir, fileId);
-      const data = await apiFetchBuffer(`/api/automations/local-agent/assets/sounds/${encodeURIComponent(fileId)}`);
-      fs.writeFileSync(fullPath, data);
-    }
-    return sendRendererTask({
-      type: 'sound.play',
-      fileUrl: pathToFileURL(fullPath).href,
-      fileName: fileId,
-      volume: Math.max(0, Math.min(1, Number(payload.volume ?? 1))),
+    const fxPayload = {
+      ...payload,
+      kind,
+      assetId,
+      assetUrl,
+      assetName: payload.assetName || payload.fileName || assetId,
+    };
+    await apiFetch('/api/automations/local-agent/fx/push', {
+      method: 'POST',
+      body: JSON.stringify({ payload: fxPayload }),
     });
+    return { ok: true, type: 'fx.play', kind, assetId, pushed: true };
   }
   if (type === 'blueprint.tits') {
     const triggerId = String(payload.triggerId || payload.triggerID || '').trim();
@@ -1340,6 +1464,7 @@ async function claimAndProcessJobs() {
           tits: true,
           vtubeStudio: true,
           vtubeStudioAuthenticated: !!config.vtubeAuthToken,
+          fxAssets: !!getFxFolder(),
           soundFolder: !!config.soundFolder,
           tts: true,
           version: app.getVersion(),
@@ -1386,6 +1511,7 @@ async function heartbeat() {
         tits: true,
         vtubeStudio: true,
         vtubeStudioAuthenticated: !!config.vtubeAuthToken,
+        fxAssets: !!getFxFolder(),
         soundFolder: !!config.soundFolder,
         tts: true,
         version: app.getVersion(),
@@ -1458,6 +1584,7 @@ function sendSocketHeartbeat() {
       tits: true,
       vtubeStudio: true,
       vtubeStudioAuthenticated: !!config.vtubeAuthToken,
+      fxAssets: !!getFxFolder(),
       soundFolder: !!config.soundFolder,
       tts: true,
       version: app.getVersion(),
@@ -1555,6 +1682,124 @@ function stopAgent() {
   return getPublicState();
 }
 
+function summarizeDiagnostics(checks) {
+  const failed = checks.filter((check) => check.status === 'fail').length;
+  const warnings = checks.filter((check) => check.status === 'warn').length;
+  const passed = checks.filter((check) => check.status === 'pass').length;
+  return {
+    passed,
+    warnings,
+    failed,
+    status: failed ? 'fail' : warnings ? 'warn' : 'pass',
+  };
+}
+
+async function withTimeout(promise, timeoutMs, message) {
+  let timer = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message || '시간 초과')), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function runLocalDiagnostics() {
+  const checks = [];
+  const push = (id, label, status, detail) => {
+    checks.push({ id, label, status, detail: detail ? String(detail).slice(0, 240) : '' });
+  };
+  const run = async (id, label, task) => {
+    try {
+      const detail = await task();
+      push(id, label, 'pass', detail || '정상');
+    } catch (error) {
+      push(id, label, 'fail', error?.message || String(error));
+    }
+  };
+
+  const token = normalizeLocalProgramToken(config.token);
+  if (token) push('token', '로컬 프로그램 토큰', 'pass', '토큰 형식을 확인했습니다.');
+  else push('token', '로컬 프로그램 토큰', 'fail', '웹 대시보드에서 발급한 토큰을 붙여넣어야 합니다.');
+
+  await run('backend', '아루봇 백엔드', async () => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    try {
+      const response = await fetch(`${normalizeBackendUrl()}/api/health`, { signal: controller.signal });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return normalizeBackendUrl();
+    } finally {
+      clearTimeout(timeout);
+    }
+  });
+
+  if (token) {
+    await run('agent-auth', '로컬 에이전트 인증', async () => {
+      await withTimeout(apiFetch('/api/automations/local-agent/heartbeat', {
+        method: 'POST',
+        body: JSON.stringify({
+          capabilities: {
+            tits: true,
+            vtubeStudio: true,
+            vtubeStudioAuthenticated: !!config.vtubeAuthToken,
+            fxAssets: !!getFxFolder(),
+            soundFolder: !!config.soundFolder,
+            tts: true,
+            version: app.getVersion(),
+          },
+        }),
+      }), 7000, '인증 확인 시간이 초과되었습니다.');
+      stats.lastHeartbeatAt = new Date().toISOString();
+      return '토큰 인증과 heartbeat가 정상입니다.';
+    });
+    await run('remote', '방송 리모컨 API', async () => {
+      const overview = await withTimeout(apiFetch('/api/local-remote/overview'), 7000, '리모컨 정보를 불러오지 못했습니다.');
+      const rules = Array.isArray(overview?.rules) ? overview.rules.length : 0;
+      const roulettes = Array.isArray(overview?.rouletteDefs) ? overview.rouletteDefs.length : 0;
+      return `명령어 ${rules}개, 룰렛 ${roulettes}개`;
+    });
+  } else {
+    push('agent-auth', '로컬 에이전트 인증', 'warn', '토큰이 없어 인증 점검을 건너뜁니다.');
+    push('remote', '방송 리모컨 API', 'warn', '토큰이 없어 리모컨 점검을 건너뜁니다.');
+  }
+
+  if (getFxFolder()) {
+    const fxDir = path.resolve(getFxFolder());
+    if (fs.existsSync(fxDir)) {
+      const discovery = scanFxAssets();
+      push('fx-folder', 'FX 에셋 폴더', 'pass', `${fxDir} · ${discovery.assets.length}개`);
+    } else {
+      push('fx-folder', 'FX 에셋 폴더', 'fail', '선택한 폴더를 찾을 수 없습니다.');
+    }
+  } else {
+    push('fx-folder', 'FX 에셋 폴더', 'warn', '이미지, 비디오, 사운드를 쓰려면 폴더를 선택하세요.');
+  }
+
+  await run('tits', 'T.I.T.S. 연결', async () => {
+    const discovery = await withTimeout(discoverAndSyncTits({ silent: true }), 7000, 'T.I.T.S. 연결 시간이 초과되었습니다.');
+    return `아이템 ${discovery.items.length}개, 트리거 ${discovery.triggers.length}개`;
+  }).catch(() => undefined);
+
+  if (config.vtubeAuthToken) {
+    await run('vtube', 'VTube Studio 연결', async () => {
+      const discovery = await withTimeout(discoverAndSyncVtubeStudio({ silent: true, timeoutMs: 5000 }), 8000, 'VTube Studio 연결 시간이 초과되었습니다.');
+      return `모델 ${discovery.models.length}개, 핫키 ${discovery.hotkeys.length}개`;
+    });
+  } else {
+    push('vtube', 'VTube Studio 연결', 'warn', '인증 토큰이 없어 인증 요청이 먼저 필요합니다.');
+  }
+
+  const summary = summarizeDiagnostics(checks);
+  addLog(summary.status === 'fail' ? 'error' : summary.status === 'warn' ? 'info' : 'success', '원클릭 점검을 완료했습니다.', `정상 ${summary.passed}, 확인 필요 ${summary.warnings}, 실패 ${summary.failed}`);
+  emitState();
+  return { checkedAt: new Date().toISOString(), summary, checks };
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1180,
@@ -1586,6 +1831,7 @@ ipcMain.handle('config:save', (_event, next) => {
 });
 ipcMain.handle('agent:start', () => startAgent());
 ipcMain.handle('agent:stop', () => stopAgent());
+ipcMain.handle('diagnostics:run', () => runLocalDiagnostics());
 ipcMain.handle('tits:discover', async () => {
   const discovery = await discoverAndSyncTits();
   addLog('success', `T.I.T.S. 목록 불러오기 완료: 아이템 ${discovery.items.length}개, 트리거 ${discovery.triggers.length}개`);
@@ -1646,12 +1892,14 @@ ipcMain.handle('remote:pvd:control', async (_event, control) => apiFetch('/api/l
 ipcMain.handle('folder:chooseSound', async () => {
   const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
   if (result.canceled || !result.filePaths?.[0]) return null;
-  saveConfig({ soundFolder: result.filePaths[0] });
+  saveConfig({ fxFolder: result.filePaths[0], soundFolder: result.filePaths[0] });
+  await syncLocalFxAssets().catch((error) => addLog('error', 'FX 에셋 동기화 실패', error.message || String(error)));
   return result.filePaths[0];
 });
 ipcMain.handle('folder:openSound', async () => {
-  if (!config.soundFolder) return false;
-  await shell.openPath(config.soundFolder);
+  const folder = getFxFolder();
+  if (!folder) return false;
+  await shell.openPath(folder);
   return true;
 });
 ipcMain.handle('dashboard:open', async () => {

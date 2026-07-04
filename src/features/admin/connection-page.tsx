@@ -514,7 +514,7 @@ export function ConnectionPage() {
                       {youtubeRegistered && !youtubeStreamerStatus?.channel?.moderatorRegistered ? (
                         <Button type="button" variant="outline" onClick={confirmYoutubeModerator} disabled={youtubeBusy}>
                           <CheckCircle2 className="h-4 w-4" />
-                          운영자 등록 확인
+                          운영자 실제 확인
                         </Button>
                       ) : null}
                       {youtubeRegistered ? (

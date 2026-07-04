@@ -52,7 +52,9 @@ cp .env.example .env
 - `CHZZK_CLIENT_ID`, `CHZZK_CLIENT_SECRET`, `CHZZK_REDIRECT_URI`
 - `CIME_CLIENT_ID`, `CIME_CLIENT_SECRET`, `CIME_REDIRECT_URI`
 - `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, `YOUTUBE_REDIRECT_URI`
-- `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_URL`
+- `ARUBOT_DB_PROVIDER`: `supabase` 또는 `postgres`
+- `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_URL`: `ARUBOT_DB_PROVIDER=supabase`일 때 사용
+- `POSTGRES_URL`: `ARUBOT_DB_PROVIDER=postgres`일 때 사용. 운영 Postgres 모드에서는 Supabase 공식 서버 URL/key에 의존하지 않습니다.
 
 선택 환경 변수:
 
@@ -62,6 +64,7 @@ cp .env.example .env
 - `YOUTUBE_STREAM_PATH`: Live Chat streaming endpoint. 기본값은 `/liveChat/messages/stream`
 - `REDIS_URL`: 실시간 이벤트 fanout을 보조할 Redis 인스턴스
 - `YOUTUBE_API_KEY`: 영상 후원 제목/검색 메타데이터 보강. YouTube Live Chat 송수신에는 OAuth 토큰을 사용합니다.
+- `POSTGRES_POOL_MAX`, `POSTGRES_CONNECT_TIMEOUT_MS`, `POSTGRES_STATEMENT_TIMEOUT_MS`, `POSTGRES_IDLE_TIMEOUT_MS`, `POSTGRES_SSL`: Postgres provider 연결 튜닝
 
 ## 로컬 개발
 
@@ -82,6 +85,29 @@ GUI 로컬 프로그램:
 ```bash
 npm run local:app
 ```
+
+DB provider 점검/전환 보조:
+
+```bash
+npm run db:migrate
+npm run db:migration-status
+npm run db:dump-public -- --target=supabase --out=backups/supabase-public.dump
+npm run db:restore-public -- --target=postgres --file=backups/supabase-public.dump --confirm=restore-public
+npm run db:repair-sequences -- --target=postgres
+npm run db:counts
+npm run db:compare-counts
+npm run db:compare-checksums
+npm run db:provider-smoke
+npm run db:cutover-preflight
+npm run db:cutover-verify
+npm run db:cutover-rehearsal
+npm run db:cutover-rehearsal -- --execute --confirm=restore-public --base=http://localhost:3001
+npm run db:switch-to-postgres
+npm run db:switch-to-postgres -- --execute --confirm=switch-to-postgres --base=https://arubotapi.yuaru.com
+npm run api:smoke -- --base=http://localhost:3001 --expect-provider=postgres
+```
+
+`db:switch-to-postgres`는 Supabase public schema dump, Postgres restore, migration, sequence repair, count/checksum 검증, `.env`의 `ARUBOT_DB_PROVIDER=postgres` 전환, PM2 reload, API smoke까지 한 번에 수행한다. 기본은 dry-run이며 실제 실행에는 `--execute --confirm=switch-to-postgres`가 필요하다.
 
 Windows 설치 파일 빌드:
 
