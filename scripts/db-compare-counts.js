@@ -1,9 +1,15 @@
 import { DEFAULT_COUNT_TABLES, getTableCounts, resolveDatabaseUrl, withPgClient } from './db-common.js';
 
+const DEFAULT_IGNORED_TABLES = ['migration_log'];
+
+function parseListArg(name, fallback = []) {
+  const arg = process.argv.find((item) => item.startsWith(`--${name}=`));
+  if (!arg) return fallback;
+  return arg.slice(name.length + 3).split(',').map((item) => item.trim()).filter(Boolean);
+}
+
 function parseTables() {
-  const arg = process.argv.find((item) => item.startsWith('--tables='));
-  if (!arg) return DEFAULT_COUNT_TABLES;
-  return arg.slice('--tables='.length).split(',').map((item) => item.trim()).filter(Boolean);
+  return parseListArg('tables', DEFAULT_COUNT_TABLES);
 }
 
 async function main() {
@@ -12,7 +18,8 @@ async function main() {
   if (!supabaseUrl) throw new Error('SUPABASE_DB_URL is required for count comparison.');
   if (!postgresUrl) throw new Error('POSTGRES_URL is required for count comparison.');
 
-  const tables = parseTables();
+  const ignoredTables = new Set(parseListArg('ignore', DEFAULT_IGNORED_TABLES));
+  const tables = parseTables().filter((tableName) => !ignoredTables.has(tableName));
   const [supabaseCounts, postgresCounts] = await Promise.all([
     withPgClient('supabase', (client) => getTableCounts(client, tables)),
     withPgClient('postgres', (client) => getTableCounts(client, tables)),
@@ -34,6 +41,7 @@ async function main() {
   const result = {
     generatedAt: new Date().toISOString(),
     ok: differences.length === 0,
+    ignoredTables: [...ignoredTables],
     differences,
     supabase: supabaseCounts,
     postgres: postgresCounts,

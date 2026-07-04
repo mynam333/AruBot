@@ -7,6 +7,7 @@ describe('database provider regression', () => {
   const envExample = fs.readFileSync(path.join(__dirname, '..', '.env.example'), 'utf8');
   const packageJson = fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8');
   const dbCommon = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'db-common.js'), 'utf8');
+  const compareCounts = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'db-compare-counts.js'), 'utf8');
   const cutoverRehearsal = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'db-cutover-rehearsal.js'), 'utf8');
   const cutoverPreflight = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'db-cutover-preflight.js'), 'utf8');
   const switchToPostgres = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'db-switch-to-postgres.js'), 'utf8');
@@ -80,6 +81,12 @@ describe('database provider regression', () => {
     expect(dbCommon).toContain('setval($1::regclass, $2, false)');
     expect(packageJson).toContain('"db:compare-checksums": "node scripts/db-compare-checksums.js"');
     expect(packageJson).toContain('"db:cutover-verify": "node scripts/db-cutover-verify.js"');
+  });
+
+  test('count comparison ignores migration_log metadata by default', () => {
+    expect(compareCounts).toContain("const DEFAULT_IGNORED_TABLES = ['migration_log']");
+    expect(compareCounts).toContain("parseListArg('ignore', DEFAULT_IGNORED_TABLES)");
+    expect(compareCounts).toContain('ignoredTables');
   });
 
   test('cutover rehearsal is dry-run by default and requires restore confirmation', () => {
