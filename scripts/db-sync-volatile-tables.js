@@ -104,6 +104,7 @@ async function main() {
   const ok = synced.every((item) => !item.skipped);
   console.log(JSON.stringify({
     generatedAt: new Date().toISOString(),
+    mode: 'text-cast-preserve-db-precision',
     ok,
     synced,
   }, null, 2));

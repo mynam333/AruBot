@@ -5,6 +5,7 @@ import { Check, ChevronRight, Loader2, PencilLine, Play, RefreshCw, Sparkles, Tr
 import { useCallback, useEffect, useMemo, useState, useTransition } from 'react';
 import { toast } from 'sonner';
 import { RouletteCreateDialog } from '@/features/admin/admin-action-dialogs';
+import { ViewerTokenPanel } from '@/features/admin/viewer-token-panel';
 import { Badge } from '@/components/ui/badge';
 import { Button, LinkButton } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -269,29 +270,49 @@ export function RoulettePage() {
 
   return (
     <div className="grid gap-[clamp(1rem,2vw,1.5rem)]">
+      <section className="relative overflow-hidden rounded-[var(--radius-panel)] border bg-[linear-gradient(135deg,hsl(var(--card)),hsl(var(--accent-lemon)/0.2),hsl(var(--accent-mint)/0.16))] p-[clamp(1.25rem,2.6vw,1.75rem)] shadow-subtle">
+        <div className="relative flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
+          <div className="max-w-4xl">
+            <div className="mb-4 flex flex-wrap items-center gap-2">
+              <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-primary/12 text-primary ring-1 ring-primary/25">
+                <Sparkles className="h-5 w-5" />
+              </span>
+              <Badge tone="lemon">룰렛</Badge>
+              <Badge tone="mint">{definitions.length}개</Badge>
+              <Badge tone="neutral">{totalItems}개 항목</Badge>
+            </div>
+            <h1 className="text-3xl font-semibold leading-tight tracking-normal md:text-4xl">룰렛 이벤트</h1>
+            <p className="mt-3 max-w-3xl text-sm leading-7 text-muted-foreground md:text-base">
+              포인트와 후원 반응에서 실행할 룰렛을 관리하고, 방송 화면에 표시될 룰렛 오버레이 주소를 같은 화면에서 바로 확인합니다.
+            </p>
+          </div>
+          <div className="flex max-w-full flex-wrap items-center gap-2">
+            <RouletteCreateDialog />
+            <LinkButton href="/roulette/logs" variant="outline">결과 보기</LinkButton>
+            <Button type="button" variant="outline" onClick={load} disabled={isPending}>
+              <RefreshCw className={isPending ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
+              새로고침
+            </Button>
+          </div>
+        </div>
+      </section>
+
+      <ViewerTokenPanel
+        title="룰렛 화면 주소"
+        description="이 주소를 OBS 브라우저 소스에 넣으면 룰렛 결과가 방송 화면에 표시돼요."
+        endpoint="/api/roulette/viewer-url"
+      />
+
       <Card>
         <CardHeader>
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <div className="mb-3 flex flex-wrap items-center gap-2">
-                <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-primary/12 text-primary">
-                  <Sparkles className="h-5 w-5" />
-                </span>
-                <Badge tone="lemon">룰렛</Badge>
-                <Badge tone="mint">{definitions.length}개</Badge>
-                <Badge tone="neutral">{totalItems}개 항목</Badge>
-              </div>
               <CardTitle>방송 이벤트로 실행할 룰렛</CardTitle>
               <CardDescription>룰렛을 만들고 바로 테스트합니다.</CardDescription>
             </div>
             <div className="flex flex-wrap gap-2">
-              <RouletteCreateDialog />
-              <LinkButton href="/roulette/logs" variant="outline">결과 보기</LinkButton>
-              <LinkButton href="/roulette/viewer" variant="outline">OBS 주소</LinkButton>
-              <Button type="button" variant="outline" onClick={load} disabled={isPending}>
-                <RefreshCw className={isPending ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
-                새로고침
-              </Button>
+              <Badge tone="mint">{definitions.length}개</Badge>
+              <Badge tone="neutral">{totalItems}개 항목</Badge>
             </div>
           </div>
         </CardHeader>

@@ -15,6 +15,5 @@ export function PvdViewerRoute({ token }: { token: string }) {
 }
 
 export function RouletteViewerRoute({ token }: { token: string }) {
-  void token;
-  return <RouletteViewer />;
+  return <RouletteViewer viewerToken={token} />;
 }

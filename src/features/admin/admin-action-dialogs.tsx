@@ -412,7 +412,7 @@ export function VideoDonationSettingsDialog({ variant = 'secondary', label = 'ì˜
   const [providers, setProviders] = useState({
     youtube: true,
     tiktok: false,
-    chzzk_clip: false,
+    chzzk_clip: true,
     cime_clip: false,
   });
   const [isPending, startTransition] = useTransition();
@@ -430,7 +430,7 @@ export function VideoDonationSettingsDialog({ variant = 'secondary', label = 'ì˜
       setProviders({
         youtube: payload.providers?.youtube !== false,
         tiktok: payload.providers?.tiktok === true,
-        chzzk_clip: payload.providers?.chzzk_clip === true,
+        chzzk_clip: payload.providers?.chzzk_clip !== false,
         cime_clip: payload.providers?.cime_clip === true,
       });
     } catch {

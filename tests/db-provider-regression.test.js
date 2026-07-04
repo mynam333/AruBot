@@ -99,6 +99,8 @@ describe('database provider regression', () => {
     expect(compareChecksums).toContain("set time zone 'UTC'");
     expect(compareChecksums).toContain('set datestyle to ISO, YMD');
     expect(compareChecksums).toContain('normalizeComparisonSession(client)');
+    expect(compareChecksums).toContain('getTableColumns');
+    expect(compareChecksums).toContain('row_hash');
     expect(diffTable).toContain("set time zone 'UTC'");
     expect(diffTable).toContain('show-values');
   });

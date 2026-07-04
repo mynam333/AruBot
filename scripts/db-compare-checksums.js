@@ -54,15 +54,31 @@ async function getPrimaryKeyColumns(client, tableName) {
   return rows.map((row) => String(row.column_name));
 }
 
+async function getTableColumns(client, tableName) {
+  const { rows } = await client.query(
+    `select column_name
+       from information_schema.columns
+      where table_schema = 'public'
+        and table_name = $1
+      order by ordinal_position`,
+    [tableName]
+  );
+  return rows.map((row) => String(row.column_name));
+}
+
 async function checksumTable(client, tableName, limit) {
   if (!(await tableExists(client, tableName))) return { exists: false, count: null, checksum: null, sampled: 0 };
-  const keys = await getPrimaryKeyColumns(client, tableName);
+  const [keys, columns] = await Promise.all([
+    getPrimaryKeyColumns(client, tableName),
+    getTableColumns(client, tableName),
+  ]);
   const orderSql = keys.length
     ? keys.map((key) => `r.${quoteIdent(key)}::text`).join(', ')
-    : 'to_jsonb(r)::text';
+    : columns.map((column) => `r.${quoteIdent(column)}::text`).join(', ');
+  const rowSql = columns.map((column) => `coalesce(r.${quoteIdent(column)}::text, '<NULL>')`).join(` || E'\\x1f' || `);
   const { rows } = await client.query(
     `with ordered as (
-       select to_jsonb(r) as row_json
+       select md5(${rowSql}) as row_hash
          from public.${quoteIdent(tableName)} r
         order by ${orderSql}
         limit $1
@@ -73,7 +89,7 @@ async function checksumTable(client, tableName, limit) {
      select
        (select total_count from counted) as count,
        count(*)::bigint as sampled,
-       md5(coalesce(string_agg(row_json::text, E'\\n' order by row_json::text), '')) as checksum
+       md5(coalesce(string_agg(row_hash, E'\\n' order by row_hash), '')) as checksum
       from ordered`,
     [limit]
   );

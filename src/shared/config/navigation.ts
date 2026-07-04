@@ -110,7 +110,6 @@ export const adminFeatureMap = {
     icon: Sparkles,
     actions: [
       { href: '/roulette/logs', label: '결과 보기' },
-      { href: '/roulette/viewer', label: 'OBS 주소' },
     ],
     tips: ['당첨 항목을 방송 분위기에 맞춰요', '결과가 화면에 바로 떠요', '다시 보고 싶은 순간을 남겨요'],
   },

@@ -376,7 +376,11 @@ interface WebSocketDebugInfo {
   channelId: string | null; // 추가: 현재 채널 ID
 }
 
-export default function RouletteViewer() {
+type RouletteViewerProps = {
+  viewerToken?: string;
+};
+
+export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps) {
   const [state, setState] = React.useState<{ name?: string | null; username?: string | null; label?: string | null; value?: number | string | null }>(() => ({}));
   const [error, setError] = React.useState<string | null>(null);
   const [active, setActive] = React.useState(false);
@@ -524,12 +528,14 @@ export default function RouletteViewer() {
     };
   }, []);
   const token = React.useMemo(() => {
+    const propToken = String(viewerToken || '').trim();
+    if (propToken) return propToken;
     try {
       const parts = (typeof window !== 'undefined' ? window.location.pathname : '').split('/').filter(Boolean);
       const idx = parts.indexOf('roulette');
       return idx >= 0 && parts[idx + 1] ? parts[idx + 1] : '';
     } catch { return ''; }
-  }, []);
+  }, [viewerToken]);
 
   // 메시지 채널 ID 검증 함수
   const validateMessageChannelId = React.useCallback((message: any, expectedChannelId: string | null): boolean => {
@@ -961,10 +967,13 @@ export default function RouletteViewer() {
         
         // 서버 검증 실패 감지 (채널 접근 거부 등)
         if (event.code === 1008 || event.code === 1009 || event.code === 1012) {
-          const serverErrorMsg = event.code === 1008 ? '토큰이 유효하지 않습니다' :
-                                 event.code === 1009 ? '채널 접근이 거부되었습니다' :
-                                 event.code === 1012 ? '채널을 찾을 수 없습니다' :
-                                 '서버 검증 실패';
+          const reason = String(event.reason || '').trim();
+          const serverErrorMsg = reason || (
+            event.code === 1008 ? '토큰이 유효하지 않습니다' :
+            event.code === 1009 ? '채널 접근이 거부되었습니다' :
+            event.code === 1012 ? '채널을 찾을 수 없습니다' :
+            '서버 검증 실패'
+          );
           setError(serverErrorMsg);
           updateDebugInfo({ 
             connectionState: 'error',

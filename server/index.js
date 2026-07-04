@@ -5448,7 +5448,7 @@ app.post('/api/video-donation/request', rateLimiters.userWrite, async (req, res)
     const start = Math.max(0, Number(startSec || 0) || 0);
     const play = Number.isFinite(Number(playSec)) && Number(playSec) > 0 ? Math.floor(Number(playSec)) : null;
     const dur = getPvdPlayDurationSec({ maxDurationSec: maxDur, ytDurationSec: media.durationSec, startSec: start, playSec: play });
-    const awaitDurationSync = media.provider === 'tiktok' && play == null && !Number.isFinite(Number(media.durationSec));
+    const awaitDurationSync = shouldAwaitPvdDurationSync(media.provider, media.durationSec, play);
     const cost = Math.ceil(pps * dur);
 
     // Deduct points
@@ -6198,12 +6198,13 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}) {
 }
 
 const PVD_PROVIDER_KEYS = ['youtube', 'tiktok', 'chzzk_clip', 'cime_clip'];
+const PVD_DURATION_SYNC_PROVIDERS = new Set(['tiktok', 'chzzk_clip', 'cime_clip']);
 
 function getDefaultPvdProviders() {
   return {
     youtube: true,
     tiktok: false,
-    chzzk_clip: false,
+    chzzk_clip: true,
     cime_clip: false,
   };
 }
@@ -6225,6 +6226,13 @@ function getPvdProviderLabel(provider) {
   return '영상';
 }
 
+function shouldAwaitPvdDurationSync(provider, mediaDurationSec, playSec = null) {
+  const explicitPlay = Number(playSec);
+  if (Number.isFinite(explicitPlay) && explicitPlay > 0) return false;
+  if (!PVD_DURATION_SYNC_PROVIDERS.has(String(provider || '').toLowerCase())) return false;
+  return !Number.isFinite(Number(mediaDurationSec)) || Number(mediaDurationSec) <= 0;
+}
+
 function extractTikTokId(url) {
   const text = String(url || '').trim();
   const direct = text.match(/(?:^|\/)(\d{15,25})(?:$|[/?#])/);
@@ -6242,8 +6250,11 @@ function extractTikTokId(url) {
 }
 
 function extractChzzkClipId(url) {
+  const text = String(url || '').trim();
+  const inline = text.match(/chzzk\.naver\.com\/(?:embed\/clip|clips)\/([A-Za-z0-9_-]+)/i);
+  if (inline) return inline[1];
   try {
-    const u = new URL(String(url || '').trim());
+    const u = new URL(text);
     if (!/(^|\.)chzzk\.naver\.com$/i.test(u.hostname)) return null;
     const m = u.pathname.match(/^\/(?:embed\/clip|clips)\/([A-Za-z0-9_-]+)/);
     return m ? m[1] : null;
@@ -6251,12 +6262,49 @@ function extractChzzkClipId(url) {
 }
 
 function extractCimeClipId(url) {
+  const text = String(url || '').trim();
+  const inline = text.match(/(?:ci\.me|cime\.kr)\/clips\/([A-Za-z0-9_-]+)/i);
+  if (inline) return inline[1];
   try {
-    const u = new URL(String(url || '').trim());
+    const u = new URL(text);
     if (!/(^|\.)ci\.me$/i.test(u.hostname) && !/(^|\.)cime\.kr$/i.test(u.hostname)) return null;
     const m = u.pathname.match(/^\/clips\/([A-Za-z0-9_-]+)/);
     return m ? m[1] : null;
   } catch { return null; }
+}
+
+async function fetchChzzkClipInfo(clipId) {
+  const id = String(clipId || '').trim();
+  if (!id) return null;
+  try {
+    const r = await axios.get(`${String(CHZZK_UNOFFICIAL_API_BASE || 'https://api.chzzk.naver.com').replace(/\/$/, '')}/service/v1/clips/${encodeURIComponent(id)}/detail`, {
+      params: { optionalProperties: 'COMMENT' },
+      timeout: 7000,
+      headers: {
+        Accept: 'application/json, text/plain, */*',
+        Referer: `https://chzzk.naver.com/clips/${encodeURIComponent(id)}`,
+        'Accept-Language': 'ko-KR,ko;q=0.9',
+      },
+    });
+    const clip = r?.data?.content || null;
+    if (!clip) return null;
+    const rawDuration = Number(clip.duration);
+    const durationSec = Number.isFinite(rawDuration) && rawDuration > 0
+      ? Math.ceil(rawDuration > 10000 ? rawDuration / 1000 : rawDuration)
+      : null;
+    return {
+      raw: clip,
+      title: clip.clipTitle || null,
+      durationSec,
+      thumbnailUrl: clip.thumbnailImageUrl || null,
+      videoId: clip.videoId || null,
+      adult: clip.adult === true,
+      krOnlyViewing: clip.krOnlyViewing === true,
+      vodStatus: clip.vodStatus || null,
+    };
+  } catch {
+    return null;
+  }
 }
 
 async function fetchCimeClipInfo(clipId) {
@@ -6344,16 +6392,6 @@ async function parsePvdMediaInput(input, { allowSearch = true } = {}) {
   const raw = String(input || '').trim();
   if (!raw) return null;
 
-  const youtubeId = extractYouTubeId(raw);
-  if (youtubeId) {
-    return {
-      provider: 'youtube',
-      mediaId: youtubeId,
-      originalUrl: /^https?:\/\//i.test(raw) ? raw : `https://youtu.be/${youtubeId}`,
-      embedUrl: null,
-    };
-  }
-
   const chzzkClipId = extractChzzkClipId(raw);
   if (chzzkClipId) {
     return {
@@ -6371,6 +6409,16 @@ async function parsePvdMediaInput(input, { allowSearch = true } = {}) {
       mediaId: cimeClipId,
       originalUrl: `https://ci.me/clips/${cimeClipId}`,
       embedUrl: `https://ci.me/clips/${cimeClipId}`,
+    };
+  }
+
+  const youtubeId = extractYouTubeId(raw);
+  if (youtubeId) {
+    return {
+      provider: 'youtube',
+      mediaId: youtubeId,
+      originalUrl: /^https?:\/\//i.test(raw) ? raw : `https://youtu.be/${youtubeId}`,
+      embedUrl: null,
     };
   }
 
@@ -6454,7 +6502,12 @@ async function resolvePvdMedia(input, settings = {}, { allowSearch = true } = {}
     } catch { }
     if (!title) title = `TikTok 영상 ${parsed.mediaId}`;
   } else {
-    if (parsed.provider === 'cime_clip') {
+    if (parsed.provider === 'chzzk_clip') {
+      const clip = await fetchChzzkClipInfo(parsed.mediaId);
+      title = clip?.title || `${getPvdProviderLabel(parsed.provider)} ${parsed.mediaId}`;
+      durationSec = Number.isFinite(clip?.durationSec) ? Number(clip.durationSec) : null;
+      thumbnailUrl = clip?.thumbnailUrl || null;
+    } else if (parsed.provider === 'cime_clip') {
       const clip = await fetchCimeClipInfo(parsed.mediaId);
       if (clip?.playbackUrl) {
         parsed.embedUrl = clip.playbackUrl;
@@ -18573,7 +18626,7 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
   const play = Number.isFinite(playNum) && playNum > 0 ? Math.floor(playNum) : null;
 
   const dur = getPvdPlayDurationSec({ maxDurationSec: maxDur, ytDurationSec: media.durationSec, startSec: start, playSec: play });
-  const awaitDurationSync = media.provider === 'tiktok' && play == null && !Number.isFinite(Number(media.durationSec));
+  const awaitDurationSync = shouldAwaitPvdDurationSync(media.provider, media.durationSec, play);
   const cost = Math.ceil(pps * dur);
   if (!channelUid) {
     const s = await getBotSettings(sid) || {};
@@ -19933,14 +19986,7 @@ async function validateWebSocketTokenConnection(token, tokenType, req) {
       if (sid) {
         try {
           const rouletteSession = await getRouletteSessionByToken(token);
-          if (!rouletteSession) {
-            rouletteTokenToSid.delete(token);
-            const error = new Error('Roulette session not found');
-            error.code = 'SESSION_NOT_FOUND';
-            throw error;
-          }
-
-          if (rouletteSession.sid !== sid) {
+          if (rouletteSession && rouletteSession.sid !== sid) {
             rouletteTokenToSid.delete(token);
             const error = new Error('Token session mismatch');
             error.code = 'SESSION_MISMATCH';
