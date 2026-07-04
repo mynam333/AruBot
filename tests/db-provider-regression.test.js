@@ -10,6 +10,7 @@ describe('database provider regression', () => {
   const compareCounts = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'db-compare-counts.js'), 'utf8');
   const compareChecksums = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'db-compare-checksums.js'), 'utf8');
   const diffTable = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'db-diff-table.js'), 'utf8');
+  const syncVolatileTables = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'db-sync-volatile-tables.js'), 'utf8');
   const cutoverRehearsal = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'db-cutover-rehearsal.js'), 'utf8');
   const cutoverPreflight = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'db-cutover-preflight.js'), 'utf8');
   const switchToPostgres = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'db-switch-to-postgres.js'), 'utf8');
@@ -57,6 +58,7 @@ describe('database provider regression', () => {
     expect(packageJson).toContain('"db:compare-counts": "node scripts/db-compare-counts.js"');
     expect(packageJson).toContain('"db:compare-checksums": "node scripts/db-compare-checksums.js"');
     expect(packageJson).toContain('"db:diff-table": "node scripts/db-diff-table.js"');
+    expect(packageJson).toContain('"db:sync-volatile-tables": "node scripts/db-sync-volatile-tables.js"');
     expect(packageJson).toContain('"db:cutover-preflight": "node scripts/db-cutover-preflight.js"');
     expect(packageJson).toContain('"db:cutover-verify": "node scripts/db-cutover-verify.js"');
     expect(packageJson).toContain('"db:cutover-rehearsal": "node scripts/db-cutover-rehearsal.js"');
@@ -99,6 +101,19 @@ describe('database provider regression', () => {
     expect(compareChecksums).toContain('normalizeComparisonSession(client)');
     expect(diffTable).toContain("set time zone 'UTC'");
     expect(diffTable).toContain('show-values');
+  });
+
+  test('cutover syncs volatile token tables before checksum comparison', () => {
+    expect(syncVolatileTables).toContain("const DEFAULT_VOLATILE_TABLES = ['platform_tokens']");
+    expect(syncVolatileTables).toContain('replaceTargetRows');
+    expect(syncVolatileTables).toContain("withPgClient('supabase'");
+    expect(syncVolatileTables).toContain("withPgClient('postgres'");
+
+    const restoreIndex = cutoverRehearsal.indexOf('Restore dump into Postgres public schema');
+    const syncIndex = cutoverRehearsal.indexOf('Sync volatile tables from Supabase');
+    const checksumIndex = cutoverRehearsal.indexOf('Compare restored core checksums');
+    expect(syncIndex).toBeGreaterThan(restoreIndex);
+    expect(checksumIndex).toBeGreaterThan(syncIndex);
   });
 
   test('cutover rehearsal is dry-run by default and requires restore confirmation', () => {

@@ -17490,6 +17490,77 @@ function isLikelyYoutubeSelfEcho(entry, ev) {
   return !!text && ts > 0 && Date.now() - ts < 2 * 60 * 1000;
 }
 
+function isYoutubeAuthorPrivilegedForModeration(author = {}) {
+  return author.isChatModerator === true || author.isChatOwner === true;
+}
+
+function serializeYoutubeAuthorDetails(author = {}) {
+  return {
+    channelId: author.channelId || null,
+    displayName: author.displayName || null,
+    isVerified: author.isVerified === true,
+    isChatOwner: author.isChatOwner === true,
+    isChatSponsor: author.isChatSponsor === true,
+    isChatModerator: author.isChatModerator === true
+  };
+}
+
+function getYoutubeLiveChatMessageText(item = {}) {
+  const snippet = item.snippet || {};
+  return String(snippet.textMessageDetails?.messageText || snippet.displayMessage || '');
+}
+
+function findYoutubeModeratorVerificationMessage(items, { sentMessageId, marker, botChannelId }) {
+  let markerMatch = null;
+  for (const item of Array.isArray(items) ? items : []) {
+    const author = item?.authorDetails || {};
+    const text = getYoutubeLiveChatMessageText(item);
+    const matchesMessage = (sentMessageId && String(item?.id || '') === String(sentMessageId))
+      || (!!marker && text.includes(marker));
+    if (!matchesMessage) continue;
+
+    const matchesBotChannel = !botChannelId || String(author.channelId || '') === String(botChannelId);
+    const match = { item, author, text, matchesBotChannel };
+    if (matchesBotChannel) return match;
+    if (!markerMatch) markerMatch = match;
+  }
+  return markerMatch;
+}
+
+async function fetchYoutubeLiveChatMessages(liveChatId, accessToken) {
+  const url = new URL('liveChat/messages', YOUTUBE_API_BASE.endsWith('/') ? YOUTUBE_API_BASE : `${YOUTUBE_API_BASE}/`);
+  url.searchParams.set('part', 'id,snippet,authorDetails');
+  url.searchParams.set('liveChatId', liveChatId);
+  url.searchParams.set('maxResults', '200');
+  url.searchParams.set('profileImageSize', '88');
+  const response = await axios.get(url.toString(), {
+    headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
+    timeout: 7000
+  });
+  return Array.isArray(response?.data?.items) ? response.data.items : [];
+}
+
+async function waitForYoutubeModeratorVerificationMessage(liveChatId, accessToken, options = {}) {
+  const attempts = Math.max(1, Number(options.attempts || 7));
+  const intervalMs = Math.max(250, Number(options.intervalMs || 1500));
+  let lastError = null;
+  let lastMarkerMatch = null;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    try {
+      const items = await fetchYoutubeLiveChatMessages(liveChatId, accessToken);
+      const match = findYoutubeModeratorVerificationMessage(items, options);
+      if (match?.matchesBotChannel) return { match, attempts: attempt + 1, lastError: null };
+      if (match && !lastMarkerMatch) lastMarkerMatch = match;
+    } catch (e) {
+      lastError = e;
+    }
+  }
+
+  return { match: lastMarkerMatch, attempts, lastError };
+}
+
 async function verifyYoutubeBotModeratorRegistration(ownerUserId) {
   const botProfile = await getValidYoutubeBotProfile();
   const streamerChannel = await getYoutubeStreamerChannel(ownerUserId);
@@ -17513,91 +17584,7 @@ async function verifyYoutubeBotModeratorRegistration(ownerUserId) {
 
   const accessToken = await getValidYoutubeBotAccessToken();
   const marker = `AruBot moderator check ${crypto.randomBytes(4).toString('hex')}`;
-  const path = String(YOUTUBE_STREAM_PATH || '/liveChat/messages/stream').replace(/^\/+/, '');
-  const url = new URL(path, YOUTUBE_API_BASE.endsWith('/') ? YOUTUBE_API_BASE : `${YOUTUBE_API_BASE}/`);
-  url.searchParams.set('part', 'id,snippet,authorDetails');
-  url.searchParams.set('liveChatId', liveChatId);
-  url.searchParams.set('maxResults', '200');
-  url.searchParams.set('profileImageSize', '88');
-
-  const controller = new AbortController();
   let sentMessageId = null;
-  let stream = null;
-  let settled = false;
-  const cleanup = () => {
-    if (settled) return;
-    settled = true;
-    try { controller.abort(); } catch { }
-    try { stream?.destroy?.(); } catch { }
-  };
-
-  const response = await axios.get(url.toString(), {
-    headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
-    responseType: 'stream',
-    timeout: 0,
-    signal: controller.signal
-  });
-  stream = response.data;
-
-  const observed = new Promise((resolve) => {
-    let buffer = '';
-    const timer = setTimeout(() => {
-      cleanup();
-      resolve({
-        verified: false,
-        reason: 'verification_message_not_observed',
-        message: '검증 메시지를 라이브 채팅 스트림에서 확인하지 못했습니다.',
-        liveChatId
-      });
-    }, 20 * 1000);
-
-    const finish = (result) => {
-      try { clearTimeout(timer); } catch { }
-      cleanup();
-      resolve(result);
-    };
-
-    stream.on('data', (chunk) => {
-      buffer += chunk.toString('utf8');
-      const extracted = extractJsonStreamObjects(buffer);
-      buffer = extracted.rest;
-      for (const raw of extracted.objects) {
-        let payload = null;
-        try { payload = JSON.parse(raw); } catch { continue; }
-        const items = Array.isArray(payload?.items) ? payload.items : [];
-        for (const item of items) {
-          const snippet = item?.snippet || {};
-          const author = item?.authorDetails || {};
-          const text = snippet.textMessageDetails?.messageText || snippet.displayMessage || '';
-          const isBotMessage = String(author.channelId || '') === String(botProfile.selectedChannelId || '');
-          const isVerificationMessage = (sentMessageId && String(item?.id || '') === String(sentMessageId)) || String(text || '').includes(marker);
-          if (!isBotMessage || !isVerificationMessage) continue;
-          finish({
-            verified: author.isChatModerator === true,
-            reason: author.isChatModerator === true ? 'moderator_verified' : 'bot_is_not_moderator',
-            message: author.isChatModerator === true
-              ? 'AruBot 중앙 봇이 이 라이브 채팅의 운영자로 확인되었습니다.'
-              : 'AruBot 중앙 봇 메시지는 확인했지만 운영자 권한이 아닙니다.',
-            liveChatId,
-            messageId: item?.id || sentMessageId,
-            botChannelId: botProfile.selectedChannelId
-          });
-        }
-      }
-    });
-    stream.on('end', () => finish({
-      verified: false,
-      reason: 'verification_stream_closed',
-      message: '운영자 확인 중 YouTube Live Chat 스트림이 종료되었습니다.',
-      liveChatId
-    }));
-    stream.on('error', (error) => finish({
-      verified: false,
-      reason: 'verification_stream_error',
-      message: error?.message || '운영자 확인 스트림 오류가 발생했습니다.',
-      liveChatId
-    }));
-  });
 
   try {
     const sent = await youtubeBotApiPost('liveChat/messages', { part: 'snippet' }, {
@@ -17609,14 +17596,60 @@ async function verifyYoutubeBotModeratorRegistration(ownerUserId) {
     }, { timeout: 7000 });
     sentMessageId = sent?.data?.id || null;
   } catch (e) {
-    cleanup();
     const error = new Error(e?.response?.data?.error?.message || e?.message || 'Failed to send YouTube moderator verification message');
     error.status = e?.response?.status || 500;
     error.code = 'moderator_verification_send_failed';
     throw error;
   }
 
-  return observed;
+  const observed = await waitForYoutubeModeratorVerificationMessage(liveChatId, accessToken, {
+    sentMessageId,
+    marker,
+    botChannelId: botProfile.selectedChannelId,
+    attempts: 8,
+    intervalMs: 1250
+  });
+
+  if (!observed.match) {
+    return {
+      verified: false,
+      reason: observed.lastError ? 'verification_lookup_failed' : 'verification_message_not_observed',
+      message: observed.lastError
+        ? `검증 메시지 조회 중 오류가 발생했습니다: ${observed.lastError?.response?.data?.error?.message || observed.lastError?.message || 'unknown error'}`
+        : '검증 메시지를 YouTube Live Chat 목록에서 확인하지 못했습니다.',
+      liveChatId,
+      messageId: sentMessageId,
+      botChannelId: botProfile.selectedChannelId,
+      checkedBy: 'liveChatMessages.list',
+      attempts: observed.attempts
+    };
+  }
+
+  const author = observed.match.author || {};
+  const authorDetails = serializeYoutubeAuthorDetails(author);
+  const verified = observed.match.matchesBotChannel && isYoutubeAuthorPrivilegedForModeration(author);
+  let reason = 'moderator_verified';
+  let message = 'AruBot 중앙 봇이 이 라이브 채팅의 운영자로 확인되었습니다.';
+  if (!observed.match.matchesBotChannel) {
+    reason = 'verification_channel_mismatch';
+    message = '검증 메시지는 확인했지만 AruBot에 등록된 중앙 봇 채널과 작성자 채널이 다릅니다.';
+  } else if (!verified) {
+    reason = 'bot_is_not_moderator';
+    message = 'AruBot 중앙 봇 메시지는 확인했지만 YouTube API에서 운영자 또는 채널 소유자 권한이 확인되지 않았습니다.';
+  }
+
+  return {
+    verified,
+    reason,
+    message,
+    liveChatId,
+    messageId: observed.match.item?.id || sentMessageId,
+    botChannelId: botProfile.selectedChannelId,
+    observedChannelId: author.channelId || null,
+    checkedBy: 'liveChatMessages.list',
+    attempts: observed.attempts,
+    authorDetails
+  };
 }
 
 async function sendYoutubeChat(ownerUserId, liveChatId, message) {

@@ -98,6 +98,7 @@ npm run db:counts
 npm run db:compare-counts
 npm run db:compare-checksums
 npm run db:diff-table -- --table=sessions
+npm run db:sync-volatile-tables
 npm run db:provider-smoke
 npm run db:cutover-preflight
 npm run db:cutover-verify

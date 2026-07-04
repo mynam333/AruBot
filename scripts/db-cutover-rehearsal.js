@@ -69,6 +69,11 @@ async function main() {
       destructive: true,
     },
     {
+      name: 'Sync volatile tables from Supabase',
+      command: nodeScript('scripts/db-sync-volatile-tables.js'),
+      destructive: false,
+    },
+    {
       name: 'Compare restored row counts',
       command: nodeScript('scripts/db-compare-counts.js'),
       destructive: false,
