@@ -246,6 +246,7 @@ export function LandingPage() {
             <Link href="/viewer/me" className="transition hover:text-foreground">시청자 포인트</Link>
             <Link href="/downloads/local-program" className="transition hover:text-foreground">로컬 프로그램</Link>
             <Link href="/downloads/browser-extension" className="transition hover:text-foreground">브라우저 확장</Link>
+            <Link href="/privacy" className="transition hover:text-foreground">개인정보처리방침</Link>
           </div>
         </div>
       </footer>

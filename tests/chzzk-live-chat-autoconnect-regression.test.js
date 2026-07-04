@@ -10,9 +10,22 @@ describe('CHZZK live chat auto-connect regression', () => {
     const refreshBody = serverIndex.slice(refreshStart, refreshEnd);
 
     expect(refreshBody).toContain('isChzzkLiveDetailOpen(content)');
+    expect(refreshBody).toContain('content?.startedAt || content?.started_at || content?.openDate');
+    expect(refreshBody).toContain('parseChzzkLiveTimestamp(candidate, now)');
     expect(refreshBody).toContain('updateSessionState(sid, anyLive');
     expect(refreshBody).toContain('ensureChzzkChatSessionForLiveSid(sid, liveChannelId)');
     expect(refreshBody).toContain('closeChzzkChatSessionForOfflineSid(sid');
+  });
+
+  test('live placeholders parse CHZZK string start times instead of treating the stream as offline', () => {
+    const detailStart = serverIndex.indexOf('async function fetchLiveDetail');
+    const detailEnd = serverIndex.indexOf('// (moved) getPartitionIdByApiKey', detailStart);
+    const detailBody = serverIndex.slice(detailStart, detailEnd);
+
+    expect(detailBody).toContain('isChzzkLiveDetailOpen(content)');
+    expect(detailBody).toContain('content?.startedAt || content?.started_at || content?.openDate');
+    expect(detailBody).toContain('parseChzzkLiveTimestamp(openCandidate, null)');
+    expect(detailBody).not.toContain('!Number.isNaN(Number(openCandidate)) ? Number(openCandidate) : null');
   });
 
   test('live gate refreshes actual status even when onlyWhenLive is disabled', () => {

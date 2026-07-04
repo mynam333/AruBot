@@ -220,7 +220,7 @@ export function ViewerConnectPage() {
                 {providers.map((provider) => {
                   const connected = connectedProviders.has(provider.id);
                   return (
-                    <Button key={provider.id} asChild variant={connected ? 'secondary' : 'default'} className="bg-card/80">
+                    <Button key={provider.id} asChild variant={connected ? 'secondary' : 'default'}>
                       <a href={apiUrl(provider.loginPath)}>
                         <img src={provider.iconPath} alt="" aria-hidden="true" className="h-6 w-6 shrink-0 rounded-[calc(var(--radius-control)*0.35)] object-contain" />
                         {connected ? `${provider.label} 추가 연결` : `${provider.label}로 로그인`}

@@ -2050,6 +2050,42 @@ function makeCimeChatPost(ownerUserId, resolvedUsername, extra = {}) {
   return { provider: 'cime', ownerUserId, resolvedUsername, ...extra };
 }
 
+function rememberOutboundMessage(entry, text) {
+  if (!entry) return;
+  if (!(entry.recentOutboundMessages instanceof Map)) entry.recentOutboundMessages = new Map();
+  const normalized = String(text || '').trim();
+  if (!normalized) return;
+  entry.recentOutboundMessages.set(normalized, Date.now());
+  if (entry.recentOutboundMessages.size > 50) {
+    let i = 0;
+    for (const key of entry.recentOutboundMessages.keys()) {
+      entry.recentOutboundMessages.delete(key);
+      if (++i >= 10) break;
+    }
+  }
+}
+
+function hasRecentOutboundMessage(entry, text, windowMs = 2 * 60 * 1000) {
+  const normalized = String(text || '').trim();
+  if (!entry || !normalized || !(entry.recentOutboundMessages instanceof Map)) return false;
+  const ts = Number(entry.recentOutboundMessages.get(normalized) || 0);
+  return ts > 0 && Date.now() - ts < windowMs;
+}
+
+async function isLikelyChzzkBotSelfEcho(entry, sid, msg, ev, resolvedUserId) {
+  const userId = String(resolvedUserId || msg?.senderChannelId || msg?.profile?.userId || ev?.id || '').trim();
+  if (!userId) return false;
+  const knownAruBotChannelId = '3e2835746563bde264f686303edc2a48';
+  if (userId.toLowerCase() === knownAruBotChannelId) return true;
+  if (!hasRecentOutboundMessage(entry, ev?.message || msg?.content || '')) return false;
+  try {
+    const owner = await getOwnerInfoForSid(sid);
+    if (owner?.channelId && userId === String(owner.channelId)) return true;
+    if (owner?.userId && userId === String(owner.userId)) return true;
+  } catch { }
+  return false;
+}
+
 async function sendChatByPost(sid, chatPost, message, opts = {}) {
   const text = String(message || '').trim();
   if (!text) return null;
@@ -2091,6 +2127,7 @@ async function sendChatByPost(sid, chatPost, message, opts = {}) {
       params: { sessionKey }
     });
   }
+  rememberOutboundMessage(sessionStore.get(sid), text.slice(0, 100));
   return r?.data?.content || r?.data || {};
 }
 
@@ -5094,6 +5131,28 @@ function updateCurrentPvdDurationFromPlayer(sid, durationSec) {
   return item;
 }
 
+async function refreshChzzkClipPlaybackForItem(item) {
+  if (!item || String(item.mediaProvider || '').toLowerCase() !== 'chzzk_clip' || !item.mediaId) return item;
+  const clip = await fetchChzzkClipInfo(item.mediaId).catch(() => null);
+  if (!clip) return item;
+  if (clip.playbackUrl) item.embedUrl = clip.playbackUrl;
+  if (clip.title && !item.title) item.title = clip.title;
+  if (clip.thumbnailUrl && !item.thumbnailUrl) item.thumbnailUrl = clip.thumbnailUrl;
+  if (Number.isFinite(Number(clip.durationSec)) && Number(clip.durationSec) > 0) {
+    item.mediaDurationSec = Math.ceil(Number(clip.durationSec));
+    item.durationSec = getPvdPlayDurationSec({
+      maxDurationSec: item.maxDurationSec || item.durationSec || clip.durationSec,
+      ytDurationSec: clip.durationSec,
+      startSec: item.startSec,
+      playSec: item.requestedPlaySec,
+    });
+    item.awaitDurationSync = false;
+    item.durationSyncTimedOut = false;
+  }
+  item.updatedAt = Date.now();
+  return item;
+}
+
 async function broadcastPvdControl(sid, message) {
   const payload = { type: 'control', ...message, serverNow: Date.now() };
   await broadcastToChannelBySid(sid, 'pvd', payload).catch(() => null);
@@ -5189,6 +5248,7 @@ async function broadcastPvdStart(sid) {
 
     // Rebase playback state when a new head starts
     if (q[0]) {
+      await refreshChzzkClipPlaybackForItem(q[0]);
       pvdPlaybackState.set(sid, createPvdPlaybackState(q[0]));
     } else {
       pvdPlaybackState.delete(sid);
@@ -5505,6 +5565,8 @@ app.post('/api/video-donation/request', rateLimiters.userWrite, async (req, res)
       mediaDurationSec: Number.isFinite(Number(media.durationSec)) ? Math.ceil(Number(media.durationSec)) : null,
       awaitDurationSync,
       startSec: start,
+      requestedPlaySec: play,
+      maxDurationSec: maxDur,
       cost,
       userId,
       username: username || null,
@@ -6233,6 +6295,24 @@ function shouldAwaitPvdDurationSync(provider, mediaDurationSec, playSec = null) 
   return !Number.isFinite(Number(mediaDurationSec)) || Number(mediaDurationSec) <= 0;
 }
 
+function findFirstChzzkClipMp4Url(cardPayload) {
+  const mpdList = cardPayload?.body?.card?.content?.vod?.playback?.MPD;
+  const candidates = [];
+  for (const mpd of Array.isArray(mpdList) ? mpdList : []) {
+    for (const period of Array.isArray(mpd?.Period) ? mpd.Period : []) {
+      for (const adaptation of Array.isArray(period?.AdaptationSet) ? period.AdaptationSet : []) {
+        for (const representation of Array.isArray(adaptation?.Representation) ? adaptation.Representation : []) {
+          for (const base of Array.isArray(representation?.BaseURL) ? representation.BaseURL : []) {
+            const value = String(base || '').trim();
+            if (value) candidates.push(value);
+          }
+        }
+      }
+    }
+  }
+  return candidates.find((url) => /\.mp4(?:$|[?#])/i.test(url)) || candidates[0] || null;
+}
+
 function extractTikTokId(url) {
   const text = String(url || '').trim();
   const direct = text.match(/(?:^|\/)(\d{15,25})(?:$|[/?#])/);
@@ -6292,12 +6372,33 @@ async function fetchChzzkClipInfo(clipId) {
     const durationSec = Number.isFinite(rawDuration) && rawDuration > 0
       ? Math.ceil(rawDuration > 10000 ? rawDuration / 1000 : rawDuration)
       : null;
+    let playbackUrl = null;
+    const videoId = clip.videoId || null;
+    if (videoId) {
+      try {
+        const card = await axios.get('https://creatorhub-api.naver.com/api/v5.0/clipviewer/card', {
+          params: {
+            serviceType: 'CHZZK',
+            seedMediaId: videoId,
+          },
+          timeout: 7000,
+          headers: {
+            Accept: 'application/json, text/plain, */*',
+            Origin: 'https://chzzk.naver.com',
+            Referer: `https://chzzk.naver.com/clips/${encodeURIComponent(id)}`,
+            'Accept-Language': 'ko-KR,ko;q=0.9',
+          },
+        });
+        playbackUrl = findFirstChzzkClipMp4Url(card?.data);
+      } catch { }
+    }
     return {
       raw: clip,
       title: clip.clipTitle || null,
       durationSec,
+      playbackUrl,
       thumbnailUrl: clip.thumbnailImageUrl || null,
-      videoId: clip.videoId || null,
+      videoId,
       adult: clip.adult === true,
       krOnlyViewing: clip.krOnlyViewing === true,
       vodStatus: clip.vodStatus || null,
@@ -6504,6 +6605,10 @@ async function resolvePvdMedia(input, settings = {}, { allowSearch = true } = {}
   } else {
     if (parsed.provider === 'chzzk_clip') {
       const clip = await fetchChzzkClipInfo(parsed.mediaId);
+      if (clip?.playbackUrl) {
+        parsed.embedUrl = clip.playbackUrl;
+        parsed.originalUrl = `https://chzzk.naver.com/clips/${parsed.mediaId}`;
+      }
       title = clip?.title || `${getPvdProviderLabel(parsed.provider)} ${parsed.mediaId}`;
       durationSec = Number.isFinite(clip?.durationSec) ? Number(clip.durationSec) : null;
       thumbnailUrl = clip?.thumbnailUrl || null;
@@ -7104,12 +7209,12 @@ async function fetchLiveDetail(uid) {
   const r = await axiosGetWithRetry(`https://api.chzzk.naver.com/service/v2/channels/${encodeURIComponent(uid)}/live-detail`);
   const content = r?.data?.content || r?.data || {};
   const status = String(content?.status || '').toLowerCase();
-  const live = status === 'open' || status === 'OPEN' || status === 'Open';
+  const live = isChzzkLiveDetailOpen(content);
   const title = content?.liveTitle || content?.title || '';
   const category = content?.liveCategory?.categoryType || content?.categoryType || content?.liveCategoryName || '';
   const viewers = Number(content?.concurrentUserCount || content?.currentViewerCount || 0);
-  const openCandidate = content?.openDate || content?.openTime || content?.openedAt || content?.liveStartAt || null;
-  const startedAtTs = openCandidate != null && !Number.isNaN(Number(openCandidate)) ? Number(openCandidate) : null;
+  const openCandidate = content?.startedAt || content?.started_at || content?.openDate || content?.openTime || content?.openedAt || content?.liveStartAt || content?.startTime || content?.createdAt || null;
+  const startedAtTs = parseChzzkLiveTimestamp(openCandidate, null);
   const startedAt = startedAtTs ? new Date(startedAtTs + 9 * 60 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 16) : '';
   const channel = content?.channel?.channelName || content?.channel?.name || '';
   return { status, title, category, viewers, startedAt, startedAtTs, channel, live, raw: content };
@@ -8301,7 +8406,7 @@ async function refreshChzzkLiveStatusForSid(sid, options = {}) {
       if (isChzzkLiveDetailOpen(content)) {
         anyLive = true;
         liveChannelId = String(uid);
-        const candidate = content?.openDate || content?.openTime || content?.openedAt || content?.liveStartAt || content?.startTime || null;
+        const candidate = content?.startedAt || content?.started_at || content?.openDate || content?.openTime || content?.openedAt || content?.liveStartAt || content?.startTime || content?.createdAt || null;
         startTs = parseChzzkLiveTimestamp(candidate, now);
         break;
       }
@@ -14012,8 +14117,11 @@ app.get('/api/public/:uid/live', async (req, res) => {
     const channelName = content?.channel?.channelName || content?.channel?.name || '';
     const title = content?.liveTitle || content?.title || '';
     const category = content?.liveCategory?.categoryType || content?.categoryType || content?.liveCategoryName || '';
-    const viewers = Number(content?.concurrentUserCount || 0);
-    return res.json({ live: status === 'open', channelName, title, category, viewers });
+    const viewers = Number(content?.concurrentUserCount || content?.currentViewerCount || 0);
+    const startedCandidate = content?.startedAt || content?.started_at || content?.openDate || content?.openTime || content?.openedAt || content?.liveStartAt || content?.startTime || content?.createdAt || null;
+    const startedAtTs = parseChzzkLiveTimestamp(startedCandidate, null);
+    const startedAt = startedAtTs ? new Date(startedAtTs + 9 * 60 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 16) : '';
+    return res.json({ live: isChzzkLiveDetailOpen(content), status, channelName, title, category, viewers, startedAt, startedAtTs });
   } catch (e) {
     return res.json({ live: false });
   }
@@ -16423,9 +16531,13 @@ async function ensureSession(sid, channelId) {
           try {
             const isKnownBotName = typeof resolvedUserId === 'string' && resolvedUserId.toLowerCase() === '3e2835746563bde264f686303edc2a48';
             if (isKnownBotName) {
-              isBotSelf = true; // we'll skip attendance below but still allow rules if needed
+              isBotSelf = true;
             }
           } catch { }
+          try {
+            if (!isBotSelf) isBotSelf = await isLikelyChzzkBotSelfEcho(entry, sid, msg, ev, resolvedUserId);
+          } catch { }
+          if (isBotSelf) return;
 
           // Attendance: only when actually live. If not live, always skip attendance.
           const currentlyLive = !!liveState.live;
@@ -16505,6 +16617,7 @@ async function ensureSession(sid, channelId) {
                           params: { sessionKey: entry.sessionKey },
                           headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }
                         }).catch(() => { });
+                        rememberOutboundMessage(entry, text);
                       }
                     }
                     // Attendance bonus channel points
@@ -16580,6 +16693,7 @@ async function ensureSession(sid, channelId) {
                     params: { sessionKey: entry.sessionKey },
                     headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }
                   }).catch(() => { });
+                  rememberOutboundMessage(entry, predictionReply);
                 }
                 return;
               }
@@ -17529,18 +17643,16 @@ function getYoutubeIgnoredDonationSummary(entry) {
 }
 
 function rememberYoutubeOutbound(entry, text) {
-  if (!entry) return;
-  entry.recentOutboundMessages.set(String(text || '').trim(), Date.now());
-  if (entry.recentOutboundMessages.size > 50) {
-    let i = 0; for (const key of entry.recentOutboundMessages.keys()) { entry.recentOutboundMessages.delete(key); if (++i >= 10) break; }
-  }
+  rememberOutboundMessage(entry, text);
 }
 
 function isLikelyYoutubeSelfEcho(entry, ev) {
-  if (!entry || String(ev?.userId || '') !== String(entry.botChannelId || entry.channelId || '')) return false;
+  if (!entry) return false;
+  const authorId = String(ev?.userId || '').trim();
+  if (authorId && entry.botChannelId && authorId === String(entry.botChannelId)) return true;
+  if (authorId && entry.channelId && authorId === String(entry.channelId) && hasRecentOutboundMessage(entry, ev?.message || '')) return true;
   const text = String(ev?.message || '').trim();
-  const ts = Number(entry.recentOutboundMessages?.get(text) || 0);
-  return !!text && ts > 0 && Date.now() - ts < 2 * 60 * 1000;
+  return !authorId && !!text && hasRecentOutboundMessage(entry, text);
 }
 
 function isYoutubeAuthorPrivilegedForModeration(author = {}) {
@@ -18541,6 +18653,17 @@ async function getCimeChannelId(ownerUserId) {
   return null;
 }
 
+async function isLikelyCimeBotSelfEcho(entry, ownerUserId, ev, resolvedUserId) {
+  const userId = String(resolvedUserId || ev?.userId || '').trim();
+  if (!userId) return false;
+  const text = String(ev?.message || '').trim();
+  const selfIds = new Set();
+  if (entry?.channelId) selfIds.add(String(entry.channelId));
+  const tokenChannelId = await getCimeChannelId(ownerUserId).catch(() => null);
+  if (tokenChannelId) selfIds.add(String(tokenChannelId));
+  return hasRecentOutboundMessage(entry, text) && selfIds.has(userId);
+}
+
 async function sendCimeChat(ownerUserId, message) {
   const text = String(message || '').trim();
   if (!text) return null;
@@ -18551,6 +18674,7 @@ async function sendCimeChat(ownerUserId, message) {
   }, {
     headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }
   });
+  rememberOutboundMessage(cimeSessionStore.get(ownerUserId), text.slice(0, 100));
   return unwrapOpenApiContent(r);
 }
 
@@ -18653,6 +18777,8 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
     mediaDurationSec: Number.isFinite(Number(media.durationSec)) ? Math.ceil(Number(media.durationSec)) : null,
     awaitDurationSync,
     startSec: start,
+    requestedPlaySec: play,
+    maxDurationSec: maxDur,
     cost,
     userId: String(userId),
     username: String(username || ''),
@@ -18713,6 +18839,8 @@ async function processCimeChatAutomation(entry, ev) {
     const pointChannelUid = entry.channelId || await resolveStreamerUidForSid(sid);
     if (pointChannelUid && !entry.channelId) entry.channelId = pointChannelUid;
     const isOwner = entry.channelId && String(resolvedUserId) === String(entry.channelId);
+    const isBotSelf = await isLikelyCimeBotSelfEcho(entry, ownerUserId, ev, resolvedUserId).catch(() => false);
+    if (isBotSelf) return;
 
     if (currentlyLive) {
       try {

@@ -9,6 +9,15 @@ type PlaybackTarget = {
 
 const TIKTOK_DURATION_SYNC_WAIT_MS = 20 * 1000;
 
+function isDirectVideoUrl(value: unknown) {
+  try {
+    const url = new URL(String(value || ''));
+    return /\.(mp4|webm|ogg)(?:$|[?#])/i.test(url.pathname);
+  } catch {
+    return /\.(mp4|webm|ogg)(?:$|[?#])/i.test(String(value || ''));
+  }
+}
+
 function getPlaybackAtSec(item: any, payload: any) {
   const start = Math.max(0, Math.floor(Number(item?.startSec || 0) || 0));
   const explicitAtSec = Number(payload?.atSec);
@@ -125,7 +134,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
     if (!src) return '';
     try {
       const url = new URL(src);
-      if (provider === 'cime_clip' && /\.(mp4|webm|ogg)(?:$|[?#])/i.test(url.pathname)) {
+      if (isDirectVideoUrl(url.toString())) {
         return url.toString();
       }
       if (provider === 'tiktok') {
@@ -531,7 +540,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
       mediaKey: key,
       targetAtSec: target,
       paused: opts?.paused === true,
-      isDirectVideo: provider === 'cime_clip' && /\.(mp4|webm|ogg)(?:$|[?#])/i.test(String(item?.embedUrl || item?.mediaUrl || '')),
+      isDirectVideo: isDirectVideoUrl(item?.embedUrl || item?.mediaUrl || ''),
       blockedReason: null,
     });
     setTimeout(() => {
@@ -775,6 +784,10 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
                 try {
                   event.currentTarget.volume = volumeRef.current / 100;
                   event.currentTarget.muted = volumeRef.current <= 0;
+                  const duration = Number(event.currentTarget.duration);
+                  if (Number.isFinite(duration) && duration > 0) {
+                    emitControl('duration', undefined, undefined, Math.ceil(duration));
+                  }
                   const start = Math.max(0, Math.floor(Number(externalItem.targetAtSec ?? externalItem.startSec ?? 0) || 0));
                   if (start > 0) event.currentTarget.currentTime = start;
                 } catch {}
