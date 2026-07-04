@@ -69,6 +69,16 @@ async function main() {
       destructive: true,
     },
     {
+      name: 'Compare restored row counts',
+      command: nodeScript('scripts/db-compare-counts.js'),
+      destructive: false,
+    },
+    {
+      name: 'Compare restored core checksums',
+      command: nodeScript('scripts/db-compare-checksums.js'),
+      destructive: false,
+    },
+    {
       name: 'Run Postgres migrations',
       command: ['node', ['scripts/db-migrate.js']],
       env: { ...env, ARUBOT_DB_PROVIDER: 'postgres' },
@@ -77,16 +87,6 @@ async function main() {
     {
       name: 'Repair Postgres sequences',
       command: nodeScript('scripts/db-repair-sequences.js', ['--target=postgres']),
-      destructive: false,
-    },
-    {
-      name: 'Compare row counts',
-      command: nodeScript('scripts/db-compare-counts.js'),
-      destructive: false,
-    },
-    {
-      name: 'Compare core checksums',
-      command: nodeScript('scripts/db-compare-checksums.js'),
       destructive: false,
     },
     {

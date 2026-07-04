@@ -99,6 +99,16 @@ describe('database provider regression', () => {
     expect(cutoverRehearsal).toContain('scripts/api-smoke.js');
   });
 
+  test('cutover rehearsal compares checksums before postgres bootstrap can mutate runtime fields', () => {
+    const restoreIndex = cutoverRehearsal.indexOf('Restore dump into Postgres public schema');
+    const checksumIndex = cutoverRehearsal.indexOf('Compare restored core checksums');
+    const migrateIndex = cutoverRehearsal.indexOf('Run Postgres migrations');
+
+    expect(restoreIndex).toBeGreaterThan(-1);
+    expect(checksumIndex).toBeGreaterThan(restoreIndex);
+    expect(migrateIndex).toBeGreaterThan(checksumIndex);
+  });
+
   test('postgres provider blocks official Supabase hosts and mixed runtime env by default', () => {
     expect(dbCommon).toContain('export function looksLikeOfficialSupabaseDatabaseUrl');
     expect(dbCommon).toContain('export function validateDatabaseUrlForProvider');
