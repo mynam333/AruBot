@@ -3636,6 +3636,58 @@ export async function listPlatformAccounts(userId) {
   });
 }
 
+export async function findAppUserIdByChannelUid(channelUid) {
+  const raw = String(channelUid || '').trim();
+  if (!raw || !getDbUrl()) return null;
+  await ensurePlatformIdentityTables();
+  const withoutPrefix = raw.replace(/^(user:|cime:|chzzk:|youtube:)/, '');
+  const withoutAt = withoutPrefix.replace(/^@/, '');
+  const candidates = uniqueNonEmpty([raw, withoutPrefix, withoutAt]);
+  return withPgClient(async (pg) => {
+    const platformMatch = await pg.query(
+      `select user_id
+         from platform_accounts
+        where user_id = any($1::text[])
+           or platform_user_id = any($1::text[])
+           or channel_id = any($1::text[])
+           or channel_handle = any($1::text[])
+           or provider || ':' || platform_user_id = any($1::text[])
+           or provider || ':' || channel_id = any($1::text[])
+        order by
+          case
+            when user_id = $2 then 0
+            when channel_id = $2 then 1
+            when platform_user_id = $2 then 2
+            else 3
+          end,
+          last_login_at desc
+        limit 1`,
+      [candidates, raw]
+    );
+    const platformUserId = String(platformMatch.rows?.[0]?.user_id || '').trim();
+    if (platformUserId) return platformUserId;
+
+    const youtubeTable = await pg.query(`select to_regclass('public.youtube_streamer_channels') as table_name`);
+    if (youtubeTable.rows?.[0]?.table_name) {
+      const youtubeMatch = await pg.query(
+        `select owner_user_id
+           from youtube_streamer_channels
+          where owner_user_id = any($1::text[])
+             or youtube_channel_id = any($1::text[])
+             or youtube_handle = any($1::text[])
+             or selected_channel_id = any($1::text[])
+          order by updated_at desc nulls last
+          limit 1`,
+        [candidates]
+      );
+      const youtubeOwnerId = String(youtubeMatch.rows?.[0]?.owner_user_id || '').trim();
+      if (youtubeOwnerId) return youtubeOwnerId;
+    }
+
+    return null;
+  }).catch(() => null);
+}
+
 function makeArubotViewerUuid(value) {
   return `aru_${crypto.createHash('sha256').update(String(value || '')).digest('hex').slice(0, 24)}`;
 }

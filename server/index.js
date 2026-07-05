@@ -9,7 +9,7 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
-import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, getSessionUserId, listChannelPoints, listChannelPointsPage, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, getChannelPoints, getChannelPointBalanceSummary, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, findSidByChannelViewerTokenSupabase, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, deletePlatformTokens, deletePlatformAccount, getAppUserAdminStatus, getYoutubeBotProfile, upsertYoutubeBotProfile, updateYoutubeBotProfileTokens, markYoutubeBotProfileStatus, deleteYoutubeBotProfile, getYoutubeStreamerChannel, upsertYoutubeStreamerChannel, markYoutubeStreamerChannelModeratorRegistered, deleteYoutubeStreamerChannel, listYoutubeStreamerChannelsByYoutubeChannelId, updateYoutubeStreamerChannelLive, updateYoutubeStreamerChannelWebsub, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps, recordBotEventLog, listBotEventLogs, insertDrawingDonationItem, listDrawingDonationItems, getDrawingDonationItem, getCurrentDrawingDonationItem, updateDrawingDonationItemStatus, deleteDrawingDonationItem, reorderDrawingDonationItems, uploadDrawingDonationObject, validateSecretEncryptionConfig, getPgPoolStatus } from './supabase.js';
+import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, getSessionUserId, listChannelPoints, listChannelPointsPage, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, getChannelPoints, getChannelPointBalanceSummary, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, findSidByChannelViewerTokenSupabase, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, findAppUserIdByChannelUid, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, deletePlatformTokens, deletePlatformAccount, getAppUserAdminStatus, getYoutubeBotProfile, upsertYoutubeBotProfile, updateYoutubeBotProfileTokens, markYoutubeBotProfileStatus, deleteYoutubeBotProfile, getYoutubeStreamerChannel, upsertYoutubeStreamerChannel, markYoutubeStreamerChannelModeratorRegistered, deleteYoutubeStreamerChannel, listYoutubeStreamerChannelsByYoutubeChannelId, updateYoutubeStreamerChannelLive, updateYoutubeStreamerChannelWebsub, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps, recordBotEventLog, listBotEventLogs, insertDrawingDonationItem, listDrawingDonationItems, getDrawingDonationItem, getCurrentDrawingDonationItem, updateDrawingDonationItemStatus, deleteDrawingDonationItem, reorderDrawingDonationItems, uploadDrawingDonationObject, validateSecretEncryptionConfig, getPgPoolStatus } from './supabase.js';
 import { createPlatformProfileService } from './platform-profiles.js';
 import { WebSocketServer, WebSocket } from 'ws';
 
@@ -16459,39 +16459,76 @@ async function resolveSidByChannelUid(channelUid) {
   return null;
 }
 
+function normalizePublicCommandArray(value) {
+  const source = Array.isArray(value) ? value : (value == null || value === '' ? [] : [value]);
+  return source.map((item) => String(item || '').trim()).filter(Boolean);
+}
+
+function toPublicCommandRule(rule) {
+  if (!rule || rule.enabled === false || rule.adminOnly === true || rule.adminonly === true) return null;
+  const keywords = normalizePublicCommandArray(rule.keywords);
+  if (!keywords.length) return null;
+  return {
+    id: rule.id,
+    name: rule.name || keywords[0],
+    keywords,
+    responses: normalizePublicCommandArray(rule.responses),
+    cooldown: Math.max(0, Number(rule.cooldown || 0)),
+    requiredRoleLevel: Math.max(1, Number(rule.requiredRoleLevel || rule.required_role_level || 1)),
+  };
+}
+
+function settingsIncludesPublicUid(settings, uid) {
+  const target = String(uid || '').trim();
+  if (!target) return false;
+  const withoutPrefix = target.replace(/^(user:|cime:|chzzk:|youtube:)/, '');
+  const candidates = new Set([target, withoutPrefix]);
+  const source = settings || {};
+  const configured = Array.isArray(source.channelUids)
+    ? source.channelUids
+    : (typeof source.channelUidsText === 'string' ? source.channelUidsText.split(',') : []);
+  return configured.map((value) => String(value || '').trim()).some((value) => candidates.has(value));
+}
+
+async function resolvePublicChannelSid(uid) {
+  const raw = String(uid || '').trim();
+  if (!raw) return null;
+  const withoutPrefix = raw.replace(/^(user:|cime:|chzzk:|youtube:)/, '');
+  if (raw.startsWith('user:')) return raw;
+  if (withoutPrefix) {
+    const accounts = await listPlatformAccounts(withoutPrefix).catch(() => []);
+    if (accounts?.length) return `user:${withoutPrefix}`;
+  }
+
+  const ownerUserId = await findAppUserIdByChannelUid(raw).catch(() => null);
+  if (ownerUserId) return `user:${ownerUserId}`;
+
+  const legacySids = Array.from(new Set([
+    ...Array.from(activeSids.keys()),
+    ...await listAllSidsWithTokens().catch(() => []),
+  ].filter(Boolean)));
+  for (const sid of legacySids) {
+    const settings = await getBotSettings(sid).catch(() => ({}));
+    if (settingsIncludesPublicUid(settings, raw)) return sid;
+  }
+  return null;
+}
+
 // Public API: list rules for streamer by channel UID
 app.get('/api/public/:uid/rules', async (req, res) => {
   const uid = String(req.params.uid || '').trim();
   if (!uid) return res.status(400).json({ error: 'uid required' });
   try {
     const rules = await singleFlight(`public:rules:${uid}`, async () => {
-      // Heuristic: try to find any sid whose settings contain this uid
-      // Since supabase client isn't exposed, reuse getBotSettings for a set of candidate sids seen recently
-      const candidates = Array.from(activeSids.keys());
-      for (const sid of candidates) {
-        try {
-          const s = await getBotSettings(sid) || {};
-          const uids = Array.isArray(s.channelUids) ? s.channelUids.map(String) : [];
-          if (uids.includes(uid)) {
-            const channelRules = await getBotRules(sid);
-            return (channelRules || []).filter(r => r.enabled && r.adminOnly !== true && r.adminonly !== true).map(r => ({
-              id: r.id,
-              name: r.name,
-              keywords: r.keywords,
-              responses: r.responses,
-              cooldown: r.cooldown,
-              requiredRoleLevel: r.requiredRoleLevel,
-            }));
-          }
-        } catch { }
-      }
-      return [];
+      const sid = await resolvePublicChannelSid(uid);
+      if (!sid) return [];
+      const channelRules = await getBotRulesWithDefaults(sid);
+      return (channelRules || []).map(toPublicCommandRule).filter(Boolean);
     });
-    if (rules.length) return res.json({ uid, rules });
-    // If not found, return empty list
-    return res.json({ uid, rules: [] });
+    return res.json({ uid, rules });
   } catch (e) {
-    return res.status(500).json({ error: 'Failed to load rules' });
+    console.error('[Public Rules] failed:', e?.message || e);
+    return res.status(500).json({ error: 'Failed to load rules', rules: [] });
   }
 });
 
