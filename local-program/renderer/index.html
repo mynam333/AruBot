@@ -25,6 +25,10 @@
             <span>리모컨</span>
             <small>방송 중 빠른 실행</small>
           </button>
+          <button class="nav-item" type="button" data-page="drawing">
+            <span>그림 후원 관리</span>
+            <small>승인과 대기열 관리</small>
+          </button>
           <button class="nav-item" type="button" data-page="tits">
             <span>T.I.T.S.</span>
             <small>아이템과 트리거</small>
@@ -187,6 +191,49 @@
                 </div>
               </div>
               <p class="hint">리모컨은 로컬 프로그램 토큰 권한으로만 동작합니다. 웹 로그인 쿠키는 사용하지 않습니다.</p>
+            </aside>
+          </div>
+        </section>
+
+        <section class="page" id="page-drawing" data-page="drawing">
+          <div class="page-grid remote-grid">
+            <article class="panel feature-panel">
+              <div class="panel-head compact">
+                <div>
+                  <span class="chip coral">그림 후원</span>
+                  <h2>방송 화면에 올라갈 그림을 바로 관리</h2>
+                </div>
+                <button class="button secondary" id="remoteDrawingRefreshButton">새로고침</button>
+              </div>
+              <div class="mini-list">
+                <div><strong id="remoteDrawingQueuedCount">0</strong><span>대기</span></div>
+                <div><strong id="remoteDrawingApprovedCount">0</strong><span>승인됨</span></div>
+              </div>
+              <div class="remote-section">
+                <h3>선택한 그림</h3>
+                <select id="remoteDrawingSelect"></select>
+                <div class="drawing-preview" id="remoteDrawingPreview">
+                  <span>선택한 그림 미리보기</span>
+                </div>
+                <div class="folder-path" id="remoteDrawingDetail">대기 중인 그림 후원이 없습니다.</div>
+                <div class="actions">
+                  <button class="button primary" id="remoteDrawingApproveButton">승인</button>
+                  <button class="button secondary" id="remoteDrawingRejectButton">거절/환불</button>
+                  <button class="button ghost" id="remoteDrawingDeleteRefundButton">삭제/환불</button>
+                </div>
+              </div>
+            </article>
+            <aside class="panel support-panel coral-soft">
+              <span class="chip coral">OBS 오버레이</span>
+              <h2>방송 중에는 필요한 처리만 빠르게 누르세요.</h2>
+              <div class="remote-section">
+                <h3>현재 재생</h3>
+                <div class="folder-path" id="remoteDrawingNow">현재 재생 항목 없음</div>
+                <div class="actions">
+                  <button class="button primary" id="remoteDrawingNextButton">다음 그림</button>
+                </div>
+              </div>
+              <p class="hint">세밀한 리플레이 검수와 차단 처리는 웹 대시보드의 그림 후원 관리에서 더 큰 화면으로 확인할 수 있습니다.</p>
             </aside>
           </div>
         </section>

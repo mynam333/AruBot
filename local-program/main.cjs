@@ -1889,6 +1889,38 @@ ipcMain.handle('remote:pvd:control', async (_event, control) => apiFetch('/api/l
   method: 'POST',
   body: JSON.stringify(control || {}),
 }));
+ipcMain.handle('remote:drawing:approve', async (_event, id) => {
+  const result = await apiFetch('/api/local-remote/drawing-donation/approve', {
+    method: 'POST',
+    body: JSON.stringify({ id }),
+  });
+  addLog('success', '리모컨에서 그림 후원을 승인했습니다.');
+  return result;
+});
+ipcMain.handle('remote:drawing:reject', async (_event, id) => {
+  const result = await apiFetch('/api/local-remote/drawing-donation/reject', {
+    method: 'POST',
+    body: JSON.stringify({ id }),
+  });
+  addLog('success', '리모컨에서 그림 후원을 거절하고 포인트를 반환했습니다.');
+  return result;
+});
+ipcMain.handle('remote:drawing:deleteRefund', async (_event, id) => {
+  const result = await apiFetch('/api/local-remote/drawing-donation/delete-refund', {
+    method: 'POST',
+    body: JSON.stringify({ id }),
+  });
+  addLog('success', '리모컨에서 그림 후원을 삭제하고 포인트를 반환했습니다.');
+  return result;
+});
+ipcMain.handle('remote:drawing:pop', async () => {
+  const result = await apiFetch('/api/local-remote/drawing-donation/pop', {
+    method: 'POST',
+    body: JSON.stringify({ cause: 'local_remote' }),
+  });
+  addLog('success', '리모컨에서 그림 후원 다음 항목으로 넘겼습니다.');
+  return result;
+});
 ipcMain.handle('folder:chooseSound', async () => {
   const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
   if (result.canceled || !result.filePaths?.[0]) return null;

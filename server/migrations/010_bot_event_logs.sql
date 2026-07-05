@@ -5,7 +5,7 @@ create table if not exists public.bot_event_logs (
   channel_uid text,
   provider text,
   category text not null
-    check (category in ('command', 'donation', 'roulette', 'video_donation', 'prediction')),
+    check (category in ('command', 'donation', 'roulette', 'video_donation', 'drawing_donation', 'prediction')),
   event_type text not null,
   source text,
   trigger_name text,

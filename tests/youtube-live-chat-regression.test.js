@@ -86,6 +86,7 @@ describe('YouTube live chat integration regression', () => {
     expect(serverIndex).toContain("reason: 'active_live_chat_required'");
     expect(serverIndex).toContain('const botProfile = await getValidYoutubeBotProfile()');
     expect(serverIndex).toContain('const streamerChannel = await getYoutubeStreamerChannel(ownerUserId)');
+    expect(serverIndex).toContain("const isExpectedCentralBotModeMiss = message === 'No YouTube tokens stored'");
     expect(connectionPage).toContain('운영자 실제 확인');
     expect(connectionPage).toContain("searchParams.get('platform') !== 'youtube'");
   });

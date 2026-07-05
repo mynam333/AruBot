@@ -274,6 +274,15 @@ nextjs-portal {
   background: var(--sb-thumb-hover);
 }
 
+.scrollbar-none {
+  scrollbar-width: none;
+}
+
+.scrollbar-none::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
 .arubot-modal-scroll {
   overscroll-behavior: contain;
   scrollbar-gutter: stable;

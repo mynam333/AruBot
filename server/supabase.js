@@ -6,6 +6,7 @@ import path from 'path';
 const { Client, Pool } = pkg;
 
 let supabase;
+let storageClient;
 let columnCache = new Map(); // key: table, value: Set of column names
 let pgPool = null;
 let pgPoolUrl = null;
@@ -71,6 +72,18 @@ function getDbUrl() {
     ? (process.env.POSTGRES_URL || '')
     : (process.env.SUPABASE_DB_URL || '');
   return validateDatabaseUrlForProvider(provider, dbUrl);
+}
+
+function getSupabaseStorageClient() {
+  const url = String(process.env.SUPABASE_URL || '').trim();
+  const key = String(process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+  const bucket = String(process.env.DRAWING_DONATION_STORAGE_BUCKET || process.env.ARUBOT_STORAGE_BUCKET || '').trim();
+  if (!url || !key || !bucket) return null;
+  if (isPostgresProvider() && String(process.env.ARUBOT_ALLOW_SUPABASE_ENV_WITH_POSTGRES || '').trim().toLowerCase() !== 'true') return null;
+  if (!storageClient) {
+    storageClient = createClient(url, key, { auth: { persistSession: false } });
+  }
+  return { client: storageClient, bucket };
 }
 
 function providerSslEnv(provider) {
@@ -1846,7 +1859,7 @@ async function ensureBotEventLogTables() {
         channel_uid text,
         provider text,
         category text not null
-          check (category in ('command', 'donation', 'roulette', 'video_donation', 'prediction')),
+          check (category in ('command', 'donation', 'roulette', 'video_donation', 'drawing_donation', 'prediction')),
         event_type text not null,
         source text,
         trigger_name text,
@@ -1878,7 +1891,7 @@ async function ensureBotEventLogTables() {
 
 function normalizeBotEventCategory(category) {
   const value = String(category || '').trim().toLowerCase();
-  return ['command', 'donation', 'roulette', 'video_donation', 'prediction'].includes(value) ? value : 'command';
+  return ['command', 'donation', 'roulette', 'video_donation', 'drawing_donation', 'prediction'].includes(value) ? value : 'command';
 }
 
 function normalizeBotEventStatus(status) {
@@ -2002,6 +2015,316 @@ export async function listBotEventLogs(ownerUserId, options = {}) {
       limit,
       totalPages: Math.max(1, Math.ceil(total / limit)),
     };
+  });
+}
+
+async function ensureDrawingDonationTables() {
+  await withPgClient(async (pg) => {
+    await pg.query(`
+      create table if not exists public.drawing_donation_items (
+        id text primary key,
+        sid text not null,
+        owner_user_id text,
+        channel_uid text not null,
+        viewer_user_id text not null,
+        viewer_name text,
+        status text not null default 'queued'
+          check (status in ('queued', 'approved', 'playing', 'done', 'rejected', 'deleted')),
+        cost integer not null default 0,
+        point_deductions jsonb not null default '[]'::jsonb,
+        point_refunded boolean not null default false,
+        canvas jsonb not null default '{}'::jsonb,
+        strokes jsonb not null default '[]'::jsonb,
+        stroke_object_key text,
+        preview_image text,
+        preview_object_key text,
+        metrics jsonb not null default '{}'::jsonb,
+        replay jsonb not null default '{}'::jsonb,
+        result_hold_sec integer not null default 8,
+        position integer not null default 0,
+        created_at timestamptz not null default now(),
+        approved_at timestamptz,
+        playing_at timestamptz,
+        rejected_at timestamptz,
+        done_at timestamptz,
+        updated_at timestamptz not null default now()
+      );
+      create index if not exists idx_drawing_donation_sid_status_created
+        on public.drawing_donation_items(sid, status, created_at);
+      create index if not exists idx_drawing_donation_sid_status_position_created
+        on public.drawing_donation_items(sid, status, position, created_at);
+      create index if not exists idx_drawing_donation_sid_position
+        on public.drawing_donation_items(sid, position, created_at);
+      create index if not exists idx_drawing_donation_viewer_created
+        on public.drawing_donation_items(sid, viewer_user_id, created_at desc);
+      alter table public.drawing_donation_items add column if not exists stroke_object_key text;
+      alter table public.drawing_donation_items add column if not exists preview_object_key text;
+    `);
+  });
+}
+
+function normalizeDrawingDonationRow(row, { includeStrokes = false } = {}) {
+  if (!row) return null;
+  const item = {
+    id: row.id,
+    ownerSid: row.sid,
+    ownerUserId: row.owner_user_id || null,
+    channelUid: row.channel_uid,
+    viewerUserId: row.viewer_user_id,
+    viewerName: row.viewer_name || null,
+    status: row.status,
+    cost: Number(row.cost || 0),
+    pointDeductions: Array.isArray(row.point_deductions) ? row.point_deductions : [],
+    pointRefunded: row.point_refunded === true,
+    canvas: row.canvas || {},
+    previewImage: row.preview_image || null,
+    strokeObjectKey: row.stroke_object_key || null,
+    previewObjectKey: row.preview_object_key || null,
+    metrics: row.metrics || {},
+    replay: row.replay || {},
+    resultHoldSec: Number(row.result_hold_sec || 8),
+    position: Number(row.position || 0),
+    createdAt: row.created_at || null,
+    approvedAt: row.approved_at || null,
+    playingAt: row.playing_at || null,
+    rejectedAt: row.rejected_at || null,
+    doneAt: row.done_at || null,
+    updatedAt: row.updated_at || null,
+  };
+  if (includeStrokes) item.strokes = Array.isArray(row.strokes) ? row.strokes : [];
+  return item;
+}
+
+export async function uploadDrawingDonationObject(key, payload, contentType = 'application/json') {
+  const storage = getSupabaseStorageClient();
+  if (!storage || !key) return null;
+  const body = typeof payload === 'string' || Buffer.isBuffer(payload) ? payload : JSON.stringify(payload);
+  const { error } = await storage.client.storage.from(storage.bucket).upload(key, body, {
+    contentType,
+    upsert: true,
+  });
+  if (error) throw new Error(error.message || 'drawing_storage_upload_failed');
+  return key;
+}
+
+export async function downloadDrawingDonationJson(key) {
+  const storage = getSupabaseStorageClient();
+  if (!storage || !key) return null;
+  const { data, error } = await storage.client.storage.from(storage.bucket).download(key);
+  if (error || !data) throw new Error(error?.message || 'drawing_storage_download_failed');
+  const text = await data.text();
+  return JSON.parse(text);
+}
+
+async function hydrateDrawingDonationStrokes(item) {
+  if (!item || !item.strokeObjectKey || (Array.isArray(item.strokes) && item.strokes.length)) return item;
+  try {
+    const strokes = await downloadDrawingDonationJson(item.strokeObjectKey);
+    item.strokes = Array.isArray(strokes) ? strokes : Array.isArray(strokes?.strokes) ? strokes.strokes : [];
+  } catch (error) {
+    console.warn('[Drawing Donation] stroke object load failed:', error?.message || error);
+    item.strokes = [];
+  }
+  return item;
+}
+
+export async function insertDrawingDonationItem(item = {}) {
+  await ensureDrawingDonationTables();
+  const id = item.id ? String(item.id) : makeId('draw');
+  const sid = String(item.ownerSid || item.sid || '');
+  if (!sid) throw new Error('sid required');
+  return withPgClient(async (pg) => {
+    const positionResult = await pg.query(
+      `select coalesce(max(position), -1) + 1 as next_position
+         from public.drawing_donation_items
+        where sid = $1 and status in ('queued', 'approved', 'playing')`,
+      [sid]
+    );
+    const position = Number(positionResult.rows?.[0]?.next_position || 0);
+    const result = await pg.query(
+      `insert into public.drawing_donation_items (
+         id, sid, owner_user_id, channel_uid, viewer_user_id, viewer_name, status,
+         cost, point_deductions, point_refunded, canvas, strokes, stroke_object_key, preview_image, preview_object_key,
+         metrics, replay, result_hold_sec, position, created_at, approved_at
+       ) values (
+         $1, $2, $3, $4, $5, $6, $7,
+         $8, $9::jsonb, $10, $11::jsonb, $12::jsonb, $13, $14, $15,
+         $16::jsonb, $17::jsonb, $18, $19, coalesce($20::timestamptz, now()), $21::timestamptz
+       )
+       returning *`,
+      [
+        id,
+        sid,
+        item.ownerUserId || item.owner_user_id ? String(item.ownerUserId || item.owner_user_id) : null,
+        String(item.channelUid || item.channel_uid || ''),
+        String(item.viewerUserId || item.viewer_user_id || ''),
+        item.viewerName || item.viewer_name ? String(item.viewerName || item.viewer_name).slice(0, 200) : null,
+        ['queued', 'approved', 'playing', 'done', 'rejected', 'deleted'].includes(String(item.status)) ? String(item.status) : 'queued',
+        Math.max(0, Number(item.cost || 0) || 0),
+        JSON.stringify(Array.isArray(item.pointDeductions) ? item.pointDeductions : []),
+        item.pointRefunded === true,
+        JSON.stringify(item.canvas && typeof item.canvas === 'object' ? item.canvas : {}),
+        JSON.stringify(Array.isArray(item.strokes) ? item.strokes : []),
+        item.strokeObjectKey || item.stroke_object_key ? String(item.strokeObjectKey || item.stroke_object_key) : null,
+        item.previewImage ? String(item.previewImage).slice(0, 512 * 1024) : null,
+        item.previewObjectKey || item.preview_object_key ? String(item.previewObjectKey || item.preview_object_key) : null,
+        JSON.stringify(item.metrics && typeof item.metrics === 'object' ? item.metrics : {}),
+        JSON.stringify(item.replay && typeof item.replay === 'object' ? item.replay : {}),
+        Math.max(1, Number(item.resultHoldSec || 8) || 8),
+        position,
+        item.createdAt || item.created_at ? new Date(item.createdAt || item.created_at).toISOString() : null,
+        item.approvedAt || item.approved_at ? new Date(item.approvedAt || item.approved_at).toISOString() : null,
+      ]
+    );
+    return normalizeDrawingDonationRow(result.rows?.[0], { includeStrokes: true });
+  });
+}
+
+export async function listDrawingDonationItems(sid, { limit = 100, includeDone = false } = {}) {
+  await ensureDrawingDonationTables();
+  return withPgClient(async (pg) => {
+    const statuses = includeDone
+      ? ['queued', 'approved', 'playing', 'done', 'rejected']
+      : ['queued', 'approved', 'playing'];
+    const result = await pg.query(
+      `select id, sid, owner_user_id, channel_uid, viewer_user_id, viewer_name, status,
+              cost, point_deductions, point_refunded, canvas, preview_image, preview_object_key, stroke_object_key,
+              metrics, replay, result_hold_sec, position,
+              created_at, approved_at, playing_at, rejected_at, done_at, updated_at
+         from public.drawing_donation_items
+        where sid = $1 and status = any($2::text[])
+        order by position asc, created_at asc
+        limit $3`,
+      [String(sid), statuses, Math.max(1, Math.min(200, Number(limit || 100)))]
+    );
+    return (result.rows || []).map((row) => normalizeDrawingDonationRow(row));
+  });
+}
+
+export async function getDrawingDonationItem(sid, id, { includeStrokes = false } = {}) {
+  await ensureDrawingDonationTables();
+  return withPgClient(async (pg) => {
+    const columns = includeStrokes ? '*' : `id, sid, owner_user_id, channel_uid, viewer_user_id, viewer_name, status,
+      cost, point_deductions, point_refunded, canvas, preview_image, preview_object_key, stroke_object_key, metrics, replay,
+      result_hold_sec, position, created_at, approved_at, playing_at, rejected_at, done_at, updated_at`;
+    const result = await pg.query(
+      `select ${columns} from public.drawing_donation_items where sid = $1 and id = $2 limit 1`,
+      [String(sid), String(id)]
+    );
+    const item = normalizeDrawingDonationRow(result.rows?.[0], { includeStrokes });
+    return includeStrokes ? hydrateDrawingDonationStrokes(item) : item;
+  });
+}
+
+export async function getCurrentDrawingDonationItem(sid) {
+  await ensureDrawingDonationTables();
+  return withPgClient(async (pg) => {
+    const result = await pg.query(
+      `with existing as (
+         select *
+           from public.drawing_donation_items
+          where sid = $1 and status = 'playing'
+          order by position asc, created_at asc
+          limit 1
+       ),
+       promoted as (
+         update public.drawing_donation_items
+            set status = 'playing', playing_at = coalesce(playing_at, now()), updated_at = now()
+          where id = (
+            select id
+              from public.drawing_donation_items
+             where sid = $1
+               and status = 'approved'
+               and not exists (select 1 from existing)
+             order by position asc, created_at asc
+             limit 1
+             for update skip locked
+          )
+          returning *
+       )
+       select * from existing
+       union all
+       select * from promoted
+       limit 1`,
+      [String(sid)]
+    );
+    return hydrateDrawingDonationStrokes(normalizeDrawingDonationRow(result.rows?.[0], { includeStrokes: true }));
+  });
+}
+
+export async function updateDrawingDonationItemStatus(sid, id, status, extra = {}) {
+  await ensureDrawingDonationTables();
+  const nextStatus = ['queued', 'approved', 'playing', 'done', 'rejected', 'deleted'].includes(String(status)) ? String(status) : 'queued';
+  const timestampColumn = nextStatus === 'approved' ? 'approved_at'
+    : nextStatus === 'playing' ? 'playing_at'
+      : nextStatus === 'done' ? 'done_at'
+        : nextStatus === 'rejected' ? 'rejected_at'
+          : null;
+  return withPgClient(async (pg) => {
+    const setParts = ['status = $3', 'updated_at = now()'];
+    const params = [String(sid), String(id), nextStatus];
+    if (timestampColumn) setParts.push(`${timestampColumn} = coalesce(${timestampColumn}, now())`);
+    if (extra.pointRefunded != null) {
+      params.push(extra.pointRefunded === true);
+      setParts.push(`point_refunded = $${params.length}`);
+    }
+    const result = await pg.query(
+      `update public.drawing_donation_items
+          set ${setParts.join(', ')}
+        where sid = $1 and id = $2
+        returning *`,
+      params
+    );
+    return hydrateDrawingDonationStrokes(normalizeDrawingDonationRow(result.rows?.[0], { includeStrokes: true }));
+  });
+}
+
+export async function deleteDrawingDonationItem(sid, id) {
+  await ensureDrawingDonationTables();
+  return withPgClient(async (pg) => {
+    const result = await pg.query(
+      `delete from public.drawing_donation_items where sid = $1 and id = $2 returning *`,
+      [String(sid), String(id)]
+    );
+    return hydrateDrawingDonationStrokes(normalizeDrawingDonationRow(result.rows?.[0], { includeStrokes: true }));
+  });
+}
+
+export async function reorderDrawingDonationItems(sid, ids = []) {
+  await ensureDrawingDonationTables();
+  const normalizedIds = Array.from(new Set((Array.isArray(ids) ? ids : []).map((id) => String(id || '').trim()).filter(Boolean)));
+  if (!normalizedIds.length) return listDrawingDonationItems(sid, { limit: 100 });
+  return withPgClient(async (pg) => {
+    await pg.query('begin');
+    try {
+      for (let index = 0; index < normalizedIds.length; index += 1) {
+        await pg.query(
+          `update public.drawing_donation_items
+              set position = $3, updated_at = now()
+            where sid = $1
+              and id = $2
+              and status in ('queued', 'approved', 'playing')`,
+          [String(sid), normalizedIds[index], index]
+        );
+      }
+      await pg.query('commit');
+      const result = await pg.query(
+        `select id, sid, owner_user_id, channel_uid, viewer_user_id, viewer_name, status,
+                cost, point_deductions, point_refunded, canvas, preview_image,
+                metrics, replay, result_hold_sec, position,
+                created_at, approved_at, playing_at, rejected_at, done_at, updated_at
+           from public.drawing_donation_items
+          where sid = $1
+            and status = any($2::text[])
+          order by position asc, created_at asc
+          limit 100`,
+        [String(sid), ['queued', 'approved', 'playing']]
+      );
+      return (result.rows || []).map((row) => normalizeDrawingDonationRow(row));
+    } catch (error) {
+      try { await pg.query('rollback'); } catch {}
+      throw error;
+    }
   });
 }
 

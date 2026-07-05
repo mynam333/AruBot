@@ -9,7 +9,7 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
-import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, getSessionUserId, listChannelPoints, listChannelPointsPage, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, getChannelPoints, getChannelPointBalanceSummary, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, findSidByChannelViewerTokenSupabase, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, deletePlatformTokens, deletePlatformAccount, getAppUserAdminStatus, getYoutubeBotProfile, upsertYoutubeBotProfile, updateYoutubeBotProfileTokens, markYoutubeBotProfileStatus, deleteYoutubeBotProfile, getYoutubeStreamerChannel, upsertYoutubeStreamerChannel, markYoutubeStreamerChannelModeratorRegistered, deleteYoutubeStreamerChannel, listYoutubeStreamerChannelsByYoutubeChannelId, updateYoutubeStreamerChannelLive, updateYoutubeStreamerChannelWebsub, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps, recordBotEventLog, listBotEventLogs, validateSecretEncryptionConfig, getPgPoolStatus } from './supabase.js';
+import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, getSessionUserId, listChannelPoints, listChannelPointsPage, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, getChannelPoints, getChannelPointBalanceSummary, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, findSidByChannelViewerTokenSupabase, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, deletePlatformTokens, deletePlatformAccount, getAppUserAdminStatus, getYoutubeBotProfile, upsertYoutubeBotProfile, updateYoutubeBotProfileTokens, markYoutubeBotProfileStatus, deleteYoutubeBotProfile, getYoutubeStreamerChannel, upsertYoutubeStreamerChannel, markYoutubeStreamerChannelModeratorRegistered, deleteYoutubeStreamerChannel, listYoutubeStreamerChannelsByYoutubeChannelId, updateYoutubeStreamerChannelLive, updateYoutubeStreamerChannelWebsub, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps, recordBotEventLog, listBotEventLogs, insertDrawingDonationItem, listDrawingDonationItems, getDrawingDonationItem, getCurrentDrawingDonationItem, updateDrawingDonationItemStatus, deleteDrawingDonationItem, reorderDrawingDonationItems, uploadDrawingDonationObject, validateSecretEncryptionConfig, getPgPoolStatus } from './supabase.js';
 import { createPlatformProfileService } from './platform-profiles.js';
 import { WebSocketServer, WebSocket } from 'ws';
 
@@ -1653,6 +1653,15 @@ const videoDonationTimers = new Map(); // sid -> NodeJS.Timeout
 const pvdSidSockets = new Map(); // sid -> Set<WebSocket>
 const pvdAdminSockets = new Map(); // sid -> Set<WebSocket>
 const pvdTokenToSid = new Map(); // token -> sid (in-memory reverse index)
+
+// =============================
+// Drawing Donation
+// =============================
+const drawingDonationQueues = new Map(); // sid -> array of drawing donation requests
+const drawingTokenToSid = new Map(); // token -> sid (in-memory reverse index)
+const drawingOverlaySockets = new Map(); // sid -> Set<WebSocket>
+const drawingAdminSockets = new Map(); // sid -> Set<WebSocket>
+const drawingLivePlaybackCache = new Map(); // key -> { expiresAt, value }
 
 // =============================
 // =============================
@@ -5517,6 +5526,8 @@ app.post('/api/video-donation/request', rateLimiters.userWrite, async (req, res)
     const userId = String(requesterUserId || '').trim();
     const username = requesterUsername ? String(requesterUsername) : null;
     if (!userId) return res.status(400).json({ error: 'requesterUserId required' });
+    const blocked = findBlockedBotUser(settings, userId, null);
+    if (blocked) return res.status(403).json({ error: 'blocked_user', message: '이 방송에서는 봇 기능을 사용할 수 없습니다.' });
     // Enforce per-user queue limit (0 means unlimited)
     try {
       if (perUserLimit > 0) {
@@ -5714,6 +5725,486 @@ app.post('/api/video-donation/rotate-viewer-token', async (req, res) => {
     return res.json({ ok: true, token, path: `/pvd/${encodeURIComponent(token)}` });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to rotate token' });
+  }
+});
+
+app.get('/api/bot/blocked-users', async (req, res) => {
+  try {
+    const sid = await getPartitionId(req, res);
+    if (!sid) return res.status(401).json({ error: 'Login required' });
+    const settings = await getBotSettings(sid) || {};
+    return res.json({ items: normalizeBlockedBotUsers(settings.blockedBotUsers) });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to load blocked users' });
+  }
+});
+
+app.post('/api/bot/blocked-users', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const sid = await getPartitionId(req, res);
+    if (!sid) return res.status(401).json({ error: 'Login required' });
+    const settings = await getBotSettings(sid) || {};
+    const userId = String(req.body?.userId || '').trim();
+    if (!userId) return res.status(400).json({ error: 'userId required' });
+    const items = normalizeBlockedBotUsers(settings.blockedBotUsers).filter((item) => item.userId.toLowerCase() !== userId.toLowerCase());
+    items.unshift({
+      userId,
+      username: String(req.body?.username || '').trim() || null,
+      reason: String(req.body?.reason || '').trim() || null,
+      createdAt: new Date().toISOString(),
+    });
+    await setBotSettings(sid, { ...settings, blockedBotUsers: items.slice(0, 500) });
+    return res.json({ ok: true, items: items.slice(0, 500) });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to block user' });
+  }
+});
+
+app.delete('/api/bot/blocked-users/:userId', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const sid = await getPartitionId(req, res);
+    if (!sid) return res.status(401).json({ error: 'Login required' });
+    const settings = await getBotSettings(sid) || {};
+    const userId = decodeURIComponent(String(req.params.userId || '')).trim();
+    const keys = buildBotUserBlockKeys(userId);
+    const items = normalizeBlockedBotUsers(settings.blockedBotUsers).filter((item) => {
+      const itemKeys = buildBotUserBlockKeys(item.userId);
+      for (const key of itemKeys) if (keys.has(key)) return false;
+      return true;
+    });
+    await setBotSettings(sid, { ...settings, blockedBotUsers: items });
+    return res.json({ ok: true, items });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to unblock user' });
+  }
+});
+
+app.get('/api/drawing-donation/settings', async (req, res) => {
+  try {
+    const sid = await getPartitionId(req, res);
+    if (!sid) return res.status(401).json({ error: 'Login required' });
+    const settings = await getBotSettings(sid) || {};
+    return res.json({ settings: normalizeDrawingDonationSettings(settings.drawingDonation) });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to load drawing donation settings' });
+  }
+});
+
+app.post('/api/drawing-donation/settings', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const sid = await getPartitionId(req, res);
+    if (!sid) return res.status(401).json({ error: 'Login required' });
+    const settings = await getBotSettings(sid) || {};
+    const drawingDonation = normalizeDrawingDonationSettings(req.body || {});
+    await setBotSettings(sid, { ...settings, drawingDonation });
+    notifyDrawingAdminSubscribers(sid, 'settings_updated').catch(() => null);
+    return res.json({ ok: true, settings: drawingDonation });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to save drawing donation settings' });
+  }
+});
+
+app.get('/api/drawing-donation/queue', async (req, res) => {
+  try {
+    const sid = await getPartitionId(req, res);
+    if (!sid) return res.status(401).json({ error: 'Login required' });
+    return res.json({ items: await listDrawingQueueForSid(sid) });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to load drawing donation queue' });
+  }
+});
+
+app.get('/api/drawing-donation/items/:id', async (req, res) => {
+  try {
+    const sid = await getPartitionId(req, res);
+    if (!sid) return res.status(401).json({ error: 'Login required' });
+    const id = decodeURIComponent(String(req.params.id || '')).trim();
+    const item = await getDrawingItemForSid(sid, id, { includeStrokes: true });
+    if (!item) return res.status(404).json({ error: 'not_found' });
+    return res.json({ item });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to load drawing donation item' });
+  }
+});
+
+app.post('/api/drawing-donation/approve', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const sid = await getPartitionId(req, res);
+    if (!sid) return res.status(401).json({ error: 'Login required' });
+    const id = String(req.body?.id || '').trim();
+    const item = await updateDrawingItemStatusForSid(sid, id, 'approved');
+    if (!item) return res.status(404).json({ error: 'not_found' });
+    notifyDrawingSubscribers(sid, 'approved').catch(() => null);
+    notifyDrawingAdminSubscribers(sid, 'approved').catch(() => null);
+    return res.json({ ok: true, item });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to approve drawing donation' });
+  }
+});
+
+app.post('/api/drawing-donation/reject', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const sid = await getPartitionId(req, res);
+    if (!sid) return res.status(401).json({ error: 'Login required' });
+    const id = String(req.body?.id || '').trim();
+    let item = await getDrawingItemForSid(sid, id, { includeStrokes: true });
+    if (!item) return res.status(404).json({ error: 'not_found' });
+    let refundedAmount = 0;
+    if (!item.pointRefunded) {
+      for (const deduction of item.pointDeductions || []) {
+        await incrChannelPoints(item.channelUid, deduction.userId, deduction.username || item.viewerName || null, Number(deduction.amount || 0)).catch(() => null);
+        refundedAmount += Number(deduction.amount || 0);
+      }
+      item.pointRefunded = true;
+    }
+    item = await updateDrawingItemStatusForSid(sid, id, 'rejected', { pointRefunded: true }) || item;
+    if (refundedAmount > 0) {
+      await recordBotEventLogSafe(sid, {
+        category: 'drawing_donation',
+        eventType: 'drawing_donation_reject_refund',
+        provider: 'admin',
+        channelUid: item.channelUid,
+        viewerUserId: item.viewerUserId,
+        viewerName: item.viewerName,
+        pointDelta: refundedAmount,
+        targetName: '그림 후원',
+        summary: `그림 후원을 거절하고 ${refundedAmount}P를 반환`,
+        status: 'refunded',
+        metadata: { drawingId: item.id },
+      });
+    }
+    notifyDrawingSubscribers(sid, 'rejected').catch(() => null);
+    notifyDrawingAdminSubscribers(sid, 'rejected').catch(() => null);
+    return res.json({ ok: true, item });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to reject drawing donation' });
+  }
+});
+
+app.post('/api/drawing-donation/delete', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const sid = await getPartitionId(req, res);
+    if (!sid) return res.status(401).json({ error: 'Login required' });
+    const id = String(req.body?.id || '').trim();
+    const item = await deleteDrawingItemForSid(sid, id);
+    if (!item) return res.status(404).json({ error: 'not_found' });
+    notifyDrawingSubscribers(sid, 'deleted').catch(() => null);
+    notifyDrawingAdminSubscribers(sid, 'deleted').catch(() => null);
+    return res.json({ ok: true, item });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to delete drawing donation' });
+  }
+});
+
+app.post('/api/drawing-donation/delete-refund', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const sid = await getPartitionId(req, res);
+    if (!sid) return res.status(401).json({ error: 'Login required' });
+    const id = String(req.body?.id || '').trim();
+    let item = await getDrawingItemForSid(sid, id, { includeStrokes: true });
+    if (!item) return res.status(404).json({ error: 'not_found' });
+    let refundedAmount = 0;
+    if (!item.pointRefunded) {
+      for (const deduction of item.pointDeductions || []) {
+        await incrChannelPoints(item.channelUid, deduction.userId, deduction.username || item.viewerName || null, Number(deduction.amount || 0)).catch(() => null);
+        refundedAmount += Number(deduction.amount || 0);
+      }
+      item.pointRefunded = true;
+    }
+    item = await deleteDrawingItemForSid(sid, id) || item;
+    if (refundedAmount > 0) {
+      await recordBotEventLogSafe(sid, {
+        category: 'drawing_donation',
+        eventType: 'drawing_donation_delete_refund',
+        provider: 'admin',
+        channelUid: item.channelUid,
+        viewerUserId: item.viewerUserId,
+        viewerName: item.viewerName,
+        pointDelta: refundedAmount,
+        targetName: '그림 후원',
+        summary: `그림 후원을 삭제하고 ${refundedAmount}P를 반환`,
+        status: 'refunded',
+        metadata: { drawingId: item.id },
+      });
+    }
+    notifyDrawingSubscribers(sid, 'deleted_refunded').catch(() => null);
+    notifyDrawingAdminSubscribers(sid, 'deleted_refunded').catch(() => null);
+    return res.json({ ok: true, item });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to delete and refund drawing donation' });
+  }
+});
+
+app.post('/api/drawing-donation/moderate-block', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const sid = await getPartitionId(req, res);
+    if (!sid) return res.status(401).json({ error: 'Login required' });
+    const id = String(req.body?.id || '').trim();
+    const reason = String(req.body?.reason || '그림 후원 검수 차단').trim();
+    let item = await getDrawingItemForSid(sid, id, { includeStrokes: true });
+    if (!item) return res.status(404).json({ error: 'not_found' });
+
+    let refundedAmount = 0;
+    if (!item.pointRefunded) {
+      for (const deduction of item.pointDeductions || []) {
+        await incrChannelPoints(item.channelUid, deduction.userId, deduction.username || item.viewerName || null, Number(deduction.amount || 0)).catch(() => null);
+        refundedAmount += Number(deduction.amount || 0);
+      }
+      item.pointRefunded = true;
+    }
+
+    const settings = await getBotSettings(sid) || {};
+    const userId = String(item.viewerUserId || '').trim();
+    if (userId) {
+      const items = normalizeBlockedBotUsers(settings.blockedBotUsers).filter((entry) => entry.userId.toLowerCase() !== userId.toLowerCase());
+      items.unshift({
+        userId,
+        username: item.viewerName || null,
+        reason,
+        createdAt: new Date().toISOString(),
+      });
+      await setBotSettings(sid, { ...settings, blockedBotUsers: items.slice(0, 500) });
+    }
+
+    item = await updateDrawingItemStatusForSid(sid, id, 'rejected', { pointRefunded: true }) || item;
+    await recordBotEventLogSafe(sid, {
+      category: 'drawing_donation',
+      eventType: 'drawing_donation_moderation_block',
+      provider: 'admin',
+      channelUid: item.channelUid,
+      viewerUserId: item.viewerUserId,
+      viewerName: item.viewerName,
+      pointDelta: refundedAmount,
+      targetName: '그림 후원',
+      summary: refundedAmount > 0 ? `그림 후원 차단 처리 및 ${refundedAmount}P 반환` : '그림 후원 차단 처리',
+      status: refundedAmount > 0 ? 'refunded' : 'cancelled',
+      metadata: { drawingId: item.id, reason },
+    });
+    notifyDrawingSubscribers(sid, 'moderated_block').catch(() => null);
+    notifyDrawingAdminSubscribers(sid, 'moderated_block').catch(() => null);
+    return res.json({ ok: true, item, refundedAmount });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to moderate drawing donation' });
+  }
+});
+
+app.post('/api/drawing-donation/reorder', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const sid = await getPartitionId(req, res);
+    if (!sid) return res.status(401).json({ error: 'Login required' });
+    const ids = Array.from(new Set((Array.isArray(req.body?.ids) ? req.body.ids : []).map((id) => String(id || '').trim()).filter(Boolean)));
+    if (!ids.length) return res.status(400).json({ error: 'ids required' });
+    const items = await reorderDrawingItemsForSid(sid, ids);
+    notifyDrawingSubscribers(sid, 'reordered').catch(() => null);
+    notifyDrawingAdminSubscribers(sid, 'reordered').catch(() => null);
+    return res.json({ ok: true, items });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to reorder drawing donation queue' });
+  }
+});
+
+app.get('/api/drawing-donation/viewer-url', async (req, res) => {
+  try {
+    const sid = await getPartitionId(req, res);
+    if (!sid) return res.status(401).json({ error: 'Login required' });
+    const settings = await getBotSettings(sid) || {};
+    let token = String(settings.drawingDonationViewerToken || '').trim();
+    if (!token) {
+      token = drawingTokenFromSid(sid);
+      await setBotSettings(sid, { ...settings, drawingDonationViewerToken: token });
+    }
+    drawingTokenToSid.set(token, sid);
+    return res.json({ token, path: `/drawing-overlay/${encodeURIComponent(token)}` });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to get drawing overlay URL' });
+  }
+});
+
+app.get('/api/drawing-donation/live-playback', rateLimiters.externalLookup, async (req, res) => {
+  try {
+    const provider = String(req.query?.provider || '').trim().toLowerCase();
+    const channelId = String(req.query?.channelId || '').trim();
+    if (!['chzzk', 'cime'].includes(provider) || !channelId) return res.status(400).json({ error: 'invalid_live_surface' });
+    const playback = await resolveDrawingLivePlaybackUrl(provider, channelId);
+    if (!playback?.playbackUrl) return res.status(404).json({ error: 'live_playback_not_found' });
+    return res.json(playback);
+  } catch (e) {
+    console.warn('[Drawing Donation] live playback resolve failed:', e?.message || e);
+    return res.status(502).json({ error: 'Failed to resolve live playback' });
+  }
+});
+
+app.post('/api/drawing-donation/rotate-viewer-token', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const sid = await getPartitionId(req, res);
+    if (!sid) return res.status(401).json({ error: 'Login required' });
+    const settings = await getBotSettings(sid) || {};
+    const oldToken = String(settings.drawingDonationViewerToken || '').trim();
+    const token = `draw_${pvdRandomToken(24)}`;
+    await setBotSettings(sid, { ...settings, drawingDonationViewerToken: token });
+    if (oldToken) drawingTokenToSid.delete(oldToken);
+    drawingTokenToSid.set(token, sid);
+    const sockets = drawingOverlaySockets.get(sid);
+    if (sockets?.size) {
+      for (const ws of Array.from(sockets)) {
+        try { ws.close(4001, 'token_rotated'); } catch {}
+      }
+      drawingOverlaySockets.delete(sid);
+    }
+    notifyDrawingAdminSubscribers(sid, 'token_rotated').catch(() => null);
+    return res.json({ ok: true, token, path: `/drawing-overlay/${encodeURIComponent(token)}` });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to rotate drawing overlay URL' });
+  }
+});
+
+app.get('/api/drawing-donation/current', async (req, res) => {
+  try {
+    const token = String(req.query?.token || '').trim();
+    const sid = await getDrawingSidByToken(token);
+    if (!sid) return res.status(404).json({ error: 'token_not_found' });
+    const item = await getCurrentDrawingItemForSid(sid);
+    return res.json({ item, serverNow: Date.now() });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to load current drawing donation' });
+  }
+});
+
+app.post('/api/drawing-donation/pop-by-token', async (req, res) => {
+  try {
+    const token = String(req.body?.token || '').trim();
+    const sid = await getDrawingSidByToken(token);
+    if (!sid) return res.status(404).json({ error: 'token_not_found' });
+    const current = await getCurrentDrawingItemForSid(sid);
+    if (!current) return res.json({ item: null });
+    const item = await updateDrawingItemStatusForSid(sid, current.id, 'done') || current;
+    notifyDrawingSubscribers(sid, 'done').catch(() => null);
+    notifyDrawingAdminSubscribers(sid, 'done').catch(() => null);
+    return res.json({ item });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to pop drawing donation' });
+  }
+});
+
+app.get('/api/viewer/drawing-donation/streamers', async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const data = await collectViewerDrawingDonationStreamers(ownerUserId);
+    return res.json(data);
+  } catch (e) {
+    console.error('[Drawing Donation] Failed to load viewer streamers:', e?.message || e);
+    return res.status(500).json({ error: 'Failed to load drawing donation streamers' });
+  }
+});
+
+app.get('/api/viewer/drawing-donation/streamers/:channelUid', async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const channelUid = decodeURIComponent(String(req.params.channelUid || '')).trim();
+    const data = await collectViewerDrawingDonationStreamers(ownerUserId);
+    const streamer = data.streamers.find((item) => item.channelUid === channelUid || item.canonicalChannelUid === channelUid);
+    if (!streamer) return res.status(404).json({ error: 'not_available' });
+    return res.json({ ...data, streamer });
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to load drawing donation streamer' });
+  }
+});
+
+app.post('/api/drawing-donation/submit', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const channelUid = String(req.body?.channelUid || '').trim();
+    if (!channelUid) return res.status(400).json({ error: 'channelUid required' });
+    const data = await collectViewerDrawingDonationStreamers(ownerUserId);
+    const streamer = data.streamers.find((item) => item.channelUid === channelUid || item.canonicalChannelUid === channelUid);
+    if (!streamer) return res.status(404).json({ error: 'not_available' });
+    const resolved = await resolveDrawingDonationSettingsForBalance(streamer);
+    if (!resolved?.drawing?.enabled) return res.status(400).json({ error: 'drawing_donation_disabled' });
+    const blocked = findBlockedBotUser(resolved.settings, ownerUserId, null, data.identityKeys);
+    if (blocked) return res.status(403).json({ error: 'blocked_user', message: '이 방송에서는 봇 기능을 사용할 수 없습니다.', block: blocked });
+
+    const activeQueue = await listDrawingQueueForSid(resolved.sid).catch(() => []);
+    const viewerActiveItems = (activeQueue || []).filter((item) => String(item.viewerUserId || '') === ownerUserId);
+    if (resolved.drawing.perUserQueueLimit > 0 && viewerActiveItems.length >= resolved.drawing.perUserQueueLimit) {
+      return res.status(429).json({ error: 'drawing_queue_limit', limit: resolved.drawing.perUserQueueLimit });
+    }
+    const cooldownMs = Math.max(0, Number(resolved.drawing.submitCooldownSec || 0) * 1000);
+    if (cooldownMs > 0) {
+      const lastSubmittedAt = viewerActiveItems
+        .map((item) => new Date(item.createdAt || 0).getTime())
+        .filter((time) => Number.isFinite(time) && time > 0)
+        .sort((a, b) => b - a)[0] || 0;
+      const remainingMs = cooldownMs - (Date.now() - lastSubmittedAt);
+      if (remainingMs > 0) {
+        return res.status(429).json({ error: 'drawing_submit_cooldown', retryAfterSec: Math.ceil(remainingMs / 1000) });
+      }
+    }
+
+    const { strokes, pointCount, rawPointCount, jsonSize, ink } = normalizeDrawingStrokePayload(req.body || {}, resolved.drawing);
+    const cost = calculateDrawingDonationCost(resolved.drawing, ink);
+    if (Number(streamer.points || 0) < cost) return res.status(400).json({ error: 'insufficient_points', need: cost, have: Number(streamer.points || 0) });
+    const payment = applyDrawingPointCost(streamer, cost);
+    if (!payment.ok) return res.status(400).json({ error: 'insufficient_points', need: cost, have: Number(streamer.points || 0) });
+
+    const replay = computeDrawingReplay(strokes, resolved.drawing.replayMaxSec);
+    for (const deduction of payment.deductions) {
+      await incrChannelPoints(streamer.channelUid, deduction.userId, deduction.username || null, -Number(deduction.amount || 0));
+    }
+
+    const item = {
+      id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
+      ownerSid: resolved.sid,
+      channelUid: streamer.channelUid,
+      viewerUserId: ownerUserId,
+      viewerName: req.body?.viewerName ? String(req.body.viewerName) : null,
+      status: resolved.drawing.approvalMode === 'auto' ? 'approved' : 'queued',
+      cost,
+      pointDeductions: payment.deductions,
+      pointRefunded: false,
+      canvas: resolved.drawing.canvas,
+      strokes,
+      previewImage: normalizeDrawingPreviewImage(req.body?.previewImage),
+      metrics: { strokeCount: strokes.length, pointCount, rawPointCount, jsonSize, ink },
+      replay,
+      resultHoldSec: resolved.drawing.resultHoldSec,
+      createdAt: new Date().toISOString(),
+      approvedAt: resolved.drawing.approvalMode === 'auto' ? new Date().toISOString() : null,
+    };
+    const strokeObjectKey = await maybeStoreDrawingStrokes(resolved.sid, item.id, strokes);
+    if (strokeObjectKey) {
+      item.strokeObjectKey = strokeObjectKey;
+      item.strokes = [];
+      item.metrics = { ...item.metrics, storage: { strokeObjectKey, strokeStorage: 'supabase' } };
+    }
+    let savedItem = item;
+    try {
+      savedItem = await insertDrawingDonationItem(item);
+    } catch (error) {
+      console.warn('[Drawing Donation] DB insert failed; using memory fallback:', error?.message || error);
+      getDrawingQueue(resolved.sid).push(item);
+    }
+    notifyDrawingSubscribers(resolved.sid, item.status === 'approved' ? 'auto_approved' : 'queued').catch(() => null);
+    notifyDrawingAdminSubscribers(resolved.sid, 'submitted').catch(() => null);
+    await recordBotEventLogSafe(resolved.sid, {
+      category: 'drawing_donation',
+      eventType: 'drawing_donation_request',
+      provider: 'viewer',
+      channelUid: streamer.channelUid,
+      viewerUserId: ownerUserId,
+      viewerName: item.viewerName,
+      pointDelta: -cost,
+      targetName: '그림 후원',
+      summary: `그림 후원 신청 (${cost}P 사용)`,
+      metadata: { drawingId: item.id, strokeCount: strokes.length, pointCount, ink },
+    });
+    return res.json({ ok: true, item: savedItem });
+  } catch (e) {
+    const status = e?.status || 500;
+    console.error('[Drawing Donation] submit failed:', e?.message || e);
+    return res.status(status).json({ error: e?.message || 'Failed to submit drawing donation' });
   }
 });
 
@@ -6406,6 +6897,624 @@ async function fetchChzzkClipInfo(clipId) {
   } catch {
     return null;
   }
+}
+
+function getDrawingQueue(sid) {
+  if (!drawingDonationQueues.has(sid)) drawingDonationQueues.set(sid, []);
+  return drawingDonationQueues.get(sid);
+}
+
+function getDefaultDrawingDonationSettings() {
+  return {
+    enabled: false,
+    pricingMode: 'fixed',
+    costPoints: 100,
+    inkCostPerUnit: 1,
+    approvalMode: 'manual',
+    replayMaxSec: 12,
+    resultHoldSec: 8,
+    maxStrokes: 120,
+    maxPoints: 6000,
+    submitCooldownSec: 20,
+    perUserQueueLimit: 3,
+    canvas: { widthRatio: 16, heightRatio: 9 },
+  };
+}
+
+function normalizeDrawingDonationSettings(input = {}) {
+  const defaults = getDefaultDrawingDonationSettings();
+  const source = input && typeof input === 'object' ? input : {};
+  const canvas = source.canvas && typeof source.canvas === 'object' ? source.canvas : {};
+  return {
+    enabled: source.enabled === true,
+    pricingMode: String(source.pricingMode || source.costMode || defaults.pricingMode) === 'ink' ? 'ink' : 'fixed',
+    costPoints: Math.max(0, Math.floor(Number(source.costPoints ?? defaults.costPoints) || defaults.costPoints)),
+    inkCostPerUnit: Math.max(0, Math.min(1000, Number(source.inkCostPerUnit ?? defaults.inkCostPerUnit) || 0)),
+    approvalMode: String(source.approvalMode || defaults.approvalMode) === 'auto' ? 'auto' : 'manual',
+    replayMaxSec: Math.max(1, Math.min(60, Math.floor(Number(source.replayMaxSec ?? defaults.replayMaxSec) || defaults.replayMaxSec))),
+    resultHoldSec: Math.max(1, Math.min(120, Math.floor(Number(source.resultHoldSec ?? defaults.resultHoldSec) || defaults.resultHoldSec))),
+    maxStrokes: Math.max(1, Math.min(1000, Math.floor(Number(source.maxStrokes ?? defaults.maxStrokes) || defaults.maxStrokes))),
+    maxPoints: Math.max(10, Math.min(50000, Math.floor(Number(source.maxPoints ?? defaults.maxPoints) || defaults.maxPoints))),
+    submitCooldownSec: Math.max(0, Math.min(3600, Math.floor(Number(source.submitCooldownSec ?? defaults.submitCooldownSec) || 0))),
+    perUserQueueLimit: Math.max(0, Math.min(50, Math.floor(Number(source.perUserQueueLimit ?? defaults.perUserQueueLimit) || 0))),
+    canvas: {
+      widthRatio: Math.max(1, Math.min(32, Number(canvas.widthRatio ?? defaults.canvas.widthRatio) || defaults.canvas.widthRatio)),
+      heightRatio: Math.max(1, Math.min(32, Number(canvas.heightRatio ?? defaults.canvas.heightRatio) || defaults.canvas.heightRatio)),
+    },
+  };
+}
+
+function computeDrawingInkUsage(strokes = []) {
+  let rawInk = 0;
+  for (const stroke of Array.isArray(strokes) ? strokes : []) {
+    const brush = stroke?.brush || {};
+    const points = Array.isArray(stroke?.points) ? stroke.points : [];
+    if (!points.length) continue;
+    const size = Math.max(0.002, Math.min(0.08, Number(brush.size ?? 0.012) || 0.012));
+    const alpha = brush.type === 'eraser' ? 1 : Math.max(0.05, Math.min(1, Number(brush.alpha ?? 1) || 1));
+    const toolFactor = brush.type === 'eraser' ? 0.35 : brush.type === 'highlighter' ? 0.7 : brush.type === 'airbrush' ? 1.25 : 1;
+    if (points.length === 1) {
+      rawInk += size * alpha * toolFactor * Math.max(0.5, Number(points[0].p || 1) || 1) * 0.2;
+      continue;
+    }
+    for (let i = 1; i < points.length; i += 1) {
+      const prev = points[i - 1];
+      const point = points[i];
+      const dx = Number(point.x || 0) - Number(prev.x || 0);
+      const dy = Number(point.y || 0) - Number(prev.y || 0);
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      const pressure = Math.max(0.05, Math.min(2, ((Number(prev.p || 1) || 1) + (Number(point.p || 1) || 1)) / 2));
+      rawInk += distance * size * alpha * pressure * toolFactor;
+    }
+  }
+  const units = Math.max(1, Math.ceil(rawInk * 1000));
+  return {
+    raw: Number(rawInk.toFixed(6)),
+    units,
+  };
+}
+
+function calculateDrawingDonationCost(settings = {}, inkUsage = null) {
+  const normalized = normalizeDrawingDonationSettings(settings);
+  if (normalized.pricingMode === 'ink') {
+    const units = Math.max(1, Number(inkUsage?.units || 1) || 1);
+    return Math.max(0, Math.ceil(units * Number(normalized.inkCostPerUnit || 0)));
+  }
+  return Math.max(0, Math.floor(Number(normalized.costPoints || 0) || 0));
+}
+
+function compactDrawingStrokePoints(points = [], brush = {}) {
+  if (!Array.isArray(points) || points.length <= 2) return Array.isArray(points) ? points : [];
+  const size = Math.max(0.002, Math.min(0.08, Number(brush.size ?? 0.012) || 0.012));
+  const minDistance = Math.max(0.0007, size * 0.04);
+  const compacted = [points[0]];
+  for (let index = 1; index < points.length - 1; index += 1) {
+    const previous = compacted[compacted.length - 1];
+    const point = points[index];
+    const dx = Number(point.x || 0) - Number(previous.x || 0);
+    const dy = Number(point.y || 0) - Number(previous.y || 0);
+    const distance = Math.sqrt(dx * dx + dy * dy);
+    const elapsed = Number(point.t || 0) - Number(previous.t || 0);
+    if (distance >= minDistance || elapsed >= 32) compacted.push(point);
+  }
+  const last = points[points.length - 1];
+  const previous = compacted[compacted.length - 1];
+  if (!previous || previous.x !== last.x || previous.y !== last.y || previous.t !== last.t) compacted.push(last);
+  return compacted;
+}
+
+function normalizeDrawingPreviewImage(value) {
+  const text = String(value || '').trim();
+  if (!text) return null;
+  if (!/^data:image\/(webp|png|jpeg);base64,[a-z0-9+/=]+$/i.test(text)) return null;
+  return Buffer.byteLength(text, 'utf8') <= 384 * 1024 ? text : null;
+}
+
+async function maybeStoreDrawingStrokes(ownerSid, drawingId, strokes) {
+  const key = `drawing-donations/${String(ownerSid || 'unknown').replace(/[^a-z0-9:_-]/gi, '_')}/${drawingId}/strokes.json`;
+  try {
+    return await uploadDrawingDonationObject(key, { version: 1, strokes }, 'application/json; charset=utf-8');
+  } catch (error) {
+    console.warn('[Drawing Donation] stroke storage fallback to DB:', error?.message || error);
+    return null;
+  }
+}
+
+function getDrawingLivePlaybackCacheKey(provider, channelId) {
+  return `${String(provider || '').toLowerCase()}:${String(channelId || '').toLowerCase()}`;
+}
+
+async function fetchJsonWithTimeout(url, { timeoutMs = 6000, headers = {} } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      headers: {
+        accept: 'application/json,text/plain,*/*',
+        'user-agent': 'Mozilla/5.0 AruBot/2.0',
+        ...headers,
+      },
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return await response.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function parseChzzkLlhlsPlaybackUrl(payload = {}) {
+  const candidates = ['livePlaybackJson', 'previewPlaybackJson', 'radioModePlaybackJson'];
+  for (const key of candidates) {
+    const raw = payload?.content?.[key];
+    if (!raw || typeof raw !== 'string') continue;
+    let playback = null;
+    try {
+      playback = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+    const media = Array.isArray(playback?.media) ? playback.media : [];
+    const llhls = media.find((item) => String(item?.mediaId || '').toLowerCase() === 'llhls');
+    const path = String(llhls?.path || '').trim();
+    if (/^https?:\/\/.+\.m3u8(\?.*)?$/i.test(path)) return path;
+  }
+  return null;
+}
+
+function parseCimePlaybackUrl(payload = {}) {
+  const url = String(payload?.data?.playbackUrl || '').trim();
+  return /^https?:\/\/.+\.m3u8(\?.*)?$/i.test(url) ? url : null;
+}
+
+async function resolveDrawingLivePlaybackUrl(provider, channelId) {
+  const normalizedProvider = String(provider || '').trim().toLowerCase();
+  const normalizedChannelId = String(channelId || '').trim().replace(/^@/, '');
+  if (!normalizedChannelId || !['chzzk', 'cime'].includes(normalizedProvider)) return null;
+  const cacheKey = getDrawingLivePlaybackCacheKey(normalizedProvider, normalizedChannelId);
+  const cached = drawingLivePlaybackCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+  let playbackUrl = null;
+  if (normalizedProvider === 'chzzk') {
+    const url = `https://api.chzzk.naver.com/service/v3.3/channels/${encodeURIComponent(normalizedChannelId)}/live-detail`;
+    playbackUrl = parseChzzkLlhlsPlaybackUrl(await fetchJsonWithTimeout(url, { headers: { referer: `https://chzzk.naver.com/live/${encodeURIComponent(normalizedChannelId)}` } }));
+  } else if (normalizedProvider === 'cime') {
+    const url = `https://ci.me/api/app/channels/${encodeURIComponent(normalizedChannelId)}/live`;
+    playbackUrl = parseCimePlaybackUrl(await fetchJsonWithTimeout(url, { headers: { referer: `https://ci.me/@${encodeURIComponent(normalizedChannelId)}` } }));
+  }
+
+  const value = playbackUrl ? { provider: normalizedProvider, channelId: normalizedChannelId, playbackUrl, fetchedAt: new Date().toISOString() } : null;
+  drawingLivePlaybackCache.set(cacheKey, { expiresAt: Date.now() + (value ? 15_000 : 5_000), value });
+  if (drawingLivePlaybackCache.size > 200) {
+    for (const [key, entry] of drawingLivePlaybackCache) {
+      if (entry.expiresAt <= Date.now() || drawingLivePlaybackCache.size > 160) drawingLivePlaybackCache.delete(key);
+    }
+  }
+  return value;
+}
+
+function buildDrawingLiveSurfaceFromAccount(account = {}, liveState = null) {
+  const provider = String(account.provider || '').toLowerCase();
+  const channelId = String(account.channel_id || account.channelId || account.platform_user_id || '').trim();
+  const channelName = account.channel_name || account.channelName || channelId;
+  const handle = String(account.channel_handle || account.channelHandle || '').trim();
+  const metadata = account.metadata && typeof account.metadata === 'object' ? account.metadata : {};
+  const publicProfile = metadata.publicProfile && typeof metadata.publicProfile === 'object' ? metadata.publicProfile : {};
+  const profileUrl = String(account.profile_url || account.profileUrl || publicProfile.profileUrl || publicProfile.url || metadata.profileUrl || '').trim();
+  const liveUrl = String(publicProfile.liveUrl || metadata.liveUrl || '').trim();
+  let watchUrl = '';
+  let embedUrl = '';
+  if (provider === 'youtube') {
+    const youtubeChannelId = channelId || publicProfile.channelId || '';
+    watchUrl = liveUrl || profileUrl || (youtubeChannelId ? `https://www.youtube.com/channel/${encodeURIComponent(youtubeChannelId)}/live` : '');
+    embedUrl = youtubeChannelId ? `https://www.youtube.com/embed/live_stream?channel=${encodeURIComponent(youtubeChannelId)}&autoplay=1&mute=1&controls=0&modestbranding=1&playsinline=1` : '';
+  } else if (provider === 'chzzk') {
+    watchUrl = liveUrl || profileUrl || (channelId ? `https://chzzk.naver.com/live/${encodeURIComponent(channelId)}` : '');
+    embedUrl = watchUrl;
+  } else if (provider === 'cime') {
+    const cimeId = handle || channelId;
+    watchUrl = liveUrl || profileUrl || (cimeId ? `https://ci.me/${encodeURIComponent(cimeId)}` : '');
+    embedUrl = watchUrl;
+  }
+  return {
+    provider,
+    channelId,
+    handle,
+    channelName,
+    avatarUrl: account.avatar_url || account.avatarUrl || publicProfile.avatarUrl || null,
+    live: liveState?.provider === provider ? !!liveState.live : null,
+    watchUrl,
+    embedUrl,
+    hlsChannelId: provider === 'cime' ? (handle || channelId).replace(/^@/, '') : channelId,
+    hlsSupported: provider === 'chzzk' || provider === 'cime',
+    embeddable: provider === 'youtube',
+  };
+}
+
+async function collectDrawingLiveSurfacesForSid(sid) {
+  const ownerUserId = String(sid || '').replace(/^user:/, '');
+  if (!ownerUserId) return [];
+  const accounts = await listPlatformAccounts(ownerUserId).catch(() => []);
+  const surfaces = [];
+  for (const account of accounts || []) {
+    const provider = String(account.provider || '').toLowerCase();
+    let liveState = liveStatusCache.get(sid) || null;
+    if (provider === 'youtube') {
+      liveState = liveState?.provider === 'youtube' ? liveState : null;
+    } else if (provider === 'chzzk') {
+      liveState = liveState?.provider === 'chzzk' ? liveState : null;
+    } else if (provider === 'cime') {
+      liveState = liveState?.provider === 'cime' ? liveState : null;
+    }
+    const surface = buildDrawingLiveSurfaceFromAccount(account, liveState);
+    if (surface.provider && surface.channelId) surfaces.push(surface);
+  }
+  return surfaces;
+}
+
+function normalizeBlockedBotUsers(input) {
+  const items = Array.isArray(input) ? input : [];
+  const seen = new Set();
+  return items.map((item) => ({
+    userId: String(item?.userId || '').trim(),
+    username: String(item?.username || '').trim() || null,
+    reason: String(item?.reason || '').trim() || null,
+    createdAt: item?.createdAt || new Date().toISOString(),
+  })).filter((item) => {
+    if (!item.userId) return false;
+    const key = item.userId.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function buildBotUserBlockKeys(userId, provider = null, extra = []) {
+  const keys = new Set();
+  const add = (value) => {
+    const text = String(value || '').trim();
+    if (!text) return;
+    keys.add(text.toLowerCase());
+    const raw = text.includes(':') ? text.split(':').slice(1).join(':') : text;
+    if (raw) keys.add(raw.toLowerCase());
+    const p = String(provider || '').trim().toLowerCase();
+    if (p && raw) keys.add(`${p}:${raw}`.toLowerCase());
+  };
+  add(userId);
+  for (const value of Array.isArray(extra) ? extra : []) add(value);
+  return keys;
+}
+
+function findBlockedBotUser(settings = {}, userId, provider = null, extra = []) {
+  const keys = buildBotUserBlockKeys(userId, provider, extra);
+  if (!keys.size) return null;
+  for (const item of normalizeBlockedBotUsers(settings.blockedBotUsers)) {
+    const itemKeys = buildBotUserBlockKeys(item.userId);
+    for (const key of itemKeys) {
+      if (keys.has(key)) return item;
+    }
+  }
+  return null;
+}
+
+function normalizeDrawingStrokePayload(body = {}, settings = getDefaultDrawingDonationSettings()) {
+  const strokes = Array.isArray(body.strokes) ? body.strokes : [];
+  if (!strokes.length) {
+    const error = new Error('drawing_empty');
+    error.status = 400;
+    throw error;
+  }
+  const maxStrokes = Math.max(1, Number(settings.maxStrokes || 120));
+  const maxPoints = Math.max(10, Number(settings.maxPoints || 6000));
+  if (strokes.length > maxStrokes) {
+    const error = new Error('too_many_strokes');
+    error.status = 400;
+    throw error;
+  }
+
+  let rawPointCount = 0;
+  const normalized = strokes.map((stroke, strokeIndex) => {
+    const brush = stroke?.brush && typeof stroke.brush === 'object' ? stroke.brush : {};
+    const points = Array.isArray(stroke?.points) ? stroke.points : [];
+    rawPointCount += points.length;
+    if (rawPointCount > maxPoints) {
+      const error = new Error('too_many_points');
+      error.status = 400;
+      throw error;
+    }
+    const normalizedBrush = {
+      type: ['pen', 'marker', 'highlighter', 'airbrush', 'eraser'].includes(String(brush.type || 'pen')) ? String(brush.type || 'pen') : 'pen',
+      color: /^#[0-9a-f]{6}$/i.test(String(brush.color || '')) ? String(brush.color) : '#ff6b9a',
+      alpha: String(brush.type || 'pen') === 'eraser' ? 1 : Math.max(0.05, Math.min(1, Number(brush.alpha ?? 1) || 1)),
+      size: Math.max(0.002, Math.min(0.08, Number(brush.size ?? 0.012) || 0.012)),
+    };
+    const normalizedPoints = points.map((point, pointIndex) => ({
+      x: Math.max(0, Math.min(1, Number(point?.x ?? 0) || 0)),
+      y: Math.max(0, Math.min(1, Number(point?.y ?? 0) || 0)),
+      p: Math.max(0.05, Math.min(2, Number(point?.p ?? 1) || 1)),
+      t: Math.max(0, Math.floor(Number(point?.t ?? pointIndex * 16) || 0)),
+    }));
+    return {
+      id: String(stroke?.id || `s${strokeIndex + 1}`),
+      brush: normalizedBrush,
+      points: compactDrawingStrokePoints(normalizedPoints, normalizedBrush),
+    };
+  }).filter((stroke) => stroke.points.length > 0);
+
+  if (!normalized.length) {
+    const error = new Error('drawing_empty');
+    error.status = 400;
+    throw error;
+  }
+
+  const pointCount = normalized.reduce((sum, stroke) => sum + stroke.points.length, 0);
+  const jsonSize = Buffer.byteLength(JSON.stringify(normalized), 'utf8');
+  if (jsonSize > 1024 * 1024) {
+    const error = new Error('drawing_too_large');
+    error.status = 400;
+    throw error;
+  }
+
+  const ink = computeDrawingInkUsage(normalized);
+  return { strokes: normalized, pointCount, rawPointCount, jsonSize, ink };
+}
+
+function computeDrawingReplay(strokes, replayMaxSec) {
+  const idleCapMs = 120;
+  let activeMs = 0;
+  for (const stroke of strokes || []) {
+    const points = Array.isArray(stroke.points) ? stroke.points : [];
+    for (let i = 1; i < points.length; i += 1) {
+      activeMs += Math.min(idleCapMs, Math.max(0, Number(points[i].t || 0) - Number(points[i - 1].t || 0)));
+    }
+  }
+  activeMs = Math.max(1000, activeMs);
+  const targetReplayMs = Math.max(1000, Math.min(Math.max(1, Number(replayMaxSec || 12)) * 1000, activeMs));
+  return {
+    activeDrawMs: activeMs,
+    targetReplayMs,
+    speed: Number((activeMs / targetReplayMs).toFixed(2)),
+    idleCapMs,
+  };
+}
+
+function drawingTokenFromSid(sid) {
+  const uid = String(sid || '').replace(/^user:/, '');
+  const existingSecret = process.env.DRAWING_DONATION_TOKEN_SECRET || process.env.PVD_TOKEN_SECRET || '';
+  if (uid && existingSecret) {
+    const h = crypto.createHmac('sha256', existingSecret).update(`drawing:${uid}`).digest('base64url');
+    return `draw_${h.slice(0, 32)}`;
+  }
+  return `draw_${pvdRandomToken(24)}`;
+}
+
+async function getDrawingSidByToken(token) {
+  const text = String(token || '').trim();
+  if (!text) return null;
+  if (drawingTokenToSid.has(text)) return drawingTokenToSid.get(text);
+  for (const sid of Array.from(activeSids?.keys?.() || [])) {
+    const settings = await getBotSettings(sid).catch(() => null) || {};
+    if (settings.drawingDonationViewerToken === text) {
+      drawingTokenToSid.set(text, sid);
+      return sid;
+    }
+  }
+  return null;
+}
+
+function getCurrentDrawingItem(sid) {
+  const queue = getDrawingQueue(sid);
+  return queue.find((item) => item.status === 'approved' || item.status === 'playing') || null;
+}
+
+async function listDrawingQueueForSid(sid) {
+  try {
+    return await listDrawingDonationItems(sid, { limit: 100 });
+  } catch (error) {
+    console.warn('[Drawing Donation] DB queue list failed; using memory fallback:', error?.message || error);
+    return getDrawingQueue(sid);
+  }
+}
+
+async function getDrawingQueueSnapshot(sid, reason = 'queue_changed') {
+  const items = await listDrawingQueueForSid(sid).catch(() => getDrawingQueue(sid));
+  const currentItem = (items || []).find((item) => item.status === 'playing' || item.status === 'approved') || null;
+  return {
+    type: 'drawing-donation.queue',
+    reason,
+    items: items || [],
+    currentItem,
+    waitingItems: (items || []).filter((item) => item.id !== currentItem?.id),
+    queueSize: Array.isArray(items) ? items.length : 0,
+    serverNow: Date.now(),
+  };
+}
+
+async function notifyDrawingAdminSubscribers(sid, reason = 'queue_changed') {
+  const set = drawingAdminSockets.get(sid);
+  if (!set || !set.size) return;
+  const payload = await getDrawingQueueSnapshot(sid, reason).catch(() => null);
+  if (!payload) return;
+  const text = JSON.stringify(payload);
+  for (const ws of Array.from(set)) {
+    try {
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === 1) ws.send(text, { compress: false });
+      else set.delete(ws);
+    } catch {
+      set.delete(ws);
+    }
+  }
+  if (set.size === 0) drawingAdminSockets.delete(sid);
+}
+
+async function notifyDrawingSubscribers(sid, reason = 'queue_changed') {
+  const set = drawingOverlaySockets.get(sid);
+  if (!set || !set.size) return;
+  const item = await getCurrentDrawingItemForSid(sid).catch(() => null);
+  const text = JSON.stringify({
+    type: 'drawing-donation.current',
+    reason,
+    item,
+    serverNow: Date.now(),
+  });
+  for (const ws of Array.from(set)) {
+    try {
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === 1) ws.send(text, { compress: false });
+      else set.delete(ws);
+    } catch {
+      set.delete(ws);
+    }
+  }
+  if (set.size === 0) drawingOverlaySockets.delete(sid);
+}
+
+async function getDrawingItemForSid(sid, id, options = {}) {
+  try {
+    return await getDrawingDonationItem(sid, id, options);
+  } catch (error) {
+    console.warn('[Drawing Donation] DB item lookup failed; using memory fallback:', error?.message || error);
+    const item = getDrawingQueue(sid).find((entry) => entry.id === id) || null;
+    if (!item) return null;
+    if (options.includeStrokes) return item;
+    const { strokes, ...withoutStrokes } = item;
+    return withoutStrokes;
+  }
+}
+
+async function getCurrentDrawingItemForSid(sid) {
+  try {
+    return await getCurrentDrawingDonationItem(sid);
+  } catch (error) {
+    console.warn('[Drawing Donation] DB current lookup failed; using memory fallback:', error?.message || error);
+    const item = getCurrentDrawingItem(sid);
+    if (item && item.status === 'approved') {
+      item.status = 'playing';
+      item.playingAt = item.playingAt || new Date().toISOString();
+    }
+    return item || null;
+  }
+}
+
+async function updateDrawingItemStatusForSid(sid, id, status, extra = {}) {
+  try {
+    return await updateDrawingDonationItemStatus(sid, id, status, extra);
+  } catch (error) {
+    console.warn('[Drawing Donation] DB status update failed; using memory fallback:', error?.message || error);
+    const item = getDrawingQueue(sid).find((entry) => entry.id === id) || null;
+    if (!item) return null;
+    item.status = status;
+    item.updatedAt = new Date().toISOString();
+    if (status === 'approved') item.approvedAt = item.approvedAt || item.updatedAt;
+    if (status === 'playing') item.playingAt = item.playingAt || item.updatedAt;
+    if (status === 'done') item.doneAt = item.doneAt || item.updatedAt;
+    if (status === 'rejected') item.rejectedAt = item.rejectedAt || item.updatedAt;
+    if (extra.pointRefunded != null) item.pointRefunded = extra.pointRefunded === true;
+    return item;
+  }
+}
+
+async function reorderDrawingItemsForSid(sid, ids = []) {
+  try {
+    return await reorderDrawingDonationItems(sid, ids);
+  } catch (error) {
+    console.warn('[Drawing Donation] DB reorder failed; using memory fallback:', error?.message || error);
+    const q = getDrawingQueue(sid);
+    const byId = new Map(q.map((item) => [String(item.id), item]));
+    const ordered = ids.map((id) => byId.get(String(id))).filter(Boolean);
+    const orderedIds = new Set(ordered.map((item) => String(item.id)));
+    const remaining = q.filter((item) => !orderedIds.has(String(item.id)));
+    const next = [...ordered, ...remaining].map((item, index) => ({ ...item, position: index }));
+    drawingDonationQueues.set(sid, next);
+    return next;
+  }
+}
+
+async function deleteDrawingItemForSid(sid, id) {
+  try {
+    return await deleteDrawingDonationItem(sid, id);
+  } catch (error) {
+    console.warn('[Drawing Donation] DB delete failed; using memory fallback:', error?.message || error);
+    const q = getDrawingQueue(sid);
+    const index = q.findIndex((entry) => entry.id === id);
+    if (index < 0) return null;
+    const [item] = q.splice(index, 1);
+    return item;
+  }
+}
+
+async function resolveDrawingDonationSettingsForBalance(balance) {
+  const rawCandidates = [
+    balance?.canonicalChannelUid,
+    balance?.channelUid,
+    String(balance?.canonicalChannelUid || '').replace(/^user:/, ''),
+    String(balance?.channelUid || '').replace(/^user:/, ''),
+  ].map((value) => String(value || '').trim()).filter(Boolean);
+  const candidates = Array.from(new Set(rawCandidates.flatMap((value) => [value, value.startsWith('user:') ? value : `user:${value}`])));
+  for (const sid of candidates) {
+    const settings = await getBotSettings(sid).catch(() => null);
+    const drawing = normalizeDrawingDonationSettings(settings?.drawingDonation);
+    if (drawing.enabled) return { sid, settings, drawing };
+  }
+  return null;
+}
+
+async function collectViewerDrawingDonationStreamers(ownerUserId) {
+  const platforms = await listPlatformAccounts(ownerUserId).catch(() => []);
+  const identityKeys = collectViewerPointIdentityKeys(ownerUserId, platforms);
+  const balances = await listViewerPointBalancesForUserIds(identityKeys);
+  const entries = [];
+  for (const balance of balances || []) {
+    const resolved = await resolveDrawingDonationSettingsForBalance(balance);
+    if (!resolved) continue;
+    const blocked = findBlockedBotUser(resolved.settings, ownerUserId, null, identityKeys);
+    const liveSurfaces = await collectDrawingLiveSurfacesForSid(resolved.sid).catch(() => []);
+    entries.push({
+      channelUid: balance.channelUid,
+      canonicalChannelUid: balance.canonicalChannelUid || null,
+      channelName: balance.channelName || balance.channelUid,
+      avatarUrl: balance.avatarUrl || null,
+      provider: balance.provider || null,
+      points: Number(balance.points || 0),
+      identities: balance.identities || [],
+      liveSurfaces,
+      drawingDonation: {
+        enabled: true,
+        pricingMode: resolved.drawing.pricingMode,
+        costPoints: resolved.drawing.costPoints,
+        inkCostPerUnit: resolved.drawing.inkCostPerUnit,
+        approvalMode: resolved.drawing.approvalMode,
+        replayMaxSec: resolved.drawing.replayMaxSec,
+        resultHoldSec: resolved.drawing.resultHoldSec,
+        canvas: resolved.drawing.canvas,
+        blocked: !!blocked,
+        blockReason: blocked?.reason || null,
+      },
+    });
+  }
+  return { platforms, identityKeys, streamers: entries };
+}
+
+function applyDrawingPointCost(balance, cost) {
+  let remaining = Math.max(0, Number(cost || 0));
+  const deductions = [];
+  const identities = (Array.isArray(balance?.identities) ? balance.identities : [])
+    .map((identity) => ({
+      userId: String(identity?.userId || '').trim(),
+      username: String(identity?.username || '').trim(),
+      points: Math.max(0, Number(identity?.points || 0)),
+    }))
+    .filter((identity) => identity.userId && identity.points > 0)
+    .sort((a, b) => b.points - a.points);
+
+  for (const identity of identities) {
+    if (remaining <= 0) break;
+    const amount = Math.min(remaining, identity.points);
+    deductions.push({ userId: identity.userId, username: identity.username || null, amount });
+    remaining -= amount;
+  }
+
+  return { ok: remaining <= 0, deductions, remaining };
 }
 
 async function fetchCimeClipInfo(clipId) {
@@ -11008,6 +12117,14 @@ async function getCurrentSessionUserId(req) {
   try { return await getSessionUserId(sidToken); } catch { return null; }
 }
 
+async function getBotRulesOwnerSid(req, res) {
+  const byKey = await getPartitionIdByApiKey(req);
+  if (byKey) return byKey;
+  const ownerUserId = await getCurrentSessionUserId(req);
+  if (ownerUserId) return `user:${String(ownerUserId)}`;
+  return await getPartitionId(req, res).catch(() => null);
+}
+
 async function requireCurrentAdminUser(req, res) {
   const ownerUserId = await getCurrentSessionUserId(req);
   if (!ownerUserId) {
@@ -13491,14 +14608,17 @@ app.get('/api/local-remote/overview', requireAutomationLocalAgent, async (req, r
     const rules = await getBotRulesWithDefaults(sid).catch(() => []);
     const rouletteDefs = getRouletteDefsFromSettings(settings);
     const videoQueue = getVideoQueue(sid);
+    const drawingQueue = await listDrawingQueueForSid(sid).catch(() => []);
     return res.json({
       rules,
       rouletteDefs,
       videoQueue,
+      drawingQueue,
       settings: {
         botEnabled: settings.botEnabled !== false,
         videoDonationAcceptEnabled: settings.videoDonationAcceptEnabled === true,
         videoDonationVolume: normalizePvdVolume(settings.videoDonationVolume ?? 100),
+        drawingDonation: normalizeDrawingDonationSettings(settings.drawingDonation),
       },
     });
   } catch (e) {
@@ -13627,6 +14747,121 @@ app.post('/api/local-remote/video-donation/control', requireAutomationLocalAgent
     return res.json({ ok: true, message });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to control video donation playback' });
+  }
+});
+
+app.post('/api/local-remote/drawing-donation/approve', requireAutomationLocalAgent, async (req, res) => {
+  try {
+    const sid = getLocalRemoteSid(req);
+    if (!sid) return res.status(401).json({ error: 'Invalid local program token' });
+    const id = String(req.body?.id || '').trim();
+    if (!id) return res.status(400).json({ error: 'id is required' });
+    const item = await updateDrawingItemStatusForSid(sid, id, 'approved');
+    if (!item) return res.status(404).json({ error: 'not_found' });
+    notifyDrawingSubscribers(sid, 'approved').catch(() => null);
+    notifyDrawingAdminSubscribers(sid, 'approved').catch(() => null);
+    return res.json({ ok: true, item, items: await listDrawingQueueForSid(sid).catch(() => []) });
+  } catch (e) {
+    console.error('[Local Remote] drawing approve error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to approve drawing donation' });
+  }
+});
+
+app.post('/api/local-remote/drawing-donation/reject', requireAutomationLocalAgent, async (req, res) => {
+  try {
+    const sid = getLocalRemoteSid(req);
+    if (!sid) return res.status(401).json({ error: 'Invalid local program token' });
+    const id = String(req.body?.id || '').trim();
+    if (!id) return res.status(400).json({ error: 'id is required' });
+    let item = await getDrawingItemForSid(sid, id, { includeStrokes: true });
+    if (!item) return res.status(404).json({ error: 'not_found' });
+    let refundedAmount = 0;
+    if (!item.pointRefunded) {
+      for (const deduction of item.pointDeductions || []) {
+        await incrChannelPoints(item.channelUid, deduction.userId, deduction.username || item.viewerName || null, Number(deduction.amount || 0)).catch(() => null);
+        refundedAmount += Number(deduction.amount || 0);
+      }
+      item.pointRefunded = true;
+    }
+    item = await updateDrawingItemStatusForSid(sid, id, 'rejected', { pointRefunded: true }) || item;
+    if (refundedAmount > 0) {
+      await recordBotEventLogSafe(sid, {
+        category: 'drawing_donation',
+        eventType: 'drawing_donation_local_reject_refund',
+        provider: 'local_program',
+        channelUid: item.channelUid,
+        viewerUserId: item.viewerUserId,
+        viewerName: item.viewerName,
+        pointDelta: refundedAmount,
+        targetName: '그림 후원',
+        summary: `로컬 리모컨에서 그림 후원을 거절하고 ${refundedAmount}P를 반환`,
+        status: 'refunded',
+        metadata: { drawingId: item.id },
+      });
+    }
+    notifyDrawingSubscribers(sid, 'rejected').catch(() => null);
+    notifyDrawingAdminSubscribers(sid, 'rejected').catch(() => null);
+    return res.json({ ok: true, item, refundedAmount, items: await listDrawingQueueForSid(sid).catch(() => []) });
+  } catch (e) {
+    console.error('[Local Remote] drawing reject error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to reject drawing donation' });
+  }
+});
+
+app.post('/api/local-remote/drawing-donation/delete-refund', requireAutomationLocalAgent, async (req, res) => {
+  try {
+    const sid = getLocalRemoteSid(req);
+    if (!sid) return res.status(401).json({ error: 'Invalid local program token' });
+    const id = String(req.body?.id || '').trim();
+    if (!id) return res.status(400).json({ error: 'id is required' });
+    let item = await getDrawingItemForSid(sid, id, { includeStrokes: true });
+    if (!item) return res.status(404).json({ error: 'not_found' });
+    let refundedAmount = 0;
+    if (!item.pointRefunded) {
+      for (const deduction of item.pointDeductions || []) {
+        await incrChannelPoints(item.channelUid, deduction.userId, deduction.username || item.viewerName || null, Number(deduction.amount || 0)).catch(() => null);
+        refundedAmount += Number(deduction.amount || 0);
+      }
+      item.pointRefunded = true;
+    }
+    item = await deleteDrawingItemForSid(sid, id) || item;
+    if (refundedAmount > 0) {
+      await recordBotEventLogSafe(sid, {
+        category: 'drawing_donation',
+        eventType: 'drawing_donation_local_delete_refund',
+        provider: 'local_program',
+        channelUid: item.channelUid,
+        viewerUserId: item.viewerUserId,
+        viewerName: item.viewerName,
+        pointDelta: refundedAmount,
+        targetName: '그림 후원',
+        summary: `로컬 리모컨에서 그림 후원을 삭제하고 ${refundedAmount}P를 반환`,
+        status: 'refunded',
+        metadata: { drawingId: item.id },
+      });
+    }
+    notifyDrawingSubscribers(sid, 'deleted_refunded').catch(() => null);
+    notifyDrawingAdminSubscribers(sid, 'deleted_refunded').catch(() => null);
+    return res.json({ ok: true, item, refundedAmount, items: await listDrawingQueueForSid(sid).catch(() => []) });
+  } catch (e) {
+    console.error('[Local Remote] drawing delete error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to delete drawing donation' });
+  }
+});
+
+app.post('/api/local-remote/drawing-donation/pop', requireAutomationLocalAgent, async (req, res) => {
+  try {
+    const sid = getLocalRemoteSid(req);
+    if (!sid) return res.status(401).json({ error: 'Invalid local program token' });
+    const current = await getCurrentDrawingItemForSid(sid);
+    if (!current) return res.json({ item: null, items: await listDrawingQueueForSid(sid).catch(() => []) });
+    const item = await updateDrawingItemStatusForSid(sid, current.id, 'done') || current;
+    notifyDrawingSubscribers(sid, 'done').catch(() => null);
+    notifyDrawingAdminSubscribers(sid, 'done').catch(() => null);
+    return res.json({ ok: true, item, items: await listDrawingQueueForSid(sid).catch(() => []) });
+  } catch (e) {
+    console.error('[Local Remote] drawing pop error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to pop drawing donation' });
   }
 });
 
@@ -14405,14 +15640,19 @@ async function getBotRulesWithDefaults(sid) {
 }
 
 app.get('/api/bot/rules', async (req, res) => {
-  const sid = await getPartitionId(req, res);
-  if (!sid) return res.json({ rules: [] });
-  const rules = await getBotRulesWithDefaults(sid);
-  return res.json({ rules });
+  try {
+    const sid = await getBotRulesOwnerSid(req, res);
+    if (!sid) return res.status(401).json({ error: 'Login required', rules: [] });
+    const rules = await getBotRulesWithDefaults(sid);
+    return res.json({ rules });
+  } catch (e) {
+    console.error('Rule load failed:', e?.message || e, e?.hint || '', e?.details || '');
+    return res.status(500).json({ error: 'Failed to load rules', rules: [] });
+  }
 });
 
 app.post('/api/bot/rules/upsert', async (req, res) => {
-  const sid = await getPartitionId(req, res);
+  const sid = await getBotRulesOwnerSid(req, res);
   if (!sid) return res.status(401).json({ error: 'Login required' });
   const { rule } = req.body || {};
   if (!rule || !rule.id) return res.status(400).json({ error: 'rule with id is required' });
@@ -14444,7 +15684,7 @@ app.post('/api/bot/rules/upsert', async (req, res) => {
 });
 
 app.post('/api/bot/rules/delete', async (req, res) => {
-  const sid = await getPartitionId(req, res);
+  const sid = await getBotRulesOwnerSid(req, res);
   if (!sid) return res.status(401).json({ error: 'Login required' });
   const { id } = req.body || {};
   if (!id) return res.status(400).json({ error: 'id is required' });
@@ -17834,8 +19074,12 @@ async function verifyYoutubeBotModeratorRegistration(ownerUserId) {
       };
     }
   } catch (e) {
-    moderatorListError = e;
-    console.warn('[YouTube] Moderator list verification failed:', e?.response?.data?.error?.message || e?.message || e);
+    const message = e?.response?.data?.error?.message || e?.message || String(e || '');
+    const isExpectedCentralBotModeMiss = message === 'No YouTube tokens stored';
+    if (!isExpectedCentralBotModeMiss) {
+      moderatorListError = e;
+      console.warn('[YouTube] Moderator list verification failed:', message);
+    }
   }
 
   try {
@@ -18784,6 +20028,8 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
     if (uids.length) channelUid = uids[0];
   }
   if (!channelUid) return cleaned || '채널 ID를 확인할 수 없습니다.';
+  const blocked = findBlockedBotUser(settings, userId, providerFromLogContext(context), [context.user?.platformUserId, context.user?.rawUserId]);
+  if (blocked) return cleaned || '이 방송에서는 봇 기능을 사용할 수 없습니다.';
   const have = await getChannelPoints(channelUid, String(userId)).catch(() => 0);
   if (Number(have || 0) < cost) return `포인트가 부족합니다. 필요: ${cost}, 보유: ${Number(have || 0)}`;
 
@@ -20353,6 +21599,8 @@ async function validateWebSocketTokenConnection(token, tokenType, req) {
 // WebSocket servers (initialized below)
 let wssPvd; // PVD viewer WS (noServer mode)
 let wssPvdAdmin; // PVD admin queue WS (noServer mode)
+let wssDrawingOverlay; // Drawing donation overlay WS (noServer mode)
+let wssDrawingAdmin; // Drawing donation admin queue WS (noServer mode)
 let wssRoulette; // Roulette viewer WS (noServer mode)
 let wssPrediction; // Prediction overlay WS (noServer mode)
 let wssAutomationLocalAgent; // Local automation program WS
@@ -20557,6 +21805,122 @@ function registerPvdAdminRoutes() {
 }
 
 try { registerPvdAdminRoutes(); } catch (e) { console.error('[pvd admin ws] failed to register routes', e?.message || e); }
+
+function registerDrawingDonationWsRoutes() {
+  console.log('[drawing donation ws] initializing WebSocketServer on /api/drawing-donation/ws');
+  wssDrawingOverlay = new WebSocketServer({
+    noServer: true,
+    maxPayload: 64 * 1024,
+    perMessageDeflate: false,
+  });
+
+  wssDrawingOverlay.on('connection', async (ws, req) => {
+    let sid = null;
+    try {
+      const url = new URL(req.url, `http://localhost:${PORT}`);
+      const token = String(url.searchParams.get('token') || '').trim();
+      sid = await getDrawingSidByToken(token);
+      if (!sid) {
+        try { ws.close(1008, 'Invalid token'); } catch {}
+        return;
+      }
+
+      let set = drawingOverlaySockets.get(sid);
+      if (!set) { set = new Set(); drawingOverlaySockets.set(sid, set); }
+      set.add(ws);
+
+      const keepAlive = setInterval(() => {
+        try { ws.ping(); } catch {}
+      }, 30000);
+
+      const item = await getCurrentDrawingItemForSid(sid).catch(() => null);
+      try {
+        ws.send(JSON.stringify({ type: 'drawing-donation.current', reason: 'connected', item, serverNow: Date.now() }), { compress: false });
+      } catch {}
+
+      ws.on('message', async (raw) => {
+        try {
+          const message = JSON.parse(String(raw || '{}'));
+          if (message?.type === 'ping') {
+            ws.send(JSON.stringify({ type: 'pong', serverNow: Date.now() }), { compress: false });
+          }
+        } catch {}
+      });
+
+      ws.on('close', () => {
+        try { clearInterval(keepAlive); } catch {}
+        const sockets = drawingOverlaySockets.get(sid);
+        if (sockets) {
+          sockets.delete(ws);
+          if (sockets.size === 0) drawingOverlaySockets.delete(sid);
+        }
+      });
+      ws.on('error', () => {
+        try { ws.close(); } catch {}
+      });
+    } catch (error) {
+      console.error('[drawing donation ws] connection error', error?.message || error);
+      try { ws.close(1011, 'Drawing donation websocket error'); } catch {}
+    }
+  });
+
+  console.log('[drawing donation admin ws] initializing WebSocketServer on /api/drawing-donation/admin/ws');
+  wssDrawingAdmin = new WebSocketServer({
+    noServer: true,
+    maxPayload: 32 * 1024,
+    perMessageDeflate: false,
+  });
+
+  wssDrawingAdmin.on('connection', async (ws, req) => {
+    let sid = null;
+    try {
+      sid = await getPvdAdminSidFromRequest(req);
+      if (!sid) {
+        try { ws.close(1008, 'Login required'); } catch {}
+        return;
+      }
+
+      let set = drawingAdminSockets.get(sid);
+      if (!set) { set = new Set(); drawingAdminSockets.set(sid, set); }
+      set.add(ws);
+
+      const keepAlive = setInterval(() => {
+        try { ws.ping(); } catch {}
+      }, 30000);
+
+      const initial = await getDrawingQueueSnapshot(sid, 'connected').catch(() => null);
+      if (initial) {
+        try { ws.send(JSON.stringify(initial), { compress: false }); } catch {}
+      }
+
+      ws.on('message', async (raw) => {
+        try {
+          const message = JSON.parse(String(raw || '{}'));
+          if (message?.type === 'ping') {
+            ws.send(JSON.stringify({ type: 'pong', serverNow: Date.now() }), { compress: false });
+          }
+        } catch {}
+      });
+
+      ws.on('close', () => {
+        try { clearInterval(keepAlive); } catch {}
+        const sockets = drawingAdminSockets.get(sid);
+        if (sockets) {
+          sockets.delete(ws);
+          if (sockets.size === 0) drawingAdminSockets.delete(sid);
+        }
+      });
+      ws.on('error', () => {
+        try { ws.close(); } catch {}
+      });
+    } catch (error) {
+      console.error('[drawing donation admin ws] connection error', error?.message || error);
+      try { ws.close(1011, 'Drawing donation admin websocket error'); } catch {}
+    }
+  });
+}
+
+try { registerDrawingDonationWsRoutes(); } catch (e) { console.error('[drawing donation ws] failed to register routes', e?.message || e); }
 
 function getPredictionChannelKey(channelUid) {
   return String(channelUid || '').trim();
@@ -21093,6 +22457,14 @@ try {
       }
       if (u.pathname === '/api/video-donation/admin/ws') {
         wssPvdAdmin.handleUpgrade(req, socket, head, (ws) => wssPvdAdmin.emit('connection', ws, req));
+        return;
+      }
+      if (u.pathname === '/api/drawing-donation/ws') {
+        wssDrawingOverlay.handleUpgrade(req, socket, head, (ws) => wssDrawingOverlay.emit('connection', ws, req));
+        return;
+      }
+      if (u.pathname === '/api/drawing-donation/admin/ws') {
+        wssDrawingAdmin.handleUpgrade(req, socket, head, (ws) => wssDrawingAdmin.emit('connection', ws, req));
         return;
       }
       if (u.pathname === '/api/roulette/ws') {

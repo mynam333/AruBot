@@ -21,6 +21,10 @@ contextBridge.exposeInMainWorld('aruLocal', {
   remoteTestRoulette: (roulette) => ipcRenderer.invoke('remote:roulette:test', roulette),
   remotePopVideoDonation: () => ipcRenderer.invoke('remote:pvd:pop'),
   remoteControlVideoDonation: (control) => ipcRenderer.invoke('remote:pvd:control', control),
+  remoteApproveDrawingDonation: (id) => ipcRenderer.invoke('remote:drawing:approve', id),
+  remoteRejectDrawingDonation: (id) => ipcRenderer.invoke('remote:drawing:reject', id),
+  remoteDeleteRefundDrawingDonation: (id) => ipcRenderer.invoke('remote:drawing:deleteRefund', id),
+  remotePopDrawingDonation: () => ipcRenderer.invoke('remote:drawing:pop'),
   onState: (callback) => {
     const listener = (_event, state) => callback(state);
     ipcRenderer.on('agent-state', listener);

@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Cable, Menu, X } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { adminNav } from '@/shared/config/navigation';
 import { cn } from '@/shared/lib/utils';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
@@ -109,31 +109,11 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  const quickNav = useMemo(
-    () =>
-      getVisibleNav(isAdmin)
-        .filter((item) => ['/dashboard', '/connection', '/commands', '/points', '/roulette'].includes(item.href))
-        .map((item) => ({
-          ...item,
-          mobileLabel:
-            item.href === '/dashboard'
-              ? '홈'
-              : item.href === '/connection'
-                ? '연결'
-                : item.href === '/commands'
-                  ? '명령어'
-                  : item.href === '/points'
-                    ? '포인트'
-                    : '룰렛',
-        })),
-    [isAdmin],
-  );
-
   return (
-    <div className="min-h-screen pb-20 xl:pb-0">
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-[var(--shell-sidebar)] border-r bg-card/90 p-[var(--page-gutter)] backdrop-blur-xl xl:block">
+    <div className="min-h-screen">
+      <aside className="fixed inset-y-0 left-0 z-30 hidden w-[var(--shell-sidebar)] overflow-y-auto border-r bg-card/90 p-[var(--page-gutter)] backdrop-blur-xl scrollbar-none overscroll-contain xl:block">
         <Brand />
-        <div className="mt-5 max-h-[calc(100vh-7rem)] overflow-y-auto pr-1">
+        <div className="mt-5 pr-1">
           <NavList isAdmin={isAdmin} />
         </div>
       </aside>
@@ -162,8 +142,8 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
       {open ? (
         <div className="fixed inset-0 z-50 xl:hidden">
           <button className="absolute inset-0 bg-black/40" aria-label="메뉴 닫기" onClick={() => setOpen(false)} />
-          <aside className="absolute inset-y-0 left-0 w-[min(86vw,calc(var(--shell-sidebar)*1.12))] border-r bg-background p-[var(--page-gutter)] shadow-2xl">
-            <div className="mb-5 flex items-center justify-between">
+          <aside className="absolute inset-y-0 left-0 flex w-[min(86vw,calc(var(--shell-sidebar)*1.12))] flex-col overflow-hidden border-r bg-background p-[var(--page-gutter)] shadow-2xl">
+            <div className="mb-5 flex shrink-0 items-center justify-between">
               <Brand onClick={() => setOpen(false)} />
               <Tooltip content="메뉴 닫기">
                 <Button variant="ghost" size="icon" onClick={() => setOpen(false)} aria-label="메뉴 닫기">
@@ -171,7 +151,9 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
                 </Button>
               </Tooltip>
             </div>
-            <NavList isAdmin={isAdmin} onNavigate={() => setOpen(false)} />
+            <div className="min-h-0 flex-1 overflow-y-auto pr-1 scrollbar-none overscroll-contain">
+              <NavList isAdmin={isAdmin} onNavigate={() => setOpen(false)} />
+            </div>
           </aside>
         </div>
       ) : null}
@@ -179,27 +161,6 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
       <main className="px-[var(--page-gutter)] py-[clamp(1.25rem,2.4vw,1.75rem)] xl:pl-[calc(var(--shell-sidebar)+var(--page-gutter))] xl:pr-[var(--page-gutter)]">
         <div className="mx-auto flex w-full max-w-7xl flex-col gap-5 md:gap-6">{children}</div>
       </main>
-
-      <nav className="fixed inset-x-[clamp(0.75rem,2vw,1rem)] bottom-[clamp(0.75rem,2vw,1rem)] z-40 grid grid-cols-5 gap-1 rounded-[var(--radius-panel)] border bg-card/95 p-[clamp(0.25rem,0.8vw,0.375rem)] shadow-lift backdrop-blur-xl xl:hidden">
-        {quickNav.map((item) => {
-          const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
-          const Icon = item.icon;
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              prefetch={false}
-              className={cn(
-                'flex min-w-0 flex-col items-center justify-center gap-1 rounded-[var(--radius-control)] px-[clamp(0.25rem,1vw,0.5rem)] py-[clamp(0.5rem,1.4vw,0.75rem)] text-[0.6875rem] font-semibold text-muted-foreground transition',
-                active && 'bg-pastel-mint/70 text-foreground shadow-subtle dark:bg-primary/20',
-              )}
-            >
-              <Icon className={cn('h-4 w-4', active && 'text-primary')} />
-              <span className="max-w-full truncate">{item.mobileLabel}</span>
-            </Link>
-          );
-        })}
-      </nav>
     </div>
   );
 }

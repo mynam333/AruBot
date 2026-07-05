@@ -123,6 +123,7 @@ function ViewerShell({ children }: { children: React.ReactNode }) {
           <span className="text-sm font-semibold">AruBot</span>
         </Link>
         <div className="flex items-center gap-2">
+          <LinkButton href="/viewer/drawing" variant="ghost" className="hidden sm:inline-flex">그림 후원</LinkButton>
           <LinkButton href="/viewer/connect" variant="ghost" className="hidden sm:inline-flex">계정 연결</LinkButton>
           <LinkButton href="/streamer" variant="ghost" className="hidden sm:inline-flex">스트리머 콘솔</LinkButton>
           <ThemeToggle />

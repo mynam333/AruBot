@@ -13,7 +13,7 @@ import { cn, formatNumber } from '@/shared/lib/utils';
 type EventLog = {
   id: string;
   provider?: string | null;
-  category: 'command' | 'donation' | 'roulette' | 'video_donation' | 'prediction';
+  category: 'command' | 'donation' | 'roulette' | 'video_donation' | 'drawing_donation' | 'prediction';
   event_type?: string;
   source?: string | null;
   trigger_name?: string | null;
@@ -47,6 +47,7 @@ const CATEGORY_OPTIONS = [
   ['donation', '후원'],
   ['roulette', '룰렛'],
   ['video_donation', '영상 후원'],
+  ['drawing_donation', '그림 후원'],
   ['prediction', '배팅'],
 ] as const;
 
@@ -67,11 +68,12 @@ function providerLabel(provider?: string | null) {
   return PROVIDER_OPTIONS.find(([key]) => key === value)?.[1] || '공통';
 }
 
-function categoryTone(category?: string): 'neutral' | 'mint' | 'sky' | 'rose' | 'lemon' | 'coral' {
+function categoryTone(category?: string): 'neutral' | 'mint' | 'sky' | 'rose' | 'lemon' | 'coral' | 'violet' {
   if (category === 'command') return 'mint';
   if (category === 'donation') return 'coral';
   if (category === 'roulette') return 'lemon';
   if (category === 'video_donation') return 'sky';
+  if (category === 'drawing_donation') return 'violet';
   if (category === 'prediction') return 'rose';
   return 'neutral';
 }

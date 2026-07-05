@@ -76,6 +76,13 @@ async function postJson(path: string, body: unknown) {
   return response.json();
 }
 
+function getApiErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error && error.message && error.message !== 'request_failed') {
+    return error.message;
+  }
+  return fallback;
+}
+
 function normalizeCommand(value: string) {
   const text = value.trim().replace(/\s+/g, '');
   if (!text) return '';
@@ -245,8 +252,8 @@ export function CommandCreateDialog({ variant = 'secondary', label = '명령어 
         setResponse('');
         setPointsCost('0');
         close();
-      } catch {
-        toast.error('명령어를 저장하지 못했어요.');
+      } catch (error) {
+        toast.error(getApiErrorMessage(error, '명령어를 저장하지 못했어요.'));
       }
     });
   };

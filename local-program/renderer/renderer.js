@@ -14,6 +14,7 @@ const fields = {
   remoteCommandResponse: $('#remoteCommandResponse'),
   remoteCommandEnabled: $('#remoteCommandEnabled'),
   remoteRouletteSelect: $('#remoteRouletteSelect'),
+  remoteDrawingSelect: $('#remoteDrawingSelect'),
   remotePvdVolume: $('#remotePvdVolume'),
 };
 
@@ -25,6 +26,10 @@ const pageMeta = {
   remote: {
     title: '방송 중 필요한 버튼을 가까이에 두세요.',
     description: '명령어, 룰렛 테스트, 포인트 영상후원을 방송 PC에서 바로 누르고 흐름을 이어갑니다.',
+  },
+  drawing: {
+    title: '그림 후원을 방송 중 바로 관리하세요.',
+    description: '승인 대기 중인 그림을 확인하고, OBS 오버레이의 다음 그림까지 빠르게 넘깁니다.',
   },
   tits: {
     title: 'T.I.T.S. 아이템과 트리거를 바로 불러오세요.',
@@ -50,7 +55,7 @@ const pageMeta = {
 
 let latestState = null;
 let latestUpdate = null;
-let remoteState = { rules: [], rouletteDefs: [], videoQueue: [] };
+let remoteState = { rules: [], rouletteDefs: [], videoQueue: [], drawingQueue: [] };
 let vtubeDiscovery = { models: [], hotkeys: [] };
 const localTaskLogs = [];
 
@@ -68,7 +73,7 @@ function setActivePage(page) {
   if (window.location.hash !== `#${nextPage}`) {
     window.history.replaceState(null, '', `#${nextPage}`);
   }
-  if (nextPage === 'remote' && !(remoteState.rules.length || remoteState.rouletteDefs.length || remoteState.videoQueue.length)) {
+  if ((nextPage === 'remote' || nextPage === 'drawing') && !(remoteState.rules.length || remoteState.rouletteDefs.length || remoteState.videoQueue.length || remoteState.drawingQueue.length)) {
     loadRemote().catch((error) => pushLocalLog('error', error?.message || '리모컨 정보를 불러오지 못했습니다.'));
   }
   if (nextPage === 'logs') scrollLogsToBottom();
@@ -199,12 +204,64 @@ function fillCommandForm(rule) {
   fields.remoteCommandEnabled.checked = current.enabled !== false;
 }
 
+function selectedDrawingItem() {
+  const id = fields.remoteDrawingSelect.value;
+  return (remoteState.drawingQueue || []).find((item) => String(item.id || '') === id) || null;
+}
+
+function drawingStatusLabel(status) {
+  if (status === 'approved') return '승인됨';
+  if (status === 'playing') return '재생 중';
+  if (status === 'queued') return '승인 대기';
+  if (status === 'rejected') return '거절됨';
+  if (status === 'done') return '완료';
+  return status || '대기';
+}
+
+function renderDrawingDetail(item = selectedDrawingItem()) {
+  const preview = $('#remoteDrawingPreview');
+  const detail = $('#remoteDrawingDetail');
+  if (!item) {
+    preview.innerHTML = '<span>선택한 그림 미리보기</span>';
+    detail.textContent = '대기 중인 그림 후원이 없습니다.';
+    $('#remoteDrawingNow').textContent = '현재 재생 항목 없음';
+    return;
+  }
+  preview.innerHTML = item.previewImage
+    ? `<img src="${escapeHtml(item.previewImage)}" alt="" />`
+    : '<span>미리보기 이미지 없음</span>';
+  detail.innerHTML = `
+    <strong>${escapeHtml(item.viewerName || item.viewerUserId || '시청자')} · ${escapeHtml(drawingStatusLabel(item.status))}</strong>
+    <span>${Number(item.cost || 0).toLocaleString('ko-KR')}P · 선 ${Number(item.metrics?.strokeCount || 0).toLocaleString('ko-KR')}개 · 점 ${Number(item.metrics?.pointCount || 0).toLocaleString('ko-KR')}개</span>
+  `;
+  const current = (remoteState.drawingQueue || []).find((entry) => entry.status === 'playing' || entry.status === 'approved');
+  $('#remoteDrawingNow').textContent = current
+    ? `${current.viewerName || current.viewerUserId || '시청자'} · ${drawingStatusLabel(current.status)} · ${Number(current.cost || 0).toLocaleString('ko-KR')}P`
+    : '현재 재생 항목 없음';
+}
+
+function renderDrawingQueue(items) {
+  remoteState.drawingQueue = Array.isArray(items) ? items : [];
+  const queued = remoteState.drawingQueue.filter((item) => item.status === 'queued').length;
+  const approved = remoteState.drawingQueue.filter((item) => item.status === 'approved' || item.status === 'playing').length;
+  $('#remoteDrawingQueuedCount').textContent = String(queued);
+  $('#remoteDrawingApprovedCount').textContent = String(approved);
+  fields.remoteDrawingSelect.innerHTML = remoteState.drawingQueue.length
+    ? remoteState.drawingQueue.map((item) => {
+      const label = `${item.viewerName || item.viewerUserId || '시청자'} · ${drawingStatusLabel(item.status)} · ${Number(item.cost || 0).toLocaleString('ko-KR')}P`;
+      return `<option value="${escapeHtml(item.id || '')}">${escapeHtml(label)}</option>`;
+    }).join('')
+    : '<option value="">그림 후원 없음</option>';
+  renderDrawingDetail(remoteState.drawingQueue[0] || null);
+}
+
 function renderRemote(data) {
   const nextVolume = Math.max(0, Math.min(100, Math.round(Number(data?.settings?.videoDonationVolume ?? 100))));
   remoteState = {
     rules: Array.isArray(data?.rules) ? data.rules : [],
     rouletteDefs: Array.isArray(data?.rouletteDefs) ? data.rouletteDefs : [],
     videoQueue: Array.isArray(data?.videoQueue) ? data.videoQueue : [],
+    drawingQueue: Array.isArray(data?.drawingQueue) ? data.drawingQueue : [],
   };
   $('#remoteCommandCount').textContent = String(remoteState.rules.length);
   $('#remoteRouletteCount').textContent = String(remoteState.rouletteDefs.length);
@@ -219,6 +276,7 @@ function renderRemote(data) {
   $('#remotePvdNow').textContent = current ? `${current.title || current.videoId || '영상'} · ${current.username || '시청자'}` : '현재 재생 항목 없음';
   fields.remotePvdVolume.value = String(nextVolume);
   $('#remotePvdVolumeText').textContent = `${nextVolume}%`;
+  renderDrawingQueue(remoteState.drawingQueue);
 }
 
 function diagnosticStatusLabel(status) {
@@ -411,6 +469,7 @@ $('#remoteRefreshButton').addEventListener('click', () => run(async () => {
 }));
 
 fields.remoteCommandSelect.addEventListener('change', () => fillCommandForm());
+fields.remoteDrawingSelect.addEventListener('change', () => renderDrawingDetail());
 
 $('#remoteSaveCommandButton').addEventListener('click', () => run(async () => {
   const current = selectedCommand();
@@ -476,6 +535,43 @@ $('#remotePvdVolumeButton').addEventListener('click', () => run(async () => {
   pushLocalLog('success', `영상후원 소리를 ${nextVolume}%로 조절했습니다.`);
 }));
 
+$('#remoteDrawingRefreshButton').addEventListener('click', () => run(async () => {
+  await loadRemote();
+  pushLocalLog('success', '그림 후원 대기열을 새로고침했습니다.');
+}));
+
+$('#remoteDrawingApproveButton').addEventListener('click', () => run(async () => {
+  const item = selectedDrawingItem();
+  if (!item?.id) return;
+  await window.aruLocal.remoteApproveDrawingDonation(item.id);
+  await loadRemote();
+  pushLocalLog('success', '그림 후원을 승인했습니다.');
+}));
+
+$('#remoteDrawingRejectButton').addEventListener('click', () => run(async () => {
+  const item = selectedDrawingItem();
+  if (!item?.id) return;
+  if (!window.confirm(`${item.viewerName || item.viewerUserId || '선택한 그림'}을 거절하고 포인트를 반환할까요?`)) return;
+  await window.aruLocal.remoteRejectDrawingDonation(item.id);
+  await loadRemote();
+  pushLocalLog('success', '그림 후원을 거절하고 포인트를 반환했습니다.');
+}));
+
+$('#remoteDrawingDeleteRefundButton').addEventListener('click', () => run(async () => {
+  const item = selectedDrawingItem();
+  if (!item?.id) return;
+  if (!window.confirm(`${item.viewerName || item.viewerUserId || '선택한 그림'}을 삭제하고 포인트를 반환할까요?`)) return;
+  await window.aruLocal.remoteDeleteRefundDrawingDonation(item.id);
+  await loadRemote();
+  pushLocalLog('success', '그림 후원을 삭제하고 포인트를 반환했습니다.');
+}));
+
+$('#remoteDrawingNextButton').addEventListener('click', () => run(async () => {
+  await window.aruLocal.remotePopDrawingDonation();
+  await loadRemote();
+  pushLocalLog('success', '다음 그림 후원으로 넘겼습니다.');
+}));
+
 window.aruLocal.onState(renderState);
 window.aruLocal.onLocalTask((task) => {
   if (!task || !task.type) return;
@@ -516,6 +612,6 @@ setActivePage(
     || 'connect',
 );
 window.aruLocal.getState().then(renderState);
-if ((window.location.hash || '').replace('#', '') === 'remote') {
+if (['remote', 'drawing'].includes((window.location.hash || '').replace('#', ''))) {
   loadRemote().catch((error) => pushLocalLog('error', error?.message || '리모컨 정보를 불러오지 못했습니다.'));
 }

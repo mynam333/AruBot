@@ -56,8 +56,16 @@ async function postJson(path: string, body: unknown) {
     credentials: 'include',
     body: JSON.stringify(body),
   });
-  if (!response.ok) throw new Error('request_failed');
-  return response.json().catch(() => ({}));
+  const data = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(data?.message || data?.error || 'request_failed');
+  return data || {};
+}
+
+function getApiErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error && error.message && error.message !== 'request_failed') {
+    return error.message;
+  }
+  return fallback;
 }
 
 function normalizeCommand(value: string) {
@@ -93,6 +101,11 @@ export function CommandsPage() {
   const load = useCallback(() => {
     startTransition(async () => {
       const data = await readJson<RulesResponse>('/api/bot/rules');
+      if (!data) {
+        setRules([]);
+        toast.error('명령어를 불러오지 못했습니다. 로그인 상태를 확인해 주세요.');
+        return;
+      }
       setRules(data?.rules || []);
     });
   }, []);
@@ -175,8 +188,8 @@ export function CommandsPage() {
       toast.success('명령어를 수정했어요.');
       closeEdit();
       load();
-    } catch {
-      toast.error('명령어를 저장하지 못했어요.');
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, '명령어를 저장하지 못했어요.'));
     } finally {
       setBusyId(null);
     }
@@ -189,8 +202,8 @@ export function CommandsPage() {
       await postJson('/api/bot/rules/delete', { id: rule.id });
       toast.success('명령어를 삭제했어요.');
       load();
-    } catch {
-      toast.error('명령어를 삭제하지 못했어요.');
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, '명령어를 삭제하지 못했어요.'));
     } finally {
       setBusyId(null);
     }
