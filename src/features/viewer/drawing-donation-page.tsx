@@ -128,21 +128,25 @@ async function loadLivePlayback(surface: LiveSurface) {
   return response.json() as Promise<{ playbackUrl: string }>;
 }
 
+function traceDrawingPath(ctx: CanvasRenderingContext2D, points: StrokePoint[], width: number, height: number) {
+  ctx.beginPath();
+  ctx.moveTo(points[0].x * width, points[0].y * height);
+  for (const point of points.slice(1)) ctx.lineTo(point.x * width, point.y * height);
+}
+
 function drawStroke(ctx: CanvasRenderingContext2D, stroke: Stroke, width: number, height: number, until = Infinity) {
   const points = stroke.points.filter((point) => point.t <= until);
   if (!points.length) return;
   const shortSide = Math.min(width, height);
+  const baseAlpha = Math.max(0.03, Math.min(1, Number(stroke.brush.alpha || 1)));
+  const baseLineWidth = Math.max(1, shortSide * stroke.brush.size);
   ctx.save();
-  ctx.globalAlpha = stroke.brush.type === 'eraser' ? 1 : stroke.brush.alpha;
+  ctx.globalAlpha = stroke.brush.type === 'eraser' ? 1 : baseAlpha;
   ctx.globalCompositeOperation = stroke.brush.type === 'eraser' ? 'destination-out' : stroke.brush.type === 'highlighter' ? 'multiply' : 'source-over';
   ctx.strokeStyle = stroke.brush.color;
-  ctx.lineWidth = Math.max(1, shortSide * stroke.brush.size);
+  ctx.lineWidth = baseLineWidth;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
-  if (stroke.brush.type === 'marker') {
-    ctx.shadowColor = stroke.brush.color;
-    ctx.shadowBlur = Math.max(1, shortSide * stroke.brush.size * 0.35);
-  }
   if (stroke.brush.type === 'airbrush') {
     ctx.fillStyle = stroke.brush.color;
     const radius = Math.max(1, shortSide * stroke.brush.size * 0.9);
@@ -158,6 +162,31 @@ function drawStroke(ctx: CanvasRenderingContext2D, stroke: Stroke, width: number
     ctx.restore();
     return;
   }
+  if (stroke.brush.type === 'marker') {
+    const layers = [
+      { scale: 3.15, alpha: 0.07 },
+      { scale: 2.35, alpha: 0.11 },
+      { scale: 1.65, alpha: 0.18 },
+      { scale: 1.06, alpha: 0.58 },
+    ];
+    ctx.shadowColor = stroke.brush.color;
+    for (const layer of layers) {
+      ctx.globalAlpha = baseAlpha * layer.alpha;
+      ctx.lineWidth = baseLineWidth * layer.scale;
+      ctx.shadowBlur = Math.max(0, baseLineWidth * (layer.scale - 1) * 0.28);
+      if (points.length === 1) {
+        ctx.fillStyle = stroke.brush.color;
+        ctx.beginPath();
+        ctx.arc(points[0].x * width, points[0].y * height, Math.max(0.5, ctx.lineWidth / 2), 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        traceDrawingPath(ctx, points, width, height);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+    return;
+  }
   if (points.length === 1) {
     ctx.fillStyle = stroke.brush.color;
     ctx.beginPath();
@@ -166,9 +195,7 @@ function drawStroke(ctx: CanvasRenderingContext2D, stroke: Stroke, width: number
     ctx.restore();
     return;
   }
-  ctx.beginPath();
-  ctx.moveTo(points[0].x * width, points[0].y * height);
-  for (const point of points.slice(1)) ctx.lineTo(point.x * width, point.y * height);
+  traceDrawingPath(ctx, points, width, height);
   ctx.stroke();
   ctx.restore();
 }
@@ -189,6 +216,7 @@ export function DrawingDonationEditorPage({ channelUid }: { channelUid: string }
   const brushCursorRef = useRef<HTMLDivElement | null>(null);
   const liveVideoRef = useRef<HTMLVideoElement | null>(null);
   const previewAnimationRef = useRef<number | null>(null);
+  const drawingFrameRef = useRef<number | null>(null);
   const drawingStartedAtRef = useRef(0);
   const activeStrokeRef = useRef<Stroke | null>(null);
   const strokesRef = useRef<Stroke[]>([]);
@@ -245,21 +273,28 @@ export function DrawingDonationEditorPage({ channelUid }: { channelUid: string }
     for (const stroke of strokesRef.current) drawStroke(target.ctx, stroke, target.width, target.height, atMs);
   }, [getCanvasTarget]);
 
-  const drawIncrementalStroke = useCallback((stroke: Stroke, points: StrokePoint[]) => {
-    const target = getCanvasTarget();
-    if (!target) return;
-    if (target.resized) {
+  const scheduleDrawingFrame = useCallback(() => {
+    if (drawingFrameRef.current) return;
+    drawingFrameRef.current = requestAnimationFrame(() => {
+      drawingFrameRef.current = null;
       redraw(strokesRef.current);
-      return;
+    });
+  }, [redraw]);
+
+  const flushDrawingFrame = useCallback(() => {
+    if (drawingFrameRef.current) {
+      cancelAnimationFrame(drawingFrameRef.current);
+      drawingFrameRef.current = null;
     }
-    drawStroke(target.ctx, { ...stroke, points }, target.width, target.height);
-  }, [getCanvasTarget, redraw]);
+    redraw(strokesRef.current);
+  }, [redraw]);
 
   const updateBrushCursor = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
     const cursor = brushCursorRef.current;
     if (!cursor) return;
     const rect = event.currentTarget.getBoundingClientRect();
-    const diameter = Math.max(8, Math.min(rect.width, rect.height) * brush.size);
+    const cursorScale = brush.type === 'marker' ? 2.35 : 1;
+    const diameter = Math.max(8, Math.min(rect.width, rect.height) * brush.size * cursorScale);
     const x = event.clientX - rect.left;
     const y = event.clientY - rect.top;
     cursor.style.width = `${diameter}px`;
@@ -292,6 +327,10 @@ export function DrawingDonationEditorPage({ channelUid }: { channelUid: string }
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, [redraw]);
+
+  useEffect(() => () => {
+    if (drawingFrameRef.current) cancelAnimationFrame(drawingFrameRef.current);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -392,7 +431,7 @@ export function DrawingDonationEditorPage({ channelUid }: { channelUid: string }
     const next = [...strokesRef.current, stroke];
     strokesRef.current = next;
     setStrokes(next);
-    drawIncrementalStroke(stroke, stroke.points);
+    flushDrawingFrame();
   };
 
   const moveStroke = (event: React.PointerEvent<HTMLCanvasElement>) => {
@@ -401,13 +440,13 @@ export function DrawingDonationEditorPage({ channelUid }: { channelUid: string }
     if (!active) return;
     const point = getPoint(event);
     if (!shouldAppendDrawingPoint(active, point)) return;
-    const previous = active.points[active.points.length - 1];
     active.points.push(point);
-    drawIncrementalStroke(active, active.brush.type === 'airbrush' ? [point] : previous ? [previous, point] : [point]);
+    scheduleDrawingFrame();
   };
 
   const endStroke = () => {
     activeStrokeRef.current = null;
+    flushDrawingFrame();
     setStrokes([...strokesRef.current]);
   };
 

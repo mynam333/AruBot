@@ -220,11 +220,11 @@ function getStationChannels(balance: ViewerBalance | null) {
   });
 }
 
-function PlatformLiveBadges({ balance }: { balance: ViewerBalance }) {
+function PlatformLiveBadges({ balance, className }: { balance: ViewerBalance; className?: string }) {
   const channels = getStationChannels(balance);
   if (!channels.length) return null;
   return (
-    <div className="mt-3 flex flex-wrap gap-1.5">
+    <div className={cn('flex flex-wrap gap-1.5', className)}>
       {channels.map((channel) => {
         const provider = channel.provider || balance.provider || 'chzzk';
         const live = channel.live === true;
@@ -644,14 +644,9 @@ export function ViewerPointsPage() {
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
                           <h2 className="truncate text-lg font-semibold">{balance.channelName || balance.channelUid}</h2>
-                          {balance.provider ? <Badge tone="neutral">{providerLabel(balance.provider)}</Badge> : null}
-                          <Badge tone={live?.live ? 'rose' : 'neutral'}>
-                            <Radio className="mr-1 h-3 w-3" />
-                            {live?.live ? '라이브 중' : '오프라인'}
-                          </Badge>
+                          <PlatformLiveBadges balance={balance} />
                         </div>
                         <p className="mt-1 truncate text-sm text-muted-foreground">{live?.live && live.title ? live.title : balance.channelUid}</p>
-                        <PlatformLiveBadges balance={balance} />
                       </div>
                     </div>
                     <div className="flex shrink-0 items-center gap-3 md:text-right">
