@@ -8504,30 +8504,32 @@ function formatElapsedStrings(startedAtTs) {
 
 async function substituteAllPlaceholders(text, sid, userId, username) {
   if (!text) return text;
-  const liveInfo = await getLiveInfoForSid(sid);
   let out = String(text);
-  if (liveInfo) {
-    const { elapsed, elapsedKo } = formatElapsedStrings(liveInfo.startedAtTs);
-    const notLiveMsg = '[방송 중이 아닙니다.]';
-    out = out
-      .replace(/\{live\.title\}/g, liveInfo.title || '')
-      .replace(/\{live\.category\}/g, liveInfo.category || '')
-      .replace(/\{live\.viewers\}/g, String(liveInfo.viewers ?? ''))
-      .replace(/\{live\.startedAt\}/g, liveInfo.startedAt || '')
-      .replace(/\{live\.elapsed\}/g, elapsed || notLiveMsg)
-      .replace(/\{live\.elapsed_ko\}/g, elapsedKo || notLiveMsg)
-      .replace(/\{live\.channel\}/g, liveInfo.channel || '');
-  }
-  else {
-    // No live info: strip live placeholders to empty strings
-    out = out
-      .replace(/\{live\.title\}/g, '')
-      .replace(/\{live\.category\}/g, '')
-      .replace(/\{live\.viewers\}/g, '')
-      .replace(/\{live\.startedAt\}/g, '')
-      .replace(/\{live\.elapsed\}/g, '[방송 중이 아닙니다.]')
-      .replace(/\{live\.elapsed_ko\}/g, '[방송 중이 아닙니다.]')
-      .replace(/\{live\.channel\}/g, '');
+  if (/\{live\.(?:title|category|viewers|startedAt|elapsed|elapsed_ko|channel)\}/.test(out)) {
+    const liveInfo = await getLiveInfoForSid(sid);
+    if (liveInfo) {
+      const { elapsed, elapsedKo } = formatElapsedStrings(liveInfo.startedAtTs);
+      const notLiveMsg = '[방송 중이 아닙니다.]';
+      out = out
+        .replace(/\{live\.title\}/g, liveInfo.title || '')
+        .replace(/\{live\.category\}/g, liveInfo.category || '')
+        .replace(/\{live\.viewers\}/g, String(liveInfo.viewers ?? ''))
+        .replace(/\{live\.startedAt\}/g, liveInfo.startedAt || '')
+        .replace(/\{live\.elapsed\}/g, elapsed || notLiveMsg)
+        .replace(/\{live\.elapsed_ko\}/g, elapsedKo || notLiveMsg)
+        .replace(/\{live\.channel\}/g, liveInfo.channel || '');
+    }
+    else {
+      // No live info: strip live placeholders to empty strings
+      out = out
+        .replace(/\{live\.title\}/g, '')
+        .replace(/\{live\.category\}/g, '')
+        .replace(/\{live\.viewers\}/g, '')
+        .replace(/\{live\.startedAt\}/g, '')
+        .replace(/\{live\.elapsed\}/g, '[방송 중이 아닙니다.]')
+        .replace(/\{live\.elapsed_ko\}/g, '[방송 중이 아닙니다.]')
+        .replace(/\{live\.channel\}/g, '');
+    }
   }
   // Channel followers count
   if (/\{channel\.followers\}/.test(out)) {
@@ -8539,9 +8541,11 @@ async function substituteAllPlaceholders(text, sid, userId, username) {
   // User followedAt
   if (userId && /\{user\.followedAt\}/.test(out)) {
     try {
-      const dt = await findUserFollowedAtForSid(sid, userId);
-      out = out.replace(/\{user\.followedAt\}/g, dt || '');
-    } catch { }
+      const dt = await findUserFollowedAtForSid(sid, userId, username);
+      out = out.replace(/\{user\.followedAt\}/g, dt || '확인할 수 없음');
+    } catch {
+      out = out.replace(/\{user\.followedAt\}/g, '확인할 수 없음');
+    }
   }
   // User name placeholders
   if (username && (/{user\.name}/.test(out) || /{user\.username}/.test(out) || /{user\.nickname}/.test(out))) {
@@ -8586,7 +8590,7 @@ async function substituteAllPlaceholders(text, sid, userId, username) {
   // Days since follow (inclusive, follow day counts as 1)
   if (userId && /\{user\.followedDays\}/.test(out)) {
     try {
-      const followedAt = await findUserFollowedAtForSid(sid, userId); // 'YYYY-MM-DD'
+      const followedAt = await findUserFollowedAtForSid(sid, userId, username); // 'YYYY-MM-DD'
       if (followedAt) {
         const todayKst = getKstDateString(); // 'YYYY-MM-DD'
         const start = new Date(`${followedAt}T00:00:00Z`).getTime();
@@ -8609,6 +8613,83 @@ const followersCountCache = new Map(); // sid -> { ts, count }
 const userFollowedAtCache = new Map(); // key `${sid}:${userId}` -> { ts, date }
 const userSubMonthsCache = new Map(); // key `${sid}:${userId}` -> { ts, months }
 
+function addFollowerLookupCandidate(set, value) {
+  const text = String(value || '').trim();
+  if (!text) return;
+  set.add(text);
+  if (text.startsWith('user:')) set.add(text.slice(5));
+  if (text.startsWith('cime:')) set.add(text.slice(5));
+  if (text.startsWith('chzzk:')) set.add(text.slice(6));
+  if (text.startsWith('youtube:')) set.add(text.slice(8));
+  if (text.startsWith('cime:nickname:')) set.add(text.slice(14));
+  if (text.startsWith('@')) set.add(text.slice(1));
+}
+
+function collectFollowerLookupCandidates(userId, username = '') {
+  const set = new Set();
+  addFollowerLookupCandidate(set, userId);
+  addFollowerLookupCandidate(set, username);
+  return set;
+}
+
+function collectFollowerItemIdentityCandidates(item = {}) {
+  const set = new Set();
+  const objects = [
+    item,
+    item.user,
+    item.profile,
+    item.channel,
+    item.follower,
+    item.followerChannel,
+    item.followerProfile,
+    item.sender,
+  ].filter(Boolean);
+  for (const source of objects) {
+    [
+      source.channelId,
+      source.followerChannelId,
+      source.userId,
+      source.id,
+      source.memberNo,
+      source.accountId,
+      source.platformUserId,
+      source.nickname,
+      source.nickName,
+      source.name,
+      source.channelName,
+      source.displayName,
+      source.handle,
+      source.channelHandle,
+    ].forEach((value) => addFollowerLookupCandidate(set, value));
+  }
+  return set;
+}
+
+function followerItemMatches(item, candidates) {
+  if (!candidates?.size) return false;
+  for (const value of collectFollowerItemIdentityCandidates(item)) {
+    if (candidates.has(value)) return true;
+  }
+  return false;
+}
+
+function getFollowerItemDate(item = {}) {
+  const objects = [item, item.user, item.profile, item.channel, item.follower, item.followerChannel, item.followerProfile].filter(Boolean);
+  for (const source of objects) {
+    const dt = source.createdDate || source.createdAt || source.followedAt || source.followDate || source.followedDate || source.timestamp || source.createdTime || source.followTime || null;
+    if (dt) {
+      const numeric = typeof dt === 'number' || /^\d+$/.test(String(dt)) ? Number(dt) : null;
+      const parsed = numeric != null && Number.isFinite(numeric)
+        ? new Date(numeric < 10_000_000_000 ? numeric * 1000 : numeric)
+        : new Date(dt);
+      if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
+      const text = String(dt || '').trim();
+      if (/^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(0, 10);
+    }
+  }
+  return '';
+}
+
 function ownerUserIdFromSid(sid) {
   const text = String(sid || '').trim();
   return text.startsWith('user:') ? text.slice(5) : text;
@@ -8617,6 +8698,30 @@ function ownerUserIdFromSid(sid) {
 function compactLogText(value, limit = 240) {
   const text = String(value || '').replace(/\s+/g, ' ').trim();
   return text.length > limit ? `${text.slice(0, Math.max(0, limit - 1))}…` : text;
+}
+
+function makeCommandReplyKey(event = {}, rule = {}, matchedKeyword = '', text = '', userId = '') {
+  const eventId = String(
+    event?.messageId ||
+    event?.msgId ||
+    event?.eventId ||
+    event?.id ||
+    event?.chatId ||
+    ''
+  ).trim();
+  const ruleKey = String(rule?.id || matchedKeyword || '').trim();
+  if (eventId) return `${eventId}:${ruleKey}`;
+  const eventTime = String(
+    event?.messageTime ||
+    event?.timestamp ||
+    event?.msgTime ||
+    event?.createdAt ||
+    event?.time ||
+    ''
+  ).trim();
+  const sender = String(userId || event?.senderChannelId || event?.userId || event?.user || event?.profile?.userId || '').trim();
+  const textHash = crypto.createHash('sha1').update(String(text || event?.message || event?.content || '')).digest('hex').slice(0, 12);
+  return `${sender || 'unknown'}|${eventTime || Date.now()}|${textHash}|${ruleKey}`;
 }
 
 function providerFromLogContext(context = {}) {
@@ -8906,12 +9011,16 @@ async function getChannelFollowersCountForSid(sid) {
 
 // (moved) API Key management endpoints are registered after app initialization
 
-async function findUserFollowedAtForSid(sid, userId) {
+async function findUserFollowedAtForSid(sid, userId, username = '') {
   if (!userId) return null;
-  const key = `${sid}:${userId}`;
+  const key = `${sid}:${userId}:${username}`;
   const cached = userFollowedAtCache.get(key);
   const now = Date.now();
   if (cached && (now - cached.ts) < 10 * 60 * 1000) return cached.date;
+  const matchCandidates = collectFollowerLookupCandidates(userId, username);
+  const maxChzzkPages = Math.max(1, Math.min(10000, Number(process.env.CHZZK_FOLLOWER_SCAN_PAGES || process.env.FOLLOWER_SCAN_PAGES || 10000)));
+  const maxCimePages = Math.max(1, Math.min(1000, Number(process.env.CIME_FOLLOWER_SCAN_PAGES || process.env.FOLLOWER_SCAN_PAGES || 1000)));
+  const lookupTimeout = Math.max(500, Math.min(30000, Number(process.env.FOLLOWER_LOOKUP_HTTP_TIMEOUT_MS || DEFAULT_TIMEOUT)));
   const uids = await getChannelUidsForSid(sid);
   if (uids.length) {
     const channelId = uids[0];
@@ -8919,28 +9028,28 @@ async function findUserFollowedAtForSid(sid, userId) {
       const accessToken = await getValidAccessToken(sid);
       // Best-effort: paginate followers list to find the user
       const size = 50;
-      for (let page = 1; page <= 10000; page++) {
+      for (let page = 1; page <= maxChzzkPages; page++) {
         let data;
         try {
           const r = await axios.get(`${OPENAPI_BASE}/open/v1/channels/followers`, {
             params: { page, size },
             headers: { Authorization: `Bearer ${accessToken}` },
+            timeout: lookupTimeout,
           });
           data = r?.data?.content || r?.data || {};
         } catch {
           // Fallback to service API
           const r2 = await axios.get(`https://api.chzzk.naver.com/service/v1/channels/${encodeURIComponent(channelId)}/followers`, {
             params: { page, size },
+            timeout: lookupTimeout,
           });
           data = r2?.data?.content || r2?.data || {};
         }
         const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data?.followers) ? data.followers : []);
         if (!Array.isArray(list) || list.length === 0) break;
         for (const item of list) {
-          const fid = String(item?.channelId || item?.user?.userId || '');
-          if (fid && fid === String(userId)) {
-            const dt = item?.createdDate || item?.createdAt || item?.timestamp || null;
-            const iso = dt ? new Date(dt).toISOString().slice(0, 10) : '';
+          if (followerItemMatches(item, matchCandidates)) {
+            const iso = getFollowerItemDate(item);
             userFollowedAtCache.set(key, { ts: now, date: iso });
             return iso;
           }
@@ -8954,21 +9063,18 @@ async function findUserFollowedAtForSid(sid, userId) {
     if (ownerUserId) {
       const accessToken = await getValidCimeAccessToken(ownerUserId);
       const size = 100;
-      const maxPages = Math.max(1, Number(process.env.CIME_FOLLOWER_SCAN_PAGES || 1000));
-      for (let page = 0; page < maxPages; page++) {
+      for (let page = 0; page < maxCimePages; page++) {
         const r = await axios.get(`${CIME_OPENAPI_BASE}/open/v1/channels/followers`, {
           params: { page, size },
           headers: { Authorization: `Bearer ${accessToken}` },
-          timeout: DEFAULT_TIMEOUT,
+          timeout: lookupTimeout,
         });
         const content = unwrapOpenApiContent(r);
         const list = Array.isArray(content?.data) ? content.data : (Array.isArray(content) ? content : []);
         if (!list.length) break;
         for (const item of list) {
-          const fid = String(item?.channelId || item?.followerChannelId || '').trim();
-          if (fid && fid === String(userId)) {
-            const dt = item?.createdDate || item?.createdAt || null;
-            const iso = dt ? new Date(dt).toISOString().slice(0, 10) : '';
+          if (followerItemMatches(item, matchCandidates)) {
+            const iso = getFollowerItemDate(item);
             userFollowedAtCache.set(key, { ts: now, date: iso });
             return iso;
           }
@@ -18501,14 +18607,7 @@ async function ensureSession(sid, channelId) {
               const finalMsg = responseToSend;
               // Guard: ensure we reply only once per source chat
               if (!entry.sentReplies) entry.sentReplies = new Set();
-              const replyKey = (() => {
-                try {
-                  const u = String(msg?.profile?.userId || msg?.senderChannelId || '');
-                  const t0 = String(msg?.messageTime || msg?.timestamp || msg?.msgTime || '');
-                  const m0 = String(msg?.messageId || msg?.id || msg?.msgId || msg?.eventId || '');
-                  return m0 || `${u}|${t0}`;
-                } catch { return `${Date.now()}`; }
-              })();
+              const replyKey = makeCommandReplyKey(msg || ev || {}, r, matchedKeyword || '', text, resolvedUserId);
               const ch = String(entry?.channelId || '');
               // Global guard as well (per channel)
               let alreadyGlobal = false;
@@ -19712,7 +19811,7 @@ async function processYoutubeChatAutomation(entry, ev) {
       }
 
       cleaned = String(cleaned || '').trim();
-      const replyKey = `${ev.id || ''}:${r.id || matchedKeyword || ''}`;
+      const replyKey = makeCommandReplyKey(ev, r, matchedKeyword || '', text, resolvedUserId);
       if (cleaned && !entry.sentReplies.has(replyKey)) {
         entry.sentReplies.add(replyKey);
         if (entry.sentReplies.size > 1000) {
@@ -20522,7 +20621,7 @@ async function processCimeChatAutomation(entry, ev) {
         if (actionResult.used) cleaned = actionResult.text;
       }
       cleaned = String(cleaned || '').trim();
-      const replyKey = `${ev.id || ''}:${r.id || matchedKeyword || ''}`;
+      const replyKey = makeCommandReplyKey(ev, r, matchedKeyword || '', text, resolvedUserId);
       if (cleaned && !entry.sentReplies.has(replyKey)) {
         entry.sentReplies.add(replyKey);
         if (entry.sentReplies.size > 1000) {
