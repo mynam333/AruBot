@@ -5485,6 +5485,29 @@ export async function updateBotStats(sid, delta = { messagesProcessed: 0, comman
 }
 
 // Rules
+function normalizeBotRuleStringArray(value) {
+  const parsed = typeof value === 'string' ? safeJsonParse(value, value) : value;
+  const source = Array.isArray(parsed) ? parsed : (parsed == null || parsed === '' ? [] : [parsed]);
+  return source
+    .map((item) => String(item ?? '').trim())
+    .filter(Boolean);
+}
+
+function normalizeBotRuleRow(row = {}, columns = {}) {
+  return {
+    id: row.id,
+    name: row.name || '',
+    keywords: normalizeBotRuleStringArray(row.keywords),
+    responses: normalizeBotRuleStringArray(row.responses),
+    enabled: row.enabled !== false,
+    adminOnly: columns.adminOnly ? !!row.admin_only : !!row.adminOnly,
+    requiredRoleLevel: columns.requiredRoleLevel ? Number(row.required_role_level || 1) : Number(row.requiredRoleLevel || 1),
+    pointsCost: columns.pointsCost ? Math.max(0, Number(row.points_cost || 0)) : Math.max(0, Number(row.pointsCost || 0)),
+    cooldown: columns.cooldown ? Number(row.cooldown || 1000) : Number(row.cooldown || 1000),
+    lastUsed: columns.lastUsed ? Number(row.last_used || 0) : Number(row.lastUsed || 0),
+  };
+}
+
 export async function getBotRules(sid) {
   ensure();
   const hasAdminOnly = await tableHasColumn('bot_rules', 'admin_only');
@@ -5492,29 +5515,35 @@ export async function getBotRules(sid) {
   const hasPointsCost = await tableHasColumn('bot_rules', 'points_cost');
   const hasCooldown = await tableHasColumn('bot_rules', 'cooldown');
   const hasLastUsed = await tableHasColumn('bot_rules', 'last_used');
+  const columns = {
+    adminOnly: hasAdminOnly,
+    requiredRoleLevel: hasReq,
+    pointsCost: hasPointsCost,
+    cooldown: hasCooldown,
+    lastUsed: hasLastUsed,
+  };
   const selectCols = ['id','name','keywords','responses','enabled']
     .concat(hasAdminOnly ? ['admin_only'] : [])
     .concat(hasReq ? ['required_role_level'] : [])
     .concat(hasPointsCost ? ['points_cost'] : [])
     .concat(hasCooldown ? ['cooldown'] : [])
     .concat(hasLastUsed ? ['last_used'] : []);
+  if (getDbUrl()) {
+    const result = await withPgClient((pg) => pg.query(
+      `select ${selectCols.map(quoteIdent).join(', ')}
+         from bot_rules
+        where sid = $1
+        order by id asc`,
+      [String(sid)]
+    ));
+    return (result.rows || []).map((row) => normalizeBotRuleRow(row, columns));
+  }
   const { data, error } = await supabase.from('bot_rules')
     .select(selectCols.join(', '))
     .eq('sid', sid)
     .order('id', { ascending: true });
   if (error || !Array.isArray(data)) return [];
-  return data.map(r => ({
-    id: r.id,
-    name: r.name || '',
-    keywords: Array.isArray(r.keywords) ? r.keywords : [],
-    responses: Array.isArray(r.responses) ? r.responses : [],
-    enabled: !!r.enabled,
-    adminOnly: hasAdminOnly ? !!r.admin_only : !!r.adminOnly,
-    requiredRoleLevel: hasReq ? Number(r.required_role_level || 1) : Number(r.requiredRoleLevel || 1),
-    pointsCost: hasPointsCost ? Math.max(0, Number(r.points_cost || 0)) : 0,
-    cooldown: hasCooldown ? Number(r.cooldown || 1000) : Number(r.cooldown || 1000),
-    lastUsed: hasLastUsed ? Number(r.last_used || 0) : Number(r.lastUsed || 0),
-  }));
+  return data.map((row) => normalizeBotRuleRow(row, columns));
 }
 
 // =============================
@@ -5890,12 +5919,14 @@ export async function upsertBotRule(sid, rule) {
   const hasPointsCost = await tableHasColumn('bot_rules', 'points_cost');
   const hasCooldown = await tableHasColumn('bot_rules', 'cooldown');
   const hasLastUsed = await tableHasColumn('bot_rules', 'last_used');
+  const keywords = normalizeBotRuleStringArray(rule.keywords);
+  const responses = normalizeBotRuleStringArray(rule.responses);
   const row = {
     sid,
     id: rule.id,
     name: rule.name || '',
-    keywords: rule.keywords || [],
-    responses: rule.responses || [],
+    keywords,
+    responses,
     enabled: !!rule.enabled,
     ...(hasAdminOnly ? { admin_only: !!rule.adminOnly } : {}),
     ...(hasReq ? { required_role_level: Math.max(1, Math.min(4, Number(rule.requiredRoleLevel || 1))) } : {}),
@@ -5903,6 +5934,27 @@ export async function upsertBotRule(sid, rule) {
     ...(hasCooldown ? { cooldown: Math.max(1000, Number(rule.cooldown || 0)) } : {}),
     ...(hasLastUsed ? { last_used: Number(rule.lastUsed || 0) } : {}),
   };
+  if (getDbUrl()) {
+    const columns = Object.keys(row);
+    const values = Object.values(row).map((value, index) => {
+      const column = columns[index];
+      if (column === 'keywords' || column === 'responses') return JSON.stringify(value);
+      return value;
+    });
+    const placeholders = columns.map((column, index) => {
+      const placeholder = `$${index + 1}`;
+      return column === 'keywords' || column === 'responses' ? `${placeholder}::jsonb` : placeholder;
+    });
+    const updateColumns = columns.filter((column) => !['sid', 'id'].includes(column));
+    await withPgClient((pg) => pg.query(
+      `insert into bot_rules (${columns.map(quoteIdent).join(', ')})
+       values (${placeholders.join(', ')})
+       on conflict (sid, id) do update set
+       ${updateColumns.map((column) => `${quoteIdent(column)} = excluded.${quoteIdent(column)}`).join(', ')}`,
+      values
+    ));
+    return;
+  }
   const { error } = await supabase.from('bot_rules').upsert(row, { onConflict: 'sid,id' });
   if (error) throw error;
 }
