@@ -31,7 +31,7 @@ export const adminNav = [
   { href: '/automations', label: '방송 자동화', icon: Orbit },
   { href: '/actions', label: '실행 액션', icon: Workflow },
   { href: '/video-donations/queue', label: '영상 후원', icon: PlaySquare },
-  { href: '/drawing-donations', label: '그림 후원 관리', icon: ImagePlus },
+  { href: '/drawing-donations', label: '그림 후원', icon: ImagePlus },
   { href: '/roulette', label: '룰렛', icon: Sparkles },
   { href: '/donations/rules', label: '후원 반응', icon: Gift },
   { href: '/viewer/me', label: '시청자 페이지', icon: UserRound },

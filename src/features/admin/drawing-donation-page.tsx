@@ -1,5 +1,6 @@
 'use client';
 
+import * as Switch from '@radix-ui/react-switch';
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { Ban, Check, Copy, Eraser, Eye, GripVertical, ImagePlus, Play, RefreshCw, RotateCw, Settings, ShieldAlert, Trash2, Undo2, Wifi, X } from 'lucide-react';
 import { toast } from 'sonner';
@@ -426,10 +427,17 @@ export function DrawingDonationPage() {
             <CardDescription>포인트 비용과 OBS 표시 시간을 정합니다.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-4 md:grid-cols-2">
-            <label className="flex min-h-[var(--control-height)] items-center justify-between gap-3 rounded-[var(--radius-control)] border bg-background/70 px-4">
+            <div className="flex min-h-[var(--control-height)] items-center justify-between gap-3 rounded-[var(--radius-control)] border bg-background/70 px-4">
               <span className="text-sm font-semibold">그림 후원 받기</span>
-              <input type="checkbox" checked={settings.enabled} onChange={(event) => setSettings((current) => ({ ...current, enabled: event.target.checked }))} />
-            </label>
+              <Switch.Root
+                checked={settings.enabled}
+                onCheckedChange={(checked) => setSettings((current) => ({ ...current, enabled: checked }))}
+                className="relative h-[1.7rem] w-[3.25rem] rounded-full border bg-muted transition data-[state=checked]:border-primary/30 data-[state=checked]:bg-primary"
+                aria-label="그림 후원 받기"
+              >
+                <Switch.Thumb className="block h-[1.35rem] w-[1.35rem] translate-x-[0.2rem] rounded-full bg-card shadow-subtle transition data-[state=checked]:translate-x-[1.55rem]" />
+              </Switch.Root>
+            </div>
             <label className="grid gap-2 text-sm font-semibold">
               비용 방식
               <select value={settings.pricingMode} onChange={(event) => setSettings((current) => ({ ...current, pricingMode: event.target.value === 'ink' ? 'ink' : 'fixed' }))} className="min-h-[var(--control-height)] rounded-[var(--radius-control)] border bg-background/80 px-3">

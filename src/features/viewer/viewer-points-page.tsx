@@ -7,13 +7,11 @@ import {
   Coins,
   ExternalLink,
   Loader2,
-  MessageSquare,
   Radio,
   RefreshCw,
   Search,
   SearchX,
   SlidersHorizontal,
-  Sparkles,
   Tv,
   Trophy,
   UserRoundPlus,
@@ -25,7 +23,6 @@ import { Button, LinkButton } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Pagination } from '@/components/ui/pagination';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
-import { Tooltip } from '@/components/ui/tooltip';
 import { apiUrl, readJson } from '@/shared/api/http';
 import { cn, formatNumber } from '@/shared/lib/utils';
 
@@ -54,6 +51,8 @@ type StationChannel = {
   profileImageUrl?: string | null;
   profile_image_url?: string | null;
   url?: string | null;
+  live?: boolean | null;
+  liveTitle?: string | null;
 };
 
 type ViewerBalance = {
@@ -123,7 +122,6 @@ function ViewerShell({ children }: { children: React.ReactNode }) {
           <span className="text-sm font-semibold">AruBot</span>
         </Link>
         <div className="flex items-center gap-2">
-          <LinkButton href="/viewer/drawing" variant="ghost" className="hidden sm:inline-flex">그림 후원</LinkButton>
           <LinkButton href="/viewer/connect" variant="ghost" className="hidden sm:inline-flex">계정 연결</LinkButton>
           <LinkButton href="/streamer" variant="ghost" className="hidden sm:inline-flex">스트리머 콘솔</LinkButton>
           <ThemeToggle />
@@ -167,9 +165,12 @@ function BalanceAvatar({ balance }: { balance: ViewerBalance }) {
 function stationChannelUrl(channel: StationChannel, fallbackBalance?: ViewerBalance) {
   const provider = String(channel.provider || fallbackBalance?.provider || '').toLowerCase();
   const channelId = String(channel.channelId || channel.channel_id || channel.platformUserId || channel.platform_user_id || fallbackBalance?.channelUid || '').trim();
-  const handle = String(channel.channelHandle || channel.channel_handle || '').trim();
+  const handle = String(channel.channelHandle || channel.channel_handle || '').trim().replace(/^@/, '');
+  if (provider === 'cime') {
+    const cimeId = handle || channelId.replace(/^@/, '');
+    if (cimeId) return `https://ci.me/@${encodeURIComponent(cimeId)}`;
+  }
   if (channel.url) return String(channel.url);
-  if (provider === 'cime' && channelId) return `https://ci.me/channels/${encodeURIComponent(channelId)}`;
   if (provider === 'youtube') {
     if (handle) {
       const normalizedHandle = handle.startsWith('@') ? handle : `@${handle}`;
@@ -217,6 +218,26 @@ function getStationChannels(balance: ViewerBalance | null) {
     seen.add(key);
     return true;
   });
+}
+
+function PlatformLiveBadges({ balance }: { balance: ViewerBalance }) {
+  const channels = getStationChannels(balance);
+  if (!channels.length) return null;
+  return (
+    <div className="mt-3 flex flex-wrap gap-1.5">
+      {channels.map((channel) => {
+        const provider = channel.provider || balance.provider || 'chzzk';
+        const live = channel.live === true;
+        const label = `${providerLabel(provider)} ${live ? '라이브' : '오프라인'}`;
+        return (
+          <Badge key={`${provider}:${channel.channelId || channel.url}`} tone={live ? 'rose' : providerTone(provider)}>
+            <Radio className="mr-1 h-3 w-3" />
+            {label}
+          </Badge>
+        );
+      })}
+    </div>
+  );
 }
 
 function StationChannelDialog({
@@ -437,7 +458,7 @@ export function ViewerPointsPage() {
               보는 플랫폼이 달라도 내 포인트는 하나로.
             </h1>
             <p className="mt-5 max-w-2xl break-keep text-sm leading-7 text-muted-foreground md:text-base">
-              자주 보는 방송의 포인트를 한곳에서 보고, 명령어와 룰렛 페이지로 바로 이동해 다음 참여를 이어가세요.
+              자주 보는 방송의 포인트를 한곳에서 보고, 지금 켜진 플랫폼을 확인해 다음 참여를 이어가세요.
             </p>
             <LinkButton href="/viewer/connect" className="mt-7">
               <UserRoundPlus className="h-4 w-4" />
@@ -453,7 +474,7 @@ export function ViewerPointsPage() {
               <CardDescription>포인트를 확인하는 순간 다음 참여까지 이어집니다.</CardDescription>
             </CardHeader>
             <CardContent className="grid gap-3">
-              {['방송별 포인트 잔액 확인', '공개 명령어 페이지 바로가기', 'CHZZK와 CIME 포인트 합산'].map((item) => (
+              {['방송별 포인트 잔액 확인', '플랫폼별 라이브 상태 확인', 'CHZZK와 CIME 포인트 합산'].map((item) => (
                 <div key={item} className="flex items-center gap-3 rounded-[var(--radius-control)] border bg-background/70 p-3 text-sm">
                   <Coins className="h-4 w-4 shrink-0 text-primary" />
                   {item}
@@ -477,7 +498,7 @@ export function ViewerPointsPage() {
                 내가 쌓은 방송별 포인트를 한눈에.
               </h1>
               <p className="mt-4 max-w-2xl break-keep text-sm leading-7 text-muted-foreground md:text-base">
-                로그인한 계정에 연결된 플랫폼 포인트를 모아 보고, 공개 명령어와 룰렛으로 바로 이어가세요.
+                로그인한 계정에 연결된 플랫폼 포인트를 모아 보고, 방송별 라이브 상태를 함께 확인하세요.
               </p>
               <div className="mt-6 flex flex-wrap gap-2">
                 {platforms.length ? (
@@ -548,9 +569,9 @@ export function ViewerPointsPage() {
               </p>
             </div>
             {topBalance ? (
-              <LinkButton href={topBalance.publicLinks?.commands || `/c/${topBalance.channelUid}/commands`} variant="soft" className="mt-auto justify-center">
-                <MessageSquare className="h-4 w-4" />
-                명령어로 참여하기
+              <LinkButton href={topBalance.publicLinks?.home || `/c/${topBalance.channelUid}`} variant="soft" className="mt-auto justify-center">
+                공개 페이지 열기
+                <ExternalLink className="h-4 w-4" />
               </LinkButton>
             ) : (
               <LinkButton href="/viewer/connect" variant="soft" className="mt-auto justify-center">
@@ -630,6 +651,7 @@ export function ViewerPointsPage() {
                           </Badge>
                         </div>
                         <p className="mt-1 truncate text-sm text-muted-foreground">{live?.live && live.title ? live.title : balance.channelUid}</p>
+                        <PlatformLiveBadges balance={balance} />
                       </div>
                     </div>
                     <div className="flex shrink-0 items-center gap-3 md:text-right">
@@ -640,20 +662,6 @@ export function ViewerPointsPage() {
                     </div>
                   </div>
                   <div className="mt-4 flex flex-wrap gap-2">
-                    <LinkButton href={balance.publicLinks?.commands || `/c/${balance.channelUid}/commands`} variant="soft">
-                      <MessageSquare className="h-4 w-4" />
-                      명령어 보기
-                    </LinkButton>
-                    <LinkButton href={balance.publicLinks?.points || `/c/${balance.channelUid}/points`} variant="outline">
-                      <Coins className="h-4 w-4" />
-                      포인트 페이지
-                    </LinkButton>
-                    <Tooltip content="방송인이 공개한 룰렛 목록으로 이동합니다.">
-                      <LinkButton href={balance.publicLinks?.roulette || `/c/${balance.channelUid}/roulette`} variant="outline">
-                        <Sparkles className="h-4 w-4" />
-                        룰렛
-                      </LinkButton>
-                    </Tooltip>
                     <LinkButton href={balance.publicLinks?.home || `/c/${balance.channelUid}`} variant="ghost">
                       공개 페이지
                       <ExternalLink className="h-4 w-4" />
@@ -699,7 +707,7 @@ export function ViewerPointsPage() {
                 아루봇에 연결한 플랫폼 계정의 포인트만 한 줄로 모여 보입니다.
               </div>
               <div className="rounded-[var(--radius-control)] border bg-background/70 p-3">
-                각 방송 카드에서 명령어, 포인트, 룰렛 페이지로 바로 이동해 참여할 수 있습니다.
+                각 방송 카드에서 공개 페이지와 방송국으로 바로 이동해 필요한 참여 화면을 이어갈 수 있습니다.
               </div>
             </CardContent>
           </Card>
@@ -710,7 +718,7 @@ export function ViewerPointsPage() {
             </CardHeader>
             <CardContent className="grid gap-3">
               <div className="rounded-[var(--radius-control)] border bg-background/70 p-3 text-sm leading-6 text-muted-foreground">
-                방송마다 열린 명령어와 룰렛을 바로 찾아가고, 지금 라이브 중인 채널을 먼저 볼 수 있습니다.
+                공개 페이지에서 명령어와 룰렛을 확인하고, 지금 라이브 중인 플랫폼을 먼저 볼 수 있습니다.
               </div>
               <LinkButton href="/viewer/connect" variant="soft" className="w-full justify-center">
                 <UserRoundPlus className="h-4 w-4" />

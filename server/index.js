@@ -1662,6 +1662,7 @@ const drawingTokenToSid = new Map(); // token -> sid (in-memory reverse index)
 const drawingOverlaySockets = new Map(); // sid -> Set<WebSocket>
 const drawingAdminSockets = new Map(); // sid -> Set<WebSocket>
 const drawingLivePlaybackCache = new Map(); // key -> { expiresAt, value }
+const viewerPlatformLiveCache = new Map(); // key -> { expiresAt, value }
 
 // =============================
 // =============================
@@ -5834,6 +5835,19 @@ app.post('/api/drawing-donation/approve', rateLimiters.userWrite, async (req, re
     const id = String(req.body?.id || '').trim();
     const item = await updateDrawingItemStatusForSid(sid, id, 'approved');
     if (!item) return res.status(404).json({ error: 'not_found' });
+    await recordBotEventLogSafe(sid, {
+      category: 'drawing_donation',
+      eventType: 'drawing_donation_approve',
+      provider: 'admin',
+      channelUid: item.channelUid,
+      viewerUserId: item.viewerUserId,
+      viewerName: item.viewerName,
+      pointDelta: 0,
+      targetName: '그림 후원',
+      summary: '그림 후원을 승인',
+      status: 'success',
+      metadata: { drawingId: item.id },
+    });
     notifyDrawingSubscribers(sid, 'approved').catch(() => null);
     notifyDrawingAdminSubscribers(sid, 'approved').catch(() => null);
     return res.json({ ok: true, item });
@@ -5888,6 +5902,19 @@ app.post('/api/drawing-donation/delete', rateLimiters.userWrite, async (req, res
     const id = String(req.body?.id || '').trim();
     const item = await deleteDrawingItemForSid(sid, id);
     if (!item) return res.status(404).json({ error: 'not_found' });
+    await recordBotEventLogSafe(sid, {
+      category: 'drawing_donation',
+      eventType: 'drawing_donation_delete',
+      provider: 'admin',
+      channelUid: item.channelUid,
+      viewerUserId: item.viewerUserId,
+      viewerName: item.viewerName,
+      pointDelta: 0,
+      targetName: '그림 후원',
+      summary: '그림 후원을 대기열에서 삭제',
+      status: 'deleted',
+      metadata: { drawingId: item.id },
+    });
     notifyDrawingSubscribers(sid, 'deleted').catch(() => null);
     notifyDrawingAdminSubscribers(sid, 'deleted').catch(() => null);
     return res.json({ ok: true, item });
@@ -6078,6 +6105,19 @@ app.post('/api/drawing-donation/pop-by-token', async (req, res) => {
     const current = await getCurrentDrawingItemForSid(sid);
     if (!current) return res.json({ item: null });
     const item = await updateDrawingItemStatusForSid(sid, current.id, 'done') || current;
+    await recordBotEventLogSafe(sid, {
+      category: 'drawing_donation',
+      eventType: 'drawing_donation_done',
+      provider: 'overlay',
+      channelUid: item.channelUid,
+      viewerUserId: item.viewerUserId,
+      viewerName: item.viewerName,
+      pointDelta: 0,
+      targetName: '그림 후원',
+      summary: '그림 후원 오버레이 재생 완료',
+      status: 'success',
+      metadata: { drawingId: item.id },
+    });
     notifyDrawingSubscribers(sid, 'done').catch(() => null);
     notifyDrawingAdminSubscribers(sid, 'done').catch(() => null);
     return res.json({ item });
@@ -7113,8 +7153,8 @@ function buildDrawingLiveSurfaceFromAccount(account = {}, liveState = null) {
     watchUrl = liveUrl || profileUrl || (channelId ? `https://chzzk.naver.com/live/${encodeURIComponent(channelId)}` : '');
     embedUrl = watchUrl;
   } else if (provider === 'cime') {
-    const cimeId = handle || channelId;
-    watchUrl = liveUrl || profileUrl || (cimeId ? `https://ci.me/${encodeURIComponent(cimeId)}` : '');
+    const cimeId = String(handle || channelId || '').trim().replace(/^@/, '');
+    watchUrl = (cimeId ? `https://ci.me/@${encodeURIComponent(cimeId)}/live` : '') || liveUrl || profileUrl;
     embedUrl = watchUrl;
   }
   return {
@@ -11759,6 +11799,33 @@ function getAuthRedirectUrl(req, params = {}) {
   return redirectUrl.toString();
 }
 
+function getSafeFrontendReturnTo(req, rawReturnTo) {
+  const raw = String(rawReturnTo || '').trim();
+  if (!raw) return null;
+  const frontendOrigin = FRONTEND_ORIGIN || process.env.NEXT_PUBLIC_SITE_URL || process.env.APP_REDIRECT_AFTER_LOGIN || `${req.protocol}://${req.get('host')}`;
+  try {
+    const frontend = new URL(frontendOrigin);
+    const url = new URL(raw, frontend);
+    if (url.origin !== frontend.origin) return null;
+    if (!url.pathname.startsWith('/viewer/') && !url.pathname.startsWith('/c/')) return null;
+    return `${url.pathname}${url.search}${url.hash}`;
+  } catch {
+    return null;
+  }
+}
+
+function getAuthRedirectUrlWithState(req, stateValidation, params = {}) {
+  const returnTo = getSafeFrontendReturnTo(req, stateValidation?.extra?.returnTo);
+  if (!returnTo) return getAuthRedirectUrl(req, params);
+  const base = FRONTEND_ORIGIN || process.env.NEXT_PUBLIC_SITE_URL || `${req.protocol}://${req.get('host')}`;
+  const redirectUrl = new URL(returnTo, base);
+  for (const [key, value] of Object.entries(params)) {
+    if (value == null || value === '') redirectUrl.searchParams.delete(key);
+    else redirectUrl.searchParams.set(key, String(value));
+  }
+  return redirectUrl.toString();
+}
+
 function getArubotAdminRedirectUrl(req, params = {}) {
   const base = FRONTEND_ORIGIN || process.env.APP_REDIRECT_AFTER_LOGIN || `${req.protocol}://${req.get('host')}`;
   const redirectUrl = new URL('/arubot-admin', base);
@@ -13191,7 +13258,7 @@ app.get('/api/auth/chzzk/login', (req, res) => {
     }
     // Ensure per-user session id cookie exists
     // Do NOT create random sid pre-login; only set oauth_state here
-    const state = createOAuthState('chzzk', req);
+    const state = createOAuthState('chzzk', req, { returnTo: getSafeFrontendReturnTo(req, req.query?.returnTo || req.query?.return_to) });
     setOAuthStateCookie(res, 'oauth_state', state);
 
     const authUrl = new URL('https://chzzk.naver.com/account-interlock');
@@ -13227,7 +13294,7 @@ app.get('/api/auth/youtube/login', (req, res) => {
         const admin = await requireCurrentAdminUser(req, res);
         if (!admin) return;
       }
-      const state = createOAuthState('youtube', req, { mode });
+      const state = createOAuthState('youtube', req, { mode, returnTo: getSafeFrontendReturnTo(req, req.query?.returnTo || req.query?.return_to) });
       setOAuthStateCookie(res, 'oauth_state_youtube', state);
 
       const authUrl = new URL(YOUTUBE_AUTH_URL);
@@ -13264,7 +13331,7 @@ app.get('/api/auth/youtube/callback', async (req, res) => {
     if (error) {
       if (stateValidation.ok || savedState) clearManagedCookie(res, 'oauth_state_youtube');
       const errorCode = String(error || '');
-      return res.redirect(getAuthRedirectUrl(req, {
+      return res.redirect(getAuthRedirectUrlWithState(req, stateValidation, {
         auth: errorCode === 'access_denied' ? 'cancelled' : 'error',
         platform: 'youtube',
         reason: errorCode
@@ -13280,7 +13347,7 @@ app.get('/api/auth/youtube/callback', async (req, res) => {
         stateValidation,
         error_description: error_description ? String(error_description) : null
       });
-      return res.redirect(getAuthRedirectUrl(req, {
+      return res.redirect(getAuthRedirectUrlWithState(req, stateValidation, {
         auth: 'error',
         platform: 'youtube',
         reason: !code ? 'missing_code' : 'invalid_state'
@@ -13355,7 +13422,7 @@ app.get('/api/auth/youtube/callback', async (req, res) => {
       });
     }
 
-    return res.redirect(getAuthRedirectUrl(req, { auth: 'success', platform: 'youtube', reason: null }));
+    return res.redirect(getAuthRedirectUrlWithState(req, stateValidation, { auth: 'success', platform: 'youtube', reason: null }));
   } catch (e) {
     console.error('[YouTube] Callback error', e?.response?.data || e?.message || e);
     return res.redirect(getAuthRedirectUrl(req, { auth: 'error', platform: 'youtube' }));
@@ -13409,7 +13476,7 @@ app.get('/api/auth/cime/login', (req, res) => {
     if (!CIME_CLIENT_ID || !CIME_CLIENT_SECRET) {
       return res.status(500).json({ error: 'Server not configured with CIME credentials' });
     }
-    const state = createOAuthState('cime', req);
+    const state = createOAuthState('cime', req, { returnTo: getSafeFrontendReturnTo(req, req.query?.returnTo || req.query?.return_to) });
     setOAuthStateCookie(res, 'oauth_state_cime', state);
 
     const authUrl = new URL(CIME_AUTH_URL);
@@ -13443,7 +13510,7 @@ app.get('/api/auth/cime/callback', async (req, res) => {
         savedState: savedState ? 'present' : 'missing',
         stateValidation
       });
-      return res.redirect(getAuthRedirectUrl(req, {
+      return res.redirect(getAuthRedirectUrlWithState(req, stateValidation, {
         auth: authStatus,
         platform: 'cime',
         reason: errorCode
@@ -13458,7 +13525,7 @@ app.get('/api/auth/cime/callback', async (req, res) => {
         stateValidation
       });
       if (savedState) clearManagedCookie(res, 'oauth_state_cime');
-      return res.redirect(getAuthRedirectUrl(req, {
+      return res.redirect(getAuthRedirectUrlWithState(req, stateValidation, {
         auth: 'error',
         platform: 'cime',
         reason: !code ? 'missing_code' : 'invalid_state'
@@ -13506,7 +13573,7 @@ app.get('/api/auth/cime/callback', async (req, res) => {
       console.warn('[CIME] Failed to start event session after OAuth callback:', err?.response?.data || err?.message || err);
     });
 
-    return res.redirect(getAuthRedirectUrl(req, { auth: 'success', platform: 'cime', reason: null }));
+    return res.redirect(getAuthRedirectUrlWithState(req, stateValidation, { auth: 'success', platform: 'cime', reason: null }));
   } catch (e) {
     console.error('[CIME] Callback error', e?.response?.data || e.message);
     return res.redirect(getAuthRedirectUrl(req, { auth: 'error', platform: 'cime' }));
@@ -14057,8 +14124,11 @@ app.get('/api/account/platforms', async (req, res) => {
 function stationChannelUrl(provider, channelId, handle) {
   const normalizedProvider = String(provider || '').toLowerCase();
   const normalizedChannelId = String(channelId || '').trim();
-  const normalizedHandle = String(handle || '').trim();
-  if (normalizedProvider === 'cime' && normalizedChannelId) return `https://ci.me/channels/${encodeURIComponent(normalizedChannelId)}`;
+  const normalizedHandle = String(handle || '').trim().replace(/^@/, '');
+  if (normalizedProvider === 'cime') {
+    const cimeId = normalizedHandle || normalizedChannelId.replace(/^@/, '');
+    if (cimeId) return `https://ci.me/@${encodeURIComponent(cimeId)}`;
+  }
   if (normalizedProvider === 'youtube') {
     if (normalizedHandle) {
       const handlePath = normalizedHandle.startsWith('@') ? normalizedHandle : `@${normalizedHandle}`;
@@ -14074,7 +14144,11 @@ function normalizeStationChannel(account, fallbackProvider = null) {
   const provider = String(account?.provider || fallbackProvider || '').toLowerCase();
   const channelId = String(account?.channel_id || account?.channelId || account?.platform_user_id || account?.platformUserId || '').trim();
   const channelHandle = String(account?.channel_handle || account?.channelHandle || '').trim();
-  const url = account?.url || stationChannelUrl(provider, channelId, channelHandle);
+  const url = provider === 'cime'
+    ? stationChannelUrl(provider, channelId, channelHandle) || account?.url
+    : account?.url || stationChannelUrl(provider, channelId, channelHandle);
+  const metadata = account?.metadata && typeof account.metadata === 'object' ? account.metadata : {};
+  const publicProfile = metadata.publicProfile && typeof metadata.publicProfile === 'object' ? metadata.publicProfile : {};
   if (!url) return null;
   return {
     provider: provider || 'chzzk',
@@ -14083,8 +14157,49 @@ function normalizeStationChannel(account, fallbackProvider = null) {
     channelName: account?.channel_name || account?.channelName || channelHandle || channelId,
     channelHandle: channelHandle || null,
     avatarUrl: account?.avatar_url || account?.avatarUrl || account?.profile_image_url || account?.profileImageUrl || null,
+    live: publicProfile.isLive === true ? true : null,
+    liveTitle: publicProfile.liveTitle || publicProfile.title || null,
     url,
   };
+}
+
+async function getViewerPlatformLiveState(ownerUserId, account = {}) {
+  const provider = String(account?.provider || '').toLowerCase();
+  const channelId = String(account?.channel_id || account?.channelId || account?.platform_user_id || account?.platformUserId || '').trim();
+  if (!ownerUserId || !provider || !channelId) return null;
+  const key = `${ownerUserId}:${provider}:${channelId}`;
+  const cached = viewerPlatformLiveCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+  let value = null;
+  const sid = `user:${ownerUserId}`;
+  try {
+    if (provider === 'chzzk') {
+      const state = await refreshChzzkLiveStatusForSid(sid, { channelUids: [channelId], ttlMs: 15_000 }).catch(() => null);
+      value = state ? { live: state.live === true, title: state.title || null, provider, channelId } : null;
+    } else if (provider === 'cime') {
+      const live = await refreshCimeLiveStatus(ownerUserId, sid, channelId).catch(() => null);
+      const state = liveStatusCache.get(sid);
+      value = live == null ? null : { live: live === true, title: state?.provider === 'cime' ? state.title || null : null, provider, channelId };
+    } else if (provider === 'youtube') {
+      const state = await refreshYoutubeLiveStatus(ownerUserId, sid, { force: false }).catch(() => null);
+      value = state ? { live: state.live === true, title: state.title || null, provider, channelId } : null;
+    }
+  } catch {
+    value = null;
+  }
+  const metadata = account?.metadata && typeof account.metadata === 'object' ? account.metadata : {};
+  const publicProfile = metadata.publicProfile && typeof metadata.publicProfile === 'object' ? metadata.publicProfile : {};
+  if (!value && publicProfile.isLive === true) {
+    value = { live: true, title: publicProfile.liveTitle || publicProfile.title || null, provider, channelId };
+  }
+  viewerPlatformLiveCache.set(key, { expiresAt: Date.now() + 15_000, value });
+  if (viewerPlatformLiveCache.size > 500) {
+    for (const [cacheKey, entry] of viewerPlatformLiveCache) {
+      if (entry.expiresAt <= Date.now() || viewerPlatformLiveCache.size > 420) viewerPlatformLiveCache.delete(cacheKey);
+    }
+  }
+  return value;
 }
 
 async function listStationChannelsForViewerBalance(balance) {
@@ -14097,10 +14212,20 @@ async function listStationChannelsForViewerBalance(balance) {
 
   for (const ownerId of ownerCandidates) {
     const accounts = await listPlatformAccounts(ownerId).catch(() => []);
-    const channels = (accounts || []).map((account) => normalizeStationChannel(account)).filter(Boolean);
-    if (channels.length) {
+    const channels = await Promise.all((accounts || []).map(async (account) => {
+      const channel = normalizeStationChannel(account);
+      if (!channel) return null;
+      const liveState = await getViewerPlatformLiveState(ownerId, account).catch(() => null);
+      return {
+        ...channel,
+        live: liveState?.live ?? channel.live ?? false,
+        liveTitle: liveState?.title || channel.liveTitle || null,
+      };
+    }));
+    const filteredChannels = channels.filter(Boolean);
+    if (filteredChannels.length) {
       const seen = new Set();
-      return channels.filter((channel) => {
+      return filteredChannels.filter((channel) => {
         const key = `${channel.provider}:${channel.channelId || channel.url}`;
         if (seen.has(key)) return false;
         seen.add(key);
@@ -14758,6 +14883,19 @@ app.post('/api/local-remote/drawing-donation/approve', requireAutomationLocalAge
     if (!id) return res.status(400).json({ error: 'id is required' });
     const item = await updateDrawingItemStatusForSid(sid, id, 'approved');
     if (!item) return res.status(404).json({ error: 'not_found' });
+    await recordBotEventLogSafe(sid, {
+      category: 'drawing_donation',
+      eventType: 'drawing_donation_local_approve',
+      provider: 'local_program',
+      channelUid: item.channelUid,
+      viewerUserId: item.viewerUserId,
+      viewerName: item.viewerName,
+      pointDelta: 0,
+      targetName: '그림 후원',
+      summary: '로컬 리모컨에서 그림 후원을 승인',
+      status: 'success',
+      metadata: { drawingId: item.id },
+    });
     notifyDrawingSubscribers(sid, 'approved').catch(() => null);
     notifyDrawingAdminSubscribers(sid, 'approved').catch(() => null);
     return res.json({ ok: true, item, items: await listDrawingQueueForSid(sid).catch(() => []) });
@@ -14856,6 +14994,19 @@ app.post('/api/local-remote/drawing-donation/pop', requireAutomationLocalAgent, 
     const current = await getCurrentDrawingItemForSid(sid);
     if (!current) return res.json({ item: null, items: await listDrawingQueueForSid(sid).catch(() => []) });
     const item = await updateDrawingItemStatusForSid(sid, current.id, 'done') || current;
+    await recordBotEventLogSafe(sid, {
+      category: 'drawing_donation',
+      eventType: 'drawing_donation_local_done',
+      provider: 'local_program',
+      channelUid: item.channelUid,
+      viewerUserId: item.viewerUserId,
+      viewerName: item.viewerName,
+      pointDelta: 0,
+      targetName: '그림 후원',
+      summary: '로컬 리모컨에서 다음 그림 후원으로 넘김',
+      status: 'success',
+      metadata: { drawingId: item.id },
+    });
     notifyDrawingSubscribers(sid, 'done').catch(() => null);
     notifyDrawingAdminSubscribers(sid, 'done').catch(() => null);
     return res.json({ ok: true, item, items: await listDrawingQueueForSid(sid).catch(() => []) });
@@ -16430,7 +16581,7 @@ app.get('/api/auth/chzzk/callback', async (req, res) => {
         savedState: savedState ? 'present' : 'missing',
         stateValidation
       });
-      return res.redirect(getAuthRedirectUrl(req, {
+      return res.redirect(getAuthRedirectUrlWithState(req, stateValidation, {
         auth: authStatus,
         platform: 'chzzk',
         reason: errorCode
@@ -16445,7 +16596,7 @@ app.get('/api/auth/chzzk/callback', async (req, res) => {
         stateValidation
       });
       if (savedState) clearManagedCookie(res, 'oauth_state');
-      return res.redirect(getAuthRedirectUrl(req, {
+      return res.redirect(getAuthRedirectUrlWithState(req, stateValidation, {
         auth: 'error',
         platform: 'chzzk',
         reason: !code ? 'missing_code' : 'invalid_state'
@@ -16580,7 +16731,7 @@ app.get('/api/auth/chzzk/callback', async (req, res) => {
     }
 
     // Redirect back to app with success flag
-    return res.redirect(getAuthRedirectUrl(req, { auth: 'success', platform: 'chzzk', reason: null }));
+    return res.redirect(getAuthRedirectUrlWithState(req, stateValidation, { auth: 'success', platform: 'chzzk', reason: null }));
   } catch (e) {
     console.error('Callback error', e?.response?.data || e.message);
     return res.redirect(getAuthRedirectUrl(req, { auth: 'error', platform: 'chzzk' }));

@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { ChevronRight, Coins, ListChecks, Radio, Sparkles } from 'lucide-react';
+import { ChevronRight, Coins, ImagePlus, ListChecks, Radio, Sparkles } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { DataView } from '@/components/ui/data-view';
@@ -191,10 +191,11 @@ export async function PublicChannelPage({ channelUid, kind }: { channelUid: stri
 export async function PublicChannelHub({ channelUid }: { channelUid: string }) {
   const data = await readPublicChannelHub(channelUid);
   const cards = [
-    { href: 'commands', title: '명령어', body: '채팅에 입력할 수 있는 말을 바로 찾아요.', count: pickRows(data.commands).length, icon: ListChecks, tone: 'sky' },
-    { href: 'points', title: '포인트', body: '내 참여가 얼마나 쌓였는지 살펴봐요.', count: pickRows(data.points).length, icon: Coins, tone: 'mint' },
-    { href: 'roulette', title: '룰렛', body: '참여 가능한 룰렛과 당첨 항목을 봐요.', count: pickRows(data.roulette).length, icon: Sparkles, tone: 'lemon' },
-    { href: 'live', title: '라이브', body: isLive(data.live) ? '지금 방송 중이에요.' : '방송 정보가 준비되면 표시돼요.', count: isLive(data.live) ? 1 : 0, icon: Radio, tone: 'coral' },
+    { href: `/viewer/login?returnTo=${encodeURIComponent(`/viewer/drawing/${channelUid}`)}`, title: '그림 후원', body: '로그인하고 방송 화면 위에 내 그림을 그려요.', count: 1, icon: ImagePlus, tone: 'mint', direct: true },
+    { href: 'commands', title: '명령어', body: '채팅에 입력할 수 있는 말을 바로 찾아요.', count: pickRows(data.commands).length, icon: ListChecks, tone: 'sky', direct: false },
+    { href: 'points', title: '포인트', body: '내 참여가 얼마나 쌓였는지 살펴봐요.', count: pickRows(data.points).length, icon: Coins, tone: 'mint', direct: false },
+    { href: 'roulette', title: '룰렛', body: '참여 가능한 룰렛과 당첨 항목을 봐요.', count: pickRows(data.roulette).length, icon: Sparkles, tone: 'lemon', direct: false },
+    { href: 'live', title: '라이브', body: isLive(data.live) ? '지금 방송 중이에요.' : '방송 정보가 준비되면 표시돼요.', count: isLive(data.live) ? 1 : 0, icon: Radio, tone: 'coral', direct: false },
   ] as const;
 
   return (
@@ -203,12 +204,12 @@ export async function PublicChannelHub({ channelUid }: { channelUid: string }) {
         {cards.map((card) => {
           const Icon = card.icon;
           return (
-            <Link key={card.href} href={`/c/${channelUid}/${card.href}`} className="group rounded-[var(--radius-card)] border bg-card/90 p-[clamp(1.25rem,2.2vw,1.5rem)] shadow-subtle transition hover:-translate-y-0.5 hover:bg-card hover:shadow-glow">
+            <Link key={card.href} href={card.direct ? card.href : `/c/${channelUid}/${card.href}`} className="group rounded-[var(--radius-card)] border bg-card/90 p-[clamp(1.25rem,2.2vw,1.5rem)] shadow-subtle transition hover:-translate-y-0.5 hover:bg-card hover:shadow-glow">
               <div className="flex items-start justify-between gap-3">
                 <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-muted text-primary">
                   <Icon className="h-5 w-5" />
                 </span>
-                <Badge tone={card.tone}>{card.count ? `${card.count}개` : '준비 중'}</Badge>
+                <Badge tone={card.tone}>{card.direct ? '로그인 필요' : card.count ? `${card.count}개` : '준비 중'}</Badge>
               </div>
               <h2 className="mt-4 text-lg font-semibold">{card.title}</h2>
               <p className="mt-2 text-sm leading-6 text-muted-foreground">{card.body}</p>

@@ -184,65 +184,6 @@ function shouldAppendDrawingPoint(stroke: Stroke, point: StrokePoint) {
   return distance >= minDistance || elapsed >= 32;
 }
 
-export function DrawingDonationListPage() {
-  const [streamers, setStreamers] = useState<Streamer[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    loadStreamers().then((data) => setStreamers(data.streamers || [])).catch(() => toast.error('그림 후원 가능한 방송을 불러오지 못했어요.')).finally(() => setLoading(false));
-  }, []);
-
-  return (
-    <ViewerShell>
-      <section className="mx-auto mt-[clamp(1.5rem,4vw,3rem)] max-w-7xl space-y-[clamp(1rem,2vw,1.5rem)]">
-        <div className="rounded-[var(--radius-panel)] border bg-card/80 p-[clamp(1rem,2.5vw,1.5rem)] shadow-subtle">
-          <Badge tone="mint">그림 후원</Badge>
-          <h1 className="mt-3 text-2xl font-bold">방송 화면에 내 그림을 띄워요.</h1>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">포인트를 사용해 그림을 그리고, 그리는 과정과 완성본이 스트리머의 OBS 화면에 자연스럽게 재생됩니다.</p>
-        </div>
-        {loading ? (
-          <div className="grid min-h-[30vh] place-items-center text-muted-foreground"><Loader2 className="animate-spin" /></div>
-        ) : streamers.length ? (
-          <div className="grid gap-[clamp(1rem,2vw,1.5rem)] md:grid-cols-2 xl:grid-cols-3">
-            {streamers.map((streamer) => (
-              <Card key={streamer.channelUid} className="bg-card/85">
-                <CardHeader>
-                  <div className="flex items-center gap-3">
-                    {streamer.avatarUrl ? <img src={streamer.avatarUrl} alt="" className="aspect-square w-[var(--icon-box)] rounded-[var(--radius-control)] object-cover" /> : <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-pastel-mint/70"><Brush /></span>}
-                    <div className="min-w-0">
-                      <CardTitle className="truncate">{streamer.channelName || streamer.channelUid}</CardTitle>
-                      <CardDescription>{formatNumber(streamer.points)}P 보유</CardDescription>
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  <div className="flex flex-wrap gap-2">
-                    <Badge tone="neutral">
-                      {streamer.drawingDonation.pricingMode === 'ink'
-                        ? `잉크 1단위 ${formatNumber(streamer.drawingDonation.inkCostPerUnit)}P`
-                        : `${formatNumber(streamer.drawingDonation.costPoints)}P`}
-                    </Badge>
-                    <Badge tone="mint">{streamer.drawingDonation.replayMaxSec}초 리플레이</Badge>
-                  </div>
-                  {streamer.drawingDonation.blocked ? (
-                    <div className="rounded-[var(--radius-control)] border bg-background/70 p-3 text-sm text-muted-foreground">이 방송에서는 봇 기능을 사용할 수 없습니다.</div>
-                  ) : (
-                    <Button asChild className="w-full">
-                      <Link href={`/viewer/drawing/${encodeURIComponent(streamer.channelUid)}`}>그림 그리기</Link>
-                    </Button>
-                  )}
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        ) : (
-          <div className="rounded-[var(--radius-panel)] border border-dashed bg-card/70 p-8 text-center text-muted-foreground">지금 그림 후원을 받을 수 있는 방송이 없습니다.</div>
-        )}
-      </section>
-    </ViewerShell>
-  );
-}
-
 export function DrawingDonationEditorPage({ channelUid }: { channelUid: string }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const brushCursorRef = useRef<HTMLDivElement | null>(null);
@@ -575,7 +516,7 @@ export function DrawingDonationEditorPage({ channelUid }: { channelUid: string }
     <ViewerShell>
       <section className="mx-auto mt-[clamp(1rem,3vw,2rem)] max-w-7xl space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <Button asChild variant="ghost"><Link href="/viewer/drawing"><ArrowLeft className="h-[1em] w-[1em]" /> 돌아가기</Link></Button>
+          <Button asChild variant="ghost"><Link href={`/c/${encodeURIComponent(channelUid)}`}><ArrowLeft className="h-[1em] w-[1em]" /> 공개 페이지로</Link></Button>
           {streamer ? <Badge tone={streamer.points >= estimatedCost ? 'mint' : 'rose'}>{formatNumber(streamer.points)}P 보유 · 예상 {formatNumber(estimatedCost)}P</Badge> : null}
         </div>
 
