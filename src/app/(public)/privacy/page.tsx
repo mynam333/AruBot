@@ -19,9 +19,8 @@ const privacyContact = 'mynam33333@gmail.com';
 const summaryItems = [
   { label: '처리자', value: controllerName },
   { label: '문의', value: privacyContact },
-  { label: '프론트엔드', value: 'arubot.yuaru.com' },
-  { label: '백엔드', value: 'arubotapi.yuaru.com' },
-  { label: '운영 DB', value: 'Oracle Cloud Korea Chuncheon PostgreSQL' },
+  { label: '적용 서비스', value: 'AruBot 웹·오버레이·로컬 프로그램' },
+  { label: '시행일', value: effectiveDate },
 ] as const;
 
 const contents = [
@@ -337,7 +336,7 @@ export default function PrivacyPage() {
       </section>
 
       <section className="mx-auto mt-5 grid max-w-5xl gap-4">
-        <div className="grid gap-3 rounded-[var(--radius-card)] border bg-card/85 p-[clamp(1rem,2vw,1.35rem)] shadow-subtle md:grid-cols-5">
+        <div className="grid gap-3 rounded-[var(--radius-card)] border bg-card/85 p-[clamp(1rem,2vw,1.35rem)] shadow-subtle md:grid-cols-4">
           {summaryItems.map((item) => (
             <div key={item.label} className="min-w-0">
               <div className="text-xs font-semibold text-muted-foreground">{item.label}</div>
