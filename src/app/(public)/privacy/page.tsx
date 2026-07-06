@@ -266,22 +266,56 @@ const sections = [
 type TableRow = (typeof processingRows)[number] | (typeof thirdPartyRows)[number] | (typeof processorRows)[number] | (typeof transferRows)[number];
 
 function PolicyTable({ rows }: { rows: readonly TableRow[] }) {
+  const columns = Object.keys(rows[0] || {});
+
   return (
-    <div className="mt-5 overflow-hidden rounded-[var(--radius-card)] border bg-background/45">
-      <div className="grid gap-px bg-border text-sm">
-        {rows.map((row, index) => (
-          <div key={index} className="grid gap-px bg-border md:grid-cols-[minmax(9rem,0.8fr)_2fr]">
-            {Object.entries(row).map(([key, value]) => (
-              <div key={key} className="grid bg-card/95 md:grid-cols-[8.5rem_1fr]">
-                <div className="bg-muted/55 px-3 py-2 font-semibold text-foreground">{columnLabel(key)}</div>
-                <div className="px-3 py-2 leading-7 text-muted-foreground">{value}</div>
-              </div>
+    <div className="mt-5 w-full max-w-full overflow-x-auto rounded-[var(--radius-card)] border bg-background/45">
+      <div className="w-max max-w-none">
+        <table className="border-collapse text-left text-sm">
+          <thead>
+            <tr className="border-b bg-muted/65">
+              {columns.map((key) => (
+                <th key={key} className={`${columnClass(key)} px-3 py-2.5 align-top font-semibold text-foreground`}>
+                  {columnLabel(key)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, index) => (
+              <tr key={index} className="border-b last:border-b-0">
+                {columns.map((key) => {
+                  const value = (row as Record<string, string>)[key] || '';
+                  return (
+                    <td key={key} className={`${columnClass(key)} bg-card/95 px-3 py-3 align-top leading-7 text-muted-foreground`}>
+                      <span className="block break-keep">{value}</span>
+                    </td>
+                  );
+                })}
+              </tr>
             ))}
-          </div>
-        ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );
+}
+
+function columnClass(key: string) {
+  const classes: Record<string, string> = {
+    service: 'min-w-[10rem] max-w-[12rem]',
+    purpose: 'min-w-[18rem] max-w-[22rem]',
+    items: 'min-w-[28rem] max-w-[34rem]',
+    basis: 'min-w-[24rem] max-w-[30rem]',
+    retention: 'min-w-[20rem] max-w-[24rem]',
+    recipient: 'min-w-[11rem] max-w-[14rem]',
+    processor: 'min-w-[13rem] max-w-[16rem]',
+    work: 'min-w-[18rem] max-w-[22rem]',
+    country: 'min-w-[18rem] max-w-[22rem]',
+    timing: 'min-w-[22rem] max-w-[28rem]',
+    contact: 'min-w-[16rem] max-w-[20rem]',
+  };
+  return classes[key] || 'min-w-[14rem] max-w-[20rem]';
 }
 
 function columnLabel(key: string) {
@@ -370,7 +404,7 @@ export default function PrivacyPage() {
         </nav>
 
         {sections.map((section) => (
-          <article key={section.title} className="rounded-[var(--radius-card)] border bg-card/88 p-[clamp(1.1rem,2.2vw,1.5rem)] shadow-subtle">
+          <article key={section.title} className="min-w-0 rounded-[var(--radius-card)] border bg-card/88 p-[clamp(1.1rem,2.2vw,1.5rem)] shadow-subtle">
             <h2 className="break-keep text-lg font-semibold">{section.title}</h2>
             <ul className="mt-4 grid gap-2 text-sm leading-7 text-muted-foreground">
               {section.body.map((item) => (

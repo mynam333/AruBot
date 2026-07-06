@@ -78,6 +78,9 @@ export function ViewerLoginPage({ returnTo: rawReturnTo }: { returnTo?: string |
           <p className="mt-5 max-w-2xl break-keep text-sm leading-7 text-muted-foreground md:text-base">
             시청자 포인트를 확인한 뒤, 스트리머가 켜둔 그림 후원 페이지로 바로 이동합니다.
           </p>
+          <p className="mt-3 max-w-2xl break-keep text-xs leading-6 text-muted-foreground">
+            로그인과 그림 후원 참여 기록은 저장형 기능입니다. 만 14세 미만은 법정대리인 동의 후 이용해야 합니다.
+          </p>
           {checking ? (
             <div className="mt-7 inline-flex items-center gap-2 rounded-full border bg-background/70 px-4 py-2 text-sm font-semibold text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />

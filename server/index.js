@@ -9,7 +9,7 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
-import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, getSessionUserId, listChannelPoints, listChannelPointsPage, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, getChannelPoints, getChannelPointBalanceSummary, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, findSidByChannelViewerTokenSupabase, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, findAppUserIdByChannelUid, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, deletePlatformTokens, deletePlatformAccount, getAppUserAdminStatus, getYoutubeBotProfile, upsertYoutubeBotProfile, updateYoutubeBotProfileTokens, markYoutubeBotProfileStatus, deleteYoutubeBotProfile, getYoutubeStreamerChannel, upsertYoutubeStreamerChannel, markYoutubeStreamerChannelModeratorRegistered, deleteYoutubeStreamerChannel, listYoutubeStreamerChannelsByYoutubeChannelId, updateYoutubeStreamerChannelLive, updateYoutubeStreamerChannelWebsub, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps, recordBotEventLog, listBotEventLogs, getBotEventLog, insertDrawingDonationItem, listDrawingDonationItems, getDrawingDonationItem, getCurrentDrawingDonationItem, updateDrawingDonationItemStatus, deleteDrawingDonationItem, reorderDrawingDonationItems, uploadDrawingDonationObject, validateSecretEncryptionConfig, getPgPoolStatus } from './supabase.js';
+import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, getSessionUserId, listChannelPoints, listChannelPointsPage, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, getChannelPoints, getChannelPointBalanceSummary, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, findSidByChannelViewerTokenSupabase, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, findAppUserIdByChannelUid, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, deletePlatformTokens, deletePlatformAccount, getAppUserAdminStatus, getYoutubeBotProfile, upsertYoutubeBotProfile, updateYoutubeBotProfileTokens, markYoutubeBotProfileStatus, deleteYoutubeBotProfile, getYoutubeStreamerChannel, upsertYoutubeStreamerChannel, markYoutubeStreamerChannelModeratorRegistered, deleteYoutubeStreamerChannel, listYoutubeStreamerChannelsByYoutubeChannelId, updateYoutubeStreamerChannelLive, updateYoutubeStreamerChannelWebsub, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps, recordBotEventLog, listBotEventLogs, getBotEventLog, insertDrawingDonationItem, listDrawingDonationItems, getDrawingDonationItem, getCurrentDrawingDonationItem, updateDrawingDonationItemStatus, deleteDrawingDonationItem, reorderDrawingDonationItems, uploadDrawingDonationObject, deleteAccountData, cleanupPrivacyRetentionData, validateSecretEncryptionConfig, getPgPoolStatus } from './supabase.js';
 import { createPlatformProfileService } from './platform-profiles.js';
 import { WebSocketServer, WebSocket } from 'ws';
 import youtubeChatPackage from 'youtube-chat';
@@ -2772,6 +2772,22 @@ app.post('/api/memory/cleanup', requireOpsAuth, async (req, res) => {
       timestamp: new Date().toISOString()
     });
   } catch (error) {
+    return res.status(500).json({ error: 'failed', message: error.message });
+  }
+});
+
+app.post('/api/privacy/retention-cleanup', requireOpsAuth, async (req, res) => {
+  try {
+    const sid = await getPartitionId(req, res);
+    if (!sid) return res.status(401).json({ error: 'Login required' });
+    const result = await cleanupPrivacyRetentionData(req.body || {});
+    return res.json({
+      ok: result.ok !== false,
+      result,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('[Privacy] Retention cleanup API failed:', error?.message || error);
     return res.status(500).json({ error: 'failed', message: error.message });
   }
 });
@@ -10476,6 +10492,39 @@ setInterval(() => {
 
 console.log('[Memory] Periodic cleanup and monitoring started');
 
+const PRIVACY_RETENTION_CLEANUP_INTERVAL_MS = Math.max(
+  60 * 60 * 1000,
+  Number(process.env.ARUBOT_PRIVACY_RETENTION_CLEANUP_INTERVAL_MS || 24 * 60 * 60 * 1000)
+);
+const PRIVACY_RETENTION_CLEANUP_ENABLED = String(process.env.ARUBOT_PRIVACY_RETENTION_CLEANUP || 'true').trim().toLowerCase() !== 'false';
+let privacyRetentionCleanupRunning = false;
+
+async function runPrivacyRetentionCleanup(reason = 'scheduled') {
+  if (!PRIVACY_RETENTION_CLEANUP_ENABLED || privacyRetentionCleanupRunning) return null;
+  privacyRetentionCleanupRunning = true;
+  try {
+    const result = await cleanupPrivacyRetentionData();
+    console.log('[Privacy] Retention cleanup completed:', {
+      reason,
+      deleted: result.deleted,
+      objectKeysDeleted: result.objectKeysDeleted,
+      objectKeysSkipped: result.objectKeysSkipped
+    });
+    return result;
+  } catch (error) {
+    console.warn('[Privacy] Retention cleanup failed:', error?.message || error);
+    return null;
+  } finally {
+    privacyRetentionCleanupRunning = false;
+  }
+}
+
+if (PRIVACY_RETENTION_CLEANUP_ENABLED) {
+  setTimeout(() => { runPrivacyRetentionCleanup('startup').catch(() => null); }, 30 * 1000);
+  setInterval(() => { runPrivacyRetentionCleanup('scheduled').catch(() => null); }, PRIVACY_RETENTION_CLEANUP_INTERVAL_MS);
+  console.log('[Privacy] Retention cleanup scheduler started');
+}
+
 function getCookieSid(req) {
   if (req.cookies?.sid) return req.cookies.sid;
   const rawCookie = String(req.headers?.cookie || '');
@@ -14539,6 +14588,115 @@ app.get('/api/account/platforms', async (req, res) => {
     return res.json({ userId: ownerUserId, sid: `user:${ownerUserId}`, platforms });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to load platform accounts' });
+  }
+});
+
+function deleteRuntimeMapEntriesBySid(map, sid) {
+  if (!map || !sid) return;
+  for (const [key, value] of Array.from(map.entries())) {
+    if (String(value || '') === sid) map.delete(key);
+  }
+}
+
+function closeSocketSetForSid(map, sid, reason = 'account_deleted') {
+  const sockets = map?.get?.(sid);
+  if (sockets && typeof sockets[Symbol.iterator] === 'function') {
+    for (const socket of sockets) {
+      try { socket.close?.(1000, reason); } catch { }
+      try { socket.terminate?.(); } catch { }
+    }
+  }
+  try { map?.delete?.(sid); } catch { }
+}
+
+function closeCimeSession(ownerUserId, reason = 'account_deleted') {
+  const entry = cimeSessionStore.get(ownerUserId);
+  if (!entry) return false;
+  if (entry.pingTimer) clearInterval(entry.pingTimer);
+  if (entry.reconnectTimer) clearTimeout(entry.reconnectTimer);
+  entry.connected = false;
+  entry.closeReason = reason;
+  try { entry.ws?.close?.(1000, reason); } catch { }
+  try { entry.ws?.terminate?.(); } catch { }
+  cimeSessionStore.delete(ownerUserId);
+  return true;
+}
+
+function deleteAutomationSoundDirectory(ownerUserId) {
+  const target = path.resolve(automationSoundDir(ownerUserId));
+  const root = path.resolve(AUTOMATION_USER_FILE_ROOT);
+  const normalizedTarget = target.toLowerCase();
+  const normalizedRoot = root.toLowerCase();
+  if (!normalizedTarget.startsWith(`${normalizedRoot}${path.sep.toLowerCase()}`)) return false;
+  fs.rmSync(target, { recursive: true, force: true });
+  return true;
+}
+
+function clearDeletedAccountRuntimeState(ownerUserId) {
+  const owner = String(ownerUserId || '').replace(/^user:/, '').trim();
+  if (!owner) return { sid: null, soundFilesDeleted: false };
+  const sid = `user:${owner}`;
+  try { closeYoutubeSession(owner, 'account_deleted'); } catch { }
+  try { closeCimeSession(owner, 'account_deleted'); } catch { }
+  const chzzkEntry = sessionStore.get(sid);
+  try { chzzkEntry?.socket?.disconnect?.(); } catch { }
+  try { chzzkEntry?.socket?.close?.(); } catch { }
+  sessionStore.delete(sid);
+  activeSids.delete(sid);
+  liveSession.delete(sid);
+  liveStatusCache.delete(sid);
+  macroCache.delete(sid);
+  macroLastSent.delete(sid);
+  try { macroTimerManager.macroTimers.delete(sid); } catch { }
+  try { macroTimerManager.failureCount.delete(sid); } catch { }
+  try { macroTimerManager.lastFailureTime.delete(sid); } catch { }
+  try { performanceMonitor.metrics.delete(sid); } catch { }
+  videoDonationQueues.delete(sid);
+  const videoTimer = videoDonationTimers.get(sid);
+  if (videoTimer) clearTimeout(videoTimer);
+  videoDonationTimers.delete(sid);
+  pvdPlaybackState.delete(sid);
+  rouletteQueues.delete(sid);
+  rouletteProcessing.delete(sid);
+  rouletteLastResultSent.delete(sid);
+  rouletteLastEnqueue.delete(sid);
+  drawingDonationQueues.delete(sid);
+  closeSocketSetForSid(pvdSidSockets, sid);
+  closeSocketSetForSid(pvdAdminSockets, sid);
+  closeSocketSetForSid(drawingOverlaySockets, sid);
+  closeSocketSetForSid(drawingAdminSockets, sid);
+  try { closeSocketSetForSid(fxSidSockets, sid); } catch { }
+  deleteRuntimeMapEntriesBySid(pvdTokenToSid, sid);
+  deleteRuntimeMapEntriesBySid(rouletteTokenToSid, sid);
+  deleteRuntimeMapEntriesBySid(drawingTokenToSid, sid);
+  for (const key of Array.from(viewerPlatformLiveCache.keys())) {
+    if (String(key).startsWith(`${owner}:`)) viewerPlatformLiveCache.delete(key);
+  }
+  let soundFilesDeleted = false;
+  try { soundFilesDeleted = deleteAutomationSoundDirectory(owner); } catch (error) {
+    console.warn('[Privacy] Automation sound directory cleanup failed:', error?.message || error);
+  }
+  return { sid, soundFilesDeleted };
+}
+
+app.delete('/api/account', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const confirmation = String(req.body?.confirm || req.query?.confirm || '').trim();
+    if (confirmation !== 'delete-account') {
+      return res.status(400).json({ error: 'Deletion confirmation required', requiredConfirm: 'delete-account' });
+    }
+    const result = await deleteAccountData(ownerUserId, { reason: 'self_service_delete' });
+    const runtime = clearDeletedAccountRuntimeState(ownerUserId);
+    clearManagedCookie(res, 'oauth_state');
+    clearManagedCookie(res, 'oauth_state_cime');
+    clearManagedCookie(res, 'oauth_state_youtube');
+    clearManagedCookie(res, 'sid');
+    return res.json({ ok: true, ...result, runtime });
+  } catch (e) {
+    console.error('[Privacy] Account delete failed:', e?.message || e);
+    return res.status(500).json({ error: 'Failed to delete account data' });
   }
 });
 

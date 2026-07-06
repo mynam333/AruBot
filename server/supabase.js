@@ -86,6 +86,29 @@ function getSupabaseStorageClient() {
   return { client: storageClient, bucket };
 }
 
+function collectDrawingDonationObjectKeys(item) {
+  return uniqueNonEmpty([
+    item?.strokeObjectKey,
+    item?.stroke_object_key,
+    item?.previewObjectKey,
+    item?.preview_object_key,
+  ]);
+}
+
+export async function deleteDrawingDonationObjectKeys(keys = []) {
+  const objectKeys = uniqueNonEmpty(keys);
+  const storage = getSupabaseStorageClient();
+  if (!objectKeys.length || !storage) return { deleted: 0, skipped: objectKeys.length };
+  let deleted = 0;
+  for (let index = 0; index < objectKeys.length; index += 100) {
+    const chunk = objectKeys.slice(index, index + 100);
+    const { error } = await storage.client.storage.from(storage.bucket).remove(chunk);
+    if (error) throw new Error(error.message || 'drawing_storage_delete_failed');
+    deleted += chunk.length;
+  }
+  return { deleted, skipped: 0 };
+}
+
 function providerSslEnv(provider) {
   return provider === DB_PROVIDER_POSTGRES
     ? process.env.POSTGRES_SSL
@@ -2298,13 +2321,401 @@ export async function updateDrawingDonationItemStatus(sid, id, status, extra = {
 
 export async function deleteDrawingDonationItem(sid, id) {
   await ensureDrawingDonationTables();
-  return withPgClient(async (pg) => {
+  const item = await withPgClient(async (pg) => {
     const result = await pg.query(
       `delete from public.drawing_donation_items where sid = $1 and id = $2 returning *`,
       [String(sid), String(id)]
     );
     return hydrateDrawingDonationStrokes(normalizeDrawingDonationRow(result.rows?.[0], { includeStrokes: true }));
   });
+  const objectKeys = collectDrawingDonationObjectKeys(item);
+  if (objectKeys.length) {
+    try {
+      await deleteDrawingDonationObjectKeys(objectKeys);
+    } catch (error) {
+      console.warn('[Drawing Donation] object delete failed:', error?.message || error);
+    }
+  }
+  return item;
+}
+
+async function tableExistsPg(pg, tableName) {
+  const normalized = String(tableName || '').includes('.') ? String(tableName) : `public.${String(tableName || '')}`;
+  const { rows } = await pg.query(`select to_regclass($1) as table_name`, [normalized]);
+  return !!rows?.[0]?.table_name;
+}
+
+async function tableColumnsPg(pg, tableName) {
+  const normalized = String(tableName || '');
+  const [schema, table] = normalized.includes('.') ? normalized.split('.', 2) : ['public', normalized];
+  const { rows } = await pg.query(
+    `select column_name
+       from information_schema.columns
+      where table_schema = $1 and table_name = $2`,
+    [schema || 'public', table]
+  );
+  return new Set((rows || []).map((row) => String(row.column_name)));
+}
+
+function addPrivacyDeleteCount(summary, tableName, rowCount) {
+  const count = Number(rowCount || 0);
+  if (!count) return;
+  summary.deleted[tableName] = (summary.deleted[tableName] || 0) + count;
+}
+
+async function deleteRowsByColumnValues(pg, summary, tableName, columnValues = []) {
+  if (!await tableExistsPg(pg, tableName)) return 0;
+  const columns = await tableColumnsPg(pg, tableName);
+  const params = [];
+  const where = [];
+  for (const item of columnValues) {
+    const column = String(item?.column || '').trim();
+    const values = uniqueNonEmpty(item?.values);
+    if (!column || !columns.has(column) || !values.length) continue;
+    params.push(values);
+    where.push(`${quoteIdent(column)} = any($${params.length}::text[])`);
+  }
+  if (!where.length) return 0;
+  const result = await pg.query(`delete from ${quoteIdent(tableName)} where ${where.join(' or ')}`, params);
+  addPrivacyDeleteCount(summary, tableName, result.rowCount);
+  return result.rowCount || 0;
+}
+
+async function deleteRowsWhere(pg, summary, tableName, whereSql, params = []) {
+  if (!await tableExistsPg(pg, tableName)) return 0;
+  const result = await pg.query(`delete from ${quoteIdent(tableName)} where ${whereSql}`, params);
+  addPrivacyDeleteCount(summary, tableName, result.rowCount);
+  return result.rowCount || 0;
+}
+
+async function collectDrawingDonationKeysWhere(pg, whereSql, params = []) {
+  if (!await tableExistsPg(pg, 'public.drawing_donation_items')) return [];
+  const { rows } = await pg.query(
+    `select stroke_object_key, preview_object_key
+       from public.drawing_donation_items
+      where ${whereSql}`,
+    params
+  );
+  return uniqueNonEmpty((rows || []).flatMap((row) => collectDrawingDonationObjectKeys(row)));
+}
+
+function addIdentityCandidates(target, values = []) {
+  for (const value of values) {
+    for (const candidate of pointLookupCandidates(value)) target.add(candidate);
+    const text = String(value || '').trim();
+    if (text) target.add(text);
+  }
+}
+
+function addPlatformAccountCandidates(target, account) {
+  addIdentityCandidates(target, [
+    account?.user_id,
+    account?.platform_user_id,
+    account?.channel_id,
+    account?.channel_handle,
+    account?.provider && account?.platform_user_id ? `${account.provider}:${account.platform_user_id}` : null,
+    account?.provider && account?.channel_id ? `${account.provider}:${account.channel_id}` : null,
+    account?.provider && account?.channel_handle ? `${account.provider}:${account.channel_handle}` : null,
+    ...collectPlatformPointIdentityKeys(account),
+  ]);
+}
+
+async function collectAccountPrivacyScope(pg, ownerUserId) {
+  const owner = String(ownerUserId || '').replace(/^user:/, '').trim();
+  const ownerSid = owner ? `user:${owner}` : '';
+  const identityKeys = new Set();
+  const channelAliases = new Set();
+  addIdentityCandidates(identityKeys, [owner, ownerSid, owner ? makeArubotViewerUuid(owner) : null]);
+  addIdentityCandidates(channelAliases, [owner, ownerSid]);
+
+  if (owner && await tableExistsPg(pg, 'public.app_users')) {
+    const appUser = await pg.query(
+      `select id, primary_provider, primary_platform_user_id, display_name
+         from public.app_users
+        where id = $1
+        limit 1`,
+      [owner]
+    );
+    const row = appUser.rows?.[0];
+    if (row) {
+      addIdentityCandidates(identityKeys, [row.id, row.primary_platform_user_id, row.display_name]);
+      addIdentityCandidates(channelAliases, [row.id, row.primary_platform_user_id]);
+      if (row.primary_provider && row.primary_platform_user_id) {
+        addIdentityCandidates(identityKeys, [`${row.primary_provider}:${row.primary_platform_user_id}`]);
+        addIdentityCandidates(channelAliases, [`${row.primary_provider}:${row.primary_platform_user_id}`]);
+      }
+    }
+  }
+
+  if (owner && await tableExistsPg(pg, 'public.platform_accounts')) {
+    const accounts = await pg.query(
+      `select user_id, provider, platform_user_id, channel_id, channel_name, channel_handle, avatar_url, metadata
+         from public.platform_accounts
+        where user_id = $1`,
+      [owner]
+    );
+    for (const account of accounts.rows || []) {
+      addPlatformAccountCandidates(identityKeys, account);
+      addPlatformAccountCandidates(channelAliases, account);
+    }
+  }
+
+  return {
+    owner,
+    ownerSid,
+    ownerPids: uniqueNonEmpty([owner, ownerSid]),
+    identityKeys: uniqueNonEmpty(Array.from(identityKeys)),
+    channelAliases: uniqueNonEmpty(Array.from(channelAliases)),
+  };
+}
+
+async function deleteDynamicChannelPointRows(pg, summary, scope) {
+  const result = await pg.query(
+    `select table_schema, table_name
+       from information_schema.tables
+      where table_schema = 'public'
+        and table_type = 'BASE TABLE'
+        and table_name like 'channelpoint\\_%' escape '\\'`
+  );
+  const ownedPointTables = new Set(scope.channelAliases.map((alias) => `channelpoint_${sanitizeTableNameSuffix(alias)}`));
+  for (const row of result.rows || []) {
+    const tableName = `${row.table_schema}.${row.table_name}`;
+    const fullChannelDelete = ownedPointTables.has(String(row.table_name));
+    const deleteResult = fullChannelDelete
+      ? await pg.query(`delete from ${quoteIdent(tableName)}`)
+      : await pg.query(`delete from ${quoteIdent(tableName)} where user_id = any($1::text[])`, [scope.identityKeys]);
+    addPrivacyDeleteCount(summary, tableName, deleteResult.rowCount);
+  }
+}
+
+export async function deleteAccountData(ownerUserId, options = {}) {
+  const owner = String(ownerUserId || '').replace(/^user:/, '').trim();
+  if (!owner || !getDbUrl()) return { ok: false, deleted: {}, objectKeysDeleted: 0, reason: 'missing_owner_or_database' };
+  const summary = {
+    ok: true,
+    ownerUserId: owner,
+    reason: String(options.reason || 'user_request').slice(0, 120),
+    deleted: {},
+    objectKeysDeleted: 0,
+    objectKeysSkipped: 0,
+  };
+  const drawingObjectKeys = [];
+
+  await withPgClient(async (pg) => {
+    const scope = await collectAccountPrivacyScope(pg, owner);
+    await pg.query('begin');
+    try {
+      await deleteRowsByColumnValues(pg, summary, 'public.prediction_bets', [
+        { column: 'user_id', values: scope.identityKeys },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.prediction_events', [
+        { column: 'sid', values: scope.channelAliases },
+        { column: 'channel_uid', values: scope.channelAliases },
+      ]);
+      if (await tableExistsPg(pg, 'public.drawing_donation_items')) {
+        drawingObjectKeys.push(...await collectDrawingDonationKeysWhere(
+          pg,
+          `owner_user_id = any($1::text[]) or sid = any($2::text[]) or channel_uid = any($2::text[]) or viewer_user_id = any($3::text[])`,
+          [[scope.owner], scope.channelAliases, scope.identityKeys]
+        ));
+      }
+      await deleteRowsByColumnValues(pg, summary, 'public.drawing_donation_items', [
+        { column: 'owner_user_id', values: [scope.owner] },
+        { column: 'sid', values: scope.channelAliases },
+        { column: 'channel_uid', values: scope.channelAliases },
+        { column: 'viewer_user_id', values: scope.identityKeys },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.bot_event_logs', [
+        { column: 'owner_user_id', values: [scope.owner] },
+        { column: 'sid', values: scope.channelAliases },
+        { column: 'channel_uid', values: scope.channelAliases },
+        { column: 'viewer_user_id', values: scope.identityKeys },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.video_donation_queue', [
+        { column: 'channel_uid', values: scope.channelAliases },
+        { column: 'requester_user_id', values: scope.identityKeys },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.viewer_playback_state', [
+        { column: 'channel_uid', values: scope.channelAliases },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.macro_schedules', [
+        { column: 'channel_uid', values: scope.channelAliases },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.channel_points_balances', [
+        { column: 'channel_uid', values: scope.channelAliases },
+        { column: 'user_id', values: scope.identityKeys },
+      ]);
+      await deleteDynamicChannelPointRows(pg, summary, scope);
+      await deleteRowsByColumnValues(pg, summary, 'public.automation_jobs', [
+        { column: 'owner_user_id', values: [scope.owner] },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.automation_connections', [
+        { column: 'owner_user_id', values: [scope.owner] },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.automation_local_agents', [
+        { column: 'owner_user_id', values: [scope.owner] },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.automation_settings', [
+        { column: 'owner_user_id', values: [scope.owner] },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.action_blueprint_runs', [
+        { column: 'owner_user_id', values: [scope.owner] },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.action_blueprints', [
+        { column: 'owner_user_id', values: [scope.owner] },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.action_blueprint_versions', [
+        { column: 'owner_user_id', values: [scope.owner] },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.youtube_streamer_channels', [
+        { column: 'owner_user_id', values: [scope.owner] },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.platform_tokens', [
+        { column: 'user_id', values: [scope.owner] },
+        { column: 'platform_user_id', values: scope.identityKeys },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.platform_accounts', [
+        { column: 'user_id', values: [scope.owner] },
+        { column: 'platform_user_id', values: scope.identityKeys },
+        { column: 'channel_id', values: scope.identityKeys },
+        { column: 'channel_handle', values: scope.identityKeys },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.sessions', [
+        { column: 'sid', values: scope.channelAliases },
+        { column: 'user_id', values: scope.identityKeys },
+        { column: 'account_user_id', values: [scope.owner] },
+        { column: 'channel_id', values: scope.channelAliases },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.tokens', [
+        { column: 'sid', values: scope.channelAliases },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.channel_tokens', [
+        { column: 'sid', values: scope.channelAliases },
+        { column: 'channel_id', values: scope.channelAliases },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.channel_viewer_tokens', [
+        { column: 'channel_uid', values: scope.channelAliases },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.live_sessions', [
+        { column: 'sid', values: scope.channelAliases },
+        { column: 'channel_id', values: scope.channelAliases },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.roulette_sessions', [
+        { column: 'sid', values: scope.channelAliases },
+        { column: 'channel_id', values: scope.channelAliases },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.bot_settings', [
+        { column: 'sid', values: scope.channelAliases },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.bot_stats', [
+        { column: 'sid', values: scope.channelAliases },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.bot_rules', [
+        { column: 'sid', values: scope.channelAliases },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.live_days', [
+        { column: 'sid', values: scope.channelAliases },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.attendance_state', [
+        { column: 'sid', values: scope.channelAliases },
+        { column: 'user_id', values: scope.identityKeys },
+        { column: 'userid', values: scope.identityKeys },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.attendance', [
+        { column: 'sid', values: scope.channelAliases },
+        { column: 'user_id', values: scope.identityKeys },
+        { column: 'userid', values: scope.identityKeys },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.api_keys', [
+        { column: 'owner_pid', values: scope.ownerPids },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.app_users', [
+        { column: 'id', values: [scope.owner] },
+      ]);
+      await pg.query('commit');
+    } catch (error) {
+      try { await pg.query('rollback'); } catch {}
+      throw error;
+    }
+  }, 0);
+
+  const objectDelete = await deleteDrawingDonationObjectKeys(drawingObjectKeys).catch((error) => {
+    console.warn('[Privacy] Drawing donation object cleanup failed:', error?.message || error);
+    return { deleted: 0, skipped: uniqueNonEmpty(drawingObjectKeys).length };
+  });
+  summary.objectKeysDeleted = objectDelete.deleted || 0;
+  summary.objectKeysSkipped = objectDelete.skipped || 0;
+  return summary;
+}
+
+function retentionDays(value, fallbackDays) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return fallbackDays;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return fallbackDays;
+  return Math.max(0, Math.floor(parsed));
+}
+
+function cutoffIsoForDays(days) {
+  const normalized = Number(days);
+  if (!Number.isFinite(normalized) || normalized <= 0) return null;
+  return new Date(Date.now() - normalized * 24 * 60 * 60 * 1000).toISOString();
+}
+
+export async function cleanupPrivacyRetentionData(options = {}) {
+  if (!getDbUrl()) return { ok: false, deleted: {}, reason: 'missing_database' };
+  const config = {
+    botEventLogDays: retentionDays(options.botEventLogDays ?? process.env.ARUBOT_BOT_EVENT_LOG_RETENTION_DAYS, 365),
+    drawingDonationDays: retentionDays(options.drawingDonationDays ?? process.env.ARUBOT_DRAWING_DONATION_RETENTION_DAYS, 365),
+    predictionDays: retentionDays(options.predictionDays ?? process.env.ARUBOT_PREDICTION_RETENTION_DAYS, 365),
+    videoDonationDays: retentionDays(options.videoDonationDays ?? process.env.ARUBOT_VIDEO_DONATION_RETENTION_DAYS, 365),
+    automationJobDays: retentionDays(options.automationJobDays ?? process.env.ARUBOT_AUTOMATION_JOB_RETENTION_DAYS, 90),
+    actionRunDays: retentionDays(options.actionRunDays ?? process.env.ARUBOT_ACTION_RUN_RETENTION_DAYS, 180),
+  };
+  const summary = { ok: true, deleted: {}, objectKeysDeleted: 0, objectKeysSkipped: 0, config };
+  const drawingObjectKeys = [];
+
+  await withPgClient(async (pg) => {
+    const botEventLogCutoff = cutoffIsoForDays(config.botEventLogDays);
+    if (botEventLogCutoff) {
+      await deleteRowsWhere(pg, summary, 'public.bot_event_logs', `created_at < $1::timestamptz`, [botEventLogCutoff]);
+    }
+
+    const drawingCutoff = cutoffIsoForDays(config.drawingDonationDays);
+    if (drawingCutoff && await tableExistsPg(pg, 'public.drawing_donation_items')) {
+      const where = `status in ('done', 'rejected', 'deleted') and created_at < $1::timestamptz`;
+      drawingObjectKeys.push(...await collectDrawingDonationKeysWhere(pg, where, [drawingCutoff]));
+      await deleteRowsWhere(pg, summary, 'public.drawing_donation_items', where, [drawingCutoff]);
+    }
+
+    const predictionCutoff = cutoffIsoForDays(config.predictionDays);
+    if (predictionCutoff) {
+      await deleteRowsWhere(pg, summary, 'public.prediction_events', `status in ('settled', 'cancelled') and created_at < $1::timestamptz`, [predictionCutoff]);
+    }
+
+    const videoDonationCutoff = cutoffIsoForDays(config.videoDonationDays);
+    if (videoDonationCutoff) {
+      await deleteRowsWhere(pg, summary, 'public.video_donation_queue', `status in ('played', 'refunded', 'failed', 'skipped') and updated_at < $1::timestamptz`, [videoDonationCutoff]);
+    }
+
+    const automationJobCutoff = cutoffIsoForDays(config.automationJobDays);
+    if (automationJobCutoff) {
+      await deleteRowsWhere(pg, summary, 'public.automation_jobs', `status in ('done', 'failed') and updated_at < $1::timestamptz`, [automationJobCutoff]);
+    }
+
+    const actionRunCutoff = cutoffIsoForDays(config.actionRunDays);
+    if (actionRunCutoff) {
+      await deleteRowsWhere(pg, summary, 'public.action_blueprint_runs', `finished_at is not null and finished_at < $1::timestamptz`, [actionRunCutoff]);
+    }
+  });
+
+  const objectDelete = await deleteDrawingDonationObjectKeys(drawingObjectKeys).catch((error) => {
+    console.warn('[Privacy] Retention object cleanup failed:', error?.message || error);
+    return { deleted: 0, skipped: uniqueNonEmpty(drawingObjectKeys).length };
+  });
+  summary.objectKeysDeleted = objectDelete.deleted || 0;
+  summary.objectKeysSkipped = objectDelete.skipped || 0;
+  return summary;
 }
 
 export async function reorderDrawingDonationItems(sid, ids = []) {

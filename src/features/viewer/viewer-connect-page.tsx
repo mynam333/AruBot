@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { BadgeCheck, ExternalLink, Link2, Loader2, RefreshCw, ShieldCheck, Unlink, WalletCards } from 'lucide-react';
+import { BadgeCheck, ExternalLink, Link2, Loader2, RefreshCw, ShieldCheck, Trash2, Unlink, WalletCards } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button, LinkButton } from '@/components/ui/button';
@@ -161,6 +161,7 @@ export function ViewerConnectPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [busyAccount, setBusyAccount] = useState<string | null>(null);
+  const [deletingAccount, setDeletingAccount] = useState(false);
 
   const load = useCallback(async (silent = false) => {
     if (silent) setRefreshing(true);
@@ -218,6 +219,35 @@ export function ViewerConnectPage() {
     }
   };
 
+  const deleteAccount = async () => {
+    if (!userId || deletingAccount) return;
+    const firstConfirm = window.confirm('AruBot 계정 연결, 포인트, 참여 기록, 그림 후원 데이터 등 서비스에 저장된 개인정보를 삭제할까요? 이 작업은 되돌릴 수 없습니다.');
+    if (!firstConfirm) return;
+    const typed = window.prompt('계정 삭제를 계속하려면 delete-account 를 입력하세요.');
+    if (typed !== 'delete-account') {
+      toast.info('계정 삭제가 취소되었습니다.');
+      return;
+    }
+    setDeletingAccount(true);
+    try {
+      const response = await fetch(apiUrl('/api/account'), {
+        method: 'DELETE',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm: 'delete-account' }),
+      });
+      if (!response.ok) throw new Error('delete_failed');
+      setUserId(null);
+      setPlatforms([]);
+      toast.success('AruBot 계정과 저장된 참여 데이터를 삭제했습니다.');
+      window.location.assign('/');
+    } catch {
+      toast.error('계정 삭제에 실패했습니다. 개인정보 보호담당자에게 문의해주세요.');
+    } finally {
+      setDeletingAccount(false);
+    }
+  };
+
   if (loading) {
     return (
       <ViewerShell>
@@ -244,6 +274,9 @@ export function ViewerConnectPage() {
               </h1>
               <p className="mt-4 max-w-2xl break-keep text-sm leading-7 text-muted-foreground md:text-base">
                 CHZZK, CIME, YouTube 중 어디에서 보더라도 같은 시청자로 포인트와 참여 경험을 이어가세요.
+              </p>
+              <p className="mt-3 max-w-2xl break-keep text-xs leading-6 text-muted-foreground">
+                계정 연결과 참여 기록은 저장형 기능입니다. 만 14세 미만은 법정대리인 동의 후 이용해야 합니다.
               </p>
               <div className="mt-6 flex flex-wrap gap-2">
                 {providers.map((provider) => {
@@ -351,6 +384,9 @@ export function ViewerConnectPage() {
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
               포인트를 확인하고, 방송별 명령어와 룰렛으로 바로 이동하며, 플랫폼이 달라도 같은 시청자로 참여할 수 있습니다.
             </p>
+            <p className="mt-2 text-xs leading-5 text-muted-foreground">
+              더 이상 이용하지 않을 경우 AruBot 계정과 저장된 참여 데이터를 삭제할 수 있습니다.
+            </p>
           </div>
           <div className="flex flex-wrap gap-2">
             <Badge tone="mint">
@@ -361,6 +397,10 @@ export function ViewerConnectPage() {
               <Link2 className="mr-1 h-3.5 w-3.5" />
               추가 연결
             </Badge>
+            <Button type="button" variant="outline" onClick={deleteAccount} disabled={!userId || deletingAccount}>
+              {deletingAccount ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+              계정 삭제
+            </Button>
           </div>
         </div>
       </section>

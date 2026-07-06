@@ -893,6 +893,9 @@ export function DrawingDonationEditorPage({ channelUid }: { channelUid: string }
               <Button type="button" className="w-full" onClick={submit} disabled={!canSubmit || isPending}>
                 {isPending ? <Loader2 className="h-[1em] w-[1em] animate-spin" /> : <Send className="h-[1em] w-[1em]" />} 그림 보내기
               </Button>
+              <p className="text-xs leading-5 text-muted-foreground">
+                제출한 그림, 닉네임, 참여 기록은 방송 운영과 부정이용 대응을 위해 저장됩니다. 만 14세 미만은 법정대리인 동의 후 이용해야 합니다.
+              </p>
               {streamer?.drawingDonation.blocked ? <p className="text-sm text-muted-foreground">이 방송에서는 봇 기능을 사용할 수 없습니다.</p> : null}
             </CardContent>
           </Card>
