@@ -10,12 +10,16 @@ describe('YouTube live chat integration regression', () => {
   const navigation = fs.readFileSync(path.join(__dirname, '..', 'src', 'shared', 'config', 'navigation.ts'), 'utf8');
   const realtimeDiagnosticsPage = fs.readFileSync(path.join(__dirname, '..', 'src', 'app', '(admin)', 'diagnostics', 'realtime', 'page.tsx'), 'utf8');
 
-  test('uses streamList endpoint without automatic polling fallback', () => {
-    expect(serverIndex).toContain("const YOUTUBE_STREAM_PATH = process.env.YOUTUBE_STREAM_PATH || '/liveChat/messages/stream'");
+  test('uses youtube-chat for receiving live chat', () => {
+    expect(serverIndex).toContain("import youtubeChatPackage from 'youtube-chat'");
+    expect(serverIndex).toContain('const { LiveChat: YoutubeLiveChat } = youtubeChatPackage');
+    expect(serverIndex).toContain('new YoutubeLiveChat(youtubeId, intervalMs)');
+    expect(serverIndex).toContain('handleYoutubeChatLibraryItem(entry, chatItem)');
     expect(serverIndex).toContain('openYoutubeChatStream(entry)');
-    expect(serverIndex).toContain('scheduleYoutubeReconnect(entry.ownerUserId)');
+    expect(serverIndex).toContain('scheduleYoutubeReconnect(entry.ownerUserId,');
     expect(serverIndex).not.toContain('pollingIntervalMillis');
     expect(serverIndex).not.toContain("youtubeApiGet('liveChat/messages'");
+    expect(serverIndex).not.toContain("'/liveChat/messages/stream'");
   });
 
   test('only KRW Super Chat becomes a donation event', () => {
@@ -32,7 +36,7 @@ describe('YouTube live chat integration regression', () => {
 
   test('Super Stickers are not routed through donation rules', () => {
     const itemStart = serverIndex.indexOf('function normalizeYoutubeLiveChatItem');
-    const itemEnd = serverIndex.indexOf('function extractJsonStreamObjects', itemStart);
+    const itemEnd = serverIndex.indexOf('function getYoutubeChatLibraryMessageText', itemStart);
     const itemBody = serverIndex.slice(itemStart, itemEnd);
 
     expect(itemBody).toContain("type === 'superStickerEvent'");
@@ -116,7 +120,7 @@ describe('YouTube live chat integration regression', () => {
   test('operational status and health include YouTube sessions', () => {
     expect(serverIndex).toContain("app.get('/api/youtube/status'");
     expect(serverIndex).toContain("app.get('/api/platforms/status'");
-    expect(serverIndex).toContain("mode: 'streamList'");
+    expect(serverIndex).toContain("mode: 'youtube-chat'");
     expect(serverIndex).toContain('reauthRequired: isYoutubeReauthRequired');
     expect(serverIndex).toContain('ignoredDonations: getYoutubeIgnoredDonationSummary');
     expect(serverIndex).toContain('youtube: typeof youtubeSessionStore');

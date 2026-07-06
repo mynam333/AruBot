@@ -83,7 +83,8 @@
     "socket.io-client": "^2.0.3",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.6.0",
-    "ws": "^8.18.3"
+    "ws": "^8.18.3",
+    "youtube-chat": "^2.2.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.9.1",
