@@ -128,7 +128,6 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
   const buildExternalSrc = useCallback((item: any, atSec: number, paused?: boolean) => {
     const provider = getItemProvider(item);
     let src = String(item?.embedUrl || item?.mediaUrl || '');
-    if (!src && provider === 'chzzk_clip' && item?.mediaId) src = `https://chzzk.naver.com/embed/clip/${encodeURIComponent(String(item.mediaId))}`;
     if (!src && provider === 'cime_clip' && item?.mediaId) src = `https://ci.me/clips/${encodeURIComponent(String(item.mediaId))}`;
     if (provider === 'tiktok' && item?.mediaId) src = `https://www.tiktok.com/player/v1/${encodeURIComponent(String(item.mediaId))}`;
     if (!src) return '';
@@ -137,6 +136,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
       if (isDirectVideoUrl(url.toString())) {
         return url.toString();
       }
+      if (provider === 'chzzk_clip') return '';
       if (provider === 'tiktok') {
         url.searchParams.set('autoplay', paused ? '0' : '1');
         url.searchParams.set('controls', '1');
@@ -156,6 +156,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
       if (Number.isFinite(atSec) && atSec > 0) url.searchParams.set('start', String(Math.floor(atSec)));
       return url.toString();
     } catch {
+      if (provider === 'chzzk_clip' && !isDirectVideoUrl(src)) return '';
       return src;
     }
   }, [getItemProvider]);
@@ -533,15 +534,16 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
 
     externalMediaKeyRef.current = key;
     lastTimeRef.current = target;
+    const viewerSrc = buildExternalSrc(item, target, opts?.paused);
     setExternalItem({
       ...item,
-      viewerSrc: buildExternalSrc(item, target, opts?.paused),
+      viewerSrc,
       provider,
       mediaKey: key,
       targetAtSec: target,
       paused: opts?.paused === true,
-      isDirectVideo: isDirectVideoUrl(item?.embedUrl || item?.mediaUrl || ''),
-      blockedReason: null,
+      isDirectVideo: isDirectVideoUrl(viewerSrc),
+      blockedReason: provider === 'chzzk_clip' && !isDirectVideoUrl(viewerSrc) ? 'chzzk_clip_mp4_unavailable' : null,
     });
     setTimeout(() => {
       applyVolume(volumeRef.current);
@@ -852,8 +854,12 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
               }}
             >
               <div style={{ maxWidth: '42rem', lineHeight: 1.7 }}>
-                <div style={{ marginBottom: '0.75rem', fontSize: 'clamp(1.35rem,3vw,2rem)' }}>{externalItem.title || 'CIME 클립'}</div>
-                <div>{externalItem.blockedReason}</div>
+                <div style={{ marginBottom: '0.75rem', fontSize: 'clamp(1.35rem,3vw,2rem)' }}>{externalItem.title || '영상 후원'}</div>
+                <div>
+                  {externalItem.blockedReason === 'chzzk_clip_mp4_unavailable'
+                    ? '치지직 클립 mp4를 가져오지 못했습니다.'
+                    : externalItem.blockedReason}
+                </div>
               </div>
             </div>
           ) : null}

@@ -5165,9 +5165,16 @@ function updateCurrentPvdDurationFromPlayer(sid, durationSec) {
 async function refreshChzzkClipPlaybackForItem(item) {
   if (!item || String(item.mediaProvider || '').toLowerCase() !== 'chzzk_clip' || !item.mediaId) return item;
   const clip = await fetchChzzkClipInfo(item.mediaId).catch(() => null);
-  if (!clip) return item;
-  if (clip.playbackUrl) item.embedUrl = clip.playbackUrl;
-  if (clip.title && !item.title) item.title = clip.title;
+  if (!clip) {
+    if (/chzzk\.naver\.com\/embed\/clip\//i.test(String(item.embedUrl || ''))) item.embedUrl = null;
+    return item;
+  }
+  if (clip.playbackUrl) {
+    item.embedUrl = clip.playbackUrl;
+  } else if (/chzzk\.naver\.com\/embed\/clip\//i.test(String(item.embedUrl || ''))) {
+    item.embedUrl = null;
+  }
+  if (clip.title && (!item.title || isChzzkClipFallbackTitle(item.title, item.mediaId))) item.title = clip.title;
   if (clip.thumbnailUrl && !item.thumbnailUrl) item.thumbnailUrl = clip.thumbnailUrl;
   if (Number.isFinite(Number(clip.durationSec)) && Number(clip.durationSec) > 0) {
     item.mediaDurationSec = Math.ceil(Number(clip.durationSec));
@@ -5182,6 +5189,14 @@ async function refreshChzzkClipPlaybackForItem(item) {
   }
   item.updatedAt = Date.now();
   return item;
+}
+
+function isChzzkClipFallbackTitle(title, mediaId) {
+  const text = String(title || '').trim();
+  const id = String(mediaId || '').trim();
+  if (!text) return true;
+  if (id && text === `CHZZK 클립 ${id}`) return true;
+  return /^CHZZK 클립\s+[A-Za-z0-9_-]+$/i.test(text) || text === '제목을 불러오지 못한 치지직 클립';
 }
 
 async function broadcastPvdControl(sid, message) {
@@ -5487,6 +5502,7 @@ app.get('/api/video-donation/resolve-title', rateLimiters.externalLookup, async 
     });
   } catch (e) {
     if (e?.code === 'provider_disabled') return res.status(400).json({ error: 'provider_disabled', provider: e.provider });
+    if (e?.code === 'clip_playback_unavailable') return res.status(404).json({ error: 'clip_playback_unavailable', provider: e.provider });
     if (e?.code === 'unsupported_media') return res.status(404).json({ error: 'not_found' });
     return res.status(500).json({ error: 'failed' });
   }
@@ -5534,6 +5550,7 @@ app.post('/api/video-donation/request', rateLimiters.userWrite, async (req, res)
       media = await resolvePvdMedia(input, settings, { allowSearch: true });
     } catch (e) {
       if (e?.code === 'provider_disabled') return res.status(400).json({ error: 'provider_disabled', provider: e.provider, message: `${getPvdProviderLabel(e.provider)} 요청은 꺼져 있습니다.` });
+      if (e?.code === 'clip_playback_unavailable') return res.status(400).json({ error: 'clip_playback_unavailable', message: '치지직 클립 mp4를 가져오지 못했습니다. 잠시 후 다시 시도해 주세요.' });
       return res.status(400).json({ error: 'unsupported_media', message: '지원하지 않는 링크입니다.' });
     }
     const start = Math.max(0, Number(startSec || 0) || 0);
@@ -5685,6 +5702,7 @@ app.get('/api/video-donation/now-playing', async (req, res) => {
     } catch { }
 
     const q = getVideoQueue(sid);
+    if (q[0]) await refreshChzzkClipPlaybackForItem(q[0]);
     const state = pvdPlaybackState.get(sid) || null;
     res.set('Cache-Control', 'no-store, max-age=0');
     return res.json({
@@ -7029,21 +7047,83 @@ function shouldAwaitPvdDurationSync(provider, mediaDurationSec, playSec = null) 
 }
 
 function findFirstChzzkClipMp4Url(cardPayload) {
-  const mpdList = cardPayload?.body?.card?.content?.vod?.playback?.MPD;
   const candidates = [];
-  for (const mpd of Array.isArray(mpdList) ? mpdList : []) {
-    for (const period of Array.isArray(mpd?.Period) ? mpd.Period : []) {
-      for (const adaptation of Array.isArray(period?.AdaptationSet) ? period.AdaptationSet : []) {
-        for (const representation of Array.isArray(adaptation?.Representation) ? adaptation.Representation : []) {
-          for (const base of Array.isArray(representation?.BaseURL) ? representation.BaseURL : []) {
-            const value = String(base || '').trim();
-            if (value) candidates.push(value);
-          }
-        }
-      }
+  const seen = new Set();
+
+  const normalizeCandidate = (value) => String(value || '')
+    .trim()
+    .replace(/\\u0026/ig, '&')
+    .replace(/\\\//g, '/')
+    .replace(/[),.;]+$/g, '');
+
+  const addCandidate = (value, context = '') => {
+    const text = normalizeCandidate(value);
+    if (!text) return;
+
+    const urls = [];
+    if (/^https?:\/\//i.test(text)) urls.push(text);
+    for (const match of text.matchAll(/https?:\/\/[^\s"'<>\\]+?\.mp4(?:\?[^\s"'<>\\]*)?(?:#[^\s"'<>\\]*)?/ig)) {
+      urls.push(match[0]);
     }
-  }
-  return candidates.find((url) => /\.mp4(?:$|[?#])/i.test(url)) || candidates[0] || null;
+
+    for (const rawUrl of urls) {
+      const url = normalizeCandidate(rawUrl);
+      if (!/^https?:\/\//i.test(url) || !/\.mp4(?:$|[?#])/i.test(url)) continue;
+      if (seen.has(url)) continue;
+      seen.add(url);
+      candidates.push({ url, context: String(context || '') });
+    }
+  };
+
+  const visit = (node, context = '', depth = 0) => {
+    if (node == null || depth > 14) return;
+    if (typeof node === 'string' || typeof node === 'number') {
+      addCandidate(node, context);
+      return;
+    }
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item, context, depth + 1);
+      return;
+    }
+    if (typeof node !== 'object') return;
+
+    const objectContext = [
+      context,
+      node.mimeType,
+      node.contentType,
+      node.type,
+      node.codecs,
+      node.width,
+      node.height,
+      node.label,
+      node.name,
+    ].filter(Boolean).join(' ');
+
+    for (const [key, value] of Object.entries(node)) {
+      const nextContext = `${objectContext} ${key}`;
+      if (typeof value === 'string' || typeof value === 'number') addCandidate(value, nextContext);
+      visit(value, nextContext, depth + 1);
+    }
+  };
+
+  visit(cardPayload);
+  if (!candidates.length) return null;
+
+  const scoreCandidate = (candidate) => {
+    const haystack = `${candidate.url} ${candidate.context}`.toLowerCase();
+    let score = 0;
+    if (/\.mp4(?:$|[?#])/i.test(candidate.url)) score += 100;
+    if (/\bvideo\b|video\//i.test(haystack)) score += 50;
+    if (/\baudio\b|audio\//i.test(haystack)) score -= 100;
+    const height = haystack.match(/(?:height|resolution|label|[_-])\D*(\d{3,4})p?\b/i);
+    if (height) score += Math.min(50, Math.floor(Number(height[1]) / 40));
+    if (/1080|720|480/i.test(haystack)) score += 10;
+    return score;
+  };
+
+  return candidates
+    .sort((a, b) => scoreCandidate(b) - scoreCandidate(a))
+    .map((candidate) => candidate.url)[0] || null;
 }
 
 function extractTikTokId(url) {
@@ -7086,6 +7166,42 @@ function extractCimeClipId(url) {
   } catch { return null; }
 }
 
+function getChzzkClipHeaders(clipId) {
+  return {
+    Accept: 'application/json, text/plain, */*',
+    Origin: 'https://chzzk.naver.com',
+    Referer: `https://chzzk.naver.com/clips/${encodeURIComponent(String(clipId || ''))}`,
+    'Accept-Language': 'ko-KR,ko;q=0.9',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36',
+  };
+}
+
+function normalizeChzzkClipTitle(value) {
+  const title = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!title || title === '치지직 CHZZK' || title === 'CHZZK') return null;
+  if (/일시적인 오류가 발생하였습니다/i.test(title)) return null;
+  return title;
+}
+
+function extractChzzkClipTitle(payload) {
+  const candidates = [
+    payload?.clipTitle,
+    payload?.title,
+    payload?.clip?.clipTitle,
+    payload?.content?.clipTitle,
+    payload?.content?.title,
+    payload?.body?.card?.content?.clipTitle,
+    payload?.body?.card?.content?.title,
+    payload?.body?.content?.clipTitle,
+    payload?.body?.content?.title,
+  ];
+  for (const candidate of candidates) {
+    const title = normalizeChzzkClipTitle(candidate);
+    if (title) return title;
+  }
+  return null;
+}
+
 async function fetchChzzkClipInfo(clipId) {
   const id = String(clipId || '').trim();
   if (!id) return null;
@@ -7093,41 +7209,36 @@ async function fetchChzzkClipInfo(clipId) {
     const r = await axios.get(`${String(CHZZK_UNOFFICIAL_API_BASE || 'https://api.chzzk.naver.com').replace(/\/$/, '')}/service/v1/clips/${encodeURIComponent(id)}/detail`, {
       params: { optionalProperties: 'COMMENT' },
       timeout: 7000,
-      headers: {
-        Accept: 'application/json, text/plain, */*',
-        Referer: `https://chzzk.naver.com/clips/${encodeURIComponent(id)}`,
-        'Accept-Language': 'ko-KR,ko;q=0.9',
-      },
+      headers: getChzzkClipHeaders(id),
     });
     const clip = r?.data?.content || null;
     if (!clip) return null;
+    let title = extractChzzkClipTitle(clip);
     const rawDuration = Number(clip.duration);
     const durationSec = Number.isFinite(rawDuration) && rawDuration > 0
       ? Math.ceil(rawDuration > 10000 ? rawDuration / 1000 : rawDuration)
       : null;
-    let playbackUrl = null;
+    let playbackUrl = findFirstChzzkClipMp4Url(clip);
     const videoId = clip.videoId || null;
-    if (videoId) {
+    const seedMediaIds = Array.from(new Set([videoId, id].filter(Boolean).map((value) => String(value))));
+    for (const seedMediaId of seedMediaIds) {
+      if (playbackUrl) break;
       try {
         const card = await axios.get('https://creatorhub-api.naver.com/api/v5.0/clipviewer/card', {
           params: {
             serviceType: 'CHZZK',
-            seedMediaId: videoId,
+            seedMediaId,
           },
           timeout: 7000,
-          headers: {
-            Accept: 'application/json, text/plain, */*',
-            Origin: 'https://chzzk.naver.com',
-            Referer: `https://chzzk.naver.com/clips/${encodeURIComponent(id)}`,
-            'Accept-Language': 'ko-KR,ko;q=0.9',
-          },
+          headers: getChzzkClipHeaders(id),
         });
+        title = title || extractChzzkClipTitle(card?.data);
         playbackUrl = findFirstChzzkClipMp4Url(card?.data);
       } catch { }
     }
     return {
       raw: clip,
-      title: clip.clipTitle || null,
+      title,
       durationSec,
       playbackUrl,
       thumbnailUrl: clip.thumbnailImageUrl || null,
@@ -7850,7 +7961,7 @@ async function parsePvdMediaInput(input, { allowSearch = true } = {}) {
       provider: 'chzzk_clip',
       mediaId: chzzkClipId,
       originalUrl: `https://chzzk.naver.com/clips/${chzzkClipId}`,
-      embedUrl: `https://chzzk.naver.com/embed/clip/${chzzkClipId}`,
+      embedUrl: null,
     };
   }
 
@@ -7959,8 +8070,13 @@ async function resolvePvdMedia(input, settings = {}, { allowSearch = true } = {}
       if (clip?.playbackUrl) {
         parsed.embedUrl = clip.playbackUrl;
         parsed.originalUrl = `https://chzzk.naver.com/clips/${parsed.mediaId}`;
+      } else {
+        const error = new Error('clip_playback_unavailable');
+        error.code = 'clip_playback_unavailable';
+        error.provider = parsed.provider;
+        throw error;
       }
-      title = clip?.title || `${getPvdProviderLabel(parsed.provider)} ${parsed.mediaId}`;
+      title = clip?.title || '제목을 불러오지 못한 치지직 클립';
       durationSec = Number.isFinite(clip?.durationSec) ? Number(clip.durationSec) : null;
       thumbnailUrl = clip?.thumbnailUrl || null;
     } else if (parsed.provider === 'cime_clip') {
@@ -21145,6 +21261,7 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
     media = await resolvePvdMedia(inputArg, settings, { allowSearch: true });
   } catch (e) {
     if (e?.code === 'provider_disabled') return cleaned || `${getPvdProviderLabel(e.provider)} 요청은 꺼져 있습니다.`;
+    if (e?.code === 'clip_playback_unavailable') return cleaned || '치지직 클립 mp4를 가져오지 못했습니다. 잠시 후 다시 시도해 주세요.';
     return cleaned || '올바른 링크나 검색어를 입력해 주세요.';
   }
 
@@ -22827,6 +22944,7 @@ function registerPvdRoutes() {
       // Immediately send current now-playing to this socket so late joiners auto-start
       try {
         const q = getVideoQueue(sid);
+        if (q[0]) await refreshChzzkClipPlaybackForItem(q[0]);
         const state = pvdPlaybackState.get(sid) || (q[0] ? createPvdPlaybackState(q[0]) : null);
         if (q[0] && state && !pvdPlaybackState.has(sid)) {
           pvdPlaybackState.set(sid, state);
