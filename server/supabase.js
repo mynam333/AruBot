@@ -2018,6 +2018,23 @@ export async function listBotEventLogs(ownerUserId, options = {}) {
   });
 }
 
+export async function getBotEventLog(ownerUserId, id) {
+  const owner = String(ownerUserId || '').replace(/^user:/, '').trim();
+  const logId = String(id || '').trim();
+  if (!owner || !logId) return null;
+  await ensureBotEventLogTables();
+  return withPgClient(async (pg) => {
+    const result = await pg.query(
+      `select *
+         from public.bot_event_logs
+        where owner_user_id = $1 and id = $2
+        limit 1`,
+      [owner, logId]
+    );
+    return result.rows?.[0] || null;
+  });
+}
+
 async function ensureDrawingDonationTables() {
   await withPgClient(async (pg) => {
     await pg.query(`

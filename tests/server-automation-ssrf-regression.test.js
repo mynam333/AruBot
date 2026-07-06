@@ -27,6 +27,9 @@ describe('server-side automation SSRF regression', () => {
     expect(body).toContain("lowerHost === 'localhost'");
     expect(body).toContain('isPrivateIpAddress(hostname)');
     expect(body).toContain('dns.promises.lookup');
+    expect(body).toContain('isCloudMetadataAddress(hostname)');
+    expect(body).toContain('isCloudMetadataAddress(record.address)');
+    expect(serverIndex).toContain("const OCI_METADATA_IPV4 = '169.254.169.254'");
     expect(body).toContain('Server-side automation endpoints must use WSS in production');
   });
 });

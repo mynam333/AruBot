@@ -180,7 +180,7 @@ type AutomationConnection = {
   type: string;
   name: string;
   enabled: boolean;
-  executionMode?: 'oracle_direct' | 'local_program';
+  executionMode?: 'web' | 'local';
   endpoint?: string;
   discoveryCache?: AutomationDiscoveryCache;
   lastStatus?: string | null;
@@ -188,7 +188,7 @@ type AutomationConnection = {
 
 type AutomationOverview = {
   settings?: {
-    integrationMode?: 'oracle_direct' | 'local_program';
+    integrationMode?: 'web' | 'local';
   };
   connections?: AutomationConnection[];
   soundStorage?: {
@@ -1447,7 +1447,7 @@ export function ActionBlueprintPage() {
     const data = await jsonRequest<{ connection: AutomationConnection }>('/api/automations/connections', 'POST', {
       type: type === 'tits' ? 'tits' : type === 'vtube' ? 'vtube_studio' : 'obs',
       name: type === 'tits' ? 'T.I.T.S.' : type === 'vtube' ? 'VTube Studio' : 'OBS Studio',
-      executionMode: 'local_program',
+      executionMode: 'local',
       endpoint: type === 'tits' ? 'ws://localhost:42069' : type === 'vtube' ? 'ws://localhost:8001' : 'ws://localhost:4455',
     });
     await refreshAutomationOverview();
@@ -1464,7 +1464,7 @@ export function ActionBlueprintPage() {
         type === 'tits' ? '/api/automations/tits/discover' : type === 'vtube' ? '/api/automations/vtube/discover' : '/api/automations/obs/discover',
         'POST',
         {
-          executionMode: 'local_program',
+          executionMode: 'local',
           endpoint,
           connectionId: connection.id,
           name: type === 'tits' ? 'T.I.T.S.' : type === 'vtube' ? 'VTube Studio' : 'OBS Studio',

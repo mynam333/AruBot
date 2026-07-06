@@ -17,6 +17,8 @@ const DEFAULT_UPDATE_MANIFEST_URL = 'https://github.com/mynam333/AruBot/releases
 const LEGACY_DASHBOARD_URL = 'https://arubot.vercel.app';
 const DEFAULT_BACKEND_URL = 'https://arubotapi.yuaru.com';
 const DEFAULT_DASHBOARD_URL = 'https://arubot.yuaru.com';
+const OCI_METADATA_IPV4 = '169.254.169.254';
+const MAX_UDP_PACKET_BYTES = 8192;
 
 function readBuildEnv() {
   try {
@@ -136,7 +138,15 @@ function sendRendererTask(task) {
   return { accepted: true, taskType: task.type, at: new Date().toISOString() };
 }
 
+function parseIpv4MappedIpv6(value) {
+  const match = String(value || '').toLowerCase().match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/);
+  if (!match || net.isIP(match[1]) !== 4) return null;
+  return match[1];
+}
+
 function isPrivateIpAddress(value) {
+  const mapped = parseIpv4MappedIpv6(value);
+  if (mapped) return isPrivateIpAddress(mapped);
   const ipVersion = net.isIP(value);
   if (!ipVersion) return false;
   if (ipVersion === 4) {
@@ -162,10 +172,72 @@ function isPrivateIpAddress(value) {
     normalized.startsWith('fe8') ||
     normalized.startsWith('fe9') ||
     normalized.startsWith('fea') ||
-    normalized.startsWith('feb') ||
-    normalized.startsWith('::ffff:127.') ||
-    normalized.startsWith('::ffff:10.') ||
-    normalized.startsWith('::ffff:192.168.');
+    normalized.startsWith('feb');
+}
+
+function isCloudMetadataAddress(value) {
+  const mapped = parseIpv4MappedIpv6(value);
+  if (mapped) return isCloudMetadataAddress(mapped);
+  if (net.isIP(value) === 4) return String(value) === OCI_METADATA_IPV4;
+  return false;
+}
+
+function assertNotCloudMetadataAddress(address, label) {
+  if (isCloudMetadataAddress(address)) {
+    throw new Error(`${label} 대상은 OCI 내부 DNS/메타데이터 주소 ${OCI_METADATA_IPV4}로 연결할 수 없습니다.`);
+  }
+}
+
+function isLoopbackIpAddress(value) {
+  const mapped = parseIpv4MappedIpv6(value);
+  if (mapped) return isLoopbackIpAddress(mapped);
+  if (net.isIP(value) === 4) return String(value).startsWith('127.');
+  if (net.isIP(value) === 6) return String(value).toLowerCase() === '::1';
+  return false;
+}
+
+function isBlockedUdpAddress(value) {
+  const mapped = parseIpv4MappedIpv6(value);
+  if (mapped) return isBlockedUdpAddress(mapped);
+  if (net.isIP(value) === 4) {
+    const parts = String(value).split('.').map((part) => Number(part));
+    const [a, b, c, d] = parts;
+    return a === 0 || a >= 224 || (a === 255 && b === 255 && c === 255 && d === 255);
+  }
+  if (net.isIP(value) === 6) {
+    const normalized = String(value).toLowerCase();
+    return normalized === '::' || normalized.startsWith('ff');
+  }
+  return false;
+}
+
+async function assertSafeUdpTarget(rawHost, options = {}) {
+  const host = String(rawHost || '').trim();
+  if (!host) throw new Error('UDP 호스트가 필요합니다.');
+  const lowerHost = host.toLowerCase();
+  const allowPrivateNetwork = options.allowPrivateNetwork === true;
+  const validateAddress = (address) => {
+    assertNotCloudMetadataAddress(address, 'UDP 노드');
+    if (isBlockedUdpAddress(address)) {
+      throw new Error('UDP 노드는 multicast, broadcast, unspecified 주소로 전송할 수 없습니다.');
+    }
+    if (isLoopbackIpAddress(address)) return;
+    if (allowPrivateNetwork && isPrivateIpAddress(address)) return;
+    throw new Error(allowPrivateNetwork
+      ? 'UDP 노드는 localhost 또는 사설망 주소로만 전송할 수 있습니다.'
+      : 'UDP 노드는 기본적으로 localhost 주소로만 전송할 수 있습니다.');
+  };
+
+  if (lowerHost === 'localhost') return '127.0.0.1';
+  if (net.isIP(host)) {
+    validateAddress(host);
+    return host;
+  }
+
+  const records = await dns.lookup(host, { all: true, verbatim: true });
+  if (!records.length) throw new Error('UDP 호스트를 확인할 수 없습니다.');
+  for (const record of records) validateAddress(record.address);
+  return records[0].address;
 }
 
 async function assertSafeExternalHttpUrl(rawUrl, options = {}) {
@@ -174,6 +246,13 @@ async function assertSafeExternalHttpUrl(rawUrl, options = {}) {
   if (url.protocol === 'http:' && options.allowInsecureHttp !== true) throw new Error('HTTP 노드는 기본적으로 HTTPS만 허용합니다.');
   const hostname = url.hostname;
   const lowerHost = hostname.toLowerCase();
+  assertNotCloudMetadataAddress(hostname, 'HTTP 노드');
+  const resolvedRecords = !net.isIP(hostname)
+    ? await dns.lookup(hostname, { all: true, verbatim: true })
+    : [];
+  if (resolvedRecords.some((record) => isCloudMetadataAddress(record.address))) {
+    throw new Error(`HTTP 노드 대상 도메인이 OCI 내부 DNS/메타데이터 주소 ${OCI_METADATA_IPV4}로 확인되어 차단했습니다.`);
+  }
   if (!options.allowPrivateNetwork && (
     lowerHost === 'localhost' ||
     lowerHost.endsWith('.localhost') ||
@@ -182,8 +261,7 @@ async function assertSafeExternalHttpUrl(rawUrl, options = {}) {
     throw new Error('HTTP 노드는 localhost 또는 사설망 주소로 요청할 수 없습니다.');
   }
   if (!options.allowPrivateNetwork && !net.isIP(hostname)) {
-    const records = await dns.lookup(hostname, { all: true, verbatim: true });
-    if (!records.length || records.some((record) => isPrivateIpAddress(record.address))) {
+    if (!resolvedRecords.length || resolvedRecords.some((record) => isPrivateIpAddress(record.address))) {
       throw new Error('HTTP 노드 대상 도메인이 사설망 주소로 확인되어 차단했습니다.');
     }
   }
@@ -1834,10 +1912,12 @@ async function processJob(job) {
     const host = String(payload.host || '127.0.0.1').trim();
     const port = Number(payload.port || 0);
     const message = typeof payload.message === 'string' ? payload.message : JSON.stringify(payload.message || {});
+    const safeHost = await assertSafeUdpTarget(host, { allowPrivateNetwork: payload.allowPrivateNetwork === true });
     if (!host) throw new Error('UDP 호스트가 필요합니다.');
     if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('UDP 포트가 올바르지 않습니다.');
-    const family = net.isIP(host) === 6 ? 'udp6' : 'udp4';
     const buffer = Buffer.from(message);
+    if (buffer.length > MAX_UDP_PACKET_BYTES) throw new Error(`UDP 메시지는 ${MAX_UDP_PACKET_BYTES}바이트를 초과할 수 없습니다.`);
+    const family = net.isIP(safeHost) === 6 ? 'udp6' : 'udp4';
     return await new Promise((resolve, reject) => {
       const socket = dgram.createSocket(family);
       const timeout = setTimeout(() => {
@@ -1849,11 +1929,11 @@ async function processJob(job) {
         try { socket.close(); } catch { }
         reject(error);
       });
-      socket.send(buffer, port, host, (error) => {
+      socket.send(buffer, port, safeHost, (error) => {
         clearTimeout(timeout);
         try { socket.close(); } catch { }
         if (error) reject(error);
-        else resolve({ ok: true, host, port, bytes: buffer.length });
+        else resolve({ ok: true, host: safeHost, requestedHost: host, port, bytes: buffer.length });
       });
     });
   }
@@ -1947,8 +2027,6 @@ function getAgentWebSocketUrl() {
   base.protocol = base.protocol === 'https:' ? 'wss:' : 'ws:';
   base.pathname = '/api/automations/local-agent/ws';
   base.search = '';
-  const token = normalizeLocalProgramToken(config.token);
-  if (token) base.searchParams.set('token', token);
   base.hash = '';
   return base.toString();
 }

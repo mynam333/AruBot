@@ -9,7 +9,7 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
-import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, getSessionUserId, listChannelPoints, listChannelPointsPage, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, getChannelPoints, getChannelPointBalanceSummary, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, findSidByChannelViewerTokenSupabase, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, findAppUserIdByChannelUid, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, deletePlatformTokens, deletePlatformAccount, getAppUserAdminStatus, getYoutubeBotProfile, upsertYoutubeBotProfile, updateYoutubeBotProfileTokens, markYoutubeBotProfileStatus, deleteYoutubeBotProfile, getYoutubeStreamerChannel, upsertYoutubeStreamerChannel, markYoutubeStreamerChannelModeratorRegistered, deleteYoutubeStreamerChannel, listYoutubeStreamerChannelsByYoutubeChannelId, updateYoutubeStreamerChannelLive, updateYoutubeStreamerChannelWebsub, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps, recordBotEventLog, listBotEventLogs, insertDrawingDonationItem, listDrawingDonationItems, getDrawingDonationItem, getCurrentDrawingDonationItem, updateDrawingDonationItemStatus, deleteDrawingDonationItem, reorderDrawingDonationItems, uploadDrawingDonationObject, validateSecretEncryptionConfig, getPgPoolStatus } from './supabase.js';
+import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, getSessionUserId, listChannelPoints, listChannelPointsPage, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, getChannelPoints, getChannelPointBalanceSummary, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, findSidByChannelViewerTokenSupabase, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, findAppUserIdByChannelUid, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, deletePlatformTokens, deletePlatformAccount, getAppUserAdminStatus, getYoutubeBotProfile, upsertYoutubeBotProfile, updateYoutubeBotProfileTokens, markYoutubeBotProfileStatus, deleteYoutubeBotProfile, getYoutubeStreamerChannel, upsertYoutubeStreamerChannel, markYoutubeStreamerChannelModeratorRegistered, deleteYoutubeStreamerChannel, listYoutubeStreamerChannelsByYoutubeChannelId, updateYoutubeStreamerChannelLive, updateYoutubeStreamerChannelWebsub, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps, recordBotEventLog, listBotEventLogs, getBotEventLog, insertDrawingDonationItem, listDrawingDonationItems, getDrawingDonationItem, getCurrentDrawingDonationItem, updateDrawingDonationItemStatus, deleteDrawingDonationItem, reorderDrawingDonationItems, uploadDrawingDonationObject, validateSecretEncryptionConfig, getPgPoolStatus } from './supabase.js';
 import { createPlatformProfileService } from './platform-profiles.js';
 import { WebSocketServer, WebSocket } from 'ws';
 import youtubeChatPackage from 'youtube-chat';
@@ -32,6 +32,8 @@ if (!VERBOSE_LOGS) {
 const app = express();
 app.set('trust proxy', 1);
 const PORT = process.env.PORT || process.env.SERVER_PORT || 3001;
+const SERVER_HOST = String(process.env.SERVER_HOST || process.env.ARUBOT_SERVER_HOST || (process.env.NODE_ENV === 'production' ? '127.0.0.1' : '')).trim();
+const OCI_METADATA_IPV4 = '169.254.169.254';
 const INSTANCE_ID = 'inst_' + Math.random().toString(16).slice(2) + '_' + Date.now().toString(36);
 const PROCESS_ROLE = process.env.ARUBOT_PROCESS_ROLE || 'api-runtime';
 const youtubeBotOAuthPendingStore = new Map(); // ownerUserId -> { tokens, channels, createdAt }
@@ -5588,6 +5590,36 @@ app.post('/api/video-donation/request', rateLimiters.userWrite, async (req, res)
       status: 'queued'
     };
     q.push(item);
+    await recordBotEventLogSafe(sid, {
+      category: 'video_donation',
+      eventType: 'video_donation_request',
+      provider: 'viewer',
+      channelUid: uid,
+      viewerUserId: userId,
+      viewerName: username || null,
+      pointDelta: -cost,
+      pointBefore: Number(currentPts || 0),
+      pointAfter: Number(currentPts || 0) - cost,
+      targetName: item.title || item.mediaId || item.mediaUrl || '영상 후원',
+      summary: `영상 후원 신청: ${item.title || item.mediaId || item.mediaUrl || '영상'} (${cost}P 사용)`,
+      metadata: {
+        mediaProvider: item.mediaProvider,
+        mediaId: item.mediaId,
+        mediaUrl: item.mediaUrl,
+        embedUrl: item.embedUrl,
+        thumbnailUrl: item.thumbnailUrl,
+        title: item.title,
+        durationSec: item.durationSec,
+        mediaDurationSec: item.mediaDurationSec,
+        awaitDurationSync: item.awaitDurationSync,
+        startSec: item.startSec,
+        requestedPlaySec: item.requestedPlaySec,
+        maxDurationSec: item.maxDurationSec,
+        cost,
+        queueItemId: item.id,
+        replaySnapshot: item,
+      },
+    });
     // If this is the first item, broadcast start & schedule auto pop
     if (q.length === 1) {
       broadcastPvdStart(sid);
@@ -6623,6 +6655,7 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}) {
   const blueprint = await getActionBlueprint(ownerUserId, idOrSlug);
   if (!blueprint || blueprint.enabled === false) return { ok: false, error: 'blueprint_not_found' };
   const dryRun = context.dryRun === true || context.source === 'manual_test';
+  const suppressPointMutations = context.replayNoCost === true || context.noPointCost === true;
   const version = blueprint.version || {};
   if (!version.published && context.source !== 'manual_test') return { ok: false, error: 'blueprint_not_published' };
   const nodes = Array.isArray(version.nodes) ? version.nodes : [];
@@ -6752,8 +6785,8 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}) {
           : userId ? await getChannelPoints(channelUid, userId).catch(() => 0) : 0;
         if (node.type === 'pointsAdjust' && userId) {
           const delta = Math.floor(Number(evaluateBlueprintValue(config.delta || 0, scope) || 0));
-          if (!dryRun) await incrChannelPoints(channelUid, userId, username || userId, delta);
-          output = { channelUid, userId, previous: current, delta, points: current + delta, dryRun };
+          if (!dryRun && !suppressPointMutations) await incrChannelPoints(channelUid, userId, username || userId, delta);
+          output = { channelUid, userId, previous: current, delta, points: suppressPointMutations ? current : current + delta, dryRun, noPointCost: suppressPointMutations };
         } else if (node.type === 'pointsEnough') {
           const required = Math.max(0, Number(evaluateBlueprintValue(config.required || 0, scope) || 0));
           const passed = Number(current || 0) >= required;
@@ -7960,7 +7993,15 @@ async function executeActionVariableTokens(sid, text, context = {}) {
           source: context.source || 'action_variable',
           triggerRef: actionId
         });
-        jobs.push(runResult);
+        jobs.push({
+          kind: 'blueprint',
+          actionId,
+          blueprintId: blueprint.id,
+          blueprintName: blueprint.name || actionId,
+          runId: runResult?.run?.id || null,
+          ok: runResult?.ok !== false,
+          result: runResult,
+        });
       } else {
         const job = await queueAutomationJob(ownerUserId, {
           connectionId: null,
@@ -7974,7 +8015,7 @@ async function executeActionVariableTokens(sid, text, context = {}) {
             createdAt: new Date().toISOString(),
           },
         });
-        jobs.push(job);
+        jobs.push({ kind: 'automation_job', actionId, jobId: job?.id || null, job });
       }
     } catch (error) {
       console.error('[Action Variable] failed to enqueue action job', actionId, error?.message || error);
@@ -8961,8 +9002,15 @@ async function recordCommandExecutionLog(sid, context = {}) {
       args: Array.isArray(context.args) ? context.args.slice(0, 10) : [],
       actionJobs: Array.isArray(context.actionJobs) ? context.actionJobs.map((job) => ({
         actionId: job.actionId || null,
+        blueprintId: job.blueprintId || job.result?.run?.blueprintId || job.run?.blueprintId || null,
+        runId: job.runId || job.result?.run?.id || job.run?.id || null,
         jobId: job.job?.id || job.jobId || null,
+        kind: job.kind || null,
+        ok: job.ok ?? null,
       })) : [],
+      actionIds: Array.isArray(context.actionJobs)
+        ? Array.from(new Set(context.actionJobs.map((job) => job.actionId || job.blueprintId || job.result?.run?.blueprintId || job.run?.blueprintId).filter(Boolean).map(String)))
+        : [],
       features: context.features || [],
       source: context.source || null,
     },
@@ -12547,6 +12595,82 @@ function listLocalFxAssetsFromConnections(connections = []) {
   };
 }
 
+function publicExecutionMode(value) {
+  return String(value || '').trim() === 'local_program' ? 'local' : 'web';
+}
+
+function internalExecutionMode(value, fallback = 'oracle_direct') {
+  const mode = String(value || '').trim();
+  if (mode === 'local' || mode === 'local_program') return 'local_program';
+  if (mode === 'web' || mode === 'managed' || mode === 'oracle_direct') return 'oracle_direct';
+  return fallback;
+}
+
+function publicSoundStorageMode(value) {
+  return String(value || '').trim() === 'local_program' ? 'local' : 'managed';
+}
+
+function internalSoundStorageMode(value) {
+  const mode = String(value || '').trim();
+  return mode === 'local' || mode === 'local_program' ? 'local_program' : 'server_hosted';
+}
+
+function publicTtsProvider(value) {
+  return String(value || '').trim() === 'local_program' ? 'local' : 'browser';
+}
+
+function internalTtsProvider(value) {
+  const provider = String(value || '').trim();
+  return provider === 'local' || provider === 'local_program' ? 'local_program' : 'browser';
+}
+
+function publicAutomationDiscovery(cache = {}) {
+  const source = cache && typeof cache === 'object' ? cache : {};
+  const out = {};
+  for (const key of ['items', 'triggers', 'hotkeys', 'models', 'expressions', 'currentModel', 'scenes', 'sources', 'filters', 'assets', 'fetchedAt']) {
+    if (source[key] != null) out[key] = source[key];
+  }
+  return out;
+}
+
+function publicAutomationConnection(connection = {}) {
+  if (!connection) return null;
+  return {
+    id: connection.id,
+    type: connection.type,
+    name: connection.name,
+    enabled: connection.enabled !== false,
+    executionMode: publicExecutionMode(connection.executionMode || connection.execution_mode),
+    endpoint: connection.endpoint || '',
+    discoveryCache: publicAutomationDiscovery(connection.discoveryCache || connection.discovery_cache || {}),
+    lastStatus: connection.lastStatus || connection.last_status || null
+  };
+}
+
+function publicAutomationAgent(agent = {}) {
+  if (!agent) return null;
+  return {
+    id: agent.id,
+    name: agent.name,
+    status: agent.status || 'offline',
+    lastSeenAt: agent.lastSeenAt || agent.last_seen_at || null
+  };
+}
+
+function publicAutomationSettings(settings = {}) {
+  return {
+    integrationMode: publicExecutionMode(settings.integrationMode),
+    soundStorageMode: publicSoundStorageMode(settings.soundStorageMode),
+    tts: {
+      enabled: settings?.tts?.enabled !== false,
+      provider: publicTtsProvider(settings?.tts?.provider),
+      voice: settings?.tts?.voice || '',
+      rate: Number(settings?.tts?.rate || 1),
+      pitch: Number(settings?.tts?.pitch || 1)
+    }
+  };
+}
+
 function normalizeFxPercent(value, fallback, min = 0, max = 100) {
   const number = Number(value);
   if (!Number.isFinite(number)) return fallback;
@@ -12684,7 +12808,15 @@ function makeTitsMessage(messageType, data = {}) {
   };
 }
 
+function parseIpv4MappedIpv6(value) {
+  const match = String(value || '').toLowerCase().match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/);
+  if (!match || net.isIP(match[1]) !== 4) return null;
+  return match[1];
+}
+
 function isPrivateIpAddress(value) {
+  const mapped = parseIpv4MappedIpv6(value);
+  if (mapped) return isPrivateIpAddress(mapped);
   if (net.isIP(value) === 4) {
     const [a, b] = String(value).split('.').map((part) => Number(part));
     return (
@@ -12708,11 +12840,15 @@ function isPrivateIpAddress(value) {
       normalized.startsWith('fe8') ||
       normalized.startsWith('fe9') ||
       normalized.startsWith('fea') ||
-      normalized.startsWith('feb') ||
-      normalized.startsWith('::ffff:127.') ||
-      normalized.startsWith('::ffff:10.') ||
-      normalized.startsWith('::ffff:192.168.');
+      normalized.startsWith('feb');
   }
+  return false;
+}
+
+function isCloudMetadataAddress(value) {
+  const mapped = parseIpv4MappedIpv6(value);
+  if (mapped) return isCloudMetadataAddress(mapped);
+  if (net.isIP(value) === 4) return String(value) === OCI_METADATA_IPV4;
   return false;
 }
 
@@ -12730,6 +12866,15 @@ async function assertSafeServerAutomationWebSocketUrl(rawEndpoint) {
 
   const hostname = url.hostname;
   const lowerHost = hostname.toLowerCase();
+  if (isCloudMetadataAddress(hostname)) {
+    throw new Error(`Server-side automation endpoints cannot target OCI internal DNS/metadata address ${OCI_METADATA_IPV4}`);
+  }
+  const resolvedRecords = !net.isIP(hostname)
+    ? await dns.promises.lookup(hostname, { all: true, verbatim: true })
+    : [];
+  if (resolvedRecords.some((record) => isCloudMetadataAddress(record.address))) {
+    throw new Error(`Server-side automation endpoint resolves to OCI internal DNS/metadata address ${OCI_METADATA_IPV4}`);
+  }
   if (!allowPrivateNetwork && (
     lowerHost === 'localhost' ||
     lowerHost.endsWith('.localhost') ||
@@ -12738,8 +12883,7 @@ async function assertSafeServerAutomationWebSocketUrl(rawEndpoint) {
     throw new Error('Server-side automation endpoints cannot target localhost or private networks');
   }
   if (!allowPrivateNetwork && !net.isIP(hostname)) {
-    const records = await dns.promises.lookup(hostname, { all: true, verbatim: true });
-    if (!records.length || records.some((record) => isPrivateIpAddress(record.address))) {
+    if (!resolvedRecords.length || resolvedRecords.some((record) => isPrivateIpAddress(record.address))) {
       throw new Error('Server-side automation endpoint resolves to a private network address');
     }
   }
@@ -14633,22 +14777,9 @@ app.get('/api/automations/overview', async (req, res) => {
     const soundStorage = listAutomationSoundFiles(ownerUserId);
     const fxAssets = listLocalFxAssetsFromConnections(connections);
     return res.json({
-      settings: {
-        integrationMode: settings.integrationMode === 'local_program' ? 'local_program' : 'oracle_direct',
-        queueBackend: 'postgres',
-        secretPolicy: 'local_storage_or_local_agent',
-        soundStorageMode: settings.soundStorageMode === 'local_program' ? 'local_program' : 'server_hosted',
-        tts: {
-          enabled: settings?.tts?.enabled !== false,
-          provider: settings?.tts?.provider || 'browser',
-          voice: settings?.tts?.voice || '',
-          rate: Number(settings?.tts?.rate || 1),
-          pitch: Number(settings?.tts?.pitch || 1)
-        },
-        ...settings
-      },
-      connections,
-      localAgents,
+      settings: publicAutomationSettings(settings),
+      connections: connections.map(publicAutomationConnection).filter(Boolean),
+      localAgents: localAgents.map(publicAutomationAgent).filter(Boolean),
       soundStorage,
       fxAssets: fxAssets.assets,
         supportedConnectors: ['obs', 'tits', 'vtube_studio', 'tts', 'stream_deck_touch_portal', 'http', 'websocket', 'udp', 'fx'],
@@ -14828,11 +14959,11 @@ app.put('/api/automations/settings', rateLimiters.userWrite, async (req, res) =>
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
     const body = req.body || {};
     const next = {
-      integrationMode: body.integrationMode === 'local_program' ? 'local_program' : 'oracle_direct',
-      soundStorageMode: body.soundStorageMode === 'local_program' ? 'local_program' : 'server_hosted',
-      tts: {
-        enabled: body?.tts?.enabled !== false,
-        provider: ['browser', 'local_program'].includes(String(body?.tts?.provider || '')) ? body.tts.provider : 'browser',
+        integrationMode: internalExecutionMode(body.integrationMode),
+        soundStorageMode: internalSoundStorageMode(body.soundStorageMode),
+        tts: {
+          enabled: body?.tts?.enabled !== false,
+          provider: internalTtsProvider(body?.tts?.provider),
         voice: String(body?.tts?.voice || '').slice(0, 120),
         rate: Math.min(2, Math.max(0.5, Number(body?.tts?.rate || 1))),
         pitch: Math.min(2, Math.max(0.5, Number(body?.tts?.pitch || 1)))
@@ -14840,7 +14971,7 @@ app.put('/api/automations/settings', rateLimiters.userWrite, async (req, res) =>
       updatedAt: new Date().toISOString()
     };
     const settings = await setAutomationSettings(ownerUserId, next);
-    return res.json({ settings });
+    return res.json({ settings: publicAutomationSettings(settings) });
   } catch (e) {
     console.error('[Automations] settings error', e?.message || e);
     return res.status(500).json({ error: 'Failed to save automation settings' });
@@ -14854,7 +14985,8 @@ app.post('/api/automations/local-agents/pair', rateLimiters.userWrite, async (re
     const name = String(req.body?.name || 'AruBot Local Program').trim().slice(0, 120) || 'AruBot Local Program';
     const result = await getOrCreateAutomationLocalAgent(ownerUserId, name, { rotate: false });
     return res.json({
-      ...result,
+      token: result.token || null,
+      agent: publicAutomationAgent(result.agent),
       tokenMasked: result.token ? null : 'alp_••••••••••••••••••••••••••••••••',
       tokenShownOnce: !!result.token
     });
@@ -14871,7 +15003,8 @@ app.post('/api/automations/local-agents/rotate', rateLimiters.userWrite, async (
     const name = String(req.body?.name || 'AruBot Local Program').trim().slice(0, 120) || 'AruBot Local Program';
     const result = await getOrCreateAutomationLocalAgent(ownerUserId, name, { rotate: true });
     return res.json({
-      ...result,
+      token: result.token || null,
+      agent: publicAutomationAgent(result.agent),
       tokenShownOnce: true
     });
   } catch (e) {
@@ -14884,7 +15017,8 @@ app.get('/api/automations/local-agents', async (req, res) => {
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
-    return res.json({ agents: await listAutomationLocalAgents(ownerUserId) });
+    const agents = await listAutomationLocalAgents(ownerUserId);
+    return res.json({ agents: agents.map(publicAutomationAgent).filter(Boolean) });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to load local programs' });
   }
@@ -14892,8 +15026,8 @@ app.get('/api/automations/local-agents', async (req, res) => {
 
 app.post('/api/automations/local-agent/heartbeat', requireAutomationLocalAgent, async (req, res) => {
   try {
-    const agent = await touchAutomationLocalAgent(req.automationLocalAgent.id, req.body?.capabilities || {});
-    return res.json({ ok: true, agent });
+    await touchAutomationLocalAgent(req.automationLocalAgent.id, req.body?.capabilities || {});
+    return res.json({ ok: true });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to update local program heartbeat' });
   }
@@ -14929,7 +15063,7 @@ app.post('/api/automations/local-agent/discovery-sync', requireAutomationLocalAg
       lastCheckedAt: new Date().toISOString()
     });
     await touchAutomationLocalAgent(req.automationLocalAgent.id, req.body?.capabilities || {}).catch(() => null);
-    return res.json({ ok: true, connection });
+    return res.json({ ok: true, connection: publicAutomationConnection(connection) });
   } catch (e) {
     console.error('[Automations] local discovery sync error', e?.message || e);
     return res.status(500).json({ error: 'Failed to sync local discovery' });
@@ -14978,7 +15112,7 @@ app.post('/api/automations/local-agent/jobs/:jobId/complete', requireAutomationL
         }).catch((error) => console.warn('[Automations] failed to persist local discovery cache', error?.message || error));
       }
     }
-    return res.json({ job });
+    return res.json({ ok: true });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to complete automation job' });
   }
@@ -15299,7 +15433,7 @@ app.get('/api/automations/connections', async (req, res) => {
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
     const connections = await listAutomationConnections(ownerUserId);
-    return res.json({ connections });
+    return res.json({ connections: connections.map(publicAutomationConnection).filter(Boolean) });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to load automation connections' });
   }
@@ -15313,19 +15447,21 @@ app.post('/api/automations/connections', rateLimiters.userWrite, async (req, res
     if (['soop', 'soop_openapi', 'soop_extension', 'ssapi', 'twip', 'twip_toonation_alertbox'].includes(type)) {
       return res.status(400).json({ error: 'Unsupported connector for this product plan' });
     }
+    const existingConnections = req.body?.id ? await listAutomationConnections(ownerUserId).catch(() => []) : [];
+    const existingConnection = existingConnections.find((item) => item.id === req.body.id) || null;
     const connection = await upsertAutomationConnection(ownerUserId, {
       id: req.body?.id,
       type,
       name: req.body?.name,
       enabled: req.body?.enabled !== false,
-      executionMode: req.body?.executionMode,
+      executionMode: internalExecutionMode(req.body?.executionMode, 'local_program'),
       endpoint: req.body?.endpoint,
-      config: req.body?.config || {},
-      capabilities: req.body?.capabilities || {},
-      discoveryCache: req.body?.discoveryCache || {},
+      config: existingConnection?.config || {},
+      capabilities: existingConnection?.capabilities || {},
+      discoveryCache: req.body?.discoveryCache || existingConnection?.discoveryCache || {},
       discoveryUpdatedAt: req.body?.discoveryUpdatedAt || null
     });
-    return res.json({ connection });
+    return res.json({ connection: publicAutomationConnection(connection) });
   } catch (e) {
     console.error('[Automations] connection save error', e?.message || e);
     return res.status(500).json({ error: 'Failed to save automation connection' });
@@ -15354,7 +15490,7 @@ app.post('/api/automations/obs/discover', rateLimiters.userWrite, async (req, re
       jobType: 'obs.discover',
       payload: { endpoint }
     });
-    return res.json({ queued: true, jobId: job?.id, executionMode: 'local_program', message: '로컬 프로그램이 OBS 장면과 소스 목록을 가져오도록 요청했습니다.' });
+    return res.json({ queued: true, message: '로컬 프로그램이 OBS 장면과 소스 목록을 가져오도록 요청했습니다.' });
   } catch (e) {
     console.error('[Automations] OBS discover error', e?.message || e);
     return res.status(500).json({ error: 'OBS 목록 불러오기를 요청하지 못했습니다.' });
@@ -15365,7 +15501,7 @@ app.post('/api/automations/tits/discover', rateLimiters.userWrite, async (req, r
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
-    const executionMode = req.body?.executionMode === 'local_program' ? 'local_program' : 'oracle_direct';
+    const executionMode = internalExecutionMode(req.body?.executionMode, 'oracle_direct');
     const endpoint = String(req.body?.endpoint || 'ws://localhost:42069').trim();
     const connectionId = req.body?.connectionId || null;
     if (executionMode === 'local_program') {
@@ -15374,7 +15510,7 @@ app.post('/api/automations/tits/discover', rateLimiters.userWrite, async (req, r
         jobType: 'tits.discover',
         payload: { endpoint, sendImage: req.body?.sendImage !== false }
       });
-      return res.json({ queued: true, jobId: job?.id, executionMode, message: '로컬 프로그램이 T.I.T.S. 목록을 가져오도록 요청했습니다.' });
+      return res.json({ queued: true, message: '로컬 프로그램이 T.I.T.S. 목록을 가져오도록 요청했습니다.' });
     }
     const [itemResponse, triggerResponse] = await Promise.all([
       sendTitsRequest(endpoint, 'TITSItemListRequest', { sendImage: req.body?.sendImage !== false }),
@@ -15401,7 +15537,7 @@ app.post('/api/automations/tits/discover', rateLimiters.userWrite, async (req, r
         lastCheckedAt: discoveryCache.fetchedAt
       }).catch(() => null);
     }
-    return res.json({ executionMode, discovery: discoveryCache });
+    return res.json({ discovery: publicAutomationDiscovery(discoveryCache) });
   } catch (e) {
     console.error('[Automations] TITS discover error', e?.message || e);
     return res.status(502).json({ error: 'T.I.T.S. 연결에 실패했습니다.', details: e?.message || String(e) });
@@ -15412,7 +15548,7 @@ app.post('/api/automations/tits/throw', rateLimiters.userWrite, async (req, res)
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
-    const executionMode = req.body?.executionMode === 'local_program' ? 'local_program' : 'oracle_direct';
+    const executionMode = internalExecutionMode(req.body?.executionMode, 'oracle_direct');
     const payload = {
       items: Array.isArray(req.body?.items) ? req.body.items.map(String).filter(Boolean) : [],
       delayTime: Math.min(5, Math.max(0.01, Number(req.body?.delayTime || 0.05))),
@@ -15421,8 +15557,8 @@ app.post('/api/automations/tits/throw', rateLimiters.userWrite, async (req, res)
     };
     if (!payload.items.length) return res.status(400).json({ error: 'items is required' });
     if (executionMode === 'local_program') {
-      const job = await queueAutomationJob(ownerUserId, { connectionId: req.body?.connectionId || null, jobType: 'tits.throw', payload });
-      return res.json({ queued: true, jobId: job?.id, executionMode });
+      await queueAutomationJob(ownerUserId, { connectionId: req.body?.connectionId || null, jobType: 'tits.throw', payload });
+      return res.json({ queued: true });
     }
     const response = await sendTitsRequest(req.body?.endpoint || 'ws://localhost:42069', 'TITSThrowItemsRequest', payload);
     return res.json({ response });
@@ -15435,15 +15571,15 @@ app.post('/api/automations/tits/trigger', rateLimiters.userWrite, async (req, re
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
-    const executionMode = req.body?.executionMode === 'local_program' ? 'local_program' : 'oracle_direct';
+    const executionMode = internalExecutionMode(req.body?.executionMode, 'oracle_direct');
     const payload = {
       triggerID: String(req.body?.triggerID || req.body?.triggerId || ''),
       triggerName: String(req.body?.triggerName || '')
     };
     if (!payload.triggerID && !payload.triggerName) return res.status(400).json({ error: 'triggerID or triggerName is required' });
     if (executionMode === 'local_program') {
-      const job = await queueAutomationJob(ownerUserId, { connectionId: req.body?.connectionId || null, jobType: 'tits.trigger', payload });
-      return res.json({ queued: true, jobId: job?.id, executionMode });
+      await queueAutomationJob(ownerUserId, { connectionId: req.body?.connectionId || null, jobType: 'tits.trigger', payload });
+      return res.json({ queued: true });
     }
     const response = await sendTitsRequest(req.body?.endpoint || 'ws://localhost:42069', 'TITSTriggerActivateRequest', payload);
     return res.json({ response });
@@ -15456,7 +15592,7 @@ app.post('/api/automations/vtube/discover', rateLimiters.userWrite, async (req, 
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
-    const executionMode = req.body?.executionMode === 'oracle_direct' ? 'oracle_direct' : 'local_program';
+    const executionMode = internalExecutionMode(req.body?.executionMode, 'local_program');
     const endpoint = String(req.body?.endpoint || 'ws://localhost:8001').trim();
     const connectionId = req.body?.connectionId || null;
     if (executionMode === 'local_program') {
@@ -15465,7 +15601,7 @@ app.post('/api/automations/vtube/discover', rateLimiters.userWrite, async (req, 
         jobType: 'vtube.discover',
         payload: { endpoint }
       });
-      return res.json({ queued: true, jobId: job?.id, executionMode, message: '로컬 프로그램이 VTube Studio 목록을 가져오도록 요청했습니다.' });
+      return res.json({ queued: true, message: '로컬 프로그램이 VTube Studio 목록을 가져오도록 요청했습니다.' });
     }
     const discoveryCache = await discoverVtubeStudio(endpoint);
     if (connectionId) {
@@ -15482,7 +15618,7 @@ app.post('/api/automations/vtube/discover', rateLimiters.userWrite, async (req, 
         lastCheckedAt: discoveryCache.fetchedAt
       }).catch(() => null);
     }
-    return res.json({ executionMode, discovery: discoveryCache });
+    return res.json({ discovery: publicAutomationDiscovery(discoveryCache) });
   } catch (e) {
     console.error('[Automations] VTube Studio discover error', e?.message || e);
     return res.status(502).json({ error: 'VTube Studio 연결에 실패했습니다.', details: e?.message || String(e) });
@@ -15493,7 +15629,7 @@ app.post('/api/automations/vtube/hotkey', rateLimiters.userWrite, async (req, re
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
-    const executionMode = req.body?.executionMode === 'oracle_direct' ? 'oracle_direct' : 'local_program';
+    const executionMode = internalExecutionMode(req.body?.executionMode, 'local_program');
     const payload = {
       endpoint: String(req.body?.endpoint || 'ws://localhost:8001').trim(),
       hotkeyId: String(req.body?.hotkeyId || req.body?.hotkeyID || '').trim(),
@@ -15502,8 +15638,8 @@ app.post('/api/automations/vtube/hotkey', rateLimiters.userWrite, async (req, re
     };
     if (!payload.hotkeyId && !payload.hotkeyName) return res.status(400).json({ error: 'hotkeyId or hotkeyName is required' });
     if (executionMode === 'local_program') {
-      const job = await queueAutomationJob(ownerUserId, { connectionId: req.body?.connectionId || null, jobType: 'vtube.hotkey', payload });
-      return res.json({ queued: true, jobId: job?.id, executionMode });
+      await queueAutomationJob(ownerUserId, { connectionId: req.body?.connectionId || null, jobType: 'vtube.hotkey', payload });
+      return res.json({ queued: true });
     }
     const response = await sendVtubeRequest(payload.endpoint, 'HotkeyTriggerRequest', {
       hotkeyID: payload.hotkeyId || payload.hotkeyName,
@@ -15519,14 +15655,14 @@ app.post('/api/automations/toonation/test', rateLimiters.userWrite, async (req, 
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
-    const executionMode = req.body?.executionMode === 'local_program' ? 'local_program' : 'oracle_direct';
+    const executionMode = internalExecutionMode(req.body?.executionMode, 'oracle_direct');
     if (executionMode === 'local_program') {
       const job = await queueAutomationJob(ownerUserId, {
         connectionId: req.body?.connectionId || null,
         jobType: 'toonation.alertbox.test',
         payload: { keyStorage: 'local', eventTypes: ['donation'] }
       });
-      return res.json({ queued: true, jobId: job?.id, executionMode });
+      return res.json({ queued: true });
     }
     return res.status(409).json({
       error: 'Toonation alertbox key is stored locally by design.',
@@ -15543,7 +15679,7 @@ app.post('/api/automations/tts/test', rateLimiters.userWrite, async (req, res) =
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
     const text = String(req.body?.text || '아루봇 음성 안내 테스트입니다.').trim().slice(0, 240);
-    const job = await queueAutomationJob(ownerUserId, {
+    await queueAutomationJob(ownerUserId, {
       jobType: 'tts.speak',
       payload: {
         text,
@@ -15552,7 +15688,7 @@ app.post('/api/automations/tts/test', rateLimiters.userWrite, async (req, res) =
         pitch: Math.min(2, Math.max(0.5, Number(req.body?.pitch || 1)))
       }
     });
-    return res.json({ queued: true, jobId: job?.id });
+    return res.json({ queued: true });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to queue TTS test' });
   }
@@ -15564,7 +15700,7 @@ app.post('/api/automations/sounds/test', rateLimiters.userWrite, async (req, res
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
     const fileId = path.basename(String(req.body?.fileId || req.body?.name || ''));
     if (!fileId) return res.status(400).json({ error: 'fileId is required' });
-    const job = await queueAutomationJob(ownerUserId, {
+    await queueAutomationJob(ownerUserId, {
       jobType: 'fx.play',
       payload: {
         kind: 'sound',
@@ -15573,7 +15709,7 @@ app.post('/api/automations/sounds/test', rateLimiters.userWrite, async (req, res
         volume: Math.min(1, Math.max(0, Number(req.body?.volume ?? 1)))
       }
     });
-    return res.json({ queued: true, jobId: job?.id });
+    return res.json({ queued: true });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to queue sound test' });
   }
@@ -15604,11 +15740,11 @@ app.post('/api/automations/fx/test', rateLimiters.userWrite, async (req, res) =>
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
     const payload = normalizeFxPayload(req.body || {});
-    const job = await queueAutomationJob(ownerUserId, {
+    await queueAutomationJob(ownerUserId, {
       jobType: 'fx.play',
       payload: { ...payload, manualRun: true, requestedAt: new Date().toISOString() }
     });
-    return res.json({ queued: true, jobId: job?.id });
+    return res.json({ queued: true });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to queue FX test' });
   }
@@ -15632,7 +15768,7 @@ app.post('/api/automations/run', rateLimiters.userWrite, async (req, res) => {
     };
     const jobType = jobTypes[type];
     if (!jobType) return res.status(400).json({ error: 'Unsupported automation run type' });
-    const job = await queueAutomationJob(ownerUserId, {
+    await queueAutomationJob(ownerUserId, {
       connectionId: req.body?.connectionId || null,
       jobType,
       payload: {
@@ -15641,7 +15777,7 @@ app.post('/api/automations/run', rateLimiters.userWrite, async (req, res) => {
         requestedAt: new Date().toISOString()
       }
     });
-    return res.json({ queued: true, jobId: job?.id, jobType });
+    return res.json({ queued: true });
   } catch (e) {
     console.error('[Automations] run error', e?.message || e);
     return res.status(500).json({ error: 'Failed to enqueue automation run' });
@@ -15688,7 +15824,7 @@ app.post('/api/automations/control-links', rateLimiters.userWrite, async (req, r
       capabilities: { httpPost: true, httpGet: true }
     });
     return res.json({
-      connection,
+      connection: publicAutomationConnection(connection),
       url: `${BACKEND_ORIGIN.replace(/\/$/, '')}/api/automations/inbound/control/${token}`,
       method: 'POST'
     });
@@ -15731,9 +15867,9 @@ app.all('/api/automations/inbound/control/:token', async (req, res) => {
     };
     if (actionId) {
       const result = await executeActionBlueprint(ownerUserId, actionId, context);
-      return res.json({ ok: result.ok !== false, actionId, result });
+      return res.json({ ok: result.ok !== false });
     }
-    const job = await queueAutomationJob(ownerUserId, {
+    await queueAutomationJob(ownerUserId, {
       connectionId: connection.id,
       jobType: 'control.trigger',
       payload: {
@@ -15744,7 +15880,7 @@ app.all('/api/automations/inbound/control/:token', async (req, res) => {
         at: new Date().toISOString()
       }
     });
-    return res.json({ ok: true, queued: true, jobId: job?.id });
+    return res.json({ ok: true, queued: true });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to enqueue control event' });
   }
@@ -16512,6 +16648,201 @@ app.get('/api/bot/event-logs', async (req, res) => {
   } catch (e) {
     console.error('[bot-event-logs:list] error', e?.message || e);
     return res.status(500).json({ error: 'Failed to list event logs' });
+  }
+});
+
+function getEventLogMetadata(log = {}) {
+  return log.metadata && typeof log.metadata === 'object' ? log.metadata : {};
+}
+
+function getReplayActionIdsFromLog(log = {}) {
+  const metadata = getEventLogMetadata(log);
+  const ids = [];
+  if (Array.isArray(metadata.actionIds)) ids.push(...metadata.actionIds);
+  if (Array.isArray(metadata.actionJobs)) {
+    for (const job of metadata.actionJobs) {
+      if (job?.actionId) ids.push(job.actionId);
+      if (job?.blueprintId) ids.push(job.blueprintId);
+    }
+  }
+  for (const text of [log.result_value, metadata.resultValue, metadata.value]) {
+    for (const match of String(text || '').matchAll(/\$\{\s*(?:action|automation|blueprint)::([^}]+)\s*\}/ig)) {
+      if (match?.[1]) ids.push(match[1]);
+    }
+  }
+  return Array.from(new Set(ids.map((id) => String(id || '').trim()).filter(Boolean)));
+}
+
+function buildReplayVideoDonationItem(log = {}) {
+  const metadata = getEventLogMetadata(log);
+  const snapshot = metadata.replaySnapshot && typeof metadata.replaySnapshot === 'object' ? metadata.replaySnapshot : {};
+  const mediaProvider = String(snapshot.mediaProvider || metadata.mediaProvider || '').trim();
+  const mediaId = String(snapshot.mediaId || metadata.mediaId || '').trim();
+  const mediaUrl = String(snapshot.mediaUrl || metadata.mediaUrl || '').trim()
+    || (mediaProvider === 'youtube' && mediaId ? `https://www.youtube.com/watch?v=${mediaId}` : '');
+  const embedUrl = String(snapshot.embedUrl || metadata.embedUrl || '').trim()
+    || (mediaProvider === 'youtube' && mediaId ? `https://www.youtube.com/embed/${mediaId}` : '');
+  if (!mediaProvider || (!mediaId && !mediaUrl && !embedUrl)) return null;
+  const durationSec = Math.max(1, Math.ceil(Number(snapshot.durationSec || metadata.durationSec || 30) || 30));
+  const startSec = Math.max(0, Math.floor(Number(snapshot.startSec ?? metadata.startSec ?? 0) || 0));
+  const requestedPlaySec = snapshot.requestedPlaySec ?? metadata.requestedPlaySec ?? null;
+  return {
+    id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    ts: Date.now(),
+    mediaProvider,
+    mediaId,
+    mediaUrl: mediaUrl || null,
+    embedUrl: embedUrl || mediaUrl || null,
+    thumbnailUrl: snapshot.thumbnailUrl || metadata.thumbnailUrl || null,
+    videoId: mediaProvider === 'youtube' ? mediaId : null,
+    title: snapshot.title || metadata.title || log.target_name || '영상 후원 재생',
+    durationSec,
+    mediaDurationSec: Number.isFinite(Number(snapshot.mediaDurationSec ?? metadata.mediaDurationSec)) ? Math.ceil(Number(snapshot.mediaDurationSec ?? metadata.mediaDurationSec)) : null,
+    awaitDurationSync: false,
+    startSec,
+    requestedPlaySec: Number.isFinite(Number(requestedPlaySec)) && Number(requestedPlaySec) > 0 ? Math.floor(Number(requestedPlaySec)) : null,
+    maxDurationSec: Math.max(durationSec, Number(snapshot.maxDurationSec || metadata.maxDurationSec || durationSec) || durationSec),
+    cost: 0,
+    userId: log.viewer_user_id ? String(log.viewer_user_id) : 'event-log-replay',
+    username: log.viewer_name || '이벤트 로그 재생',
+    status: 'queued',
+    replay: { fromLogId: log.id || null, originalQueueItemId: metadata.queueItemId || snapshot.id || null }
+  };
+}
+
+async function replayVideoDonationLog(sid, ownerUserId, log) {
+  const item = buildReplayVideoDonationItem(log);
+  if (!item) return { ok: false, error: 'video_replay_metadata_missing' };
+  const q = getVideoQueue(sid);
+  q.push(item);
+  await recordBotEventLogSafe(sid, {
+    category: 'video_donation',
+    eventType: 'video_donation_replay',
+    provider: 'admin',
+    channelUid: log.channel_uid || ownerUserId,
+    viewerUserId: log.viewer_user_id || null,
+    viewerName: log.viewer_name || null,
+    pointDelta: 0,
+    targetName: item.title,
+    summary: `이벤트 로그에서 영상 후원 재생: ${item.title}`,
+    metadata: { replayedFromLogId: log.id, replaySnapshot: item },
+  });
+  if (q.length === 1) {
+    await broadcastPvdStart(sid);
+    scheduleNextPvdAutoPop(sid);
+  } else {
+    await notifyPvdAdminSubscribers(sid, 'replay_queued').catch(() => null);
+  }
+  return { ok: true, type: 'video_donation', item };
+}
+
+async function replayDrawingDonationLog(sid, ownerUserId, log) {
+  const metadata = getEventLogMetadata(log);
+  const drawingId = String(metadata.drawingId || metadata.drawing_id || '').trim();
+  if (!drawingId) return { ok: false, error: 'drawing_replay_metadata_missing' };
+  const source = await getDrawingDonationItem(sid, drawingId, { includeStrokes: true }).catch(() => null);
+  if (!source) return { ok: false, error: 'drawing_source_not_found' };
+  const id = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  const item = {
+    ...source,
+    id,
+    ownerSid: sid,
+    ownerUserId,
+    status: 'approved',
+    cost: 0,
+    pointDeductions: [],
+    pointRefunded: true,
+    metrics: { ...(source.metrics || {}), replayedFromLogId: log.id, originalDrawingId: drawingId },
+    createdAt: new Date().toISOString(),
+    approvedAt: new Date().toISOString(),
+    playingAt: null,
+    doneAt: null,
+  };
+  let savedItem = item;
+  try {
+    savedItem = await insertDrawingDonationItem(item);
+  } catch (error) {
+    console.warn('[Drawing Donation] replay DB insert failed; using memory fallback:', error?.message || error);
+    getDrawingQueue(sid).push(item);
+  }
+  await recordBotEventLogSafe(sid, {
+    category: 'drawing_donation',
+    eventType: 'drawing_donation_replay',
+    provider: 'admin',
+    channelUid: source.channelUid || log.channel_uid || ownerUserId,
+    viewerUserId: source.viewerUserId || log.viewer_user_id || null,
+    viewerName: source.viewerName || log.viewer_name || null,
+    pointDelta: 0,
+    targetName: '그림 후원',
+    summary: '이벤트 로그에서 그림 후원 재생',
+    metadata: { replayedFromLogId: log.id, sourceDrawingId: drawingId, drawingId: savedItem.id },
+  });
+  await notifyDrawingSubscribers(sid, 'replay_queued').catch(() => null);
+  await notifyDrawingAdminSubscribers(sid, 'replay_queued').catch(() => null);
+  return { ok: true, type: 'drawing_donation', item: savedItem };
+}
+
+async function replayBlueprintActionsFromLog(sid, ownerUserId, log) {
+  const actionIds = getReplayActionIdsFromLog(log);
+  if (!actionIds.length) return { ok: false, error: 'blueprint_replay_metadata_missing' };
+  const provider = String(log.provider || 'admin').toLowerCase();
+  const channelUid = log.channel_uid || ownerUserId;
+  const results = [];
+  for (const actionId of actionIds) {
+    const result = await executeActionBlueprint(ownerUserId, actionId, {
+      source: 'event_log_replay',
+      triggerRef: log.id,
+      replayNoCost: true,
+      noPointCost: true,
+      platform: provider,
+      user: {
+        userId: log.viewer_user_id || 'event-log-replay',
+        username: log.viewer_name || '이벤트 로그 재생',
+        name: log.viewer_name || '이벤트 로그 재생',
+      },
+      channelUid,
+      channel: { channelUid },
+      trigger: { platform: provider, replayedFromLogId: log.id },
+      eventLog: { id: log.id, category: log.category, eventType: log.event_type, summary: log.summary || null },
+    });
+    results.push({ actionId, result });
+  }
+  await recordBotEventLogSafe(sid, {
+    category: 'command',
+    eventType: 'blueprint_replay',
+    provider: 'admin',
+    channelUid,
+    viewerUserId: log.viewer_user_id || null,
+    viewerName: log.viewer_name || null,
+    pointDelta: 0,
+    targetName: actionIds.join(', '),
+    summary: `이벤트 로그에서 블루프린트 재생: ${actionIds.join(', ')}`,
+    metadata: { replayedFromLogId: log.id, actionIds, results: results.map((item) => ({ actionId: item.actionId, ok: item.result?.ok !== false, runId: item.result?.run?.id || null })) },
+  });
+  return { ok: true, type: 'blueprint', actionIds, results };
+}
+
+async function replayBotEventLog(sid, ownerUserId, log) {
+  if (log.category === 'video_donation') return replayVideoDonationLog(sid, ownerUserId, log);
+  if (log.category === 'drawing_donation') return replayDrawingDonationLog(sid, ownerUserId, log);
+  if (getReplayActionIdsFromLog(log).length) return replayBlueprintActionsFromLog(sid, ownerUserId, log);
+  return { ok: false, error: 'replay_not_available' };
+}
+
+app.post('/api/bot/event-logs/:id/replay', rateLimiters.userWrite, async (req, res) => {
+  const sid = await getPartitionId(req, res);
+  if (!sid) return res.status(401).json({ error: 'Login required' });
+  try {
+    const ownerUserId = ownerUserIdFromSid(sid);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const log = await getBotEventLog(ownerUserId, req.params.id);
+    if (!log) return res.status(404).json({ error: 'not_found' });
+    const result = await replayBotEventLog(sid, ownerUserId, log);
+    if (result.ok === false) return res.status(400).json(result);
+    return res.json(result);
+  } catch (e) {
+    console.error('[bot-event-logs:replay] error', e?.message || e);
+    return res.status(500).json({ error: 'Failed to replay event log' });
   }
 });
 
@@ -18506,6 +18837,7 @@ async function ensureSession(sid, channelId) {
             let commandPointBefore = null;
             let commandPointAfter = null;
             const commandFeatures = [];
+            const commandActionJobs = [];
 
             const executionContext = msg?.executionContext || { source: 'chat', shouldDeductPoints: true };
             const shouldSkipPointsDeduction = executionContext.source === 'roulette' || !executionContext.shouldDeductPoints;
@@ -18735,6 +19067,7 @@ async function ensureSession(sid, channelId) {
                 responseToSend = actionResult.text;
                 ruleUsed = true;
                 commandFeatures.push('action');
+                commandActionJobs.push(...(actionResult.jobs || []));
               }
             }
 
@@ -18834,6 +19167,7 @@ async function ensureSession(sid, channelId) {
                 pointBefore: commandPointBefore,
                 pointAfter: commandPointAfter,
                 features: commandFeatures,
+                actionJobs: commandActionJobs,
                 source: executionContext.source || 'chat',
                 summary: `명령어 실행: ${matchedKeyword || ''}${r.name ? ` · ${r.name}` : ''}`,
               });
@@ -19957,6 +20291,7 @@ async function processYoutubeChatAutomation(entry, ev) {
       let commandPointBefore = null;
       let commandPointAfter = null;
       const commandFeatures = [];
+      const commandActionJobs = [];
       if (!isRouletteRule && commandCost > 0 && entry.channelId && resolvedUserId) {
         const have = await getChannelPoints(entry.channelId, resolvedUserId).catch(() => 0);
         if (Number(have || 0) < commandCost) {
@@ -20080,6 +20415,7 @@ async function processYoutubeChatAutomation(entry, ev) {
         if (actionResult.used) {
           cleaned = actionResult.text;
           commandFeatures.push('action');
+          commandActionJobs.push(...(actionResult.jobs || []));
         }
       }
 
@@ -20110,6 +20446,7 @@ async function processYoutubeChatAutomation(entry, ev) {
         pointBefore: commandPointBefore,
         pointAfter: commandPointAfter,
         features: commandFeatures,
+        actionJobs: commandActionJobs,
         source: 'youtube-chat',
         summary: `명령어 실행: ${matchedKeyword || ''}${r.name ? ` · ${r.name}` : ''}`,
       });
@@ -20651,12 +20988,21 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
     metadata: {
       mediaProvider: media.provider,
       mediaId: media.mediaId,
+      mediaUrl: media.mediaUrl,
+      embedUrl: media.embedUrl,
+      thumbnailUrl: media.thumbnailUrl || null,
+      title: media.title || null,
       durationSec: dur,
+      mediaDurationSec: Number.isFinite(Number(media.durationSec)) ? Math.ceil(Number(media.durationSec)) : null,
+      awaitDurationSync,
       startSec: start,
+      requestedPlaySec: play,
+      maxDurationSec: maxDur,
       cost,
       queueItemId: queueItem.id,
       source: context.source || null,
       command: context.command || null,
+      replaySnapshot: queueItem,
     },
   });
   if (q.length === 1) {
@@ -20790,6 +21136,7 @@ async function processCimeChatAutomation(entry, ev) {
       let commandPointBefore = null;
       let commandPointAfter = null;
       const commandFeatures = [];
+      const commandActionJobs = [];
       if (!isRouletteRule && commandCost > 0 && pointChannelUid && resolvedUserId) {
         const have = await getChannelPoints(pointChannelUid, resolvedUserId).catch(() => 0);
         if (Number(have || 0) < commandCost) {
@@ -20909,7 +21256,11 @@ async function processCimeChatAutomation(entry, ev) {
           channelUid: pointChannelUid || entry.channelId || null,
           channel: { channelUid: pointChannelUid || entry.channelId || null },
         });
-        if (actionResult.used) cleaned = actionResult.text;
+        if (actionResult.used) {
+          cleaned = actionResult.text;
+          commandFeatures.push('action');
+          commandActionJobs.push(...(actionResult.jobs || []));
+        }
       }
       cleaned = String(cleaned || '').trim();
       const replyKey = makeCommandReplyKey(ev, r, matchedKeyword || '', text, resolvedUserId);
@@ -20938,6 +21289,7 @@ async function processCimeChatAutomation(entry, ev) {
         pointBefore: commandPointBefore,
         pointAfter: commandPointAfter,
         features: commandFeatures,
+        actionJobs: commandActionJobs,
         source: 'cime-chat',
         summary: `명령어 실행: ${matchedKeyword || ''}${r.name ? ` · ${r.name}` : ''}`,
       });
@@ -21521,9 +21873,13 @@ app.post('/api/cime/reset', async (req, res) => {
   }
 });
 
-const server = app.listen(PORT, () => {
-  console.log(`[server] listening on http://localhost:${PORT}`);
-});
+const server = SERVER_HOST
+  ? app.listen(PORT, SERVER_HOST, () => {
+      console.log(`[server] listening on http://${SERVER_HOST}:${PORT}`);
+    })
+  : app.listen(PORT, () => {
+      console.log(`[server] listening on http://localhost:${PORT}`);
+    });
 
 // Bootstrap: ensure sessions for all sids that have tokens on startup
 async function bootstrapEnsureSessions() {
@@ -22896,7 +23252,7 @@ function registerAutomationLocalAgentRoutes() {
       const url = new URL(req.url, `http://localhost:${PORT}`);
       const auth = String(req.headers.authorization || '').trim();
       const bearer = auth.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : '';
-      const token = bearer || String(req.headers['x-local-agent-token'] || url.searchParams.get('token') || '').trim();
+      const token = bearer || String(req.headers['x-local-agent-token'] || '').trim();
       agent = await authenticateAutomationLocalAgent(token);
       if (!agent) {
         try { ws.close(1008, 'Invalid local program token'); } catch { }

@@ -1,13 +1,14 @@
 'use client';
 
-import { CalendarDays, Filter, ListChecks, RefreshCw, Search, TrendingDown, TrendingUp } from 'lucide-react';
+import { CalendarDays, Filter, ListChecks, Play, RefreshCw, Search, TrendingDown, TrendingUp } from 'lucide-react';
 import { useCallback, useDeferredValue, useEffect, useMemo, useState, useTransition } from 'react';
+import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Pagination } from '@/components/ui/pagination';
-import { readJson } from '@/shared/api/http';
+import { apiUrl, readJson } from '@/shared/api/http';
 import { cn, formatNumber } from '@/shared/lib/utils';
 
 type EventLog = {
@@ -103,9 +104,41 @@ function pointDeltaTone(value?: number): 'neutral' | 'mint' | 'rose' {
   return 'neutral';
 }
 
-function LogCard({ log }: { log: EventLog }) {
+function getReplayActionIds(log: EventLog) {
+  const metadata = log.metadata || {};
+  const ids = new Set<string>();
+  const actionIds = Array.isArray(metadata.actionIds) ? metadata.actionIds : [];
+  actionIds.forEach((id) => { if (id) ids.add(String(id)); });
+  const actionJobs = Array.isArray(metadata.actionJobs) ? metadata.actionJobs : [];
+  actionJobs.forEach((job) => {
+    if (job && typeof job === 'object') {
+      const data = job as Record<string, unknown>;
+      if (data.actionId) ids.add(String(data.actionId));
+      if (data.blueprintId) ids.add(String(data.blueprintId));
+    }
+  });
+  for (const match of String(log.result_value || '').matchAll(/\$\{\s*(?:action|automation|blueprint)::([^}]+)\s*\}/ig)) {
+    if (match[1]) ids.add(match[1]);
+  }
+  return Array.from(ids);
+}
+
+function canReplayLog(log: EventLog) {
+  if (log.category === 'video_donation') return true;
+  if (log.category === 'drawing_donation') return !!(log.metadata?.drawingId || log.metadata?.drawing_id);
+  return getReplayActionIds(log).length > 0;
+}
+
+function replayLabel(log: EventLog) {
+  if (log.category === 'video_donation') return '영상 재생';
+  if (log.category === 'drawing_donation') return '그림 재생';
+  return '효과 재생';
+}
+
+function LogCard({ log, replaying, onReplay }: { log: EventLog; replaying?: boolean; onReplay: (log: EventLog) => void }) {
   const delta = Number(log.point_delta || 0);
   const DeltaIcon = delta < 0 ? TrendingDown : TrendingUp;
+  const replayable = canReplayLog(log);
   return (
     <Card className="bg-card/86">
       <CardContent className="p-[clamp(1rem,2.4vw,1.35rem)]">
@@ -142,6 +175,12 @@ function LogCard({ log }: { log: EventLog }) {
               <span>이후</span>
               <span className="text-right font-semibold text-foreground">{log.point_after == null ? '-' : `${formatNumber(Number(log.point_after))}P`}</span>
             </div>
+            {replayable ? (
+              <Button type="button" variant="outline" onClick={() => onReplay(log)} disabled={replaying} className="mt-1 w-full">
+                <Play className={cn('h-4 w-4', replaying && 'animate-pulse')} />
+                {replaying ? '재생 중' : replayLabel(log)}
+              </Button>
+            ) : null}
           </div>
         </div>
       </CardContent>
@@ -159,6 +198,7 @@ export function EventLogsPage() {
   const [query, setQuery] = useState('');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
+  const [replayingId, setReplayingId] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const deferredQuery = useDeferredValue(query);
 
@@ -193,6 +233,35 @@ export function EventLogsPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  const replay = useCallback(async (log: EventLog) => {
+    if (!log.id || replayingId) return;
+    setReplayingId(log.id);
+    try {
+      const response = await fetch(apiUrl(`/api/bot/event-logs/${encodeURIComponent(log.id)}/replay`), {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok || data?.ok === false) {
+        const error = data?.error === 'drawing_source_not_found'
+          ? '원본 그림 후원을 찾을 수 없습니다.'
+          : data?.error === 'replay_not_available' || data?.error?.includes?.('metadata')
+            ? '이 로그에는 재생에 필요한 정보가 없습니다.'
+            : '다시 재생하지 못했습니다.';
+        toast.error(error);
+        return;
+      }
+      toast.success(`${replayLabel(log)}을 대기열에 넣었습니다.`);
+      load();
+    } catch {
+      toast.error('다시 재생하지 못했습니다.');
+    } finally {
+      setReplayingId(null);
+    }
+  }, [load, replayingId]);
 
   return (
     <div className="grid gap-5">
@@ -246,7 +315,7 @@ export function EventLogsPage() {
       </Card>
 
       <section className="grid gap-3">
-        {logs.length ? logs.map((log) => <LogCard key={log.id} log={log} />) : (
+        {logs.length ? logs.map((log) => <LogCard key={log.id} log={log} replaying={replayingId === log.id} onReplay={replay} />) : (
           <Card className="bg-card/86">
             <CardContent className="grid place-items-center p-[clamp(2rem,6vw,4rem)] text-center">
               <ListChecks className="h-10 w-10 text-muted-foreground" />

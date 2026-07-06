@@ -31,8 +31,8 @@ import { Tooltip } from '@/components/ui/tooltip';
 import { apiUrl, readJson } from '@/shared/api/http';
 import { cn } from '@/shared/lib/utils';
 
-type ExecutionMode = 'oracle_direct' | 'local_program';
-type SoundStorageMode = 'server_hosted' | 'local_program';
+type ExecutionMode = 'web' | 'local';
+type SoundStorageMode = 'managed' | 'local';
 type AutomationTab = 'local' | 'obs' | 'tits' | 'vtube' | 'voice' | 'network' | 'control' | 'connections';
 
 type AutomationSettings = {
@@ -294,8 +294,8 @@ export function AutomationsPage() {
   const [blueprints, setBlueprints] = useState<Blueprint[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [mode, setMode] = useState<ExecutionMode>('local_program');
-  const [soundMode, setSoundMode] = useState<SoundStorageMode>('server_hosted');
+  const [mode, setMode] = useState<ExecutionMode>('local');
+  const [soundMode, setSoundMode] = useState<SoundStorageMode>('managed');
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const [ttsVoice, setTtsVoice] = useState('');
   const [ttsRate, setTtsRate] = useState('1');
@@ -359,8 +359,8 @@ export function AutomationsPage() {
     ]);
     if (overviewData) {
       setOverview(overviewData);
-      setMode(overviewData.settings.integrationMode === 'oracle_direct' ? 'oracle_direct' : 'local_program');
-      setSoundMode(overviewData.settings.soundStorageMode === 'local_program' ? 'local_program' : 'server_hosted');
+      setMode(overviewData.settings.integrationMode === 'web' ? 'web' : 'local');
+      setSoundMode(overviewData.settings.soundStorageMode === 'local' ? 'local' : 'managed');
       setTtsEnabled(overviewData.settings.tts?.enabled !== false);
       setTtsVoice(overviewData.settings.tts?.voice || '');
       setTtsRate(String(overviewData.settings.tts?.rate || 1));
@@ -414,7 +414,7 @@ export function AutomationsPage() {
         soundStorageMode: soundMode,
         tts: {
           enabled: ttsEnabled,
-          provider: mode === 'local_program' ? 'local_program' : 'browser',
+          provider: mode === 'local' ? 'local' : 'browser',
           voice: ttsVoice,
           rate: Number(ttsRate || 1),
           pitch: Number(ttsPitch || 1),
@@ -445,7 +445,7 @@ export function AutomationsPage() {
     const data = await jsonRequest<{ connection: AutomationConnection }>('/api/automations/connections', 'POST', {
       type: 'vtube_studio',
       name: 'VTube Studio',
-      executionMode: 'local_program',
+      executionMode: 'local',
       endpoint: vtubeEndpoint,
     });
     return data.connection;
@@ -456,7 +456,7 @@ export function AutomationsPage() {
     const data = await jsonRequest<{ connection: AutomationConnection }>('/api/automations/connections', 'POST', {
       type: 'obs',
       name: 'OBS Studio',
-      executionMode: 'local_program',
+      executionMode: 'local',
       endpoint: obsEndpoint,
     });
     return data.connection;
@@ -493,7 +493,7 @@ export function AutomationsPage() {
         items: [selectedTitsItem],
         amountOfThrows: Number(titsThrowAmount || 1),
       });
-      toast.success(mode === 'local_program' ? '로컬 프로그램에 아이템 던지기를 요청했습니다.' : 'T.I.T.S. 아이템을 던졌습니다.');
+      toast.success(mode === 'local' ? '로컬 프로그램에 아이템 던지기를 요청했습니다.' : 'T.I.T.S. 아이템을 던졌습니다.');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '아이템 던지기에 실패했습니다.');
     } finally {
@@ -511,7 +511,7 @@ export function AutomationsPage() {
         connectionId: titsConnection?.id || null,
         triggerId: selectedTitsTrigger,
       });
-      toast.success(mode === 'local_program' ? '로컬 프로그램에 트리거 실행을 요청했습니다.' : 'T.I.T.S. 트리거를 실행했습니다.');
+      toast.success(mode === 'local' ? '로컬 프로그램에 트리거 실행을 요청했습니다.' : 'T.I.T.S. 트리거를 실행했습니다.');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '트리거 실행에 실패했습니다.');
     } finally {
@@ -524,7 +524,7 @@ export function AutomationsPage() {
     try {
       const connection = await ensureVtubeConnection();
       const data = await jsonRequest<{ queued?: boolean; discovery?: AutomationConnection['discoveryCache']; message?: string }>('/api/automations/vtube/discover', 'POST', {
-        executionMode: 'local_program',
+        executionMode: 'local',
         endpoint: vtubeEndpoint,
         connectionId: connection.id,
         name: 'VTube Studio',
@@ -544,7 +544,7 @@ export function AutomationsPage() {
     try {
       const connection = await ensureVtubeConnection();
       await jsonRequest('/api/automations/vtube/hotkey', 'POST', {
-        executionMode: 'local_program',
+        executionMode: 'local',
         endpoint: vtubeEndpoint,
         connectionId: connection.id,
         hotkeyId: selectedVtubeHotkey,
@@ -562,7 +562,7 @@ export function AutomationsPage() {
     try {
       const connection = await ensureObsConnection();
       const data = await jsonRequest<{ queued?: boolean; message?: string }>('/api/automations/obs/discover', 'POST', {
-        executionMode: 'local_program',
+        executionMode: 'local',
         endpoint: obsEndpoint,
         connectionId: connection.id,
         name: 'OBS Studio',
@@ -816,8 +816,8 @@ export function AutomationsPage() {
         </CardHeader>
         <CardContent className="grid gap-4">
           <div className="grid gap-3 md:grid-cols-[repeat(2,minmax(0,1fr))]">
-            <SegmentedButton active={mode === 'local_program'} title="방송 PC 실행" description="내 PC의 방송 도구를 바로 움직여요" icon={HardDrive} onClick={() => setMode('local_program')} />
-            <SegmentedButton active={mode === 'oracle_direct'} title="웹에서 실행" description="외부에서 접근 가능한 도구에 사용해요" icon={Database} onClick={() => setMode('oracle_direct')} />
+            <SegmentedButton active={mode === 'local'} title="방송 PC 실행" description="내 PC의 방송 도구를 바로 움직여요" icon={HardDrive} onClick={() => setMode('local')} />
+            <SegmentedButton active={mode === 'web'} title="웹에서 실행" description="외부에서 접근 가능한 도구에 사용해요" icon={Database} onClick={() => setMode('web')} />
           </div>
           <Button type="button" variant="outline" onClick={saveSettings} disabled={saving}>
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
@@ -1104,8 +1104,8 @@ export function AutomationsPage() {
             </div>
           </div>
           <div className="grid gap-2 md:grid-cols-[repeat(2,minmax(0,1fr))]">
-            <SegmentedButton active={soundMode === 'server_hosted'} title="클라우드 보관" description="짧은 효과음을 올려 재생" icon={Database} onClick={() => setSoundMode('server_hosted')} />
-            <SegmentedButton active={soundMode === 'local_program'} title="내 PC 저장" description="로컬 사운드 폴더에서 재생" icon={HardDrive} onClick={() => setSoundMode('local_program')} />
+            <SegmentedButton active={soundMode === 'managed'} title="클라우드 보관" description="짧은 효과음을 올려 재생" icon={Database} onClick={() => setSoundMode('managed')} />
+            <SegmentedButton active={soundMode === 'local'} title="내 PC 저장" description="로컬 사운드 폴더에서 재생" icon={HardDrive} onClick={() => setSoundMode('local')} />
           </div>
           <input ref={fileInputRef} type="file" accept="audio/*" className="hidden" onChange={(event) => uploadSound(event.target.files?.[0])} />
           <div className="flex flex-wrap gap-2">
@@ -1113,7 +1113,7 @@ export function AutomationsPage() {
               <Save className="h-4 w-4" />
               저장 방식 저장
             </Button>
-            <Button type="button" onClick={() => fileInputRef.current?.click()} disabled={busyAction === 'sound' || soundMode !== 'server_hosted'}>
+            <Button type="button" onClick={() => fileInputRef.current?.click()} disabled={busyAction === 'sound' || soundMode !== 'managed'}>
               {busyAction === 'sound' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
               사운드 업로드
             </Button>
@@ -1260,7 +1260,7 @@ export function AutomationsPage() {
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex flex-wrap items-center gap-2">
                 <Badge tone="sky">{connectionTypeLabel(item.type)}</Badge>
-                <Badge tone={item.executionMode === 'local_program' ? 'mint' : 'lemon'}>{item.executionMode === 'local_program' ? '방송 PC 실행' : '웹 실행'}</Badge>
+                <Badge tone={item.executionMode === 'local' ? 'mint' : 'lemon'}>{item.executionMode === 'local' ? '방송 PC 실행' : '웹 실행'}</Badge>
               </div>
               <div className="flex items-center gap-1">
                 <Button type="button" variant="ghost" size="icon" onClick={() => saveConnection(item)} aria-label="연결 저장">
