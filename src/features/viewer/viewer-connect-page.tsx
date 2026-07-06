@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { BadgeCheck, ExternalLink, Link2, Loader2, RefreshCw, ShieldCheck, Trash2, Unlink, WalletCards } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
+import { LegalFooter } from '@/components/app-shell/legal-footer';
 import { Button, LinkButton } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
@@ -99,6 +100,9 @@ function ViewerShell({ children }: { children: React.ReactNode }) {
         </div>
       </header>
       {children}
+      <div className="mx-auto w-full max-w-7xl">
+        <LegalFooter />
+      </div>
     </main>
   );
 }

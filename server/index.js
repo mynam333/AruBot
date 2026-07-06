@@ -10018,13 +10018,18 @@ const YOUTUBE_BOT_AUTH_SCOPE = String(
   process.env.YOUTUBE_AUTH_SCOPE ||
   'https://www.googleapis.com/auth/youtube.force-ssl'
 ).trim();
-const YOUTUBE_VIEWER_AUTH_SCOPE = String(
+const YOUTUBE_CHANNEL_READ_AUTH_SCOPE = String(
+  process.env.YOUTUBE_CHANNEL_READ_AUTH_SCOPE ||
   process.env.YOUTUBE_VIEWER_AUTH_SCOPE ||
   'https://www.googleapis.com/auth/youtube.readonly'
 ).trim();
+const YOUTUBE_VIEWER_AUTH_SCOPE = String(
+  process.env.YOUTUBE_VIEWER_AUTH_SCOPE ||
+  YOUTUBE_CHANNEL_READ_AUTH_SCOPE
+).trim();
 const YOUTUBE_STREAMER_AUTH_SCOPE = String(
   process.env.YOUTUBE_STREAMER_AUTH_SCOPE ||
-  YOUTUBE_VIEWER_AUTH_SCOPE
+  YOUTUBE_CHANNEL_READ_AUTH_SCOPE
 ).trim();
 const YOUTUBE_API_BASE = process.env.YOUTUBE_API_BASE || 'https://www.googleapis.com/youtube/v3';
 const YOUTUBE_AUTH_URL = process.env.YOUTUBE_AUTH_URL || 'https://accounts.google.com/o/oauth2/v2/auth';
@@ -12163,7 +12168,9 @@ function getSafeFrontendReturnTo(req, rawReturnTo) {
     const frontend = new URL(frontendOrigin);
     const url = new URL(raw, frontend);
     if (url.origin !== frontend.origin) return null;
-    if (!url.pathname.startsWith('/viewer/') && !url.pathname.startsWith('/c/')) return null;
+    const allowedPaths = ['/viewer/', '/c/', '/connection'];
+    const allowed = allowedPaths.some((path) => url.pathname === path || url.pathname.startsWith(path.endsWith('/') ? path : `${path}/`));
+    if (!allowed) return null;
     return `${url.pathname}${url.search}${url.hash}`;
   } catch {
     return null;
@@ -13652,6 +13659,55 @@ async function subscribeYoutubeChannelWebsub(req, streamerChannel) {
   return { ok: true, status: 'subscribe_requested', callback, topic, expiresAt };
 }
 
+function buildYoutubeStreamerChannelFromProfile(profile, botProfile = null) {
+  const youtubeChannelId = String(profile?.channelId || profile?.platformUserId || '').trim();
+  if (!youtubeChannelId) return null;
+  const rawHandle = String(profile?.channelHandle || '').trim();
+  const youtubeHandle = rawHandle ? rawHandle.replace(/^@/, '') : null;
+  const inputValue = youtubeHandle
+    ? `https://www.youtube.com/@${youtubeHandle}`
+    : `https://www.youtube.com/channel/${youtubeChannelId}`;
+  return {
+    youtubeChannelId,
+    youtubeHandle,
+    title: profile?.channelName || profile?.displayName || null,
+    thumbnailUrl: profile?.channelImageUrl || profile?.avatarUrl || null,
+    inputValue,
+    botProfileId: botProfile?.id || null,
+    resetModeratorRegistered: false,
+    websubSecret: `ytws_${crypto.randomBytes(24).toString('base64url')}`,
+    websubStatus: 'pending',
+    lastError: null,
+    metadata: {
+      source: 'youtube_oauth',
+      raw: profile?.metadata?.raw || null
+    }
+  };
+}
+
+async function upsertYoutubeStreamerChannelFromOAuthProfile(req, ownerUserId, profile) {
+  const channel = buildYoutubeStreamerChannelFromProfile(
+    profile,
+    await getYoutubeBotProfile(YOUTUBE_BOT_PROFILE_ID).catch(() => null)
+  );
+  if (!channel) return { channel: null, websub: { ok: false, status: 'missing_channel_id' } };
+  const streamerChannel = await upsertYoutubeStreamerChannel(ownerUserId, channel);
+  let websub = { ok: false, status: streamerChannel.youtubeChannelId ? 'pending' : 'unresolved_channel' };
+  if (streamerChannel.youtubeChannelId) {
+    try {
+      websub = await subscribeYoutubeChannelWebsub(req, streamerChannel);
+    } catch (e) {
+      await updateYoutubeStreamerChannelWebsub(ownerUserId, {
+        websubStatus: 'subscribe_failed',
+        websubLeaseExpiresAt: null,
+        lastError: e?.response?.data || e?.message || 'websub_subscribe_failed'
+      }).catch(() => null);
+      websub = { ok: false, status: 'subscribe_failed', error: e?.message || 'websub_subscribe_failed' };
+    }
+  }
+  return { channel: streamerChannel, websub };
+}
+
 async function fetchYoutubeVideoLiveDetails(videoId) {
   const id = String(videoId || '').trim();
   if (!id) return null;
@@ -13887,12 +13943,17 @@ app.get('/api/auth/youtube/callback', async (req, res) => {
     await upsertSession(sidToken, userId, 30);
     if (!getCookieSid(req)) setCookieSid(res, sidToken);
     if (oauthMode !== 'viewer') {
+      await upsertYoutubeStreamerChannelFromOAuthProfile(req, userId, profile);
       ensureYoutubeSession(userId).catch((err) => {
         console.warn('[YouTube] Failed to start live chat session after OAuth callback:', err?.response?.data || err?.message || err);
       });
     }
 
-    return res.redirect(getAuthRedirectUrlWithState(req, stateValidation, { auth: 'success', platform: 'youtube', reason: null }));
+    return res.redirect(getAuthRedirectUrlWithState(req, stateValidation, {
+      auth: 'success',
+      platform: 'youtube',
+      reason: oauthMode === 'viewer' ? null : 'youtube_streamer_registered'
+    }));
   } catch (e) {
     console.error('[YouTube] Callback error', e?.response?.data || e?.message || e);
     return res.redirect(getAuthRedirectUrl(req, { auth: 'error', platform: 'youtube' }));

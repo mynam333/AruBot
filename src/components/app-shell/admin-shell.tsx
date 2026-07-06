@@ -9,6 +9,7 @@ import { cn } from '@/shared/lib/utils';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
 import { Button, LinkButton } from '@/components/ui/button';
 import { Tooltip } from '@/components/ui/tooltip';
+import { LegalFooter } from '@/components/app-shell/legal-footer';
 import { readJson } from '@/shared/api/http';
 
 type AdminAccess = {
@@ -159,7 +160,10 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
       ) : null}
 
       <main className="px-[var(--page-gutter)] py-[clamp(1.25rem,2.4vw,1.75rem)] xl:pl-[calc(var(--shell-sidebar)+var(--page-gutter))] xl:pr-[var(--page-gutter)]">
-        <div className="mx-auto flex w-full max-w-7xl flex-col gap-5 md:gap-6">{children}</div>
+        <div className="mx-auto flex w-full max-w-7xl flex-col gap-5 md:gap-6">
+          {children}
+          <LegalFooter className="mt-2" />
+        </div>
       </main>
     </div>
   );

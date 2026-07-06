@@ -19,6 +19,7 @@ import {
   X,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { LegalFooter } from '@/components/app-shell/legal-footer';
 import { Button, LinkButton } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Pagination } from '@/components/ui/pagination';
@@ -128,6 +129,9 @@ function ViewerShell({ children }: { children: React.ReactNode }) {
         </div>
       </header>
       {children}
+      <div className="mx-auto w-full max-w-7xl">
+        <LegalFooter />
+      </div>
     </main>
   );
 }

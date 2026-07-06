@@ -4654,7 +4654,7 @@ export async function upsertYoutubeStreamerChannel(ownerUserId, channel) {
       `insert into youtube_streamer_channels
         (owner_user_id, youtube_channel_id, youtube_handle, title, thumbnail_url, input_value,
          bot_profile_id, moderator_registered, websub_status, websub_secret, last_error, metadata, updated_at)
-       values ($1, $2, $3, $4, $5, $6, coalesce($7, 'default'), false, coalesce($8, 'pending'), $9, $10, $11::jsonb, now())
+       values ($1, $2, $3, $4, $5, $6, $7, false, coalesce($8, 'pending'), $9, $10, $11::jsonb, now())
        on conflict (owner_user_id) do update set
          youtube_channel_id = excluded.youtube_channel_id,
          youtube_handle = excluded.youtube_handle,
@@ -4662,7 +4662,11 @@ export async function upsertYoutubeStreamerChannel(ownerUserId, channel) {
          thumbnail_url = excluded.thumbnail_url,
          input_value = excluded.input_value,
          bot_profile_id = excluded.bot_profile_id,
-         moderator_registered = false,
+         moderator_registered = case
+           when coalesce($12::boolean, true) then false
+           when youtube_streamer_channels.youtube_channel_id is distinct from excluded.youtube_channel_id then false
+           else youtube_streamer_channels.moderator_registered
+         end,
          websub_status = excluded.websub_status,
          websub_secret = excluded.websub_secret,
          last_error = excluded.last_error,
@@ -4676,11 +4680,12 @@ export async function upsertYoutubeStreamerChannel(ownerUserId, channel) {
         channel.title || null,
         channel.thumbnailUrl || null,
         channel.inputValue || null,
-        channel.botProfileId || 'default',
+        channel.botProfileId || null,
         channel.websubStatus || 'pending',
         protectSecret(channel.websubSecret || null),
         channel.lastError || null,
         JSON.stringify(channel.metadata || {}),
+        channel.resetModeratorRegistered !== false,
       ]
     );
     return normalizeYoutubeStreamerChannelRow(rows[0]);

@@ -5,6 +5,7 @@ import type Hls from 'hls.js';
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { ArrowLeft, Brush, Eraser, ExternalLink, Loader2, MonitorPlay, Palette, Pipette, Play, RotateCcw, RotateCw, Send, SlidersHorizontal, Volume2, VolumeX } from 'lucide-react';
 import { toast } from 'sonner';
+import { LegalFooter } from '@/components/app-shell/legal-footer';
 import { Badge } from '@/components/ui/badge';
 import { Button, LinkButton } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -110,6 +111,9 @@ function ViewerShell({ children }: { children: React.ReactNode }) {
         </div>
       </header>
       {children}
+      <div className="mx-auto w-full max-w-7xl">
+        <LegalFooter />
+      </div>
     </main>
   );
 }

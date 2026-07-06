@@ -277,6 +277,7 @@ export function ConnectionPage() {
   const youtubeBotConfigured = youtubeStreamerStatus?.botConfigured === true;
   const youtubeRegistered = youtubeStreamerStatus?.configured === true;
   const youtubeBotProfile = youtubeStreamerStatus?.botProfile || null;
+  const youtubeLoginHref = apiUrl(`/api/auth/youtube/login?returnTo=${encodeURIComponent('/connection?platform=youtube')}`);
 
   useEffect(() => {
     if (openedYoutubeParamRef.current) return;
@@ -523,16 +524,25 @@ export function ConnectionPage() {
                 <div className="mt-4 flex flex-wrap gap-2">
                   {config.id === 'youtube' ? (
                     <>
-                      <Button type="button" variant={youtubeRegistered ? 'secondary' : 'default'} onClick={() => setShowYoutubeModal(true)} disabled={!youtubeBotConfigured}>
-                        <img
-                          src={config.iconPath}
-                          alt=""
-                          aria-hidden="true"
-                          className="h-6 w-6 shrink-0 rounded-[calc(var(--radius-control)*0.35)] object-contain"
-                          draggable={false}
-                        />
-                        {youtubeRegistered ? '채널 다시 등록' : '채널 등록'}
+                      <Button asChild variant={youtubeRegistered ? 'secondary' : 'default'}>
+                        <a href={youtubeLoginHref}>
+                          <img
+                            src={config.iconPath}
+                            alt=""
+                            aria-hidden="true"
+                            className="h-6 w-6 shrink-0 rounded-[calc(var(--radius-control)*0.35)] object-contain"
+                            draggable={false}
+                          />
+                          {youtubeRegistered ? 'YouTube 다시 연결' : 'YouTube로 시작'}
+                          <ExternalLink className="h-4 w-4" />
+                        </a>
                       </Button>
+                      {youtubeBotConfigured ? (
+                        <Button type="button" variant="outline" onClick={() => setShowYoutubeModal(true)}>
+                          <Cable className="h-4 w-4" />
+                          {youtubeRegistered ? '채널 수동 등록' : '채널 직접 등록'}
+                        </Button>
+                      ) : null}
                       {youtubeStreamerStatus?.channel?.moderatorUrl ? (
                         <Button asChild variant="outline">
                           <a href={youtubeStreamerStatus.channel.moderatorUrl} target="_blank" rel="noreferrer">

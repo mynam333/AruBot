@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { ChevronRight, Coins, ImagePlus, ListChecks, Radio, Sparkles } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { LegalFooter } from '@/components/app-shell/legal-footer';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { DataView } from '@/components/ui/data-view';
 import { cn } from '@/shared/lib/utils';
@@ -144,6 +145,7 @@ function PublicShell({
           </div>
         </section>
         {children}
+        <LegalFooter />
       </div>
     </main>
   );

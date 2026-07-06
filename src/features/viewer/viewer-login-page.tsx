@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ImagePlus, Loader2, ShieldCheck } from 'lucide-react';
+import { LegalFooter } from '@/components/app-shell/legal-footer';
 import { Badge } from '@/components/ui/badge';
 import { Button, LinkButton } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -114,6 +115,10 @@ export function ViewerLoginPage({ returnTo: rawReturnTo }: { returnTo?: string |
           </CardContent>
         </Card>
       </section>
+
+      <div className="mx-auto w-full max-w-7xl">
+        <LegalFooter />
+      </div>
     </main>
   );
 }

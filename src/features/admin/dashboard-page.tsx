@@ -312,6 +312,7 @@ export function DashboardPage() {
   const accounts = useMemo(() => dashboardData.platforms || [], [dashboardData.platforms]);
   const youtubeStreamerStatus = dashboardData.youtubeStreamerStatus || null;
   const youtubeConfigured = youtubeStreamerStatus?.configured === true;
+  const youtubeLoginHref = apiUrl(`/api/auth/youtube/login?returnTo=${encodeURIComponent('/connection?platform=youtube')}`);
   const youtubeAccount = useMemo<PlatformAccount | null>(() => {
     if (!youtubeConfigured || accounts.some((account) => account.provider?.toLowerCase() === 'youtube')) return null;
     const channel = youtubeStreamerStatus?.channel || {};
@@ -380,16 +381,18 @@ export function DashboardPage() {
                 const connected = connectedProviders.has(provider.id);
                 if (provider.id === 'youtube') {
                   return (
-                    <LinkButton key={provider.id} href={provider.connectionPath} variant={connected ? 'secondary' : 'default'} size="lg">
-                      <img
-                        src={provider.iconPath}
-                        alt=""
-                        aria-hidden="true"
-                        className="h-5 w-5 shrink-0 rounded-[calc(var(--radius-control)*0.35)] object-contain"
-                        draggable={false}
-                      />
-                      {connected ? 'YouTube 다시 연결' : 'YouTube로 로그인'}
-                    </LinkButton>
+                    <Button key={provider.id} asChild variant={connected ? 'secondary' : 'default'} size="lg">
+                      <a href={youtubeLoginHref}>
+                        <img
+                          src={provider.iconPath}
+                          alt=""
+                          aria-hidden="true"
+                          className="h-5 w-5 shrink-0 rounded-[calc(var(--radius-control)*0.35)] object-contain"
+                          draggable={false}
+                        />
+                        {connected ? 'YouTube 다시 연결' : 'YouTube로 로그인'}
+                      </a>
+                    </Button>
                   );
                 }
                 return (
