@@ -7088,6 +7088,33 @@ function findFirstChzzkClipMp4Url(cardPayload) {
     }
   };
 
+  const addCanonicalMpdBaseUrls = (payload) => {
+    const mpdList = payload?.body?.card?.content?.vod?.playback?.MPD;
+    for (const mpd of Array.isArray(mpdList) ? mpdList : []) {
+      for (const period of Array.isArray(mpd?.Period) ? mpd.Period : []) {
+        for (const adaptation of Array.isArray(period?.AdaptationSet) ? period.AdaptationSet : []) {
+          for (const representation of Array.isArray(adaptation?.Representation) ? adaptation.Representation : []) {
+            for (const baseUrl of Array.isArray(representation?.BaseURL) ? representation.BaseURL : []) {
+              addCandidate(baseUrl, `${adaptation?.['@mimeType'] || ''} ${representation?.['@mimeType'] || ''} ${representation?.['@codecs'] || ''} canonical-mpd-baseurl`);
+            }
+          }
+        }
+      }
+    }
+  };
+
+  const addCandidatesFromSerializedPayload = (payload) => {
+    let serialized = '';
+    try { serialized = JSON.stringify(payload || ''); } catch { serialized = ''; }
+    if (!serialized) return;
+    const normalized = normalizeCandidate(serialized)
+      .replace(/&amp;/g, '&')
+      .replace(/%5Cu0026/ig, '&');
+    for (const match of normalized.matchAll(/https?:\/\/[^"'<>\s\\]+?\.mp4(?:\?[^"'<>\s\\]*)?(?:#[^"'<>\s\\]*)?/ig)) {
+      addCandidate(match[0], 'serialized-payload');
+    }
+  };
+
   const visit = (node, context = '', depth = 0) => {
     if (node == null || depth > 14) return;
     if (typeof node === 'string' || typeof node === 'number') {
@@ -7119,7 +7146,9 @@ function findFirstChzzkClipMp4Url(cardPayload) {
     }
   };
 
+  addCanonicalMpdBaseUrls(cardPayload);
   visit(cardPayload);
+  addCandidatesFromSerializedPayload(cardPayload);
   if (!candidates.length) return null;
 
   const scoreCandidate = (candidate) => {
