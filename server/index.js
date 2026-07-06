@@ -5507,7 +5507,10 @@ app.get('/api/video-donation/resolve-title', rateLimiters.externalLookup, async 
     });
   } catch (e) {
     if (e?.code === 'provider_disabled') return res.status(400).json({ error: 'provider_disabled', provider: e.provider });
-    if (e?.code === 'clip_playback_unavailable') return res.status(404).json({ error: 'clip_playback_unavailable', provider: e.provider });
+    if (e?.code === 'clip_playback_unavailable') {
+      logChzzkClipPlaybackFailure('resolve-title', e);
+      return res.status(404).json({ error: 'clip_playback_unavailable', provider: e.provider, reason: e.reason || null });
+    }
     if (e?.code === 'unsupported_media') return res.status(404).json({ error: 'not_found' });
     return res.status(500).json({ error: 'failed' });
   }
@@ -5555,7 +5558,10 @@ app.post('/api/video-donation/request', rateLimiters.userWrite, async (req, res)
       media = await resolvePvdMedia(input, settings, { allowSearch: true });
     } catch (e) {
       if (e?.code === 'provider_disabled') return res.status(400).json({ error: 'provider_disabled', provider: e.provider, message: `${getPvdProviderLabel(e.provider)} 요청은 꺼져 있습니다.` });
-      if (e?.code === 'clip_playback_unavailable') return res.status(400).json({ error: 'clip_playback_unavailable', message: '치지직 클립 mp4를 가져오지 못했습니다. 잠시 후 다시 시도해 주세요.' });
+      if (e?.code === 'clip_playback_unavailable') {
+        logChzzkClipPlaybackFailure('request', e);
+        return res.status(400).json({ error: 'clip_playback_unavailable', reason: e.reason || null, message: '치지직 클립 mp4를 가져오지 못했습니다. 잠시 후 다시 시도해 주세요.' });
+      }
       return res.status(400).json({ error: 'unsupported_media', message: '지원하지 않는 링크입니다.' });
     }
     const start = Math.max(0, Number(startSec || 0) || 0);
@@ -7209,6 +7215,24 @@ function extractChzzkClipTitle(payload) {
   return null;
 }
 
+function createChzzkClipPlaybackUnavailableError(reason, details = {}) {
+  const error = new Error('clip_playback_unavailable');
+  error.code = 'clip_playback_unavailable';
+  error.provider = 'chzzk_clip';
+  error.reason = String(reason || 'unknown');
+  error.details = details;
+  return error;
+}
+
+function logChzzkClipPlaybackFailure(context, error) {
+  if (error?.code !== 'clip_playback_unavailable') return;
+  console.warn('[pvd:chzzk-clip] playback url unavailable', {
+    context,
+    reason: error.reason || null,
+    ...(error.details && typeof error.details === 'object' ? error.details : {}),
+  });
+}
+
 async function fetchChzzkClipInfo(clipId) {
   const id = String(clipId || '').trim();
   if (!id) return null;
@@ -7228,6 +7252,7 @@ async function fetchChzzkClipInfo(clipId) {
     let playbackUrl = findFirstChzzkClipMp4Url(clip);
     const videoId = clip.videoId || null;
     const seedMediaIds = Array.from(new Set([videoId, id].filter(Boolean).map((value) => String(value))));
+    const cardFetchErrors = [];
     for (const seedMediaId of seedMediaIds) {
       if (playbackUrl) break;
       try {
@@ -7243,13 +7268,29 @@ async function fetchChzzkClipInfo(clipId) {
         });
         title = title || extractChzzkClipTitle(card?.data);
         playbackUrl = findFirstChzzkClipMp4Url(card?.data);
-      } catch { }
+      } catch (error) {
+        cardFetchErrors.push({
+          seedMediaId,
+          status: error?.response?.status || null,
+          code: error?.code || null,
+          message: error?.message || String(error),
+        });
+      }
     }
+    const playbackUnavailableReason = playbackUrl
+      ? null
+      : !videoId
+        ? 'video_id_missing'
+        : cardFetchErrors.length >= seedMediaIds.length
+          ? 'card_fetch_failed'
+          : 'mp4_not_found_in_card';
     return {
       raw: clip,
       title,
       durationSec,
       playbackUrl,
+      playbackUnavailableReason,
+      cardFetchErrors,
       thumbnailUrl: clip.thumbnailImageUrl || null,
       videoId,
       adult: clip.adult === true,
@@ -8080,10 +8121,12 @@ async function resolvePvdMedia(input, settings = {}, { allowSearch = true } = {}
         parsed.embedUrl = clip.playbackUrl;
         parsed.originalUrl = `https://chzzk.naver.com/clips/${parsed.mediaId}`;
       } else {
-        const error = new Error('clip_playback_unavailable');
-        error.code = 'clip_playback_unavailable';
-        error.provider = parsed.provider;
-        throw error;
+        throw createChzzkClipPlaybackUnavailableError(clip?.playbackUnavailableReason || 'detail_fetch_failed', {
+          clipId: parsed.mediaId,
+          videoId: clip?.videoId || null,
+          title: clip?.title || null,
+          cardFetchErrors: clip?.cardFetchErrors || [],
+        });
       }
       title = clip?.title || '제목을 불러오지 못한 치지직 클립';
       durationSec = Number.isFinite(clip?.durationSec) ? Number(clip.durationSec) : null;
@@ -21270,7 +21313,10 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
     media = await resolvePvdMedia(inputArg, settings, { allowSearch: true });
   } catch (e) {
     if (e?.code === 'provider_disabled') return cleaned || `${getPvdProviderLabel(e.provider)} 요청은 꺼져 있습니다.`;
-    if (e?.code === 'clip_playback_unavailable') return cleaned || '치지직 클립 mp4를 가져오지 못했습니다. 잠시 후 다시 시도해 주세요.';
+    if (e?.code === 'clip_playback_unavailable') {
+      logChzzkClipPlaybackFailure('chat-command', e);
+      return cleaned || '치지직 클립 mp4를 가져오지 못했습니다. 잠시 후 다시 시도해 주세요.';
+    }
     return cleaned || '올바른 링크나 검색어를 입력해 주세요.';
   }
 
