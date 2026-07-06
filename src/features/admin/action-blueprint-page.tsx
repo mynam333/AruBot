@@ -75,6 +75,7 @@ type NodeType =
   | 'setVariable'
   | 'readVariable'
   | 'action'
+  | 'parallel'
   | 'loop'
   | 'random'
   | 'pointsGet'
@@ -165,6 +166,10 @@ type AutomationDiscoveryCache = {
   models?: Array<{ id: string; name: string; loaded?: boolean }>;
   expressions?: Array<{ file?: string; name: string; active?: boolean }>;
   parameters?: Array<{ id: string; name: string; min?: number | null; max?: number | null; defaultValue?: number | null }>;
+  scenes?: Array<{ id?: string; name: string; current?: boolean }>;
+  sources?: Array<{ id?: string; name: string; sceneName?: string; inputKind?: string; enabled?: boolean }>;
+  filters?: Array<{ id?: string; name: string; sourceName?: string; kind?: string; enabled?: boolean }>;
+  requests?: Array<{ id: string; name: string; group?: string }>;
   currentModel?: { loaded?: boolean; id?: string; name?: string };
   fetchedAt?: string;
 };
@@ -267,6 +272,7 @@ const nodeCatalog: Array<{
   icon: typeof Workflow;
   tone: BlueprintTone;
   config: Record<string, unknown>;
+  hidden?: boolean;
 }> = [
   { type: 'start', title: '시작', body: '액션의 첫 순간', group: '필수', icon: Play, tone: 'mint', config: {} },
   { type: 'end', title: '종료', body: '마무리 응답', group: '필수', icon: BadgeCheck, tone: 'coral', config: { status: 'success', message: '완료' } },
@@ -276,30 +282,31 @@ const nodeCatalog: Array<{
   { type: 'setVariable', title: '임시 변수', body: '값을 잠시 보관', group: '기본', icon: Braces, tone: 'amber', config: { key: 'bonusPoint', mode: 'set', value: '100' } },
   { type: 'readVariable', title: '변수 읽기', body: '필요한 값 꺼내기', group: '기본', icon: Type, tone: 'cyan', config: { path: '{user.name}' } },
   { type: 'action', title: '다른 블루프린트 실행', body: '다른 액션 이어가기', group: '기본', icon: Workflow, tone: 'sky', config: { actionId: '' } },
+  { type: 'parallel', title: '다중 실행', body: '연결된 노드를 동시에 실행', group: '흐름', icon: GitBranch, tone: 'violet', config: {} },
   { type: 'loop', title: 'N회 반복', body: '반복 중 true, 완료 후 false', group: '흐름', icon: RefreshCw, tone: 'sky', config: { count: 3, gapMs: 250 } },
   { type: 'random', title: '랜덤 분기', body: '가중치 기반 분기', group: '흐름', icon: Shuffle, tone: 'lemon', config: { options: [{ id: 'a', label: 'A', weight: 1 }, { id: 'b', label: 'B', weight: 1 }] } },
   { type: 'pointsGet', title: '포인트 조회', body: '보유 포인트 가져오기', group: '포인트', icon: Coins, tone: 'mint', config: { userId: '{user.userId}' } },
   { type: 'pointsAdjust', title: '포인트 지급/차감', body: '보상/사용 포인트 반영', group: '포인트', icon: Coins, tone: 'mint', config: { userId: '{user.userId}', delta: '100' } },
-  { type: 'pointsEnough', title: '포인트 충분 여부', body: 'true/false 분기', group: '포인트', icon: Coins, tone: 'lemon', config: { userId: '{user.userId}', required: '1000' } },
+  { type: 'pointsEnough', title: '포인트 충분 여부', body: '조건문으로 대체됨', group: '레거시', icon: Coins, tone: 'lemon', config: { userId: '{user.userId}', required: '1000' }, hidden: true },
   { type: 'pointsRanking', title: '포인트 랭킹', body: '상위 시청자 조회', group: '포인트', icon: Coins, tone: 'mint', config: { limit: 10 } },
   { type: 'pointsExcluded', title: '적립 제외 확인', body: '제외 UUID true/false', group: '포인트', icon: Coins, tone: 'lemon', config: { userId: '{user.userId}' } },
   { type: 'rouletteList', title: '룰렛 목록', body: '실행 가능한 룰렛 조회', group: '룰렛', icon: Sparkles, tone: 'lemon', config: {} },
   { type: 'rouletteRun', title: '룰렛 실행', body: '당첨 결과 만들기', group: '룰렛', icon: Sparkles, tone: 'lemon', config: { name: '' } },
-  { type: 'rouletteCompare', title: '룰렛 결과 비교', body: '결과값 조건 분기', group: '룰렛', icon: Sparkles, tone: 'lemon', config: { left: '{node.rouletteRun.result.label}', operator: 'eq', right: '' } },
-  { type: 'rouletteDisplay', title: '룰렛 결과 표시', body: '결과를 화면에 띄움', group: '룰렛', icon: Sparkles, tone: 'sky', config: { text: '{roulette.result.label}', durationMs: 4000 } },
+  { type: 'rouletteCompare', title: '룰렛 결과 비교', body: '조건문으로 대체됨', group: '레거시', icon: Sparkles, tone: 'lemon', config: { left: '{node.rouletteRun.result.label}', operator: 'eq', right: '' }, hidden: true },
+  { type: 'rouletteDisplay', title: '룰렛 결과 표시', body: '오버레이 표시로 대체됨', group: '레거시', icon: Sparkles, tone: 'sky', config: { text: '{roulette.result.label}', durationMs: 4000 }, hidden: true },
   { type: 'attendanceGet', title: '출석 조회', body: '누적 출석일 확인', group: '참여', icon: CheckCircle2, tone: 'mint', config: { userId: '{user.userId}' } },
-  { type: 'cooldown', title: '쿨다운 확인', body: '사용자별 제한 분기', group: '흐름', icon: CalendarClock, tone: 'lemon', config: { key: '{user.userId}', seconds: 30 } },
-  { type: 'join', title: '흐름 합류', body: '여러 입력을 하나로', group: '흐름', icon: GitBranch, tone: 'neutral', config: {} },
+  { type: 'cooldown', title: '쿨다운 확인', body: '조건문으로 대체됨', group: '레거시', icon: CalendarClock, tone: 'lemon', config: { key: '{user.userId}', seconds: 30 }, hidden: true },
+  { type: 'join', title: '흐름 합류', body: 'React Flow 연결 방식으로 대체됨', group: '레거시', icon: GitBranch, tone: 'neutral', config: {}, hidden: true },
   { type: 'approval', title: '관리자 확인', body: '방송 전 승인 받기', group: '흐름', icon: CheckCircle2, tone: 'emerald', config: { message: '이 액션을 실행할까요?' } },
-  { type: 'timer', title: '타이머 예약', body: '지정 시간 뒤 실행', group: '흐름', icon: CalendarClock, tone: 'sky', config: { seconds: 10 } },
-  { type: 'chatVote', title: '채팅 투표 대기', body: '채팅 투표 결과 수집', group: '참여', icon: MessageSquare, tone: 'sky', config: { seconds: 30, options: '1,2' } },
-  { type: 'highlight', title: '하이라이트 마커', body: '기억할 순간 기록', group: '참여', icon: BadgeCheck, tone: 'neutral', config: { label: '하이라이트' } },
-  { type: 'overlay', title: '오버레이 표시', body: '텍스트/진행바/카운트다운', group: '연출', icon: Layers3, tone: 'sky', config: { text: '{user.name}님 당첨!', durationMs: 4000, animation: 'pop' } },
-  { type: 'overlayUpdate', title: '오버레이 수정', body: '표시 내용/진행률 수정', group: '연출', icon: Layers3, tone: 'sky', config: { overlayId: '{node.overlay.overlayId}', text: '', progress: '' } },
+  { type: 'timer', title: '타이머 예약', body: '대기 노드로 대체됨', group: '레거시', icon: CalendarClock, tone: 'sky', config: { seconds: 10 }, hidden: true },
+  { type: 'chatVote', title: '채팅 투표 대기', body: '채팅 투표 기능으로 대체됨', group: '레거시', icon: MessageSquare, tone: 'sky', config: { seconds: 30, options: '1,2' }, hidden: true },
+  { type: 'highlight', title: '하이라이트 마커', body: '로그 노드로 대체됨', group: '레거시', icon: BadgeCheck, tone: 'neutral', config: { label: '하이라이트' }, hidden: true },
+  { type: 'overlay', title: '오버레이 표시', body: '텍스트/진행바/카운트다운', group: '연출', icon: Layers3, tone: 'sky', config: { text: '{user.name}님 당첨!', durationMs: 4000, animation: '', cssCode: '', animationKey: '' } },
+  { type: 'overlayUpdate', title: '오버레이 수정', body: '표시 내용/진행률 수정', group: '연출', icon: Layers3, tone: 'sky', config: { overlayId: '{node.overlay.overlayId}', text: '', progress: '', animation: '', cssCode: '', animationKey: '' } },
   { type: 'overlayHide', title: '오버레이 숨김', body: '표시 중인 오버레이 닫기', group: '연출', icon: Layers3, tone: 'neutral', config: { overlayId: '{node.overlay.overlayId}' } },
   { type: 'tts', title: 'TTS', body: '말할 내용 입력', group: '연출', icon: Volume2, tone: 'coral', config: { text: '{user.name}님 축하합니다!', voice: '', rate: 1, pitch: 1 } },
-  { type: 'fx', title: 'FX 오버레이', body: '이미지/스티커/비디오/사운드', group: '연출', icon: Volume2, tone: 'coral', config: { kind: 'image', assetId: '', x: 50, y: 50, width: 28, height: 28, durationMs: 4000, enterCss: 'fx-pop-in 360ms ease-out both', exitCss: 'fx-fade-out 280ms ease-in both', chromaKey: false, chromaKeyColor: '#00ff00', volume: 1 } },
-  { type: 'obs', title: 'OBS', body: '장면/소스/필터 제어', group: '연동', icon: Radio, tone: 'mint', config: { action: 'scene.switch', sceneName: '' } },
+  { type: 'fx', title: 'FX 오버레이', body: '이미지/스티커/비디오/사운드', group: '연출', icon: Volume2, tone: 'coral', config: { kind: 'image', assetId: '', x: 50, y: 50, width: 28, height: 28, durationMs: 4000, enterCss: '', exitCss: '', chromaKey: false, chromaKeyColor: '#00ff00', volume: 1 } },
+  { type: 'obs', title: 'OBS', body: '장면/소스/필터 제어', group: '연동', icon: Radio, tone: 'mint', config: { connectionId: '', action: 'scene.switch', sceneName: '', sourceName: '', filterName: '', enabled: true } },
   { type: 'http', title: 'HTTP 요청', body: '외부 도구 깨우기', group: '연동', icon: Network, tone: 'neutral', config: { method: 'POST', url: '', body: '{}' } },
   { type: 'websocket', title: 'WebSocket', body: '로컬 도구에 메시지', group: '연동', icon: Network, tone: 'neutral', config: { url: '', message: '{}', timeoutMs: 8000 } },
   { type: 'udp', title: 'UDP', body: '장비/효과 실행', group: '연동', icon: Network, tone: 'neutral', config: { host: '127.0.0.1', port: 0, message: '' } },
@@ -335,10 +342,10 @@ const blueprintTemplates: Array<{
     body: '포인트가 충분하면 차감 후 룰렛을 돌리고 결과를 오버레이로 보여줍니다.',
     tone: 'lemon',
     nodes: [
-      { type: 'pointsEnough', name: '포인트 확인', position: { x: 0, y: 0 }, config: { userId: '{user.userId}', required: '1000' } },
+      { type: 'condition', name: '포인트 확인', position: { x: 0, y: 0 }, config: { left: '{user.points}', operator: 'gte', right: '1000' } },
       { type: 'pointsAdjust', name: '포인트 차감', position: { x: 22, y: -2 }, config: { userId: '{user.userId}', delta: '-1000' } },
       { type: 'rouletteRun', name: '룰렛 실행', position: { x: 44, y: -2 }, config: { name: '' } },
-      { type: 'rouletteDisplay', name: '룰렛 결과 표시', position: { x: 66, y: -2 }, config: { text: '{node.rouletteRun.result.label}', durationMs: 4500 } },
+      { type: 'overlay', name: '룰렛 결과 표시', position: { x: 66, y: -2 }, config: { text: '{node.rouletteRun.result.label}', durationMs: 4500, animation: '', cssCode: '', animationKey: '' } },
       { type: 'chat', name: '포인트 부족 안내', position: { x: 22, y: 10 }, config: { message: '{user.username}님, 포인트가 부족합니다.' } },
     ],
     edges: [
@@ -355,7 +362,7 @@ const blueprintTemplates: Array<{
     tone: 'sky',
     nodes: [
       { type: 'condition', name: '키워드 확인', position: { x: 0, y: 0 }, config: { left: '{trigger.message}', operator: 'contains', right: '축하' } },
-      { type: 'highlight', name: '하이라이트 저장', position: { x: 22, y: -2 }, config: { label: '{user.username} 채팅' } },
+      { type: 'log', name: '하이라이트 기록', position: { x: 22, y: -2 }, config: { message: '{user.username} 채팅: {trigger.message}' } },
       { type: 'tts', name: 'TTS 읽기', position: { x: 44, y: -2 }, config: { text: '{user.username}님이 말했어요. {trigger.message}', voice: '', rate: 1, pitch: 1 } },
     ],
     edges: [
@@ -451,6 +458,10 @@ function outputPorts(node: BlueprintNode) {
   return ['out'];
 }
 
+function allowsMultipleOutgoing(node?: Pick<BlueprintNode, 'type'> | null) {
+  return node?.type === 'parallel';
+}
+
 function isBlank(value: unknown) {
   return value == null || String(value).trim() === '';
 }
@@ -462,7 +473,13 @@ function requiredConfigErrors(node: BlueprintNode) {
   const need = (key: string, field: string) => {
     if (isBlank(cfg[key])) errors.push(`${label}: ${field} 값이 필요합니다.`);
   };
+  const numberInRange = (key: string, field: string, min = Number.NEGATIVE_INFINITY, max = Number.POSITIVE_INFINITY) => {
+    if (isBlank(cfg[key])) return;
+    const value = Number(cfg[key]);
+    if (!Number.isFinite(value) || value < min || value > max) errors.push(`${label}: ${field} 값이 올바른 숫자여야 합니다.`);
+  };
   if (node.type === 'chat') need('message', '메시지');
+  if (node.type === 'readVariable') need('path', '읽을 변수');
   if (node.type === 'condition' || node.type === 'rouletteCompare') {
     need('left', '좌변');
     need('operator', '연산자');
@@ -477,13 +494,34 @@ function requiredConfigErrors(node: BlueprintNode) {
     if (!options.some((option) => Number(option.weight ?? 1) > 0)) errors.push(`${label}: 가중치가 1 이상인 선택지가 필요합니다.`);
   }
   if (node.type === 'action') need('actionId', '실행할 액션 ID');
-  if (node.type === 'pointsAdjust') need('delta', '변경 포인트');
+  if (node.type === 'wait') numberInRange('seconds', '대기 시간', 0);
+  if (node.type === 'loop') {
+    numberInRange('count', '반복 횟수', 0);
+    numberInRange('gapMs', '반복 간격', 0);
+  }
+  if (node.type === 'pointsAdjust') {
+    need('delta', '변경 포인트');
+    numberInRange('delta', '변경 포인트');
+  }
   if (node.type === 'pointsEnough') need('required', '필요 포인트');
+  if (node.type === 'pointsRanking') numberInRange('limit', '조회 인원', 1, 50);
   if (node.type === 'rouletteRun') need('name', '룰렛 이름 또는 ID');
   if (node.type === 'rouletteDisplay' || node.type === 'overlay') need('text', '표시 내용');
+  if (node.type === 'overlayUpdate' || node.type === 'overlayHide') need('overlayId', '오버레이 ID');
   if (node.type === 'fx' && !(String(node.config.kind || '') === 'video' && String(node.config.youtubeUrl || '').trim())) need('assetId', 'FX 에셋');
   if (node.type === 'tts') need('text', '말할 내용');
   if (node.type === 'http') need('url', 'URL');
+  if (node.type === 'http') {
+    if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(String(cfg.method || 'POST').toUpperCase())) errors.push(`${label}: HTTP 메서드는 GET, POST, PUT, PATCH, DELETE 중 하나여야 합니다.`);
+    if (!isBlank(cfg.headers)) {
+      try {
+        const parsed = JSON.parse(String(cfg.headers));
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) errors.push(`${label}: Headers는 JSON 객체여야 합니다.`);
+      } catch {
+        errors.push(`${label}: Headers JSON 형식이 올바르지 않습니다.`);
+      }
+    }
+  }
   if (node.type === 'websocket') {
     need('url', 'URL');
     need('message', '메시지');
@@ -491,12 +529,26 @@ function requiredConfigErrors(node: BlueprintNode) {
   if (node.type === 'udp') {
     need('host', '호스트');
     need('port', '포트');
+    numberInRange('port', '포트', 1, 65535);
     need('message', '메시지');
   }
   if (node.type === 'tits') need('triggerId', '트리거');
   if (node.type === 'vtube' && isBlank(cfg.hotkeyId) && isBlank(cfg.parameter)) {
     errors.push(`${label}: 핫키 또는 파라미터 중 하나가 필요합니다.`);
   }
+  if (node.type === 'obs') {
+    const action = String(cfg.action || 'scene.switch');
+    if (action === 'scene.switch') need('sceneName', '장면 이름');
+    if (action === 'source.visibility') {
+      need('sceneName', '장면 이름');
+      need('sourceName', '소스 이름');
+    }
+    if (action === 'filter.enabled') {
+      need('sourceName', '소스 이름');
+      need('filterName', '필터 이름');
+    }
+  }
+  if (node.type === 'approval') need('message', '승인 메시지');
   return errors;
 }
 
@@ -550,8 +602,10 @@ function validateBlueprint(nodes: BlueprintNode[], edges: BlueprintEdge[]) {
       errors.push(`${target.name}: 존재하지 않는 입력 포트가 연결되어 있습니다.`);
     }
     const key = `${edge.source}:${edge.sourcePort || 'out'}`;
-    if (outputKeys.has(key)) errors.push('하나의 출력 포트에서 여러 연결이 나갈 수 없습니다.');
-    outputKeys.add(key);
+    if (!allowsMultipleOutgoing(source)) {
+      if (outputKeys.has(key)) errors.push('하나의 출력 포트에서 여러 연결이 나갈 수 없습니다. 동시에 여러 노드를 실행하려면 다중 실행 노드를 사용하세요.');
+      outputKeys.add(key);
+    }
   });
   if (nodes.length && hasCycle(nodes, edges)) errors.push('순환 연결은 실행할 수 없습니다. 반복은 N회 반복 노드를 사용하세요.');
   return Array.from(new Set(errors));
@@ -677,10 +731,27 @@ function nodePreview(node: BlueprintNode) {
   if (node.type === 'tts') return String(node.config.text || '').slice(0, 54);
   if (node.type === 'wait') return `${String(node.config.seconds || 0)}초 대기`;
   if (node.type === 'loop') return `${String(node.config.count || 1)}회 반복`;
+  if (node.type === 'parallel') return '출력 포트에 연결된 노드를 동시에 실행';
   if (node.type === 'http') return `${String(node.config.method || 'GET')} ${String(node.config.url || 'URL 미설정')}`;
+  if (node.type === 'websocket') return String(node.config.url || 'WSS URL 미설정');
+  if (node.type === 'udp') return `${String(node.config.host || '127.0.0.1')}:${String(node.config.port || '포트 미설정')}`;
+  if (node.type === 'obs') {
+    const parts = [String(node.config.action || 'scene.switch'), node.config.sceneName, node.config.sourceName, node.config.filterName]
+      .map((item) => String(item || '').trim())
+      .filter(Boolean);
+    return parts.join(' · ') || 'OBS 동작 미설정';
+  }
+  if (node.type === 'overlay' || node.type === 'rouletteDisplay') return String(node.config.text || '표시 내용 미설정').slice(0, 54);
+  if (node.type === 'overlayUpdate') return `${String(node.config.overlayId || '오버레이 ID 미설정')} · 수정`;
+  if (node.type === 'overlayHide') return `${String(node.config.overlayId || '오버레이 ID 미설정')} · 숨김`;
+  if (node.type === 'pointsGet') return `${String(node.config.userId || '{user.userId}')} 포인트 조회`;
   if (node.type === 'pointsAdjust') return `${String(node.config.delta || 0)} 포인트`;
+  if (node.type === 'pointsRanking') return `상위 ${String(node.config.limit || 10)}명`;
+  if (node.type === 'attendanceGet') return `${String(node.config.userId || '{user.userId}')} 출석 조회`;
   if (node.type === 'rouletteRun') return String(node.config.name || '룰렛 미선택');
   if (node.type === 'action') return String(node.config.actionId || '블루프린트 미선택');
+  if (node.type === 'approval') return String(node.config.message || '승인 메시지 미설정').slice(0, 54);
+  if (node.type === 'log' || node.type === 'highlight') return String(node.config.message || node.config.label || '로그 내용 미설정').slice(0, 54);
   if (node.type === 'fx') return `${String(node.config.kind || 'image')} · ${String(node.config.assetName || node.config.assetId || node.config.youtubeUrl || '에셋 미선택')}`;
   if (node.type === 'sound') return String(node.config.fileId || '사운드 미선택');
   if (node.type === 'tits') return String(node.config.triggerName || node.config.triggerId || '트리거 미선택');
@@ -691,6 +762,51 @@ function nodePreview(node: BlueprintNode) {
     return hotkey || parameter || '핫키/파라미터 미선택';
   }
   return node.type;
+}
+
+function nodeOutputHints(node: Pick<BlueprintNode, 'id' | 'type'>) {
+  const prefix = `{node.${node.id}.`;
+  const byType: Partial<Record<NodeType, string[]>> = {
+    start: ['context}'],
+    chat: ['sent}', 'platform}', 'text}'],
+    wait: ['waitedMs}'],
+    timer: ['delayMs}', 'queued}'],
+    condition: ['passed}', 'left}', 'right}'],
+    cooldown: ['passed}', 'remainingMs}'],
+    pointsGet: ['points}', 'userId}', 'channelUid}'],
+    pointsEnough: ['passed}', 'points}', 'required}'],
+    pointsAdjust: ['points}', 'delta}', 'previous}'],
+    pointsRanking: ['ranking}'],
+    pointsExcluded: ['excluded}'],
+    attendanceGet: ['totalDays}', 'userId}'],
+    rouletteList: ['roulettes}'],
+    rouletteRun: ['result.label}', 'result.value}', 'roulette.name}'],
+    rouletteCompare: ['passed}', 'left}', 'right}'],
+    rouletteDisplay: ['overlayId}', 'shown}'],
+    overlay: ['overlayId}', 'shown}'],
+    overlayUpdate: ['overlayId}', 'updated}'],
+    overlayHide: ['overlayId}', 'hidden}'],
+    tts: ['spoken}', 'voice}', 'queued}'],
+    fx: ['queued}', 'jobId}', 'payload.id}'],
+    sound: ['queued}', 'jobId}'],
+    http: ['queued}', 'jobId}'],
+    websocket: ['queued}', 'jobId}'],
+    udp: ['queued}', 'jobId}'],
+    obs: ['queued}', 'jobId}'],
+    tits: ['queued}', 'jobId}'],
+    vtube: ['queued}', 'jobId}'],
+    random: ['picked.label}', 'picked.id}'],
+    parallel: ['results}', 'count}'],
+    loop: ['count}'],
+    action: ['ok}', 'result}'],
+    approval: ['approvalRequired}', 'jobId}'],
+    highlight: ['marked}', 'label}'],
+    log: ['message}', 'at}'],
+    readVariable: ['value}'],
+    setVariable: ['key}', 'value}'],
+    join: ['joined}'],
+  };
+  return (byType[node.type] || ['status}']).map((suffix) => `${prefix}${suffix}`);
 }
 
 function normalizeBlueprint(payload?: Blueprint | null) {
@@ -943,6 +1059,7 @@ function BlueprintCanvasNode({ data, selected }: NodeProps<BlueprintFlowNode>) {
   const tone = toneClass(spec.tone);
   const statusTone = latestStep?.status === 'failed' ? 'bg-destructive' : active ? 'bg-primary' : latestStep?.status === 'done' ? 'bg-emerald-500' : node.enabled === false ? 'bg-muted-foreground' : 'bg-primary/65';
   const nodeHeight = nodeHeightPx(node);
+  const outputHints = nodeOutputHints(node).slice(0, 2);
   return (
     <div
       onContextMenu={(event) => {
@@ -980,6 +1097,7 @@ function BlueprintCanvasNode({ data, selected }: NodeProps<BlueprintFlowNode>) {
             <span className="min-w-0">
               <span className="block truncate text-[0.78rem] font-extrabold leading-tight text-foreground">{node.name}</span>
               <span className="mt-0.5 block truncate text-[0.66rem] font-semibold text-muted-foreground">{spec.group} · {spec.title}</span>
+              <span className="mt-1 block truncate font-mono text-[0.58rem] font-bold text-muted-foreground/80">ID {node.id}</span>
             </span>
           </div>
           <span className={cn('mt-1 h-2.5 w-2.5 shrink-0 rounded-full shadow-[0_0_0_0.25rem_hsl(var(--background)/0.88)]', statusTone)} />
@@ -988,9 +1106,17 @@ function BlueprintCanvasNode({ data, selected }: NodeProps<BlueprintFlowNode>) {
           <span className="line-clamp-2">{nodePreview(node) || spec.body}</span>
         </div>
         {latestStep ? (
-          <div className="flex items-center justify-between gap-2 rounded-full border bg-background/72 px-2.5 py-1 text-[0.66rem] font-bold text-muted-foreground">
-            <span>{latestStep.status || 'done'}</span>
-            <span>{latestStep.durationMs ?? 0}ms</span>
+          <div className="grid gap-1 rounded-[calc(var(--radius-control)*0.8)] border bg-background/72 px-2.5 py-1.5 text-[0.66rem] font-bold text-muted-foreground">
+            <div className="flex items-center justify-between gap-2">
+              <span>{latestStep.status || 'done'}</span>
+              <span>{latestStep.durationMs ?? 0}ms</span>
+            </div>
+            {outputHints.length ? <span className="truncate font-mono text-[0.58rem] text-muted-foreground/80">{outputHints.join(' · ')}</span> : null}
+          </div>
+        ) : outputHints.length ? (
+          <div className="grid gap-1 text-[0.64rem] font-semibold text-muted-foreground">
+            <span className="truncate">{spec.body}</span>
+            <span className="truncate font-mono text-[0.58rem]">{outputHints.join(' · ')}</span>
           </div>
         ) : (
           <div className="flex items-center justify-between gap-2 text-[0.66rem] font-semibold text-muted-foreground">
@@ -1023,6 +1149,7 @@ export function ActionBlueprintPage() {
   const applyingHistoryRef = useRef(false);
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const playTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectEdgeRef = useRef<{ edgeId: string; handleType: 'source' | 'target' | null; completed: boolean } | null>(null);
   const [blueprints, setBlueprints] = useState<Blueprint[]>([]);
   const [blueprint, setBlueprint] = useState<Blueprint>(() => normalizeBlueprint(null));
   const [automationOverview, setAutomationOverview] = useState<AutomationOverview | null>(null);
@@ -1114,7 +1241,7 @@ export function ActionBlueprintPage() {
 
   const filteredCatalog = useMemo(() => {
     const term = paletteQuery.trim().toLowerCase();
-    return nodeCatalog.filter((item) => !term || `${item.title} ${item.body} ${item.group}`.toLowerCase().includes(term));
+    return nodeCatalog.filter((item) => !item.hidden && (!term || `${item.title} ${item.body} ${item.group}`.toLowerCase().includes(term)));
   }, [paletteQuery]);
   const catalogGroups = useMemo(() => {
     const groups = new Map<string, typeof filteredCatalog>();
@@ -1126,6 +1253,7 @@ export function ActionBlueprintPage() {
   const automationConnections = useMemo(() => automationOverview?.connections || [], [automationOverview?.connections]);
   const titsConnection = useMemo(() => automationConnections.find((item) => item.type === 'tits') || null, [automationConnections]);
   const vtubeConnection = useMemo(() => automationConnections.find((item) => item.type === 'vtube_studio') || null, [automationConnections]);
+  const obsConnection = useMemo(() => automationConnections.find((item) => item.type === 'obs') || null, [automationConnections]);
   const zoomLabel = Math.round((liveViewport.zoom || 1) * 100);
 
   const updateBlueprint = useCallback((updater: (current: Blueprint) => Blueprint) => {
@@ -1179,33 +1307,33 @@ export function ActionBlueprintPage() {
     return data;
   }, []);
 
-  const ensureAutomationConnection = useCallback(async (type: 'tits' | 'vtube') => {
-    const existing = type === 'tits' ? titsConnection : vtubeConnection;
+  const ensureAutomationConnection = useCallback(async (type: 'tits' | 'vtube' | 'obs') => {
+    const existing = type === 'tits' ? titsConnection : type === 'vtube' ? vtubeConnection : obsConnection;
     if (existing) return existing;
     const data = await jsonRequest<{ connection: AutomationConnection }>('/api/automations/connections', 'POST', {
-      type: type === 'tits' ? 'tits' : 'vtube_studio',
-      name: type === 'tits' ? 'T.I.T.S.' : 'VTube Studio',
+      type: type === 'tits' ? 'tits' : type === 'vtube' ? 'vtube_studio' : 'obs',
+      name: type === 'tits' ? 'T.I.T.S.' : type === 'vtube' ? 'VTube Studio' : 'OBS Studio',
       executionMode: 'local_program',
-      endpoint: type === 'tits' ? 'ws://localhost:42069' : 'ws://localhost:8001',
+      endpoint: type === 'tits' ? 'ws://localhost:42069' : type === 'vtube' ? 'ws://localhost:8001' : 'ws://localhost:4455',
     });
     await refreshAutomationOverview();
     return data.connection;
-  }, [refreshAutomationOverview, titsConnection, vtubeConnection]);
+  }, [obsConnection, refreshAutomationOverview, titsConnection, vtubeConnection]);
 
-  const discoverAutomation = useCallback(async (type: 'tits' | 'vtube') => {
+  const discoverAutomation = useCallback(async (type: 'tits' | 'vtube' | 'obs') => {
     const busyKey = `${type}.discover`;
     setAutomationBusy(busyKey);
     try {
       const connection = await ensureAutomationConnection(type);
-      const endpoint = connection.endpoint || (type === 'tits' ? 'ws://localhost:42069' : 'ws://localhost:8001');
+      const endpoint = connection.endpoint || (type === 'tits' ? 'ws://localhost:42069' : type === 'vtube' ? 'ws://localhost:8001' : 'ws://localhost:4455');
       const data = await jsonRequest<{ queued?: boolean; discovery?: AutomationDiscoveryCache; message?: string }>(
-        type === 'tits' ? '/api/automations/tits/discover' : '/api/automations/vtube/discover',
+        type === 'tits' ? '/api/automations/tits/discover' : type === 'vtube' ? '/api/automations/vtube/discover' : '/api/automations/obs/discover',
         'POST',
         {
           executionMode: 'local_program',
           endpoint,
           connectionId: connection.id,
-          name: type === 'tits' ? 'T.I.T.S.' : 'VTube Studio',
+          name: type === 'tits' ? 'T.I.T.S.' : type === 'vtube' ? 'VTube Studio' : 'OBS Studio',
           sendImage: type === 'tits',
         },
       );
@@ -1406,7 +1534,7 @@ export function ActionBlueprintPage() {
     }
   }, []);
 
-  const onConnect = useCallback<OnConnect>((connection: Connection) => {
+  const upsertConnection = useCallback((connection: Connection, replaceEdgeId?: string) => {
     const sourceId = String(connection.source || '');
     const targetId = String(connection.target || '');
     const sourcePort = String(connection.sourceHandle || 'out');
@@ -1422,18 +1550,54 @@ export function ActionBlueprintPage() {
       return;
     }
     updateBlueprint((current) => {
-      const nextEdges = (current.version?.edges || []).filter((edge) => !(edge.source === sourceId && edge.sourcePort === sourcePort));
+      const currentEdges = current.version?.edges || [];
+      const nextEdges = currentEdges.filter((edge) => {
+        if (replaceEdgeId && edge.id === replaceEdgeId) return false;
+        if (!allowsMultipleOutgoing(sourceNode) && edge.source === sourceId && edge.sourcePort === sourcePort) return false;
+        if (edge.target === targetId && edge.targetPort === targetPort) return false;
+        return true;
+      });
       return {
         ...current,
         version: {
           ...current.version,
-          edges: [...nextEdges, { id: createId('edge'), source: sourceId, sourcePort, target: targetId, targetPort }],
+          edges: [...nextEdges, { id: replaceEdgeId || createId('edge'), source: sourceId, sourcePort, target: targetId, targetPort }],
         },
       };
     });
     setSelectedIds([]);
     setSelectedEdgeId(null);
   }, [nodes, updateBlueprint]);
+
+  const onConnect = useCallback<OnConnect>((connection: Connection) => {
+    upsertConnection(connection);
+  }, [upsertConnection]);
+
+  const onReconnectStart = useCallback((_event: unknown, edge: BlueprintFlowEdge, handleType?: 'source' | 'target') => {
+    reconnectEdgeRef.current = { edgeId: edge.id, handleType: handleType || null, completed: false };
+  }, []);
+
+  const onReconnect = useCallback((oldEdge: BlueprintFlowEdge, connection: Connection) => {
+    reconnectEdgeRef.current = { edgeId: oldEdge.id, handleType: reconnectEdgeRef.current?.handleType || null, completed: true };
+    upsertConnection(connection, oldEdge.id);
+  }, [upsertConnection]);
+
+  const onReconnectEnd = useCallback(() => {
+    const pending = reconnectEdgeRef.current;
+    reconnectEdgeRef.current = null;
+    if (!pending || pending.completed) return;
+    const edge = edges.find((item) => item.id === pending.edgeId);
+    const sourceNode = edge ? nodes.find((node) => node.id === edge.source) : null;
+    if (pending.handleType === 'source' && allowsMultipleOutgoing(sourceNode)) return;
+    updateBlueprint((current) => ({
+      ...current,
+      version: {
+        ...current.version,
+        edges: (current.version?.edges || []).filter((item) => item.id !== pending.edgeId),
+      },
+    }));
+    setSelectedEdgeId(null);
+  }, [edges, nodes, updateBlueprint]);
 
   const onSelectionChange = useCallback((params: OnSelectionChangeParams<BlueprintFlowNode, BlueprintFlowEdge>) => {
     setSelectedIds(params.nodes.map((node) => node.id));
@@ -2405,6 +2569,10 @@ export function ActionBlueprintPage() {
                 onNodesChange={onNodesChange}
                 onEdgesChange={onEdgesChange}
                 onConnect={onConnect}
+                edgesReconnectable
+                onReconnectStart={onReconnectStart}
+                onReconnect={onReconnect}
+                onReconnectEnd={onReconnectEnd}
                 onSelectionChange={onSelectionChange}
                 onNodeDoubleClick={handleNodeDoubleClick}
                 onViewportChange={setLiveViewport}
@@ -2508,6 +2676,19 @@ export function ActionBlueprintPage() {
             <CardContent className="grid gap-3 p-4 pt-0">
               {selectedNode ? (
                 <>
+                  <div className="grid gap-2 rounded-[var(--radius-control)] border bg-background/70 p-3 text-xs leading-5 text-muted-foreground">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-bold text-foreground">노드 ID</span>
+                      <code className="rounded-full bg-muted px-2 py-1 font-mono text-[0.72rem]">{selectedNode.id}</code>
+                      {nodeSpec(selectedNode.type).hidden ? <Badge tone="neutral">호환 노드</Badge> : null}
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {nodeOutputHints(selectedNode).map((hint) => (
+                        <OutputHintButton key={hint} value={hint} />
+                      ))}
+                    </div>
+                    {nodeSpec(selectedNode.type).hidden ? <p>새 액션에서는 조건문, 대기, 로그, 오버레이 표시 노드로 대체하는 것을 권장합니다. 기존 저장본은 계속 실행됩니다.</p> : null}
+                  </div>
                   <label className="grid gap-2 text-sm font-semibold">
                     노드 이름
                     <Input value={selectedNode.name} onChange={(event) => updateBlueprint((current) => ({ ...current, version: { ...current.version, nodes: (current.version?.nodes || []).map((node) => node.id === selectedNode.id ? { ...node, name: event.target.value } : node) } }))} />
@@ -2724,6 +2905,23 @@ function ContextMenuButton({
   );
 }
 
+function OutputHintButton({ value }: { value: string }) {
+  const copy = async () => {
+    await navigator.clipboard?.writeText(value).catch(() => undefined);
+    toast.success('임시변수를 복사했습니다.');
+  };
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      className="rounded-full bg-muted/80 px-2 py-1 font-mono text-[0.68rem] text-foreground/80 transition hover:bg-primary/12 hover:text-primary"
+      title={`${value} 복사`}
+    >
+      {value}
+    </button>
+  );
+}
+
 function ConfigFields({
   node,
   onChange,
@@ -2736,16 +2934,32 @@ function ConfigFields({
   onChange: (key: string, value: unknown) => void;
   automationOverview?: AutomationOverview | null;
   automationBusy?: string | null;
-  onDiscoverAutomation?: (type: 'tits' | 'vtube') => void;
+  onDiscoverAutomation?: (type: 'tits' | 'vtube' | 'obs') => void;
   blueprints?: Blueprint[];
 }) {
   const cfg = node.config || {};
   const automationConnections = automationOverview?.connections || [];
   const titsConnection = automationConnections.find((item) => item.type === 'tits') || null;
   const vtubeConnection = automationConnections.find((item) => item.type === 'vtube_studio') || null;
+  const obsConnections = automationConnections.filter((item) => item.type === 'obs' && item.enabled !== false);
+  const selectedObsConnection = obsConnections.find((item) => item.id === cfg.connectionId) || obsConnections[0] || null;
   const hasOnlineLocalAgent = (automationOverview?.localAgents || []).some((agent) => agent.status === 'online');
   const soundFiles = automationOverview?.soundStorage?.files || [];
   const fxAssets = automationOverview?.fxAssets || [];
+  const [ttsVoices, setTtsVoices] = useState<Array<{ value: string; label: string }>>([]);
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return undefined;
+    const loadVoices = () => {
+      const voices = window.speechSynthesis.getVoices();
+      setTtsVoices(voices.map((voice) => ({
+        value: voice.name,
+        label: `${voice.name}${voice.lang ? ` · ${voice.lang}` : ''}${voice.default ? ' · 기본' : ''}`,
+      })));
+    };
+    loadVoices();
+    window.speechSynthesis.addEventListener?.('voiceschanged', loadVoices);
+    return () => window.speechSynthesis.removeEventListener?.('voiceschanged', loadVoices);
+  }, []);
   if (node.type === 'condition' || node.type === 'rouletteCompare') {
     return (
       <div className="grid gap-3">
@@ -2800,8 +3014,21 @@ function ConfigFields({
   if (node.type === 'tts') {
     return (
       <div className="grid gap-3">
+        <div className="rounded-[var(--radius-control)] border bg-background/70 p-3 text-xs leading-5 text-muted-foreground">
+          TTS는 OBS에 추가한 FX 오버레이 브라우저 소스에서 재생됩니다. 방송에 소리가 나가려면 해당 브라우저 소스의 오디오가 OBS에서 활성화되어 있어야 합니다.
+        </div>
         <LongField label="말할 내용" value={String(cfg.text || '')} onChange={(value) => onChange('text', value)} />
-        <Field label="목소리" value={String(cfg.voice || '')} onChange={(value) => onChange('voice', value)} />
+        {ttsVoices.length ? (
+          <SelectField
+            label="목소리"
+            value={String(cfg.voice || '')}
+            onChange={(value) => onChange('voice', value)}
+            placeholder="오버레이 브라우저의 기본 목소리"
+            options={ttsVoices}
+          />
+        ) : (
+          <Field label="목소리" value={String(cfg.voice || '')} onChange={(value) => onChange('voice', value)} />
+        )}
         <Field label="속도" value={String(cfg.rate || 1)} onChange={(value) => onChange('rate', value)} />
         <Field label="높낮이" value={String(cfg.pitch || 1)} onChange={(value) => onChange('pitch', value)} />
       </div>
@@ -2859,16 +3086,16 @@ function ConfigFields({
             </div>
             <ExampleField
               label="등장 CSS animation"
-              value={String(cfg.enterCss || 'fx-pop-in 360ms ease-out both')}
+              value={String(cfg.enterCss || '')}
               onChange={(value) => onChange('enterCss', value)}
-              placeholder="fx-pop-in 360ms ease-out both"
+              placeholder="비워두면 애니메이션 없음"
               examples={['fx-pop-in 360ms ease-out both', 'fx-slide-up 420ms ease-out both', 'fx-spin-in 520ms cubic-bezier(.2,.8,.2,1) both', 'fade-in 280ms ease-out both']}
             />
             <ExampleField
               label="퇴장 CSS animation"
-              value={String(cfg.exitCss || 'fx-fade-out 280ms ease-in both')}
+              value={String(cfg.exitCss || '')}
               onChange={(value) => onChange('exitCss', value)}
-              placeholder="fx-fade-out 280ms ease-in both"
+              placeholder="비워두면 애니메이션 없음"
               examples={['fx-fade-out 280ms ease-in both', 'fade-out 280ms ease-in both', 'fx-slide-up 260ms ease-in reverse both', 'fx-pop-in 240ms ease-in reverse both']}
             />
             <label className="flex items-center gap-2 rounded-[var(--radius-control)] border bg-background/70 p-3 text-sm font-semibold">
@@ -2896,7 +3123,16 @@ function ConfigFields({
       <div className="grid gap-3">
         <LongField label="표시 내용" value={String(cfg.text || '')} onChange={(value) => onChange('text', value)} />
         <Field label="표시 시간(ms)" value={String(cfg.durationMs || 4000)} onChange={(value) => onChange('durationMs', value)} />
-        <Field label="애니메이션" value={String(cfg.animation || 'pop')} onChange={(value) => onChange('animation', value)} />
+        <Field label="오버레이 ID(비워두면 자동 생성)" value={String(cfg.overlayId || '')} onChange={(value) => onChange('overlayId', value)} />
+        <LongField label="CSS 코드" value={String(cfg.cssCode || '')} onChange={(value) => onChange('cssCode', value)} />
+        <Field label="적용할 CSS 키" value={String(cfg.animationKey || '')} onChange={(value) => onChange('animationKey', value)} />
+        <ExampleField
+          label="CSS animation"
+          value={String(cfg.animation || '')}
+          onChange={(value) => onChange('animation', value)}
+          placeholder="예: my-pop 420ms ease-out both"
+          examples={['my-pop 420ms ease-out both', 'fade-in 280ms ease-out both', 'slide-soft 520ms cubic-bezier(.2,.8,.2,1) both']}
+        />
       </div>
     );
   }
@@ -2905,6 +3141,13 @@ function ConfigFields({
       <div className="grid gap-3">
         <Field label="반복 횟수" value={String(cfg.count || 1)} onChange={(value) => onChange('count', value)} />
         <Field label="반복 간격(ms)" value={String(cfg.gapMs || 0)} onChange={(value) => onChange('gapMs', value)} />
+      </div>
+    );
+  }
+  if (node.type === 'parallel') {
+    return (
+      <div className="rounded-[var(--radius-control)] border bg-background/70 p-3 text-xs leading-5 text-muted-foreground">
+        출력 포트 하나에 여러 노드를 연결하면 동시에 실행됩니다. 출력 포트를 빈 공간으로 끌어도 기존 연결은 유지되고, 입력 포트에서 빈 공간으로 끌면 해당 연결만 해제됩니다.
       </div>
     );
   }
@@ -2932,6 +3175,16 @@ function ConfigFields({
       <div className="grid gap-3">
         <LongField label="표시 문구" value={String(cfg.text || '')} onChange={(value) => onChange('text', value)} />
         <Field label="표시 시간(ms)" value={String(cfg.durationMs || 4000)} onChange={(value) => onChange('durationMs', value)} />
+        <Field label="오버레이 ID(비워두면 자동 생성)" value={String(cfg.overlayId || '')} onChange={(value) => onChange('overlayId', value)} />
+        <LongField label="CSS 코드" value={String(cfg.cssCode || '')} onChange={(value) => onChange('cssCode', value)} />
+        <Field label="적용할 CSS 키" value={String(cfg.animationKey || '')} onChange={(value) => onChange('animationKey', value)} />
+        <ExampleField
+          label="CSS animation"
+          value={String(cfg.animation || '')}
+          onChange={(value) => onChange('animation', value)}
+          placeholder="예: roulette-pop 420ms ease-out both"
+          examples={['roulette-pop 420ms ease-out both', 'fade-in 280ms ease-out both', 'slide-soft 520ms cubic-bezier(.2,.8,.2,1) both']}
+        />
       </div>
     );
   }
@@ -2980,6 +3233,15 @@ function ConfigFields({
           <>
             <LongField label="새 표시 내용" value={String(cfg.text || '')} onChange={(value) => onChange('text', value)} />
             <Field label="진행률" value={String(cfg.progress || '')} onChange={(value) => onChange('progress', value)} />
+            <LongField label="CSS 코드" value={String(cfg.cssCode || '')} onChange={(value) => onChange('cssCode', value)} />
+            <Field label="적용할 CSS 키" value={String(cfg.animationKey || '')} onChange={(value) => onChange('animationKey', value)} />
+            <ExampleField
+              label="CSS animation"
+              value={String(cfg.animation || '')}
+              onChange={(value) => onChange('animation', value)}
+              placeholder="비워두면 현재 애니메이션 유지"
+              examples={['my-pop 420ms ease-out both', 'fade-in 280ms ease-out both', 'slide-soft 520ms cubic-bezier(.2,.8,.2,1) both']}
+            />
           </>
         ) : null}
       </div>
@@ -2988,7 +3250,12 @@ function ConfigFields({
   if (node.type === 'http') {
     return (
       <div className="grid gap-3">
-        <Field label="메서드" value={String(cfg.method || 'POST')} onChange={(value) => onChange('method', value)} />
+        <SelectField
+          label="메서드"
+          value={String(cfg.method || 'POST').toUpperCase()}
+          onChange={(value) => onChange('method', value)}
+          options={['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map((method) => ({ value: method, label: method }))}
+        />
         <Field label="URL" value={String(cfg.url || '')} onChange={(value) => onChange('url', value)} />
         <LongField label="Headers(JSON)" value={typeof cfg.headers === 'object' ? JSON.stringify(cfg.headers, null, 2) : String(cfg.headers || '{}')} onChange={(value) => onChange('headers', value)} />
         <LongField label="Body" value={String(cfg.body || '{}')} onChange={(value) => onChange('body', value)} />
@@ -3030,12 +3297,78 @@ function ConfigFields({
     );
   }
   if (node.type === 'obs') {
+    const discovery = selectedObsConnection?.discoveryCache || {};
+    const scenes = discovery.scenes || [];
+    const sources = discovery.sources || [];
+    const filters = discovery.filters || [];
+    const actions = [
+      { value: 'scene.switch', label: '장면 전환' },
+      { value: 'source.visibility', label: '소스 표시/숨김' },
+      { value: 'filter.enabled', label: '필터 켜기/끄기' },
+      { value: 'record.start', label: '녹화 시작' },
+      { value: 'record.stop', label: '녹화 중지' },
+      { value: 'stream.start', label: '방송 시작' },
+      { value: 'stream.stop', label: '방송 종료' },
+      { value: 'replay.save', label: '리플레이 저장' },
+    ];
+    const sceneOptions = scenes.map((scene) => ({ value: scene.name, label: `${scene.name}${scene.current ? ' · 현재' : ''}` }));
+    const sourceOptions = sources
+      .filter((source) => !cfg.sceneName || source.sceneName === cfg.sceneName || !source.sceneName)
+      .map((source) => ({ value: source.name, label: `${source.name}${source.sceneName ? ` · ${source.sceneName}` : ''}` }));
+    const filterOptions = filters
+      .filter((filter) => !cfg.sourceName || filter.sourceName === cfg.sourceName || !filter.sourceName)
+      .map((filter) => ({ value: filter.name, label: `${filter.name}${filter.sourceName ? ` · ${filter.sourceName}` : ''}` }));
     return (
       <div className="grid gap-3">
-        <Field label="연결 ID" value={String(cfg.connectionId || '')} onChange={(value) => onChange('connectionId', value)} />
-        <Field label="동작" value={String(cfg.action || 'scene.switch')} onChange={(value) => onChange('action', value)} />
-        <Field label="장면 이름" value={String(cfg.sceneName || '')} onChange={(value) => onChange('sceneName', value)} />
-        <Field label="소스/필터 이름" value={String(cfg.sourceName || cfg.filterName || '')} onChange={(value) => onChange('sourceName', value)} />
+        <AutomationDiscoveryHeader
+          title="OBS Studio"
+          connection={selectedObsConnection}
+          hasOnlineLocalAgent={hasOnlineLocalAgent}
+          busy={automationBusy === 'obs.discover'}
+          onDiscover={() => onDiscoverAutomation?.('obs')}
+        />
+        {obsConnections.length ? (
+          <SelectField
+            label="연결할 OBS"
+            value={String(cfg.connectionId || selectedObsConnection?.id || '')}
+            onChange={(value) => onChange('connectionId', value)}
+            placeholder="OBS 연결 선택"
+            options={obsConnections.map((connection) => ({ value: connection.id, label: connection.name || connection.endpoint || connection.id }))}
+          />
+        ) : (
+          <Field label="연결 ID" value={String(cfg.connectionId || '')} onChange={(value) => onChange('connectionId', value)} />
+        )}
+        <SelectField
+          label="동작"
+          value={String(cfg.action || 'scene.switch')}
+          onChange={(value) => onChange('action', value)}
+          options={actions}
+        />
+        <SelectField
+          label="장면 이름"
+          value={String(cfg.sceneName || '')}
+          onChange={(value) => onChange('sceneName', value)}
+          placeholder={sceneOptions.length ? '장면 선택' : 'OBS 목록을 먼저 불러오세요'}
+          options={sceneOptions}
+        />
+        <SelectField
+          label="소스 이름"
+          value={String(cfg.sourceName || '')}
+          onChange={(value) => onChange('sourceName', value)}
+          placeholder={sourceOptions.length ? '소스 선택' : '소스가 필요한 동작에서 선택'}
+          options={sourceOptions}
+        />
+        <SelectField
+          label="필터 이름"
+          value={String(cfg.filterName || '')}
+          onChange={(value) => onChange('filterName', value)}
+          placeholder={filterOptions.length ? '필터 선택' : '필터가 필요한 동작에서 선택'}
+          options={filterOptions}
+        />
+        <label className="flex items-center gap-2 rounded-[var(--radius-control)] border bg-background/70 p-3 text-sm font-semibold">
+          <input type="checkbox" checked={cfg.enabled !== false} onChange={(event) => onChange('enabled', event.target.checked)} />
+          켜기/표시 상태로 실행
+        </label>
       </div>
     );
   }

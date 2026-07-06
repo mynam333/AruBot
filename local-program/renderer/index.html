@@ -37,6 +37,10 @@
             <span>VTube Studio</span>
             <small>모델 핫키와 표정</small>
           </button>
+          <button class="nav-item" type="button" data-page="obs">
+            <span>OBS</span>
+            <small>장면과 소스 제어</small>
+          </button>
           <button class="nav-item" type="button" data-page="sound">
             <span>FX 에셋</span>
             <small>이미지 · 영상 · 사운드</small>
@@ -312,6 +316,55 @@
               <div><strong>승인</strong><span>첫 연결 시 VTube Studio 화면에서 한 번 허용</span></div>
             </div>
           </aside>
+          </div>
+        </section>
+
+        <section class="page" id="page-obs" data-page="obs">
+          <div class="page-grid tool-grid">
+            <article class="panel feature-panel">
+              <div class="panel-head compact">
+                <div>
+                  <span class="chip sky">OBS</span>
+                  <h2>장면과 소스 목록</h2>
+                </div>
+                <button class="button secondary" id="discoverObsButton">목록 동기화</button>
+              </div>
+              <div class="form-grid">
+                <label>
+                  WebSocket 주소
+                  <input id="obsEndpoint" placeholder="ws://localhost:4455" />
+                </label>
+                <label>
+                  비밀번호
+                  <input id="obsPassword" type="password" placeholder="OBS WebSocket 비밀번호" />
+                </label>
+              </div>
+              <div class="mini-list">
+                <div><strong id="obsSceneCount">0</strong><span>장면</span></div>
+                <div><strong id="obsSourceCount">0</strong><span>소스</span></div>
+                <div><strong id="obsFilterCount">0</strong><span>필터</span></div>
+              </div>
+            </article>
+            <aside class="panel support-panel">
+              <span class="chip mint">테스트 실행</span>
+              <h2>블루프린트와 같은 방식으로 OBS를 움직입니다.</h2>
+              <div class="remote-section">
+                <h3>장면 전환</h3>
+                <select id="obsSceneSelect"></select>
+                <div class="actions">
+                  <button class="button primary" id="obsSwitchSceneButton">장면 전환</button>
+                </div>
+              </div>
+              <div class="remote-section">
+                <h3>소스 표시</h3>
+                <select id="obsSourceSelect"></select>
+                <div class="actions">
+                  <button class="button secondary" id="obsShowSourceButton">표시</button>
+                  <button class="button ghost" id="obsHideSourceButton">숨김</button>
+                </div>
+              </div>
+              <p class="hint">OBS WebSocket 서버를 켜고, 필요한 경우 비밀번호를 입력하세요. 비밀번호는 이 PC에만 저장됩니다.</p>
+            </aside>
           </div>
         </section>
 

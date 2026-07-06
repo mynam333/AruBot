@@ -5,10 +5,15 @@ import { getBrowserApiBase } from '@/shared/api/http';
 
 type FxPayload = {
   id?: string;
-  kind?: 'image' | 'sticker' | 'video' | 'sound';
+  kind?: 'image' | 'sticker' | 'video' | 'sound' | 'text' | 'tts';
   assetUrl?: string;
   youtubeUrl?: string;
   assetName?: string;
+  text?: string;
+  overlayId?: string;
+  animation?: string;
+  animationKey?: string;
+  cssCode?: string;
   x?: number;
   y?: number;
   width?: number;
@@ -20,6 +25,9 @@ type FxPayload = {
   chromaKeyColor?: string;
   chromaKeyTolerance?: number;
   volume?: number;
+  voice?: string;
+  rate?: number;
+  pitch?: number;
 };
 
 type FxItem = FxPayload & {
@@ -140,6 +148,13 @@ function ChromaCanvas({ item, video }: { item: FxItem; video?: boolean }) {
 }
 
 function FxVisual({ item }: { item: FxItem }) {
+  if (item.kind === 'text') {
+    return (
+      <div className="flex h-full w-full items-center justify-center whitespace-pre-wrap break-keep rounded-[min(2vw,1.4rem)] bg-black/46 px-[4%] py-[3%] text-center text-[clamp(1.4rem,4vw,4.5rem)] font-extrabold leading-tight text-white shadow-[0_1.2rem_3rem_rgba(0,0,0,0.28)] [text-shadow:0_0.08em_0.16em_rgba(0,0,0,0.45)]">
+        {item.text}
+      </div>
+    );
+  }
   const embed = youtubeEmbedUrl(item.youtubeUrl);
   if (item.kind === 'video' && embed) {
     return <iframe title={item.assetName || 'FX video'} src={embed} allow="autoplay; encrypted-media" className="h-full w-full border-0" />;
@@ -152,6 +167,20 @@ function FxVisual({ item }: { item: FxItem }) {
 
 export function FxOverlay({ token }: { token: string }) {
   const [items, setItems] = React.useState<FxItem[]>([]);
+
+  const speak = React.useCallback((payload: FxPayload) => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    const text = String(payload.text || '').trim();
+    if (!text) return;
+    const utterance = new SpeechSynthesisUtterance(text);
+    const voices = window.speechSynthesis.getVoices();
+    const voiceName = String(payload.voice || '').trim();
+    const voice = voices.find((item) => item.name === voiceName);
+    if (voice) utterance.voice = voice;
+    utterance.rate = Math.max(0.5, Math.min(2, Number(payload.rate || 1)));
+    utterance.pitch = Math.max(0.5, Math.min(2, Number(payload.pitch || 1)));
+    window.speechSynthesis.speak(utterance);
+  }, []);
 
   React.useEffect(() => {
     document.documentElement.style.background = 'transparent';
@@ -172,9 +201,28 @@ export function FxOverlay({ token }: { token: string }) {
       ws = new WebSocket(getWsUrl(token));
       ws.onmessage = (event) => {
         const message = JSON.parse(String(event.data || '{}'));
-        if (message?.type !== 'fx:play') return;
         const payload = message.payload as FxPayload;
+        if (message?.type === 'fx:update') {
+          const targetId = payload.overlayId || payload.id;
+          if (!targetId) return;
+          setItems((current) => current.map((item) => item.id === targetId ? { ...item, ...payload, id: item.id } : item));
+          return;
+        }
+        if (message?.type === 'fx:hide') {
+          const targetId = payload.overlayId || payload.id;
+          if (!targetId) return;
+          setItems((current) => current.map((item) => item.id === targetId ? { ...item, exiting: true } : item));
+          window.setTimeout(() => {
+            setItems((current) => current.filter((item) => item.id !== targetId));
+          }, 700);
+          return;
+        }
+        if (message?.type !== 'fx:play') return;
         const id = payload.id || `fx_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+        if (payload.kind === 'tts') {
+          speak(payload);
+          return;
+        }
         if (payload.kind === 'sound') {
           if (payload.assetUrl) {
             const audio = new Audio(payload.assetUrl);
@@ -206,7 +254,7 @@ export function FxOverlay({ token }: { token: string }) {
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
       try { ws?.close(); } catch { /* ignore */ }
     };
-  }, [token]);
+    }, [speak, token]);
 
   return (
     <main className="fixed inset-0 overflow-hidden bg-transparent">
@@ -219,16 +267,17 @@ export function FxOverlay({ token }: { token: string }) {
       {items.map((item) => (
         <div
           key={item.id}
-          className="absolute"
+          className={`absolute ${String(item.animationKey || '').replace(/[^\w:-]+/g, ' ').trim()}`}
           style={{
             left: `${Number(item.x ?? 50)}%`,
             top: `${Number(item.y ?? 50)}%`,
             width: `${Number(item.width ?? 30)}vw`,
             height: `${Number(item.height ?? 30)}vh`,
             transform: 'translate(-50%, -50%)',
-            animation: item.exiting ? (item.exitCss || 'fx-fade-out 280ms ease-in both') : (item.enterCss || 'fx-pop-in 360ms ease-out both'),
+            animation: item.exiting ? (item.exitCss || undefined) : (item.animation || item.enterCss || undefined),
           }}
         >
+          {item.cssCode ? <style>{item.cssCode}</style> : null}
           <FxVisual item={item} />
         </div>
       ))}

@@ -6,6 +6,10 @@ const fields = {
   titsEndpoint: $('#titsEndpoint'),
   vtubeEndpoint: $('#vtubeEndpoint'),
   vtubeHotkeySelect: $('#vtubeHotkeySelect'),
+  obsEndpoint: $('#obsEndpoint'),
+  obsPassword: $('#obsPassword'),
+  obsSceneSelect: $('#obsSceneSelect'),
+  obsSourceSelect: $('#obsSourceSelect'),
   remoteCommandSelect: $('#remoteCommandSelect'),
   remoteCommandName: $('#remoteCommandName'),
   remoteCommandKeyword: $('#remoteCommandKeyword'),
@@ -21,7 +25,7 @@ const fields = {
 const pageMeta = {
   connect: {
     title: '방송 도구를 안전하게 연결하세요.',
-    description: '아루봇과 실시간으로 연결해 방송 PC의 T.I.T.S., VTube Studio, TTS, 사운드 효과를 바로 실행합니다.',
+    description: '아루봇과 실시간으로 연결해 방송 PC의 OBS, T.I.T.S., VTube Studio, TTS, 사운드 효과를 바로 실행합니다.',
   },
   remote: {
     title: '방송 중 필요한 버튼을 가까이에 두세요.',
@@ -38,6 +42,10 @@ const pageMeta = {
   vtube: {
     title: 'VTube Studio 모델 반응을 방송 흐름에 맞추세요.',
     description: '표정, 모델 전환, 아이템 핫키를 불러와 채팅과 후원 순간에 자연스럽게 실행합니다.',
+  },
+  obs: {
+    title: 'OBS 장면과 소스를 아루봇 액션으로 움직이세요.',
+    description: '장면, 소스, 필터 목록을 불러와 블루프린트에서 바로 선택할 수 있게 동기화합니다.',
   },
   sound: {
     title: 'FX 에셋은 방송 PC에서 관리하세요.',
@@ -57,6 +65,7 @@ let latestState = null;
 let latestUpdate = null;
 let remoteState = { rules: [], rouletteDefs: [], videoQueue: [], drawingQueue: [] };
 let vtubeDiscovery = { models: [], hotkeys: [] };
+let obsDiscovery = { scenes: [], sources: [], filters: [] };
 const localTaskLogs = [];
 
 function setActivePage(page) {
@@ -185,6 +194,8 @@ function renderState(state) {
   fields.autoStart.checked = !!cfg.autoStart;
   fields.titsEndpoint.value = cfg.titsEndpoint || 'ws://localhost:42069';
   fields.vtubeEndpoint.value = cfg.vtubeEndpoint || 'ws://localhost:8001';
+  fields.obsEndpoint.value = cfg.obsEndpoint || 'ws://localhost:4455';
+  if (!fields.obsPassword.dataset.dirty) fields.obsPassword.placeholder = cfg.hasObsPassword ? '저장된 비밀번호 사용' : '비밀번호 없음';
 
   renderLogs(state.logs);
 }
@@ -321,6 +332,8 @@ function collectConfig() {
     autoStart: fields.autoStart.checked,
     titsEndpoint: fields.titsEndpoint.value,
     vtubeEndpoint: fields.vtubeEndpoint.value,
+    obsEndpoint: fields.obsEndpoint.value,
+    obsPassword: fields.obsPassword.value || undefined,
   };
 }
 
@@ -336,6 +349,23 @@ function renderVtubeDiscovery(discovery) {
     : '<option value="">핫키 없음</option>';
 }
 
+function renderObsDiscovery(discovery) {
+  obsDiscovery = {
+    scenes: Array.isArray(discovery?.scenes) ? discovery.scenes : [],
+    sources: Array.isArray(discovery?.sources) ? discovery.sources : [],
+    filters: Array.isArray(discovery?.filters) ? discovery.filters : [],
+  };
+  $('#obsSceneCount').textContent = String(obsDiscovery.scenes.length);
+  $('#obsSourceCount').textContent = String(obsDiscovery.sources.length);
+  $('#obsFilterCount').textContent = String(obsDiscovery.filters.length);
+  fields.obsSceneSelect.innerHTML = obsDiscovery.scenes.length
+    ? obsDiscovery.scenes.map((scene) => `<option value="${escapeHtml(scene.name || '')}">${escapeHtml(`${scene.name || '장면'}${scene.current ? ' · 현재' : ''}`)}</option>`).join('')
+    : '<option value="">장면 없음</option>';
+  fields.obsSourceSelect.innerHTML = obsDiscovery.sources.length
+    ? obsDiscovery.sources.map((source) => `<option value="${escapeHtml(source.name || '')}" data-scene="${escapeHtml(source.sceneName || '')}">${escapeHtml(`${source.name || '소스'}${source.sceneName ? ` · ${source.sceneName}` : ''}`)}</option>`).join('')
+    : '<option value="">소스 없음</option>';
+}
+
 async function run(action) {
   try {
     await action();
@@ -346,6 +376,9 @@ async function run(action) {
 
 fields.token.addEventListener('input', () => {
   fields.token.dataset.dirty = '1';
+});
+fields.obsPassword.addEventListener('input', () => {
+  fields.obsPassword.dataset.dirty = '1';
 });
 
 document.querySelectorAll('.nav-item').forEach((button) => {
@@ -401,6 +434,54 @@ $('#triggerVtubeHotkeyButton').addEventListener('click', () => run(async () => {
   await window.aruLocal.saveConfig(collectConfig());
   await window.aruLocal.triggerVtubeHotkey({ hotkeyId });
   pushLocalLog('success', 'VTube Studio 핫키를 실행했습니다.');
+}));
+
+$('#discoverObsButton').addEventListener('click', () => run(async () => {
+  await window.aruLocal.saveConfig(collectConfig());
+  const discovery = await window.aruLocal.discoverObs();
+  fields.obsPassword.value = '';
+  fields.obsPassword.dataset.dirty = '';
+  renderObsDiscovery(discovery);
+}));
+
+$('#obsSwitchSceneButton').addEventListener('click', () => run(async () => {
+  const sceneName = fields.obsSceneSelect.value;
+  if (!sceneName) return;
+  await window.aruLocal.saveConfig(collectConfig());
+  fields.obsPassword.value = '';
+  fields.obsPassword.dataset.dirty = '';
+  await window.aruLocal.runObsAction({ action: 'scene.switch', sceneName });
+  pushLocalLog('success', `OBS 장면 전환: ${sceneName}`);
+}));
+
+function selectedObsSourcePayload(enabled) {
+  const option = fields.obsSourceSelect.selectedOptions?.[0];
+  return {
+    action: 'source.visibility',
+    sourceName: fields.obsSourceSelect.value,
+    sceneName: option?.dataset?.scene || fields.obsSceneSelect.value,
+    enabled,
+  };
+}
+
+$('#obsShowSourceButton').addEventListener('click', () => run(async () => {
+  const payload = selectedObsSourcePayload(true);
+  if (!payload.sourceName || !payload.sceneName) return;
+  await window.aruLocal.saveConfig(collectConfig());
+  fields.obsPassword.value = '';
+  fields.obsPassword.dataset.dirty = '';
+  await window.aruLocal.runObsAction(payload);
+  pushLocalLog('success', `OBS 소스 표시: ${payload.sourceName}`);
+}));
+
+$('#obsHideSourceButton').addEventListener('click', () => run(async () => {
+  const payload = selectedObsSourcePayload(false);
+  if (!payload.sourceName || !payload.sceneName) return;
+  await window.aruLocal.saveConfig(collectConfig());
+  fields.obsPassword.value = '';
+  fields.obsPassword.dataset.dirty = '';
+  await window.aruLocal.runObsAction(payload);
+  pushLocalLog('success', `OBS 소스 숨김: ${payload.sourceName}`);
 }));
 
 $('#chooseSoundFolderButton').addEventListener('click', () => run(async () => {

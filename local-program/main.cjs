@@ -72,6 +72,8 @@ const DEFAULT_CONFIG = {
   titsEndpoint: 'ws://localhost:42069',
   vtubeEndpoint: 'ws://localhost:8001',
   vtubeAuthToken: '',
+  obsEndpoint: 'ws://localhost:4455',
+  obsPassword: '',
   fxFolder: '',
   soundFolder: '',
   autoStart: false,
@@ -394,6 +396,7 @@ function loadConfig() {
     dashboardUrl,
     token: normalizeLocalProgramToken(decryptText(vault.token)),
     vtubeAuthToken: decryptText(vault.vtubeAuthToken),
+    obsPassword: decryptText(vault.obsPassword),
   };
   config.fxFolder = String(config.fxFolder || config.soundFolder || '').trim();
   return config;
@@ -410,6 +413,8 @@ function saveConfig(next) {
     titsEndpoint: String(next.titsEndpoint ?? config.titsEndpoint ?? '').trim() || DEFAULT_CONFIG.titsEndpoint,
     vtubeEndpoint: String(next.vtubeEndpoint ?? config.vtubeEndpoint ?? '').trim() || DEFAULT_CONFIG.vtubeEndpoint,
     vtubeAuthToken: String(next.vtubeAuthToken ?? config.vtubeAuthToken ?? '').trim(),
+    obsEndpoint: String(next.obsEndpoint ?? config.obsEndpoint ?? '').trim() || DEFAULT_CONFIG.obsEndpoint,
+    obsPassword: String(next.obsPassword ?? config.obsPassword ?? '').trim(),
     fxFolder: String(next.fxFolder ?? next.soundFolder ?? config.fxFolder ?? config.soundFolder ?? '').trim(),
     soundFolder: String(next.soundFolder ?? next.fxFolder ?? config.soundFolder ?? config.fxFolder ?? '').trim(),
     autoStart: !!(next.autoStart ?? config.autoStart),
@@ -417,6 +422,7 @@ function saveConfig(next) {
   writeJson('config.json', {
     titsEndpoint: config.titsEndpoint,
     vtubeEndpoint: config.vtubeEndpoint,
+    obsEndpoint: config.obsEndpoint,
     fxFolder: config.fxFolder,
     soundFolder: config.soundFolder,
     autoStart: config.autoStart,
@@ -424,6 +430,7 @@ function saveConfig(next) {
   writeJson('vault.json', {
     token: encryptText(config.token),
     vtubeAuthToken: encryptText(config.vtubeAuthToken),
+    obsPassword: encryptText(config.obsPassword),
   });
   emitState();
   return getPublicState();
@@ -440,6 +447,8 @@ function getPublicState() {
       vtubeEndpoint: config.vtubeEndpoint,
       vtubeAuthToken: config.vtubeAuthToken ? `${config.vtubeAuthToken.slice(0, 8)}...` : '',
       hasVtubeAuthToken: !!config.vtubeAuthToken,
+      obsEndpoint: config.obsEndpoint,
+      hasObsPassword: !!config.obsPassword,
       fxFolder: config.fxFolder,
       soundFolder: config.soundFolder,
       autoStart: config.autoStart,
@@ -1084,6 +1093,203 @@ async function discoverVtubeStudio(options = {}) {
   }
 }
 
+function getObsEndpoint(endpoint = config.obsEndpoint) {
+  const raw = String(endpoint || DEFAULT_CONFIG.obsEndpoint).trim();
+  return raw || DEFAULT_CONFIG.obsEndpoint;
+}
+
+function makeObsAuth(password, salt, challenge) {
+  const secret = crypto.createHash('sha256').update(`${password}${salt}`).digest('base64');
+  return crypto.createHash('sha256').update(`${secret}${challenge}`).digest('base64');
+}
+
+async function openObsSocket(options = {}) {
+  const endpoint = getObsEndpoint(options.endpoint);
+  const password = String(options.password ?? config.obsPassword ?? '').trim();
+  const ws = await openWs(endpoint, Math.max(1500, Math.min(30000, Number(options.timeoutMs || 7000))), 'OBS 연결 시간이 초과되었습니다.');
+  const hello = await waitObsMessage(ws, (message) => message?.op === 0, options.timeoutMs || 7000);
+  const auth = hello?.d?.authentication;
+  const identify = { op: 1, d: { rpcVersion: 1 } };
+  if (auth?.challenge && auth?.salt) {
+    if (!password) {
+      try { ws.close(); } catch {}
+      throw new Error('OBS WebSocket 비밀번호가 필요합니다.');
+    }
+    identify.d.authentication = makeObsAuth(password, auth.salt, auth.challenge);
+  }
+  ws.send(JSON.stringify(identify));
+  const identified = await waitObsMessage(ws, (message) => message?.op === 2, options.timeoutMs || 7000);
+  return { ws, endpoint, negotiatedRpcVersion: identified?.d?.negotiatedRpcVersion || 1 };
+}
+
+function openWs(endpoint, timeoutMs, timeoutMessage) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(endpoint);
+    const timer = setTimeout(() => {
+      try { ws.close(); } catch {}
+      reject(new Error(timeoutMessage || 'WebSocket 연결 시간이 초과되었습니다.'));
+    }, timeoutMs);
+    ws.once('open', () => {
+      clearTimeout(timer);
+      resolve(ws);
+    });
+    ws.once('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+}
+
+function waitObsMessage(ws, predicate, timeoutMs = 7000) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error('OBS 응답 시간이 초과되었습니다.'));
+    }, Math.max(1500, Math.min(30000, Number(timeoutMs || 7000))));
+    const cleanup = () => {
+      clearTimeout(timer);
+      ws.off('message', onMessage);
+      ws.off('error', onError);
+    };
+    const onMessage = (raw) => {
+      try {
+        const message = JSON.parse(String(raw));
+        if (!predicate(message)) return;
+        cleanup();
+        resolve(message);
+      } catch (error) {
+        cleanup();
+        reject(error);
+      }
+    };
+    const onError = (error) => {
+      cleanup();
+      reject(error);
+    };
+    ws.on('message', onMessage);
+    ws.once('error', onError);
+  });
+}
+
+async function sendObsRequest(ws, requestType, requestData = {}, timeoutMs = 7000) {
+  const requestId = `arubot_obs_${Date.now().toString(36)}_${crypto.randomBytes(4).toString('hex')}`;
+  ws.send(JSON.stringify({ op: 6, d: { requestType, requestId, requestData } }));
+  const message = await waitObsMessage(ws, (candidate) => candidate?.op === 7 && candidate?.d?.requestId === requestId, timeoutMs);
+  const status = message?.d?.requestStatus || {};
+  if (status.result === false) throw new Error(status.comment || `${requestType} 요청이 실패했습니다.`);
+  return message?.d?.responseData || {};
+}
+
+async function discoverObs(options = {}) {
+  const { ws, endpoint } = await openObsSocket(options);
+  try {
+    const sceneData = await sendObsRequest(ws, 'GetSceneList', {}, options.timeoutMs);
+    const inputData = await sendObsRequest(ws, 'GetInputList', {}, options.timeoutMs).catch(() => ({ inputs: [] }));
+    const scenes = (sceneData.scenes || []).map((scene) => ({
+      id: String(scene.sceneUuid || scene.sceneName || ''),
+      name: String(scene.sceneName || ''),
+      current: scene.sceneName === sceneData.currentProgramSceneName,
+    })).filter((scene) => scene.name);
+    const sceneItemRows = await Promise.all(scenes.slice(0, 80).map(async (scene) => {
+      const response = await sendObsRequest(ws, 'GetSceneItemList', { sceneName: scene.name }, options.timeoutMs).catch(() => ({ sceneItems: [] }));
+      return (response.sceneItems || []).map((item) => ({
+        id: String(item.sceneItemId || item.sourceUuid || item.sourceName || ''),
+        name: String(item.sourceName || ''),
+        sceneName: scene.name,
+        inputKind: String(item.inputKind || item.sourceType || ''),
+        enabled: item.sceneItemEnabled !== false,
+      })).filter((item) => item.name);
+    }));
+    const sources = [
+      ...sceneItemRows.flat(),
+      ...(inputData.inputs || []).map((input) => ({
+        id: String(input.inputUuid || input.inputName || ''),
+        name: String(input.inputName || ''),
+        sceneName: '',
+        inputKind: String(input.inputKind || ''),
+        enabled: true,
+      })),
+    ].filter((source, index, array) => source.name && array.findIndex((item) => item.name === source.name && item.sceneName === source.sceneName) === index);
+    const filterRows = await Promise.all(sources.slice(0, 120).map(async (source) => {
+      const response = await sendObsRequest(ws, 'GetSourceFilterList', { sourceName: source.name }, options.timeoutMs).catch(() => ({ filters: [] }));
+      return (response.filters || []).map((filter) => ({
+        id: String(filter.filterUuid || filter.filterName || ''),
+        name: String(filter.filterName || ''),
+        sourceName: source.name,
+        kind: String(filter.filterKind || ''),
+        enabled: filter.filterEnabled !== false,
+      })).filter((filter) => filter.name);
+    }));
+    return {
+      source: 'obs',
+      endpoint,
+      scenes,
+      sources,
+      filters: filterRows.flat(),
+      requests: [
+        { id: 'scene.switch', name: '장면 전환', group: 'scene' },
+        { id: 'source.visibility', name: '소스 표시/숨김', group: 'source' },
+        { id: 'filter.enabled', name: '필터 켜기/끄기', group: 'filter' },
+        { id: 'record.start', name: '녹화 시작', group: 'record' },
+        { id: 'record.stop', name: '녹화 중지', group: 'record' },
+        { id: 'stream.start', name: '방송 시작', group: 'stream' },
+        { id: 'stream.stop', name: '방송 종료', group: 'stream' },
+        { id: 'replay.save', name: '리플레이 저장', group: 'replay' },
+      ],
+      fetchedAt: new Date().toISOString(),
+    };
+  } finally {
+    try { ws.close(); } catch {}
+  }
+}
+
+async function runObsAction(payload = {}) {
+  const { ws } = await openObsSocket({ endpoint: payload.endpoint, timeoutMs: payload.timeoutMs });
+  try {
+    const action = String(payload.action || 'scene.switch');
+    if (action === 'scene.switch') {
+      const sceneName = String(payload.sceneName || '').trim();
+      if (!sceneName) throw new Error('전환할 OBS 장면이 없습니다.');
+      return await sendObsRequest(ws, 'SetCurrentProgramScene', { sceneName }, payload.timeoutMs);
+    }
+    if (action === 'source.visibility') {
+      const sceneName = String(payload.sceneName || '').trim();
+      const sourceName = String(payload.sourceName || '').trim();
+      if (!sceneName || !sourceName) throw new Error('OBS 장면과 소스를 선택해 주세요.');
+      const list = await sendObsRequest(ws, 'GetSceneItemList', { sceneName }, payload.timeoutMs);
+      const item = (list.sceneItems || []).find((entry) => String(entry.sourceName || '') === sourceName);
+      if (!item) throw new Error('선택한 OBS 소스를 장면에서 찾지 못했습니다.');
+      return await sendObsRequest(ws, 'SetSceneItemEnabled', {
+        sceneName,
+        sceneItemId: Number(item.sceneItemId),
+        sceneItemEnabled: payload.enabled !== false,
+      }, payload.timeoutMs);
+    }
+    if (action === 'filter.enabled') {
+      const sourceName = String(payload.sourceName || '').trim();
+      const filterName = String(payload.filterName || '').trim();
+      if (!sourceName || !filterName) throw new Error('OBS 소스와 필터를 선택해 주세요.');
+      return await sendObsRequest(ws, 'SetSourceFilterEnabled', {
+        sourceName,
+        filterName,
+        filterEnabled: payload.enabled !== false,
+      }, payload.timeoutMs);
+    }
+    const requestMap = {
+      'record.start': 'StartRecord',
+      'record.stop': 'StopRecord',
+      'stream.start': 'StartStream',
+      'stream.stop': 'StopStream',
+      'replay.save': 'SaveReplayBuffer',
+    };
+    const requestType = requestMap[action];
+    if (!requestType) throw new Error(`지원하지 않는 OBS 동작입니다: ${action}`);
+    return await sendObsRequest(ws, requestType, {}, payload.timeoutMs);
+  } finally {
+    try { ws.close(); } catch {}
+  }
+}
+
 const FX_EXTENSIONS = {
   image: new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.avif']),
   video: new Set(['.mp4', '.webm', '.mov', '.m4v']),
@@ -1200,7 +1406,7 @@ function getFxAssetUrl(assetId) {
 }
 
 async function syncLocalDiscovery(type, discovery, options = {}) {
-  const normalizedType = type === 'vtube_studio' ? 'vtube_studio' : type === 'tits' ? 'tits' : type === 'fx_assets' ? 'fx_assets' : '';
+  const normalizedType = type === 'obs' ? 'obs' : type === 'vtube_studio' ? 'vtube_studio' : type === 'tits' ? 'tits' : type === 'fx_assets' ? 'fx_assets' : '';
   if (!normalizedType || !discovery || typeof discovery !== 'object') return null;
   if (!normalizeLocalProgramToken(config.token)) return null;
   try {
@@ -1208,8 +1414,8 @@ async function syncLocalDiscovery(type, discovery, options = {}) {
       method: 'POST',
       body: JSON.stringify({
         type: normalizedType,
-        name: normalizedType === 'vtube_studio' ? 'VTube Studio' : normalizedType === 'fx_assets' ? 'FX 로컬 에셋' : 'T.I.T.S.',
-        endpoint: discovery.endpoint || (normalizedType === 'vtube_studio' ? config.vtubeEndpoint : normalizedType === 'tits' ? config.titsEndpoint : 'local-fx-assets'),
+        name: normalizedType === 'obs' ? 'OBS Studio' : normalizedType === 'vtube_studio' ? 'VTube Studio' : normalizedType === 'fx_assets' ? 'FX 로컬 에셋' : 'T.I.T.S.',
+        endpoint: discovery.endpoint || (normalizedType === 'obs' ? config.obsEndpoint : normalizedType === 'vtube_studio' ? config.vtubeEndpoint : normalizedType === 'tits' ? config.titsEndpoint : 'local-fx-assets'),
         discoveryCache: discovery,
       }),
     });
@@ -1231,12 +1437,21 @@ async function discoverAndSyncVtubeStudio(options = {}) {
   return discovery;
 }
 
+async function discoverAndSyncObs(options = {}) {
+  const discovery = await discoverObs(options);
+  await syncLocalDiscovery('obs', discovery, options);
+  return discovery;
+}
+
 async function runStartupDiscoverySync() {
   if (startupDiscoverySyncRunning || !normalizeLocalProgramToken(config.token)) return;
   startupDiscoverySyncRunning = true;
   try {
-    addLog('info', 'T.I.T.S.와 VTube Studio 목록 자동 동기화를 시작합니다.');
+    addLog('info', 'OBS, T.I.T.S., VTube Studio 목록 자동 동기화를 시작합니다.');
     const tasks = [
+      discoverAndSyncObs({ silent: true, timeoutMs: 7000 })
+        .then((discovery) => addLog('success', `OBS 목록 자동 동기화 완료: 장면 ${discovery.scenes.length}개, 소스 ${discovery.sources.length}개`))
+        .catch((error) => addLog('info', 'OBS 자동 동기화를 건너뜁니다.', error.message || String(error))),
       discoverAndSyncTits({ silent: true })
         .then((discovery) => addLog('success', `T.I.T.S. 목록 자동 동기화 완료: 아이템 ${discovery.items.length}개, 트리거 ${discovery.triggers.length}개`))
         .catch((error) => addLog('info', 'T.I.T.S. 자동 동기화를 건너뜁니다.', error.message || String(error))),
@@ -1303,6 +1518,9 @@ async function processJob(job) {
   if (type === 'vtube.discover') {
     return { discovery: await discoverVtubeStudio({ endpoint: payload.endpoint }) };
   }
+  if (type === 'obs.discover') {
+    return { discovery: await discoverObs({ endpoint: payload.endpoint }) };
+  }
   if (type === 'vtube.hotkey') {
     return await triggerVtubeHotkey(payload);
   }
@@ -1310,6 +1528,9 @@ async function processJob(job) {
     if (payload.hotkeyId || payload.hotkeyID || payload.hotkeyName) return await triggerVtubeHotkey(payload);
     if (payload.parameter || payload.parameterName) return await injectVtubeParameter(payload);
     throw new Error('VTube Studio 노드에 핫키 또는 파라미터 설정이 없습니다.');
+  }
+  if (type === 'blueprint.obs' || type === 'obs.action') {
+    return await runObsAction(payload);
   }
   if (type === 'tts.speak' || type === 'blueprint.tts') {
     const text = String(payload.text || '').trim();
@@ -1464,6 +1685,8 @@ async function claimAndProcessJobs() {
           tits: true,
           vtubeStudio: true,
           vtubeStudioAuthenticated: !!config.vtubeAuthToken,
+          obs: true,
+          obsPasswordConfigured: !!config.obsPassword,
           fxAssets: !!getFxFolder(),
           soundFolder: !!config.soundFolder,
           tts: true,
@@ -1511,6 +1734,8 @@ async function heartbeat() {
         tits: true,
         vtubeStudio: true,
         vtubeStudioAuthenticated: !!config.vtubeAuthToken,
+        obs: true,
+        obsPasswordConfigured: !!config.obsPassword,
         fxAssets: !!getFxFolder(),
         soundFolder: !!config.soundFolder,
         tts: true,
@@ -1584,6 +1809,8 @@ function sendSocketHeartbeat() {
       tits: true,
       vtubeStudio: true,
       vtubeStudioAuthenticated: !!config.vtubeAuthToken,
+      obs: true,
+      obsPasswordConfigured: !!config.obsPassword,
       fxAssets: !!getFxFolder(),
       soundFolder: !!config.soundFolder,
       tts: true,
@@ -1747,6 +1974,8 @@ async function runLocalDiagnostics() {
             tits: true,
             vtubeStudio: true,
             vtubeStudioAuthenticated: !!config.vtubeAuthToken,
+            obs: true,
+            obsPasswordConfigured: !!config.obsPassword,
             fxAssets: !!getFxFolder(),
             soundFolder: !!config.soundFolder,
             tts: true,
@@ -1850,6 +2079,16 @@ ipcMain.handle('vtube:discover', async () => {
 ipcMain.handle('vtube:hotkey', async (_event, payload) => {
   const result = await triggerVtubeHotkey(payload || {});
   addLog('success', 'VTube Studio 핫키를 실행했습니다.');
+  return result;
+});
+ipcMain.handle('obs:discover', async () => {
+  const discovery = await discoverAndSyncObs();
+  addLog('success', `OBS 목록 불러오기 완료: 장면 ${discovery.scenes.length}개, 소스 ${discovery.sources.length}개`);
+  return discovery;
+});
+ipcMain.handle('obs:action', async (_event, payload) => {
+  const result = await runObsAction(payload || {});
+  addLog('success', 'OBS 동작을 실행했습니다.');
   return result;
 });
 ipcMain.handle('remote:overview', async () => apiFetch('/api/local-remote/overview'));

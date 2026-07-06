@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('aruLocal', {
   authenticateVtube: () => ipcRenderer.invoke('vtube:authenticate'),
   discoverVtube: () => ipcRenderer.invoke('vtube:discover'),
   triggerVtubeHotkey: (payload) => ipcRenderer.invoke('vtube:hotkey', payload),
+  discoverObs: () => ipcRenderer.invoke('obs:discover'),
+  runObsAction: (payload) => ipcRenderer.invoke('obs:action', payload),
   chooseSoundFolder: () => ipcRenderer.invoke('folder:chooseSound'),
   openSoundFolder: () => ipcRenderer.invoke('folder:openSound'),
   openDashboard: () => ipcRenderer.invoke('dashboard:open'),

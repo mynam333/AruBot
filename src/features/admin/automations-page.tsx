@@ -17,13 +17,11 @@ import {
   RadioTower,
   RefreshCw,
   Save,
-  Send,
   Sparkles,
   Trash2,
   Upload,
   Volume2,
   Wand2,
-  Wifi,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button, LinkButton } from '@/components/ui/button';
@@ -35,7 +33,7 @@ import { cn } from '@/shared/lib/utils';
 
 type ExecutionMode = 'oracle_direct' | 'local_program';
 type SoundStorageMode = 'server_hosted' | 'local_program';
-type AutomationTab = 'local' | 'browser' | 'tits' | 'vtube' | 'voice' | 'network' | 'control' | 'connections';
+type AutomationTab = 'local' | 'obs' | 'tits' | 'vtube' | 'voice' | 'network' | 'control' | 'connections';
 
 type AutomationSettings = {
   integrationMode?: ExecutionMode;
@@ -65,6 +63,9 @@ type AutomationConnection = {
     models?: Array<{ id: string; name: string; loaded?: boolean }>;
     expressions?: Array<{ file?: string; name: string; active?: boolean }>;
     currentModel?: { loaded?: boolean; id?: string; name?: string };
+    scenes?: Array<{ id?: string; name: string; current?: boolean }>;
+    sources?: Array<{ id?: string; name: string; sceneName?: string; inputKind?: string; enabled?: boolean }>;
+    filters?: Array<{ id?: string; name: string; sourceName?: string; kind?: string; enabled?: boolean }>;
     fetchedAt?: string;
   };
   lastStatus?: string | null;
@@ -105,7 +106,7 @@ type ConnectionDraft = {
 
 const tabs: Array<{ id: AutomationTab; label: string; icon: ComponentType<{ className?: string }> }> = [
   { id: 'local', label: '로컬 프로그램', icon: Cable },
-  { id: 'browser', label: '브라우저 브리지', icon: Wifi },
+  { id: 'obs', label: 'OBS', icon: RadioTower },
   { id: 'tits', label: 'T.I.T.S.', icon: Sparkles },
   { id: 'vtube', label: 'VTube Studio', icon: Bot },
   { id: 'voice', label: '음성/사운드', icon: Volume2 },
@@ -116,6 +117,7 @@ const tabs: Array<{ id: AutomationTab; label: string; icon: ComponentType<{ clas
 
 function connectionTypeLabel(type: string) {
   const labels: Record<string, string> = {
+    obs: 'OBS',
     stream_deck_touch_portal: 'Stream Deck / Touch Portal',
     tits: 'T.I.T.S.',
     vtube_studio: 'VTube Studio',
@@ -287,7 +289,6 @@ function SegmentedButton({
 
 export function AutomationsPage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const browserBridgeRef = useRef<WebSocket | null>(null);
   const [activeTab, setActiveTab] = useState<AutomationTab>('local');
   const [overview, setOverview] = useState<Overview | null>(null);
   const [blueprints, setBlueprints] = useState<Blueprint[]>([]);
@@ -306,6 +307,11 @@ export function AutomationsPage() {
   const [titsThrowAmount, setTitsThrowAmount] = useState('1');
   const [vtubeEndpoint, setVtubeEndpoint] = useState('ws://localhost:8001');
   const [selectedVtubeHotkey, setSelectedVtubeHotkey] = useState('');
+  const [obsEndpoint, setObsEndpoint] = useState('ws://localhost:4455');
+  const [selectedObsScene, setSelectedObsScene] = useState('');
+  const [selectedObsSource, setSelectedObsSource] = useState('');
+  const [selectedObsFilter, setSelectedObsFilter] = useState('');
+  const [selectedObsAction, setSelectedObsAction] = useState('scene.switch');
   const [controlLabel, setControlLabel] = useState('방송 액션 실행');
   const [controlUrl, setControlUrl] = useState('');
   const [fxViewerUrl, setFxViewerUrl] = useState('');
@@ -314,9 +320,6 @@ export function AutomationsPage() {
   const [localProgramToken, setLocalProgramToken] = useState('');
   const [connectionDrafts, setConnectionDrafts] = useState<Record<string, ConnectionDraft>>({});
   const [busyAction, setBusyAction] = useState<string | null>(null);
-  const [browserBridgeUrl, setBrowserBridgeUrl] = useState('ws://127.0.0.1:42069/websocket');
-  const [browserBridgeMessage, setBrowserBridgeMessage] = useState('{"apiName":"TITSPublicApi","apiVersion":"1.0","requestID":"arubot-browser-test","messageType":"TITSTriggerListRequest","data":{}}');
-  const [browserBridgeStatus, setBrowserBridgeStatus] = useState('연결 대기');
   const [httpMethod, setHttpMethod] = useState('POST');
   const [httpUrl, setHttpUrl] = useState('http://127.0.0.1:8080/action');
   const [httpHeaders, setHttpHeaders] = useState('{}');
@@ -331,6 +334,7 @@ export function AutomationsPage() {
   const connections = overview?.connections || [];
   const titsConnection = connections.find((item) => item.type === 'tits');
   const vtubeConnection = connections.find((item) => item.type === 'vtube_studio');
+  const obsConnection = connections.find((item) => item.type === 'obs');
   const storage = overview?.soundStorage;
   const storageRatio = storage ? Math.min(100, Math.round((storage.usedBytes / Math.max(1, storage.quotaBytes)) * 100)) : 0;
   const localAgents = overview?.localAgents || [];
@@ -339,6 +343,9 @@ export function AutomationsPage() {
   const titsTriggers = useMemo(() => titsConnection?.discoveryCache?.triggers || [], [titsConnection]);
   const vtubeModels = useMemo(() => vtubeConnection?.discoveryCache?.models || [], [vtubeConnection]);
   const vtubeHotkeys = useMemo(() => vtubeConnection?.discoveryCache?.hotkeys || [], [vtubeConnection]);
+  const obsScenes = useMemo(() => obsConnection?.discoveryCache?.scenes || [], [obsConnection]);
+  const obsSources = useMemo(() => obsConnection?.discoveryCache?.sources || [], [obsConnection]);
+  const obsFilters = useMemo(() => obsConnection?.discoveryCache?.filters || [], [obsConnection]);
   const publishedBlueprints = useMemo(
     () => blueprints.filter((item) => item.enabled !== false && item.version?.published),
     [blueprints],
@@ -362,6 +369,8 @@ export function AutomationsPage() {
       if (savedTits?.endpoint) setTitsEndpoint(savedTits.endpoint);
       const savedVtube = overviewData.connections.find((item) => item.type === 'vtube_studio');
       if (savedVtube?.endpoint) setVtubeEndpoint(savedVtube.endpoint);
+      const savedObs = overviewData.connections.find((item) => item.type === 'obs');
+      if (savedObs?.endpoint) setObsEndpoint(savedObs.endpoint);
       setConnectionDrafts(Object.fromEntries(overviewData.connections.map((item) => [
         item.id,
         {
@@ -380,9 +389,6 @@ export function AutomationsPage() {
 
   useEffect(() => {
     load();
-    return () => {
-      try { browserBridgeRef.current?.close(); } catch { /* ignore */ }
-    };
   }, [load]);
 
   useEffect(() => {
@@ -393,6 +399,12 @@ export function AutomationsPage() {
   useEffect(() => {
     if (!selectedVtubeHotkey && vtubeHotkeys[0]?.id) setSelectedVtubeHotkey(vtubeHotkeys[0].id);
   }, [selectedVtubeHotkey, vtubeHotkeys]);
+
+  useEffect(() => {
+    if (!selectedObsScene && obsScenes[0]?.name) setSelectedObsScene(obsScenes[0].name);
+    if (!selectedObsSource && obsSources[0]?.name) setSelectedObsSource(obsSources[0].name);
+    if (!selectedObsFilter && obsFilters[0]?.name) setSelectedObsFilter(obsFilters[0].name);
+  }, [obsFilters, obsScenes, obsSources, selectedObsFilter, selectedObsScene, selectedObsSource]);
 
   const saveSettings = async () => {
     setSaving(true);
@@ -435,6 +447,17 @@ export function AutomationsPage() {
       name: 'VTube Studio',
       executionMode: 'local_program',
       endpoint: vtubeEndpoint,
+    });
+    return data.connection;
+  };
+
+  const ensureObsConnection = async () => {
+    if (obsConnection) return obsConnection;
+    const data = await jsonRequest<{ connection: AutomationConnection }>('/api/automations/connections', 'POST', {
+      type: 'obs',
+      name: 'OBS Studio',
+      executionMode: 'local_program',
+      endpoint: obsEndpoint,
     });
     return data.connection;
   };
@@ -529,6 +552,50 @@ export function AutomationsPage() {
       toast.success('로컬 프로그램에 VTube Studio 핫키 실행을 요청했습니다.');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'VTube Studio 핫키를 실행하지 못했습니다.');
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const discoverObs = async () => {
+    setBusyAction('obs.discover');
+    try {
+      const connection = await ensureObsConnection();
+      const data = await jsonRequest<{ queued?: boolean; message?: string }>('/api/automations/obs/discover', 'POST', {
+        executionMode: 'local_program',
+        endpoint: obsEndpoint,
+        connectionId: connection.id,
+        name: 'OBS Studio',
+      });
+      toast.success(data.queued ? (data.message || '로컬 프로그램으로 OBS 목록을 불러오도록 요청했습니다.') : 'OBS 목록을 불러왔습니다.');
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'OBS 목록을 불러오지 못했습니다.');
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const runObsAction = async () => {
+    setBusyAction('obs.action');
+    try {
+      const connection = await ensureObsConnection();
+      const source = obsSources.find((item) => item.name === selectedObsSource);
+      await jsonRequest('/api/automations/run', 'POST', {
+        type: 'obs',
+        payload: {
+          connectionId: connection.id,
+          endpoint: obsEndpoint,
+          action: selectedObsAction,
+          sceneName: selectedObsScene || source?.sceneName || '',
+          sourceName: selectedObsSource,
+          filterName: selectedObsFilter,
+          enabled: true,
+        },
+      });
+      toast.success('로컬 프로그램에 OBS 실행을 요청했습니다.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'OBS 동작을 실행하지 못했습니다.');
     } finally {
       setBusyAction(null);
     }
@@ -722,31 +789,6 @@ export function AutomationsPage() {
     }
   };
 
-  const connectBrowserBridge = () => {
-    try { browserBridgeRef.current?.close(); } catch { /* ignore */ }
-    try {
-      setBrowserBridgeStatus('연결 중');
-      const ws = new WebSocket(browserBridgeUrl);
-      browserBridgeRef.current = ws;
-      ws.addEventListener('open', () => setBrowserBridgeStatus('연결됨'));
-      ws.addEventListener('message', (event) => setBrowserBridgeStatus(`수신: ${String(event.data).slice(0, 120)}`));
-      ws.addEventListener('close', () => setBrowserBridgeStatus('연결 종료'));
-      ws.addEventListener('error', () => setBrowserBridgeStatus('연결 실패'));
-    } catch (error) {
-      setBrowserBridgeStatus(error instanceof Error ? error.message : '연결 실패');
-    }
-  };
-
-  const sendBrowserBridgeMessage = () => {
-    const ws = browserBridgeRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      toast.warning('브라우저 브리지를 먼저 연결해 주세요.');
-      return;
-    }
-    ws.send(browserBridgeMessage);
-    setBrowserBridgeStatus('메시지 전송됨');
-  };
-
   const loadFxViewerUrl = async () => {
     setBusyAction('fx-viewer-url');
     try {
@@ -834,34 +876,71 @@ export function AutomationsPage() {
     </div>
   );
 
-  const renderBrowserTab = () => (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2"><Wifi className="h-5 w-5 text-primary" />브라우저 브리지</CardTitle>
-        <CardDescription>이 페이지에서 내 PC의 로컬 도구로 메시지를 보냅니다.</CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-4">
-        <Field label="로컬 WebSocket 주소">
-          <Input value={browserBridgeUrl} onChange={(event) => setBrowserBridgeUrl(event.target.value)} />
-        </Field>
-        <Field label="전송 메시지">
-          <Textarea value={browserBridgeMessage} onChange={setBrowserBridgeMessage} />
-        </Field>
-        <div className="flex flex-wrap gap-2">
-          <Button type="button" onClick={connectBrowserBridge}>
-            <Cable className="h-4 w-4" />
-            연결
+  const renderObsTab = () => (
+    <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><RadioTower className="h-5 w-5 text-primary" />OBS 연결</CardTitle>
+          <CardDescription>로컬 프로그램이 OBS에서 장면, 소스, 필터 목록을 불러옵니다.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          <Field label="OBS WebSocket 주소">
+            <Input value={obsEndpoint} onChange={(event) => setObsEndpoint(event.target.value)} placeholder="ws://localhost:4455" />
+          </Field>
+          <Button type="button" onClick={discoverObs} disabled={busyAction === 'obs.discover'}>
+            {busyAction === 'obs.discover' ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            장면/소스 불러오기
           </Button>
-          <Button type="button" variant="outline" onClick={sendBrowserBridgeMessage}>
-            <Send className="h-4 w-4" />
-            메시지 전송
+          <div className="grid gap-2 sm:grid-cols-[repeat(3,minmax(0,1fr))]">
+            <Badge tone={obsScenes.length ? 'mint' : 'neutral'}>{obsScenes.length}개 장면</Badge>
+            <Badge tone={obsSources.length ? 'mint' : 'neutral'}>{obsSources.length}개 소스</Badge>
+            <Badge tone={obsFilters.length ? 'mint' : 'neutral'}>{obsFilters.length}개 필터</Badge>
+          </div>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>OBS 테스트 실행</CardTitle>
+          <CardDescription>불러온 목록에서 고른 동작을 실행합니다.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          <Field label="동작">
+            <select value={selectedObsAction} onChange={(event) => setSelectedObsAction(event.target.value)} className="min-h-[var(--control-height)] w-full min-w-0 rounded-[var(--radius-control)] border bg-background px-[clamp(0.75rem,1.4vw,1rem)] text-sm">
+              <option value="scene.switch">장면 전환</option>
+              <option value="source.visibility">소스 표시</option>
+              <option value="filter.enabled">필터 켜기</option>
+              <option value="record.start">녹화 시작</option>
+              <option value="record.stop">녹화 중지</option>
+              <option value="stream.start">방송 시작</option>
+              <option value="stream.stop">방송 종료</option>
+              <option value="replay.save">리플레이 저장</option>
+            </select>
+          </Field>
+          <Field label="장면">
+            <select value={selectedObsScene} onChange={(event) => setSelectedObsScene(event.target.value)} className="min-h-[var(--control-height)] w-full min-w-0 rounded-[var(--radius-control)] border bg-background px-[clamp(0.75rem,1.4vw,1rem)] text-sm">
+              <option value="">장면 선택</option>
+              {obsScenes.map((scene) => <option key={scene.id || scene.name} value={scene.name}>{scene.name}{scene.current ? ' · 현재' : ''}</option>)}
+            </select>
+          </Field>
+          <Field label="소스">
+            <select value={selectedObsSource} onChange={(event) => setSelectedObsSource(event.target.value)} className="min-h-[var(--control-height)] w-full min-w-0 rounded-[var(--radius-control)] border bg-background px-[clamp(0.75rem,1.4vw,1rem)] text-sm">
+              <option value="">소스 선택</option>
+              {obsSources.map((source) => <option key={`${source.sceneName || 'global'}:${source.name}`} value={source.name}>{source.name}{source.sceneName ? ` · ${source.sceneName}` : ''}</option>)}
+            </select>
+          </Field>
+          <Field label="필터">
+            <select value={selectedObsFilter} onChange={(event) => setSelectedObsFilter(event.target.value)} className="min-h-[var(--control-height)] w-full min-w-0 rounded-[var(--radius-control)] border bg-background px-[clamp(0.75rem,1.4vw,1rem)] text-sm">
+              <option value="">필터 선택</option>
+              {obsFilters.map((filter) => <option key={`${filter.sourceName || 'source'}:${filter.name}`} value={filter.name}>{filter.name}{filter.sourceName ? ` · ${filter.sourceName}` : ''}</option>)}
+            </select>
+          </Field>
+          <Button type="button" onClick={runObsAction} disabled={busyAction === 'obs.action'}>
+            {busyAction === 'obs.action' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+            OBS 실행
           </Button>
-        </div>
-        <div className="rounded-[var(--radius-control)] border bg-background/70 p-[clamp(0.85rem,1.5vw,1rem)] text-sm font-semibold text-muted-foreground">
-          상태: {browserBridgeStatus}
-        </div>
-      </CardContent>
-    </Card>
+        </CardContent>
+      </Card>
+    </div>
   );
 
   const renderTitsTab = () => (
@@ -1231,7 +1310,7 @@ export function AutomationsPage() {
 
   const renderActiveTab = () => {
     if (activeTab === 'local') return renderLocalTab();
-    if (activeTab === 'browser') return renderBrowserTab();
+    if (activeTab === 'obs') return renderObsTab();
     if (activeTab === 'tits') return renderTitsTab();
     if (activeTab === 'vtube') return renderVtubeTab();
     if (activeTab === 'voice') return renderVoiceTab();
@@ -1254,7 +1333,7 @@ export function AutomationsPage() {
               방송의 순간을 한 번의 액션으로 움직이세요.
             </h1>
             <p className="mt-4 max-w-2xl text-sm leading-7 text-muted-foreground md:text-base">
-              T.I.T.S., VTube Studio, TTS, 사운드, 버튼 앱을 연결합니다.
+              OBS, T.I.T.S., VTube Studio, TTS, 사운드, 버튼 앱을 연결합니다.
             </p>
           </div>
           <div className="grid min-w-0 gap-2 sm:grid-cols-[repeat(3,minmax(0,1fr))]">

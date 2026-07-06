@@ -6387,6 +6387,10 @@ function blueprintOutputPorts(node = {}) {
   return ['out'];
 }
 
+function blueprintAllowsMultipleOutgoing(node = {}) {
+  return String(node?.type || '') === 'parallel';
+}
+
 function isBlankConfigValue(value) {
   return value == null || String(value).trim() === '';
 }
@@ -6398,7 +6402,13 @@ function validateBlueprintNodeConfig(node = {}) {
   const need = (key, field) => {
     if (isBlankConfigValue(config[key])) errors.push(`${label}: ${field} 값이 필요합니다.`);
   };
+  const numberInRange = (key, field, min = Number.NEGATIVE_INFINITY, max = Number.POSITIVE_INFINITY) => {
+    if (isBlankConfigValue(config[key])) return;
+    const value = Number(config[key]);
+    if (!Number.isFinite(value) || value < min || value > max) errors.push(`${label}: ${field} 값이 올바른 숫자여야 합니다.`);
+  };
   if (node.type === 'chat') need('message', '메시지');
+  if (node.type === 'readVariable') need('path', '읽을 변수');
   if (node.type === 'condition' || node.type === 'rouletteCompare') {
     need('left', '좌변');
     need('operator', '연산자');
@@ -6413,16 +6423,42 @@ function validateBlueprintNodeConfig(node = {}) {
     if (!options.some((option) => Number(option?.weight ?? 1) > 0)) errors.push(`${label}: 가중치가 1 이상인 선택지가 필요합니다.`);
   }
   if (node.type === 'action') need('actionId', '실행할 액션 ID');
-  if (node.type === 'pointsAdjust') need('delta', '변경 포인트');
+  if (node.type === 'wait') numberInRange('seconds', '대기 시간', 0);
+  if (node.type === 'loop') {
+    numberInRange('count', '반복 횟수', 0);
+    numberInRange('gapMs', '반복 간격', 0);
+  }
+  if (node.type === 'pointsAdjust') {
+    need('delta', '변경 포인트');
+    numberInRange('delta', '변경 포인트');
+  }
   if (node.type === 'pointsEnough') need('required', '필요 포인트');
+  if (node.type === 'pointsRanking') numberInRange('limit', '조회 인원', 1, 50);
   if (node.type === 'rouletteRun') need('name', '룰렛 이름 또는 ID');
   if (node.type === 'rouletteDisplay' || node.type === 'overlay') need('text', '표시 내용');
+  if (node.type === 'overlayUpdate' || node.type === 'overlayHide') need('overlayId', '오버레이 ID');
   if (node.type === 'fx') {
     const kind = String(config.kind || 'image');
     if (kind !== 'video' || !String(config.youtubeUrl || '').trim()) need('assetId', 'FX 에셋');
   }
   if (node.type === 'tts') need('text', '말할 내용');
   if (node.type === 'http') need('url', 'URL');
+  if (node.type === 'http') {
+    const method = String(config.method || 'POST').toUpperCase();
+    if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+      errors.push(`${label}: HTTP 메서드는 GET, POST, PUT, PATCH, DELETE 중 하나여야 합니다.`);
+    }
+    if (!isBlankConfigValue(config.headers)) {
+      try {
+        const parsed = typeof config.headers === 'object' ? config.headers : JSON.parse(String(config.headers));
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          errors.push(`${label}: Headers는 JSON 객체여야 합니다.`);
+        }
+      } catch {
+        errors.push(`${label}: Headers JSON 형식이 올바르지 않습니다.`);
+      }
+    }
+  }
   if (node.type === 'websocket') {
     need('url', 'URL');
     need('message', '메시지');
@@ -6430,12 +6466,26 @@ function validateBlueprintNodeConfig(node = {}) {
   if (node.type === 'udp') {
     need('host', '호스트');
     need('port', '포트');
+    numberInRange('port', '포트', 1, 65535);
     need('message', '메시지');
   }
   if (node.type === 'tits') need('triggerId', '트리거');
   if (node.type === 'vtube' && isBlankConfigValue(config.hotkeyId) && isBlankConfigValue(config.parameter)) {
     errors.push(`${label}: 핫키 또는 파라미터 중 하나가 필요합니다.`);
   }
+  if (node.type === 'obs') {
+    const action = String(config.action || 'scene.switch');
+    if (action === 'scene.switch') need('sceneName', '장면 이름');
+    if (action === 'source.visibility') {
+      need('sceneName', '장면 이름');
+      need('sourceName', '소스 이름');
+    }
+    if (action === 'filter.enabled') {
+      need('sourceName', '소스 이름');
+      need('filterName', '필터 이름');
+    }
+  }
+  if (node.type === 'approval') need('message', '승인 메시지');
   return errors;
 }
 
@@ -6494,8 +6544,10 @@ function validateBlueprintGraph(nodes = [], edges = []) {
       errors.push(`${targetNode.name || targetNode.type}: 존재하지 않는 입력 포트가 연결되어 있습니다.`);
     }
     const outputKey = `${edge.source}:${edge.sourcePort || 'out'}`;
-    if (outputUse.has(outputKey)) errors.push('하나의 출력 포트에서 여러 연결이 나갈 수 없습니다.');
-    outputUse.add(outputKey);
+    if (!blueprintAllowsMultipleOutgoing(sourceNode)) {
+      if (outputUse.has(outputKey)) errors.push('하나의 출력 포트에서 여러 연결이 나갈 수 없습니다. 동시에 여러 노드를 실행하려면 다중 실행 노드를 사용하세요.');
+      outputUse.add(outputKey);
+    }
   }
   if (nodeIds.size && hasBlueprintCycle(nodes, edges)) errors.push('순환 연결은 실행할 수 없습니다. 반복은 N회 반복 노드를 사용하세요.');
   return Array.from(new Set(errors));
@@ -6623,6 +6675,16 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}) {
         output = normalizedActionId && !currentActionKeys.includes(normalizedActionId) && !actionStack.includes(normalizedActionId)
           ? await executeActionBlueprint(ownerUserId, normalizedActionId, { ...context, source: dryRun ? 'manual_test' : 'blueprint_nested', dryRun, actionStack: [...actionStack, ...currentActionKeys] })
           : { ok: false, error: 'recursive_action_blocked' };
+      } else if (node.type === 'parallel') {
+        const outgoing = edges.filter((edge) => String(edge.source) === String(node.id) && String(edge.sourcePort || 'out') === 'out');
+        output = { count: outgoing.length, results: [], completed: false };
+        nodeOutputs[node.id] = output;
+        nodeOutputs[node.type] = output;
+        const results = await Promise.all(outgoing.map((edge) => runNode(edge.target, output, depth + 1)));
+        output.results = results;
+        output.completed = true;
+        await recordStep(node, 'done', incoming, output, startedAt);
+        return output;
       } else if (node.type === 'loop') {
         const count = Math.max(0, Math.floor(Number(evaluateBlueprintValue(config.count || 1, scope) || 0)));
         const gapMs = Math.max(0, Math.floor(Number(evaluateBlueprintValue(config.gapMs || 0, scope) || 0)));
@@ -6746,8 +6808,61 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}) {
           payload: { nodeId: node.id, blueprintId: blueprint.id, runId: run.id, ...payload }
         });
         output = { queued: !dryRun, jobId: job?.id || null, type: 'fx', payload, dryRun };
-      } else if (['overlay', 'overlayUpdate', 'overlayHide', 'rouletteDisplay', 'tts', 'obs', 'http', 'websocket', 'udp', 'tits', 'vtube', 'chatVote'].includes(node.type)) {
+      } else if (node.type === 'overlay' || node.type === 'rouletteDisplay') {
+        const overlayId = renderBlueprintTemplate(config.overlayId || `overlay_${node.id}_${Date.now().toString(36)}`, scope);
+        const payload = normalizeFxPayload({
+          ...renderBlueprintValueDeep(config || {}, scope),
+          id: overlayId,
+          overlayId,
+          kind: 'text',
+          text: renderBlueprintTemplate(config.text || '', scope),
+          x: config.x ?? 50,
+          y: config.y ?? 50,
+          width: config.width ?? 46,
+          height: config.height ?? 16,
+        });
+        const sent = dryRun ? 0 : broadcastFxToSid(sid, payload);
+        output = { shown: sent > 0, overlayId, sent, payload, dryRun };
+      } else if (node.type === 'overlayUpdate') {
+        const overlayId = renderBlueprintTemplate(config.overlayId || '', scope);
+        const payload = normalizeFxPayload({
+          ...renderBlueprintValueDeep(config || {}, scope),
+          id: overlayId,
+          overlayId,
+          kind: 'text',
+          text: renderBlueprintTemplate(config.text || '', scope),
+        });
+        const sent = dryRun ? 0 : broadcastFxEventToSid(sid, 'fx:update', payload);
+        output = { updated: sent > 0, overlayId, sent, payload, dryRun };
+      } else if (node.type === 'overlayHide') {
+        const overlayId = renderBlueprintTemplate(config.overlayId || '', scope);
+        const sent = dryRun ? 0 : broadcastFxEventToSid(sid, 'fx:hide', { id: overlayId, overlayId, kind: 'text' });
+        output = { hidden: sent > 0, overlayId, sent, dryRun };
+      } else if (node.type === 'tts') {
+        const payload = normalizeFxPayload({
+          ...renderBlueprintValueDeep(config || {}, scope),
+          kind: 'tts',
+          text: renderBlueprintTemplate(config.text || '', scope),
+          voice: renderBlueprintTemplate(config.voice || '', scope),
+          rate: Math.min(2, Math.max(0.5, Number(evaluateBlueprintValue(config.rate || 1, scope) || 1))),
+          pitch: Math.min(2, Math.max(0.5, Number(evaluateBlueprintValue(config.pitch || 1, scope) || 1))),
+        });
+        payload.voice = String(config.voice ? renderBlueprintTemplate(config.voice, scope) : '').slice(0, 120);
+        payload.rate = Math.min(2, Math.max(0.5, Number(evaluateBlueprintValue(config.rate || 1, scope) || 1)));
+        payload.pitch = Math.min(2, Math.max(0.5, Number(evaluateBlueprintValue(config.pitch || 1, scope) || 1)));
+        const sent = dryRun ? 0 : broadcastFxToSid(sid, payload);
+        const job = dryRun || sent > 0 ? null : await queueAutomationJob(ownerUserId, {
+          jobType: 'tts.speak',
+          payload: { text: payload.text, voice: payload.voice, rate: payload.rate, pitch: payload.pitch, nodeId: node.id, blueprintId: blueprint.id, runId: run.id }
+        });
+        output = { spoken: sent > 0, queued: !!job, jobId: job?.id || null, sent, voice: payload.voice || '', payload, dryRun };
+      } else if (['obs', 'http', 'websocket', 'udp', 'tits', 'vtube', 'chatVote'].includes(node.type)) {
         const payload = renderBlueprintValueDeep(config || {}, scope);
+        if (payload.connectionId && !payload.endpoint) {
+          const connections = await listAutomationConnections(ownerUserId).catch(() => []);
+          const connection = connections.find((item) => String(item.id || '') === String(payload.connectionId));
+          if (connection?.endpoint) payload.endpoint = connection.endpoint;
+        }
         const job = dryRun ? null : await queueAutomationJob(ownerUserId, {
           connectionId: config.connectionId || null,
           jobType: `blueprint.${node.type}`,
@@ -12370,7 +12485,7 @@ function listAutomationSoundFiles(ownerUserId) {
   };
 }
 
-const FX_ASSET_KINDS = new Set(['image', 'sticker', 'video', 'sound']);
+const FX_ASSET_KINDS = new Set(['image', 'sticker', 'video', 'sound', 'text', 'tts']);
 
 function listLocalFxAssetsFromConnections(connections = []) {
   const connection = connections.find((item) => item.type === 'fx_assets' && item.enabled !== false);
@@ -12406,6 +12521,12 @@ function normalizeFxCss(value, fallback = '') {
     .slice(0, 240);
 }
 
+function normalizeFxCssCode(value) {
+  return String(value || '')
+    .replace(/<\/?style[^>]*>/gi, '')
+    .slice(0, 12000);
+}
+
 function normalizeFxColor(value, fallback = '#00ff00') {
   const text = String(value || '').trim();
   return /^#[0-9a-f]{6}$/i.test(text) ? text.toLowerCase() : fallback;
@@ -12421,13 +12542,21 @@ function normalizeFxPayload(input = {}) {
     assetName: String(input.assetName || input.fileName || input.name || '').slice(0, 120),
     assetUrl: typeof input.assetUrl === 'string' ? input.assetUrl.slice(0, 4096) : '',
     youtubeUrl: typeof input.youtubeUrl === 'string' ? input.youtubeUrl.slice(0, 2048) : '',
+    text: typeof input.text === 'string' ? input.text.slice(0, 500) : '',
+    overlayId: typeof input.overlayId === 'string' ? input.overlayId.slice(0, 120) : '',
+    animation: typeof input.animation === 'string' ? input.animation.slice(0, 240) : '',
+    animationKey: typeof input.animationKey === 'string' ? input.animationKey.slice(0, 120) : '',
+    cssCode: normalizeFxCssCode(input.cssCode),
+    voice: typeof input.voice === 'string' ? input.voice.slice(0, 120) : '',
+    rate: Math.min(2, Math.max(0.5, Number(input.rate || 1))),
+    pitch: Math.min(2, Math.max(0.5, Number(input.pitch || 1))),
     x: normalizeFxPercent(input.x ?? input.left, 50),
     y: normalizeFxPercent(input.y ?? input.top, 50),
-    width: normalizeFxPercent(input.width, normalizedKind === 'sound' ? 0 : 30, 1, 100),
-    height: normalizeFxPercent(input.height, normalizedKind === 'sound' ? 0 : 30, 1, 100),
+    width: normalizeFxPercent(input.width, normalizedKind === 'sound' || normalizedKind === 'tts' ? 0 : normalizedKind === 'text' ? 46 : 30, 1, 100),
+    height: normalizeFxPercent(input.height, normalizedKind === 'sound' || normalizedKind === 'tts' ? 0 : normalizedKind === 'text' ? 16 : 30, 1, 100),
     durationMs: Math.max(250, Math.min(60000, Number(input.durationMs ?? Number(input.durationSec || 4) * 1000) || 4000)),
-    enterCss: normalizeFxCss(input.enterCss, 'fx-pop-in 360ms ease-out both'),
-    exitCss: normalizeFxCss(input.exitCss, 'fx-fade-out 280ms ease-in both'),
+    enterCss: normalizeFxCss(input.enterCss),
+    exitCss: normalizeFxCss(input.exitCss),
     chromaKey: input.chromaKey === true,
     chromaKeyColor: normalizeFxColor(input.chromaKeyColor),
     chromaKeyTolerance: Math.max(0, Math.min(160, Number(input.chromaKeyTolerance ?? 42) || 42)),
@@ -12436,11 +12565,11 @@ function normalizeFxPayload(input = {}) {
   };
 }
 
-function broadcastFxToSid(sid, payload) {
+function broadcastFxEventToSid(sid, type, payload) {
   const key = String(sid || '').trim();
   const sockets = fxSidSockets?.get(key);
   if (!sockets?.size) return 0;
-  const event = { type: 'fx:play', sid: key, payload: normalizeFxPayload(payload), serverNow: Date.now() };
+  const event = { type, sid: key, payload: normalizeFxPayload(payload), serverNow: Date.now() };
   let sent = 0;
   for (const ws of Array.from(sockets)) {
     try {
@@ -12456,6 +12585,10 @@ function broadcastFxToSid(sid, payload) {
   }
   if (sockets.size === 0) fxSidSockets.delete(key);
   return sent;
+}
+
+function broadcastFxToSid(sid, payload) {
+  return broadcastFxEventToSid(sid, 'fx:play', payload);
 }
 
 function pickYoutubeThumbnail(thumbnails = {}) {
@@ -14480,7 +14613,7 @@ app.get('/api/automations/overview', async (req, res) => {
       localAgents,
       soundStorage,
       fxAssets: fxAssets.assets,
-      supportedConnectors: ['tits', 'vtube_studio', 'tts', 'stream_deck_touch_portal', 'http', 'websocket', 'udp', 'fx'],
+        supportedConnectors: ['obs', 'tits', 'vtube_studio', 'tts', 'stream_deck_touch_portal', 'http', 'websocket', 'udp', 'fx'],
       disabledConnectors: ['soop', 'ssapi', 'twip']
     });
   } catch (e) {
@@ -14733,7 +14866,7 @@ app.post('/api/automations/local-agent/discovery-sync', requireAutomationLocalAg
     const ownerUserId = req.automationLocalAgent?.ownerUserId;
     if (!ownerUserId) return res.status(401).json({ error: 'Invalid local program token' });
     const type = String(req.body?.type || '').toLowerCase();
-    if (!['tits', 'vtube_studio', 'fx_assets'].includes(type)) return res.status(400).json({ error: 'Unsupported discovery type' });
+    if (!['obs', 'tits', 'vtube_studio', 'fx_assets'].includes(type)) return res.status(400).json({ error: 'Unsupported discovery type' });
     const discoveryCache = req.body?.discoveryCache && typeof req.body.discoveryCache === 'object'
       ? req.body.discoveryCache
       : {};
@@ -14746,7 +14879,7 @@ app.post('/api/automations/local-agent/discovery-sync', requireAutomationLocalAg
     const connection = await upsertAutomationConnection(ownerUserId, {
       id: req.body?.connectionId || req.body?.id || existing?.id,
       type,
-      name: req.body?.name || existing?.name || (type === 'vtube_studio' ? 'VTube Studio' : type === 'fx_assets' ? 'FX 로컬 에셋' : 'T.I.T.S.'),
+      name: req.body?.name || existing?.name || (type === 'obs' ? 'OBS Studio' : type === 'vtube_studio' ? 'VTube Studio' : type === 'fx_assets' ? 'FX 로컬 에셋' : 'T.I.T.S.'),
       enabled: true,
       executionMode: 'local_program',
       endpoint: req.body?.endpoint || discoveryCache.endpoint || existing?.endpoint || '',
@@ -14790,12 +14923,13 @@ app.post('/api/automations/local-agent/jobs/:jobId/complete', requireAutomationL
     if (req.body?.status === 'done' && connectionId && discovery && typeof discovery === 'object') {
       const type = jobType.startsWith('vtube.') ? 'vtube_studio'
         : jobType.startsWith('tits.') ? 'tits'
+          : jobType.startsWith('obs.') ? 'obs'
           : String(discovery.source || '');
       if (type) {
         await upsertAutomationConnection(req.automationLocalAgent.ownerUserId, {
           id: connectionId,
           type,
-          name: type === 'vtube_studio' ? 'VTube Studio' : type === 'tits' ? 'T.I.T.S.' : type,
+          name: type === 'obs' ? 'OBS Studio' : type === 'vtube_studio' ? 'VTube Studio' : type === 'tits' ? 'T.I.T.S.' : type,
           enabled: true,
           executionMode: 'local_program',
           endpoint: discovery.endpoint || '',
@@ -15171,6 +15305,24 @@ app.delete('/api/automations/connections/:id', rateLimiters.userWrite, async (re
   }
 });
 
+app.post('/api/automations/obs/discover', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const endpoint = String(req.body?.endpoint || 'ws://localhost:4455').trim();
+    const connectionId = req.body?.connectionId || null;
+    const job = await queueAutomationJob(ownerUserId, {
+      connectionId,
+      jobType: 'obs.discover',
+      payload: { endpoint }
+    });
+    return res.json({ queued: true, jobId: job?.id, executionMode: 'local_program', message: '로컬 프로그램이 OBS 장면과 소스 목록을 가져오도록 요청했습니다.' });
+  } catch (e) {
+    console.error('[Automations] OBS discover error', e?.message || e);
+    return res.status(500).json({ error: 'OBS 목록 불러오기를 요청하지 못했습니다.' });
+  }
+});
+
 app.post('/api/automations/tits/discover', rateLimiters.userWrite, async (req, res) => {
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
@@ -15432,6 +15584,7 @@ app.post('/api/automations/run', rateLimiters.userWrite, async (req, res) => {
     const payload = req.body?.payload && typeof req.body.payload === 'object' ? req.body.payload : {};
     const jobTypes = {
       http: 'blueprint.http',
+      obs: 'blueprint.obs',
       websocket: 'blueprint.websocket',
       udp: 'blueprint.udp',
       vtube: 'blueprint.vtube',
