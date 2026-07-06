@@ -269,53 +269,75 @@ function PolicyTable({ rows }: { rows: readonly TableRow[] }) {
   const columns = Object.keys(rows[0] || {});
 
   return (
-    <div className="mt-5 w-full max-w-full overflow-x-auto rounded-[var(--radius-card)] border bg-background/45">
-      <div className="w-max max-w-none">
-        <table className="border-collapse text-left text-sm">
-          <thead>
-            <tr className="border-b bg-muted/65">
-              {columns.map((key) => (
-                <th key={key} className={`${columnClass(key)} px-3 py-2.5 align-top font-semibold text-foreground`}>
-                  {columnLabel(key)}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row, index) => (
-              <tr key={index} className="border-b last:border-b-0">
-                {columns.map((key) => {
-                  const value = (row as Record<string, string>)[key] || '';
-                  return (
-                    <td key={key} className={`${columnClass(key)} bg-card/95 px-3 py-3 align-top leading-7 text-muted-foreground`}>
-                      <span className="block break-keep">{value}</span>
-                    </td>
-                  );
-                })}
-              </tr>
+    <div className="mt-5 w-full rounded-[var(--radius-card)] border bg-background/45">
+      <table className="w-full table-fixed border-collapse text-left text-[0.78rem] sm:text-sm">
+        <colgroup>
+          {columns.map((key) => (
+            <col key={key} style={{ width: columnWidth(key, columns) }} />
+          ))}
+        </colgroup>
+        <thead>
+          <tr className="border-b bg-muted/65">
+            {columns.map((key) => (
+              <th key={key} className="break-keep px-2 py-2.5 align-top text-[0.7rem] font-semibold leading-5 text-foreground sm:px-3 sm:text-xs">
+                {columnLabel(key)}
+              </th>
             ))}
-          </tbody>
-        </table>
-      </div>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, index) => (
+            <tr key={index} className="border-b last:border-b-0">
+              {columns.map((key) => {
+                const value = (row as Record<string, string>)[key] || '';
+                return (
+                  <td key={key} className="bg-card/95 px-2 py-3 align-top leading-6 text-muted-foreground [overflow-wrap:anywhere] sm:px-3 sm:leading-7">
+                    <span className="block break-words">{value}</span>
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
 
-function columnClass(key: string) {
-  const classes: Record<string, string> = {
-    service: 'min-w-[10rem] max-w-[12rem]',
-    purpose: 'min-w-[18rem] max-w-[22rem]',
-    items: 'min-w-[28rem] max-w-[34rem]',
-    basis: 'min-w-[24rem] max-w-[30rem]',
-    retention: 'min-w-[20rem] max-w-[24rem]',
-    recipient: 'min-w-[11rem] max-w-[14rem]',
-    processor: 'min-w-[13rem] max-w-[16rem]',
-    work: 'min-w-[18rem] max-w-[22rem]',
-    country: 'min-w-[18rem] max-w-[22rem]',
-    timing: 'min-w-[22rem] max-w-[28rem]',
-    contact: 'min-w-[16rem] max-w-[20rem]',
+function columnWidth(key: string, columns: string[]) {
+  const widthSets: Record<string, Record<string, string>> = {
+    'service,purpose,items,basis,retention': {
+      service: '11%',
+      purpose: '19%',
+      items: '30%',
+      basis: '19%',
+      retention: '21%',
+    },
+    'recipient,purpose,items,basis,retention': {
+      recipient: '14%',
+      purpose: '21%',
+      items: '25%',
+      basis: '19%',
+      retention: '21%',
+    },
+    'processor,work,items,retention': {
+      processor: '18%',
+      work: '28%',
+      items: '30%',
+      retention: '24%',
+    },
+    'recipient,country,items,timing,retention,contact': {
+      recipient: '12%',
+      country: '13%',
+      items: '20%',
+      timing: '20%',
+      retention: '19%',
+      contact: '16%',
+    },
   };
-  return classes[key] || 'min-w-[14rem] max-w-[20rem]';
+
+  const widths = widthSets[columns.join(',')];
+  return widths?.[key] || `${100 / Math.max(columns.length, 1)}%`;
 }
 
 function columnLabel(key: string) {
