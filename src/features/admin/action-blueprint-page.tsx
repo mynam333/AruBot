@@ -170,6 +170,7 @@ type AutomationDiscoveryCache = {
   sources?: Array<{ id?: string; name: string; sceneName?: string; inputKind?: string; enabled?: boolean }>;
   filters?: Array<{ id?: string; name: string; sourceName?: string; kind?: string; enabled?: boolean }>;
   requests?: Array<{ id: string; name: string; group?: string }>;
+  transitions?: Array<{ id?: string; name: string; current?: boolean }>;
   currentModel?: { loaded?: boolean; id?: string; name?: string };
   fetchedAt?: string;
 };
@@ -264,6 +265,61 @@ const SELECTION_CLIPBOARD_SCHEMA = 'arubot.blueprint.selection';
 const BLUEPRINT_EXPORT_SCHEMA = 'arubot.blueprint';
 const AUTOSAVE_KEY = 'arubot:action-blueprint:draft:v1';
 
+const OBS_ACTION_OPTIONS = [
+  { value: 'scene.switch', label: '장면 전환', group: '장면' },
+  { value: 'scene.preview', label: '미리보기 장면 전환', group: '장면' },
+  { value: 'source.show', label: '소스 표시', group: '소스' },
+  { value: 'source.hide', label: '소스 숨기기', group: '소스' },
+  { value: 'source.toggle', label: '소스 표시 토글', group: '소스' },
+  { value: 'input.mute', label: '입력 음소거', group: '오디오' },
+  { value: 'input.unmute', label: '입력 음소거 해제', group: '오디오' },
+  { value: 'input.toggleMute', label: '입력 음소거 토글', group: '오디오' },
+  { value: 'input.volume', label: '입력 볼륨 설정', group: '오디오' },
+  { value: 'filter.on', label: '필터 ON', group: '필터' },
+  { value: 'filter.off', label: '필터 OFF', group: '필터' },
+  { value: 'filter.toggle', label: '필터 토글', group: '필터' },
+  { value: 'input.text', label: '텍스트 소스 수정', group: '입력' },
+  { value: 'input.settings', label: '입력 설정 JSON 적용', group: '입력' },
+  { value: 'media.play', label: '미디어 재생', group: '미디어' },
+  { value: 'media.pause', label: '미디어 일시정지', group: '미디어' },
+  { value: 'media.stop', label: '미디어 정지', group: '미디어' },
+  { value: 'media.restart', label: '미디어 다시 시작', group: '미디어' },
+  { value: 'media.next', label: '미디어 다음', group: '미디어' },
+  { value: 'media.previous', label: '미디어 이전', group: '미디어' },
+  { value: 'record.start', label: '녹화 시작', group: '녹화' },
+  { value: 'record.stop', label: '녹화 중지', group: '녹화' },
+  { value: 'record.toggle', label: '녹화 토글', group: '녹화' },
+  { value: 'record.pause', label: '녹화 일시정지', group: '녹화' },
+  { value: 'record.resume', label: '녹화 재개', group: '녹화' },
+  { value: 'record.togglePause', label: '녹화 일시정지 토글', group: '녹화' },
+  { value: 'record.split', label: '녹화 파일 분할', group: '녹화' },
+  { value: 'record.chapter', label: '녹화 챕터 만들기', group: '녹화' },
+  { value: 'stream.start', label: '방송 시작', group: '방송' },
+  { value: 'stream.stop', label: '방송 종료', group: '방송' },
+  { value: 'stream.toggle', label: '방송 토글', group: '방송' },
+  { value: 'stream.caption', label: '방송 자막 전송', group: '방송' },
+  { value: 'replay.start', label: '리플레이 버퍼 시작', group: '리플레이' },
+  { value: 'replay.stop', label: '리플레이 버퍼 중지', group: '리플레이' },
+  { value: 'replay.toggle', label: '리플레이 버퍼 토글', group: '리플레이' },
+  { value: 'replay.save', label: '리플레이 저장', group: '리플레이' },
+  { value: 'virtualcam.start', label: '가상 카메라 시작', group: '출력' },
+  { value: 'virtualcam.stop', label: '가상 카메라 중지', group: '출력' },
+  { value: 'virtualcam.toggle', label: '가상 카메라 토글', group: '출력' },
+  { value: 'transition.set', label: '전환 효과 선택', group: '전환' },
+  { value: 'transition.duration', label: '전환 시간 설정', group: '전환' },
+  { value: 'studio.mode.on', label: '스튜디오 모드 켜기', group: '스튜디오' },
+  { value: 'studio.mode.off', label: '스튜디오 모드 끄기', group: '스튜디오' },
+  { value: 'studio.mode.toggle', label: '스튜디오 모드 토글', group: '스튜디오' },
+  { value: 'hotkey.trigger', label: 'OBS 핫키 실행', group: '핫키' },
+] as const;
+
+const obsSceneActions = new Set(['scene.switch', 'scene.preview']);
+const obsSceneSourceActions = new Set(['source.show', 'source.hide', 'source.toggle', 'source.visibility']);
+const obsFilterActions = new Set(['filter.on', 'filter.off', 'filter.toggle', 'filter.enabled']);
+const obsInputActions = new Set(['input.mute', 'input.unmute', 'input.toggleMute', 'input.volume', 'input.text', 'input.settings']);
+const obsMediaActions = new Set(['media.play', 'media.pause', 'media.stop', 'media.restart', 'media.next', 'media.previous']);
+const obsSupportedActions = new Set([...OBS_ACTION_OPTIONS.map((item) => item.value), 'source.visibility', 'filter.enabled']);
+
 const nodeCatalog: Array<{
   type: NodeType;
   title: string;
@@ -311,7 +367,7 @@ const nodeCatalog: Array<{
   { type: 'websocket', title: 'WebSocket', body: '로컬 도구에 메시지', group: '연동', icon: Network, tone: 'neutral', config: { url: '', message: '{}', timeoutMs: 8000 } },
   { type: 'udp', title: 'UDP', body: '장비/효과 실행', group: '연동', icon: Network, tone: 'neutral', config: { host: '127.0.0.1', port: 0, message: '' } },
   { type: 'tits', title: 'T.I.T.S', body: '아이템/트리거 실행', group: '로컬', icon: Activity, tone: 'amber', config: { triggerId: '', strength: 1, durationMs: 1000 } },
-  { type: 'vtube', title: 'VTube Studio', body: '모델 반응 실행', group: '로컬', icon: Bot, tone: 'cyan', config: { hotkeyId: '', parameter: '', value: '' } },
+  { type: 'vtube', title: 'VTube Studio', body: '핫키/파라미터 제어', group: '로컬', icon: Bot, tone: 'cyan', config: { hotkeyId: '', parameter: '', value: '' } },
   { type: 'log', title: '로그', body: '실행 기록에 남김', group: '기본', icon: Code2, tone: 'neutral', config: { message: '로그: {flow.bonusPoint}' } },
 ];
 
@@ -538,15 +594,30 @@ function requiredConfigErrors(node: BlueprintNode) {
   }
   if (node.type === 'obs') {
     const action = String(cfg.action || 'scene.switch');
-    if (action === 'scene.switch') need('sceneName', '장면 이름');
-    if (action === 'source.visibility') {
+    if (!obsSupportedActions.has(action)) errors.push(`${label}: 지원하지 않는 OBS 동작입니다.`);
+    if (obsSceneActions.has(action)) need('sceneName', '장면 이름');
+    if (obsSceneSourceActions.has(action)) {
       need('sceneName', '장면 이름');
       need('sourceName', '소스 이름');
     }
-    if (action === 'filter.enabled') {
+    if (obsFilterActions.has(action)) {
       need('sourceName', '소스 이름');
       need('filterName', '필터 이름');
     }
+    if (obsInputActions.has(action) || obsMediaActions.has(action)) need('sourceName', '소스/입력 이름');
+    if (action === 'input.volume') numberInRange('volume', '볼륨', 0, 2);
+    if (action === 'input.text' || action === 'stream.caption') need('text', '텍스트');
+    if (action === 'input.settings' && !isBlank(cfg.inputSettingsJson)) {
+      try {
+        const parsed = JSON.parse(String(cfg.inputSettingsJson));
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) errors.push(`${label}: 입력 설정 JSON은 객체여야 합니다.`);
+      } catch {
+        errors.push(`${label}: 입력 설정 JSON 형식이 올바르지 않습니다.`);
+      }
+    }
+    if (action === 'hotkey.trigger') need('hotkeyName', '핫키');
+    if (action === 'transition.set') need('transitionName', '전환 효과');
+    if (action === 'transition.duration') numberInRange('durationMs', '전환 시간', 0);
   }
   if (node.type === 'approval') need('message', '승인 메시지');
   return errors;
@@ -809,6 +880,69 @@ function nodeOutputHints(node: Pick<BlueprintNode, 'id' | 'type'>) {
   return (byType[node.type] || ['status}']).map((suffix) => `${prefix}${suffix}`);
 }
 
+const outputHintDescriptions: Record<string, { title: string; description: string }> = {
+  context: { title: '실행 컨텍스트', description: '명령어, 후원, 테스트 실행 등 액션이 시작된 전체 상황입니다.' },
+  sent: { title: '전송 여부', description: '채팅 메시지를 실제 플랫폼으로 전송했는지 나타냅니다.' },
+  platform: { title: '플랫폼', description: '이 노드가 대상으로 삼은 플랫폼 이름입니다.' },
+  text: { title: '텍스트', description: '노드가 전송하거나 표시한 최종 문구입니다.' },
+  waitedMs: { title: '대기 시간', description: '대기 노드가 기다린 밀리초 값입니다.' },
+  delayMs: { title: '예약 시간', description: '예약 또는 타이머로 밀린 시간입니다.' },
+  queued: { title: '대기열 등록', description: '로컬 프로그램 또는 오버레이 작업 대기열에 들어갔는지 나타냅니다.' },
+  passed: { title: '조건 결과', description: '조건, 비교, 충분 여부 확인의 true/false 결과입니다.' },
+  left: { title: '좌변 값', description: '조건 비교에 사용된 왼쪽 값입니다.' },
+  right: { title: '우변 값', description: '조건 비교에 사용된 오른쪽 값입니다.' },
+  remainingMs: { title: '남은 시간', description: '쿨다운 등에서 아직 기다려야 하는 밀리초 값입니다.' },
+  points: { title: '포인트', description: '조회 또는 변경 후의 시청자 포인트입니다.' },
+  userId: { title: '시청자 ID', description: '포인트, 출석, 실행 대상이 된 시청자 식별자입니다.' },
+  channelUid: { title: '채널 ID', description: '포인트와 출석이 집계되는 방송 채널 식별자입니다.' },
+  required: { title: '필요 포인트', description: '조건을 통과하기 위해 필요했던 포인트입니다.' },
+  delta: { title: '변경량', description: '포인트 지급 또는 차감에 사용된 값입니다.' },
+  previous: { title: '이전 포인트', description: '포인트 변경 전의 보유 포인트입니다.' },
+  ranking: { title: '랭킹 목록', description: '포인트 랭킹 조회 결과 배열입니다.' },
+  excluded: { title: '제외 여부', description: '포인트 적립 제외 대상인지 나타냅니다.' },
+  totalDays: { title: '누적 출석일', description: '시청자의 누적 출석일입니다.' },
+  roulettes: { title: '룰렛 목록', description: '실행 가능한 룰렛 목록입니다.' },
+  'result.label': { title: '룰렛 결과 이름', description: '당첨된 룰렛 항목의 표시 이름입니다.' },
+  'result.value': { title: '룰렛 결과 값', description: '당첨된 룰렛 항목에 설정된 값입니다.' },
+  'roulette.name': { title: '룰렛 이름', description: '실행된 룰렛의 이름입니다.' },
+  overlayId: { title: '오버레이 ID', description: '표시, 수정, 숨김에 사용할 오버레이 식별자입니다.' },
+  shown: { title: '표시 여부', description: '오버레이가 화면에 표시됐는지 나타냅니다.' },
+  updated: { title: '수정 여부', description: '오버레이 내용이나 상태가 수정됐는지 나타냅니다.' },
+  hidden: { title: '숨김 여부', description: '오버레이가 숨겨졌는지 나타냅니다.' },
+  spoken: { title: 'TTS 재생 여부', description: 'TTS가 오버레이에서 재생됐는지 나타냅니다.' },
+  voice: { title: '목소리', description: 'TTS에 사용된 브라우저 음성 이름입니다.' },
+  jobId: { title: '작업 ID', description: '로컬 프로그램이 처리할 자동화 작업 ID입니다.' },
+  'payload.id': { title: '페이로드 ID', description: 'FX, 오버레이 등 화면 효과 작업의 식별자입니다.' },
+  'picked.label': { title: '랜덤 선택 이름', description: '랜덤 분기에서 선택된 항목 이름입니다.' },
+  'picked.id': { title: '랜덤 선택 ID', description: '랜덤 분기에서 선택된 출력 포트 ID입니다.' },
+  results: { title: '병렬 실행 결과', description: '다중 실행 노드에서 동시에 실행한 하위 노드들의 결과입니다.' },
+  count: { title: '개수', description: '반복 횟수 또는 병렬 실행 대상 개수입니다.' },
+  ok: { title: '성공 여부', description: '다른 블루프린트 실행 결과의 성공 여부입니다.' },
+  result: { title: '실행 결과', description: '다른 블루프린트에서 반환된 결과입니다.' },
+  approvalRequired: { title: '승인 필요', description: '관리자 확인이 필요한 상태인지 나타냅니다.' },
+  marked: { title: '마킹 여부', description: '레거시 하이라이트 마커가 처리됐는지 나타냅니다.' },
+  label: { title: '라벨', description: '선택, 결과, 마커 등에 붙은 표시 이름입니다.' },
+  message: { title: '메시지', description: '로그 또는 승인 요청에 남긴 문구입니다.' },
+  at: { title: '기록 시각', description: '로그가 남겨진 ISO 시각입니다.' },
+  value: { title: '값', description: '읽거나 저장한 임시 변수 값입니다.' },
+  key: { title: '키', description: '저장한 임시 변수 이름입니다.' },
+  joined: { title: '합류 여부', description: '레거시 흐름 합류 노드 처리 여부입니다.' },
+  status: { title: '상태', description: '노드 실행 상태입니다.' },
+};
+
+function nodeOutputDetails(node: Pick<BlueprintNode, 'id' | 'type'>) {
+  return nodeOutputHints(node).map((value) => {
+    const match = value.match(/\.([^.]*(?:\.[^.]*)?)}$/);
+    const key = match?.[1] || 'status';
+    const fallback = outputHintDescriptions[key.split('.').slice(-1)[0]] || outputHintDescriptions.status;
+    return {
+      value,
+      title: outputHintDescriptions[key]?.title || fallback.title,
+      description: outputHintDescriptions[key]?.description || fallback.description,
+    };
+  });
+}
+
 function normalizeBlueprint(payload?: Blueprint | null) {
   if (!payload) {
     const nodes = defaultNodes();
@@ -1059,7 +1193,7 @@ function BlueprintCanvasNode({ data, selected }: NodeProps<BlueprintFlowNode>) {
   const tone = toneClass(spec.tone);
   const statusTone = latestStep?.status === 'failed' ? 'bg-destructive' : active ? 'bg-primary' : latestStep?.status === 'done' ? 'bg-emerald-500' : node.enabled === false ? 'bg-muted-foreground' : 'bg-primary/65';
   const nodeHeight = nodeHeightPx(node);
-  const outputHints = nodeOutputHints(node).slice(0, 2);
+  const outputHintCount = nodeOutputHints(node).length;
   return (
     <div
       onContextMenu={(event) => {
@@ -1111,12 +1245,12 @@ function BlueprintCanvasNode({ data, selected }: NodeProps<BlueprintFlowNode>) {
               <span>{latestStep.status || 'done'}</span>
               <span>{latestStep.durationMs ?? 0}ms</span>
             </div>
-            {outputHints.length ? <span className="truncate font-mono text-[0.58rem] text-muted-foreground/80">{outputHints.join(' · ')}</span> : null}
+            {outputHintCount ? <span className="text-[0.58rem] text-muted-foreground/80">출력 변수 {outputHintCount}개</span> : null}
           </div>
-        ) : outputHints.length ? (
+        ) : outputHintCount ? (
           <div className="grid gap-1 text-[0.64rem] font-semibold text-muted-foreground">
             <span className="truncate">{spec.body}</span>
-            <span className="truncate font-mono text-[0.58rem]">{outputHints.join(' · ')}</span>
+            <span className="text-[0.58rem]">출력 변수 {outputHintCount}개 · 선택하면 전체 확인</span>
           </div>
         ) : (
           <div className="flex items-center justify-between gap-2 text-[0.66rem] font-semibold text-muted-foreground">
@@ -2676,19 +2810,7 @@ export function ActionBlueprintPage() {
             <CardContent className="grid gap-3 p-4 pt-0">
               {selectedNode ? (
                 <>
-                  <div className="grid gap-2 rounded-[var(--radius-control)] border bg-background/70 p-3 text-xs leading-5 text-muted-foreground">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-bold text-foreground">노드 ID</span>
-                      <code className="rounded-full bg-muted px-2 py-1 font-mono text-[0.72rem]">{selectedNode.id}</code>
-                      {nodeSpec(selectedNode.type).hidden ? <Badge tone="neutral">호환 노드</Badge> : null}
-                    </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {nodeOutputHints(selectedNode).map((hint) => (
-                        <OutputHintButton key={hint} value={hint} />
-                      ))}
-                    </div>
-                    {nodeSpec(selectedNode.type).hidden ? <p>새 액션에서는 조건문, 대기, 로그, 오버레이 표시 노드로 대체하는 것을 권장합니다. 기존 저장본은 계속 실행됩니다.</p> : null}
-                  </div>
+                  <NodeReferencePanel node={selectedNode} />
                   <label className="grid gap-2 text-sm font-semibold">
                     노드 이름
                     <Input value={selectedNode.name} onChange={(event) => updateBlueprint((current) => ({ ...current, version: { ...current.version, nodes: (current.version?.nodes || []).map((node) => node.id === selectedNode.id ? { ...node, name: event.target.value } : node) } }))} />
@@ -2905,20 +3027,65 @@ function ContextMenuButton({
   );
 }
 
-function OutputHintButton({ value }: { value: string }) {
+function CopyTokenButton({ value, label = value, title }: { value: string; label?: string; title?: string }) {
   const copy = async () => {
     await navigator.clipboard?.writeText(value).catch(() => undefined);
-    toast.success('임시변수를 복사했습니다.');
+    toast.success('복사했습니다.');
   };
   return (
     <button
       type="button"
       onClick={copy}
-      className="rounded-full bg-muted/80 px-2 py-1 font-mono text-[0.68rem] text-foreground/80 transition hover:bg-primary/12 hover:text-primary"
-      title={`${value} 복사`}
+      className="inline-flex min-w-0 items-center gap-1.5 rounded-full bg-muted/80 px-2.5 py-1 font-mono text-[0.68rem] font-bold text-foreground/80 ring-1 ring-border/60 transition hover:bg-primary/12 hover:text-primary hover:ring-primary/25"
+      title={title || `${value} 복사`}
     >
-      {value}
+      <Copy className="h-3.5 w-3.5 shrink-0" />
+      <span className="min-w-0 truncate">{label}</span>
     </button>
+  );
+}
+
+function NodeReferencePanel({ node }: { node: BlueprintNode }) {
+  const spec = nodeSpec(node.type);
+  const details = nodeOutputDetails(node);
+  return (
+    <section className="overflow-hidden rounded-[var(--radius-control)] border bg-[linear-gradient(135deg,hsl(var(--background)/0.92),hsl(var(--muted)/0.48))] shadow-subtle">
+      <div className="border-b bg-background/55 p-3">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="text-[0.68rem] font-extrabold uppercase tracking-[0.08em] text-muted-foreground">노드 참조</p>
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+              <span className="text-sm font-extrabold text-foreground">{spec.title}</span>
+              {spec.hidden ? <Badge tone="neutral">호환 노드</Badge> : null}
+              <Badge tone={spec.tone}>{details.length}개 변수</Badge>
+            </div>
+          </div>
+          <CopyTokenButton value={node.id} label="ID 복사" title={`${node.id} 복사`} />
+        </div>
+        <div className="mt-2 rounded-[calc(var(--radius-control)*0.8)] bg-muted/55 px-2.5 py-2">
+          <code className="break-all font-mono text-[0.72rem] font-bold text-foreground">{node.id}</code>
+        </div>
+      </div>
+      <div className="grid gap-2 p-3">
+        {details.map((item) => (
+          <article key={item.value} className="grid gap-2 rounded-[calc(var(--radius-control)*0.85)] border bg-background/72 p-3">
+            <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-xs font-extrabold text-foreground">{item.title}</p>
+                <p className="mt-0.5 text-xs leading-5 text-muted-foreground">{item.description}</p>
+              </div>
+              <CopyTokenButton value={item.value} label="복사" title={`${item.value} 복사`} />
+            </div>
+            <code className="block min-w-0 break-all rounded-[calc(var(--radius-control)*0.7)] bg-muted/55 px-2.5 py-2 font-mono text-[0.7rem] font-bold text-foreground/86">{item.value}</code>
+          </article>
+        ))}
+        {spec.hidden ? (
+          <p className="rounded-[calc(var(--radius-control)*0.85)] border border-dashed bg-background/60 p-3 text-xs leading-5 text-muted-foreground">
+            새 액션에서는 조건문, 대기, 로그, 오버레이 표시 노드로 대체하는 것을 권장합니다. 기존 저장본은 계속 실행됩니다.
+          </p>
+        ) : null}
+      </div>
+    </section>
   );
 }
 
@@ -3301,23 +3468,21 @@ function ConfigFields({
     const scenes = discovery.scenes || [];
     const sources = discovery.sources || [];
     const filters = discovery.filters || [];
-    const actions = [
-      { value: 'scene.switch', label: '장면 전환' },
-      { value: 'source.visibility', label: '소스 표시/숨김' },
-      { value: 'filter.enabled', label: '필터 켜기/끄기' },
-      { value: 'record.start', label: '녹화 시작' },
-      { value: 'record.stop', label: '녹화 중지' },
-      { value: 'stream.start', label: '방송 시작' },
-      { value: 'stream.stop', label: '방송 종료' },
-      { value: 'replay.save', label: '리플레이 저장' },
-    ];
+    const hotkeys = discovery.hotkeys || [];
+    const transitions = discovery.transitions || [];
+    const action = String(cfg.action || 'scene.switch');
+    const needsScene = obsSceneActions.has(action) || obsSceneSourceActions.has(action);
+    const needsSource = obsSceneSourceActions.has(action) || obsFilterActions.has(action) || obsInputActions.has(action) || obsMediaActions.has(action);
+    const needsFilter = obsFilterActions.has(action);
     const sceneOptions = scenes.map((scene) => ({ value: scene.name, label: `${scene.name}${scene.current ? ' · 현재' : ''}` }));
     const sourceOptions = sources
-      .filter((source) => !cfg.sceneName || source.sceneName === cfg.sceneName || !source.sceneName)
+      .filter((source) => !obsSceneSourceActions.has(action) || !cfg.sceneName || source.sceneName === cfg.sceneName || !source.sceneName)
       .map((source) => ({ value: source.name, label: `${source.name}${source.sceneName ? ` · ${source.sceneName}` : ''}` }));
     const filterOptions = filters
       .filter((filter) => !cfg.sourceName || filter.sourceName === cfg.sourceName || !filter.sourceName)
       .map((filter) => ({ value: filter.name, label: `${filter.name}${filter.sourceName ? ` · ${filter.sourceName}` : ''}` }));
+    const transitionOptions = transitions.map((transition) => ({ value: transition.name, label: `${transition.name}${transition.current ? ' · 현재' : ''}` }));
+    const hotkeyOptions = hotkeys.map((hotkey) => ({ value: hotkey.name || hotkey.id, label: hotkey.name || hotkey.id }));
     return (
       <div className="grid gap-3">
         <AutomationDiscoveryHeader
@@ -3340,35 +3505,62 @@ function ConfigFields({
         )}
         <SelectField
           label="동작"
-          value={String(cfg.action || 'scene.switch')}
+          value={action}
           onChange={(value) => onChange('action', value)}
-          options={actions}
+          options={OBS_ACTION_OPTIONS.map((item) => ({ value: item.value, label: `${item.group} · ${item.label}` }))}
         />
-        <SelectField
-          label="장면 이름"
-          value={String(cfg.sceneName || '')}
-          onChange={(value) => onChange('sceneName', value)}
-          placeholder={sceneOptions.length ? '장면 선택' : 'OBS 목록을 먼저 불러오세요'}
-          options={sceneOptions}
-        />
-        <SelectField
-          label="소스 이름"
-          value={String(cfg.sourceName || '')}
-          onChange={(value) => onChange('sourceName', value)}
-          placeholder={sourceOptions.length ? '소스 선택' : '소스가 필요한 동작에서 선택'}
-          options={sourceOptions}
-        />
-        <SelectField
-          label="필터 이름"
-          value={String(cfg.filterName || '')}
-          onChange={(value) => onChange('filterName', value)}
-          placeholder={filterOptions.length ? '필터 선택' : '필터가 필요한 동작에서 선택'}
-          options={filterOptions}
-        />
-        <label className="flex items-center gap-2 rounded-[var(--radius-control)] border bg-background/70 p-3 text-sm font-semibold">
-          <input type="checkbox" checked={cfg.enabled !== false} onChange={(event) => onChange('enabled', event.target.checked)} />
-          켜기/표시 상태로 실행
-        </label>
+        {needsScene ? (
+          <SelectField
+            label="장면 이름"
+            value={String(cfg.sceneName || '')}
+            onChange={(value) => onChange('sceneName', value)}
+            placeholder={sceneOptions.length ? '장면 선택' : 'OBS 목록을 먼저 불러오세요'}
+            options={sceneOptions}
+          />
+        ) : null}
+        {needsSource ? (
+          <SelectField
+            label={obsInputActions.has(action) || obsMediaActions.has(action) ? '소스/입력 이름' : '소스 이름'}
+            value={String(cfg.sourceName || '')}
+            onChange={(value) => onChange('sourceName', value)}
+            placeholder={sourceOptions.length ? '소스 또는 입력 선택' : 'OBS 목록을 먼저 불러오세요'}
+            options={sourceOptions}
+          />
+        ) : null}
+        {needsFilter ? (
+          <SelectField
+            label="필터 이름"
+            value={String(cfg.filterName || '')}
+            onChange={(value) => onChange('filterName', value)}
+            placeholder={filterOptions.length ? '필터 선택' : '필터가 필요한 동작에서 선택'}
+            options={filterOptions}
+          />
+        ) : null}
+        {action === 'input.volume' ? <Field label="볼륨(0-2)" value={String(cfg.volume ?? 1)} onChange={(value) => onChange('volume', value)} /> : null}
+        {action === 'input.text' || action === 'stream.caption' ? <LongField label="텍스트" value={String(cfg.text || '')} onChange={(value) => onChange('text', value)} /> : null}
+        {action === 'input.settings' ? (
+          <LongField label="입력 설정 JSON" value={String(cfg.inputSettingsJson || '{\n  "text": "새 문구"\n}')} onChange={(value) => onChange('inputSettingsJson', value)} />
+        ) : null}
+        {action === 'record.chapter' ? <Field label="챕터 이름" value={String(cfg.chapterName || '')} onChange={(value) => onChange('chapterName', value)} /> : null}
+        {action === 'transition.set' ? (
+          <SelectField
+            label="전환 효과"
+            value={String(cfg.transitionName || '')}
+            onChange={(value) => onChange('transitionName', value)}
+            placeholder={transitionOptions.length ? '전환 효과 선택' : 'OBS 목록을 먼저 불러오세요'}
+            options={transitionOptions}
+          />
+        ) : null}
+        {action === 'transition.duration' ? <Field label="전환 시간(ms)" value={String(cfg.durationMs || 300)} onChange={(value) => onChange('durationMs', value)} /> : null}
+        {action === 'hotkey.trigger' ? (
+          <SelectField
+            label="OBS 핫키"
+            value={String(cfg.hotkeyName || '')}
+            onChange={(value) => onChange('hotkeyName', value)}
+            placeholder={hotkeyOptions.length ? '핫키 선택' : 'OBS 목록을 먼저 불러오세요'}
+            options={hotkeyOptions}
+          />
+        ) : null}
       </div>
     );
   }

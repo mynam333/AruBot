@@ -484,6 +484,26 @@ $('#obsHideSourceButton').addEventListener('click', () => run(async () => {
   pushLocalLog('success', `OBS 소스 숨김: ${payload.sourceName}`);
 }));
 
+$('#obsToggleSourceButton').addEventListener('click', () => run(async () => {
+  const payload = selectedObsSourcePayload(true);
+  if (!payload.sourceName || !payload.sceneName) return;
+  await window.aruLocal.saveConfig(collectConfig());
+  fields.obsPassword.value = '';
+  fields.obsPassword.dataset.dirty = '';
+  await window.aruLocal.runObsAction({ ...payload, action: 'source.toggle' });
+  pushLocalLog('success', `OBS 소스 표시 토글: ${payload.sourceName}`);
+}));
+
+$('#obsToggleMuteButton').addEventListener('click', () => run(async () => {
+  const sourceName = fields.obsSourceSelect.value;
+  if (!sourceName) return;
+  await window.aruLocal.saveConfig(collectConfig());
+  fields.obsPassword.value = '';
+  fields.obsPassword.dataset.dirty = '';
+  await window.aruLocal.runObsAction({ action: 'input.toggleMute', sourceName });
+  pushLocalLog('success', `OBS 입력 음소거 토글: ${sourceName}`);
+}));
+
 $('#chooseSoundFolderButton').addEventListener('click', () => run(async () => {
   const folder = await window.aruLocal.chooseSoundFolder();
   if (folder) $('#soundFolderText').textContent = folder;

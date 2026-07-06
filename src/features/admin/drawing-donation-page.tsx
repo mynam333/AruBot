@@ -93,19 +93,89 @@ function drawAdminStroke(ctx: CanvasRenderingContext2D, stroke: AdminStroke, wid
   if (!points.length) return;
   const brush = stroke.brush || {};
   const shortSide = Math.min(width, height);
-  const lineWidth = Math.max(1, shortSide * Math.max(0.002, Math.min(0.08, Number(brush.size ?? 0.012) || 0.012)));
+  const lineWidth = Math.max(1, shortSide * Math.max(0.002, Math.min(0.2, Number(brush.size ?? 0.012) || 0.012)));
   ctx.save();
   ctx.globalAlpha = brush.type === 'eraser' ? 1 : Math.max(0.05, Math.min(1, Number(brush.alpha ?? 1) || 1));
-  ctx.globalCompositeOperation = brush.type === 'eraser' ? 'destination-out' : brush.type === 'highlighter' ? 'multiply' : 'source-over';
+  ctx.globalCompositeOperation = brush.type === 'eraser' ? 'destination-out' : 'source-over';
   ctx.strokeStyle = String(brush.color || '#ff6b9a');
+  ctx.fillStyle = String(brush.color || '#ff6b9a');
   ctx.lineWidth = lineWidth;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
+  if (brush.type === 'airbrush') {
+    const rgb = /^#[0-9a-f]{6}$/i.test(String(brush.color || '')) ? String(brush.color) : '#ff6b9a';
+    const radius = Math.max(1, lineWidth * 0.9);
+    const drawDab = (x: number, y: number) => {
+      const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius);
+      const r = Number.parseInt(rgb.slice(1, 3), 16);
+      const g = Number.parseInt(rgb.slice(3, 5), 16);
+      const b = Number.parseInt(rgb.slice(5, 7), 16);
+      gradient.addColorStop(0, `rgba(${r},${g},${b},0.34)`);
+      gradient.addColorStop(0.48, `rgba(${r},${g},${b},0.12)`);
+      gradient.addColorStop(1, `rgba(${r},${g},${b},0)`);
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.fill();
+    };
+    drawDab(points[0].x * width, points[0].y * height);
+    for (let index = 1; index < points.length; index += 1) {
+      const prev = points[index - 1];
+      const point = points[index];
+      const x0 = prev.x * width;
+      const y0 = prev.y * height;
+      const x1 = point.x * width;
+      const y1 = point.y * height;
+      const count = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) / Math.max(1, radius * 0.38)));
+      for (let i = 1; i <= count; i += 1) {
+        const t = i / count;
+        drawDab(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t);
+      }
+    }
+    ctx.restore();
+    return;
+  }
   if (points.length === 1) {
-    ctx.fillStyle = String(brush.color || '#ff6b9a');
     ctx.beginPath();
     ctx.arc(points[0].x * width, points[0].y * height, Math.max(0.5, lineWidth / 2), 0, Math.PI * 2);
     ctx.fill();
+    ctx.restore();
+    return;
+  }
+  if (brush.type === 'crayon' || brush.type === 'marker') {
+    const layers = [
+      { scale: 1.35, alpha: 0.2, dash: [lineWidth * 0.42, lineWidth * 0.22] },
+      { scale: 1.06, alpha: 0.58, dash: [lineWidth * 0.28, lineWidth * 0.14] },
+      { scale: 0.72, alpha: 0.34, dash: [lineWidth * 0.18, lineWidth * 0.18] },
+    ];
+    layers.forEach((layer, index) => {
+      ctx.globalAlpha = Math.max(0.05, Math.min(1, Number(brush.alpha ?? 1) || 1)) * layer.alpha;
+      ctx.lineWidth = lineWidth * layer.scale;
+      ctx.setLineDash(layer.dash);
+      ctx.lineDashOffset = -(index + 1) * lineWidth * 0.37;
+      ctx.beginPath();
+      ctx.moveTo(points[0].x * width, points[0].y * height);
+      for (const point of points.slice(1)) ctx.lineTo(point.x * width, point.y * height);
+      ctx.stroke();
+    });
+    ctx.setLineDash([]);
+    ctx.restore();
+    return;
+  }
+  if (brush.type === 'brush' || brush.type === 'highlighter') {
+    const alpha = Math.max(0.05, Math.min(1, Number(brush.alpha ?? 1) || 1));
+    ctx.globalAlpha = alpha * 0.36;
+    ctx.lineWidth = lineWidth * 1.85;
+    ctx.beginPath();
+    ctx.moveTo(points[0].x * width, points[0].y * height);
+    for (const point of points.slice(1)) ctx.lineTo(point.x * width, point.y * height);
+    ctx.stroke();
+    ctx.globalAlpha = alpha * 0.82;
+    ctx.lineWidth = lineWidth * 0.92;
+    ctx.beginPath();
+    ctx.moveTo(points[0].x * width, points[0].y * height);
+    for (const point of points.slice(1)) ctx.lineTo(point.x * width, point.y * height);
+    ctx.stroke();
     ctx.restore();
     return;
   }

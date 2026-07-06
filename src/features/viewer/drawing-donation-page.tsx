@@ -47,13 +47,13 @@ type LiveSurface = {
 
 type StrokePoint = { x: number; y: number; p: number; t: number };
 type Stroke = { id: string; brush: BrushState; points: StrokePoint[] };
-type BrushState = { type: 'pen' | 'marker' | 'highlighter' | 'airbrush' | 'eraser'; color: string; alpha: number; size: number };
+type BrushState = { type: 'pen' | 'crayon' | 'brush' | 'airbrush' | 'eraser'; color: string; alpha: number; size: number };
 
 const colorSwatches = ['#ff6b9a', '#ffb86b', '#ffe66d', '#7bd88f', '#6bdcff', '#8f7dff', '#ffffff', '#111827'];
 const brushLabels: Record<BrushState['type'], string> = {
   pen: '펜',
-  marker: '마커',
-  highlighter: '형광펜',
+  crayon: '크레용',
+  brush: '먹붓',
   airbrush: '에어브러시',
   eraser: '지우개',
 };
@@ -68,9 +68,9 @@ function computeInkUsage(strokes: Stroke[]) {
   for (const stroke of strokes) {
     const { brush, points } = stroke;
     if (!points.length) continue;
-    const size = Math.max(0.002, Math.min(0.08, Number(brush.size || 0.012)));
+    const size = Math.max(0.002, Math.min(0.2, Number(brush.size || 0.012)));
     const alpha = brush.type === 'eraser' ? 1 : Math.max(0.05, Math.min(1, Number(brush.alpha || 1)));
-    const toolFactor = brush.type === 'eraser' ? 0.35 : brush.type === 'highlighter' ? 0.7 : brush.type === 'airbrush' ? 1.25 : 1;
+    const toolFactor = brush.type === 'eraser' ? 0.35 : brush.type === 'airbrush' ? 1.25 : brush.type === 'brush' ? 1.1 : 1;
     if (points.length === 1) {
       rawInk += size * alpha * toolFactor * Math.max(0.5, Number(points[0].p || 1)) * 0.2;
       continue;
@@ -134,6 +134,49 @@ function traceDrawingPath(ctx: CanvasRenderingContext2D, points: StrokePoint[], 
   for (const point of points.slice(1)) ctx.lineTo(point.x * width, point.y * height);
 }
 
+function hexToRgb(color: string) {
+  const match = String(color || '').trim().match(/^#?([0-9a-f]{6})$/i);
+  if (!match) return { r: 255, g: 107, b: 154 };
+  const value = Number.parseInt(match[1], 16);
+  return { r: (value >> 16) & 255, g: (value >> 8) & 255, b: value & 255 };
+}
+
+function rgbaFromHex(color: string, alpha: number) {
+  const { r, g, b } = hexToRgb(color);
+  return `rgba(${r},${g},${b},${Math.max(0, Math.min(1, alpha))})`;
+}
+
+function drawAirbrushDab(ctx: CanvasRenderingContext2D, x: number, y: number, radius: number, color: string) {
+  const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius);
+  gradient.addColorStop(0, rgbaFromHex(color, 0.34));
+  gradient.addColorStop(0.48, rgbaFromHex(color, 0.12));
+  gradient.addColorStop(1, rgbaFromHex(color, 0));
+  ctx.fillStyle = gradient;
+  ctx.beginPath();
+  ctx.arc(x, y, radius, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawAirbrushPath(ctx: CanvasRenderingContext2D, points: StrokePoint[], width: number, height: number, radius: number, color: string) {
+  const step = Math.max(1, radius * 0.38);
+  const drawPoint = (point: StrokePoint) => drawAirbrushDab(ctx, point.x * width, point.y * height, radius, color);
+  drawPoint(points[0]);
+  for (let index = 1; index < points.length; index += 1) {
+    const prev = points[index - 1];
+    const point = points[index];
+    const x0 = prev.x * width;
+    const y0 = prev.y * height;
+    const x1 = point.x * width;
+    const y1 = point.y * height;
+    const distance = Math.hypot(x1 - x0, y1 - y0);
+    const count = Math.max(1, Math.ceil(distance / step));
+    for (let i = 1; i <= count; i += 1) {
+      const t = i / count;
+      drawAirbrushDab(ctx, x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, radius, color);
+    }
+  }
+}
+
 function drawStroke(ctx: CanvasRenderingContext2D, stroke: Stroke, width: number, height: number, until = Infinity) {
   const points = stroke.points.filter((point) => point.t <= until);
   if (!points.length) return;
@@ -142,38 +185,35 @@ function drawStroke(ctx: CanvasRenderingContext2D, stroke: Stroke, width: number
   const baseLineWidth = Math.max(1, shortSide * stroke.brush.size);
   ctx.save();
   ctx.globalAlpha = stroke.brush.type === 'eraser' ? 1 : baseAlpha;
-  ctx.globalCompositeOperation = stroke.brush.type === 'eraser' ? 'destination-out' : stroke.brush.type === 'highlighter' ? 'multiply' : 'source-over';
+  ctx.globalCompositeOperation = stroke.brush.type === 'eraser' ? 'destination-out' : 'source-over';
   ctx.strokeStyle = stroke.brush.color;
   ctx.lineWidth = baseLineWidth;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   if (stroke.brush.type === 'airbrush') {
-    ctx.fillStyle = stroke.brush.color;
-    const radius = Math.max(1, shortSide * stroke.brush.size * 0.9);
-    for (const point of points) {
-      const gradient = ctx.createRadialGradient(point.x * width, point.y * height, 0, point.x * width, point.y * height, radius);
-      gradient.addColorStop(0, stroke.brush.color);
-      gradient.addColorStop(1, 'rgba(255,255,255,0)');
-      ctx.fillStyle = gradient;
-      ctx.beginPath();
-      ctx.arc(point.x * width, point.y * height, radius, 0, Math.PI * 2);
-      ctx.fill();
-    }
+    drawAirbrushPath(ctx, points, width, height, Math.max(1, shortSide * stroke.brush.size * 0.9), stroke.brush.color);
     ctx.restore();
     return;
   }
-  if (stroke.brush.type === 'marker') {
+  if (points.length === 1) {
+    ctx.fillStyle = stroke.brush.color;
+    ctx.beginPath();
+    ctx.arc(points[0].x * width, points[0].y * height, Math.max(0.5, ctx.lineWidth / 2), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    return;
+  }
+  if (stroke.brush.type === 'crayon') {
     const layers = [
-      { scale: 3.15, alpha: 0.07 },
-      { scale: 2.35, alpha: 0.11 },
-      { scale: 1.65, alpha: 0.18 },
-      { scale: 1.06, alpha: 0.58 },
+      { scale: 1.35, alpha: 0.2, dash: [baseLineWidth * 0.42, baseLineWidth * 0.22] },
+      { scale: 1.06, alpha: 0.58, dash: [baseLineWidth * 0.28, baseLineWidth * 0.14] },
+      { scale: 0.72, alpha: 0.34, dash: [baseLineWidth * 0.18, baseLineWidth * 0.18] },
     ];
-    ctx.shadowColor = stroke.brush.color;
-    for (const layer of layers) {
+    layers.forEach((layer, index) => {
       ctx.globalAlpha = baseAlpha * layer.alpha;
       ctx.lineWidth = baseLineWidth * layer.scale;
-      ctx.shadowBlur = Math.max(0, baseLineWidth * (layer.scale - 1) * 0.28);
+      ctx.setLineDash(layer.dash);
+      ctx.lineDashOffset = -(index + 1) * baseLineWidth * 0.37;
       if (points.length === 1) {
         ctx.fillStyle = stroke.brush.color;
         ctx.beginPath();
@@ -183,15 +223,26 @@ function drawStroke(ctx: CanvasRenderingContext2D, stroke: Stroke, width: number
         traceDrawingPath(ctx, points, width, height);
         ctx.stroke();
       }
-    }
+    });
+    ctx.setLineDash([]);
     ctx.restore();
     return;
   }
-  if (points.length === 1) {
-    ctx.fillStyle = stroke.brush.color;
-    ctx.beginPath();
-    ctx.arc(points[0].x * width, points[0].y * height, Math.max(0.5, ctx.lineWidth / 2), 0, Math.PI * 2);
-    ctx.fill();
+  if (stroke.brush.type === 'brush') {
+    ctx.shadowColor = stroke.brush.color;
+    ctx.shadowBlur = baseLineWidth * 0.18;
+    ctx.globalAlpha = baseAlpha * 0.36;
+    ctx.lineWidth = baseLineWidth * 1.85;
+    traceDrawingPath(ctx, points, width, height);
+    ctx.stroke();
+    ctx.globalAlpha = baseAlpha * 0.82;
+    ctx.lineWidth = baseLineWidth * 0.92;
+    traceDrawingPath(ctx, points, width, height);
+    ctx.stroke();
+    ctx.globalAlpha = baseAlpha * 0.28;
+    ctx.lineWidth = Math.max(1, baseLineWidth * 0.28);
+    traceDrawingPath(ctx, points.filter((_, index) => index % 2 === 0 || index === points.length - 1), width, height);
+    ctx.stroke();
     ctx.restore();
     return;
   }
@@ -293,7 +344,7 @@ export function DrawingDonationEditorPage({ channelUid }: { channelUid: string }
     const cursor = brushCursorRef.current;
     if (!cursor) return;
     const rect = event.currentTarget.getBoundingClientRect();
-    const cursorScale = brush.type === 'marker' ? 2.35 : 1;
+    const cursorScale = brush.type === 'airbrush' ? 1.8 : brush.type === 'crayon' ? 1.25 : brush.type === 'brush' ? 1.45 : 1;
     const diameter = Math.max(8, Math.min(rect.width, rect.height) * brush.size * cursorScale);
     const x = event.clientX - rect.left;
     const y = event.clientY - rect.top;
@@ -668,7 +719,7 @@ export function DrawingDonationEditorPage({ channelUid }: { channelUid: string }
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid grid-cols-2 gap-2">
-                {(['pen', 'marker', 'highlighter', 'airbrush', 'eraser'] as const).map((type) => (
+                {(['pen', 'crayon', 'brush', 'airbrush', 'eraser'] as const).map((type) => (
                   <Button key={type} type="button" variant={brush.type === type ? 'default' : 'secondary'} onClick={() => setBrush((current) => ({ ...current, type }))}>
                     {type === 'eraser' ? <Eraser className="h-[1em] w-[1em]" /> : <Brush className="h-[1em] w-[1em]" />} {brushLabels[type]}
                   </Button>
@@ -702,7 +753,7 @@ export function DrawingDonationEditorPage({ channelUid }: { channelUid: string }
               </label>
               <label className="grid gap-2 text-sm font-semibold">
                 붓 크기 {Math.round(brush.size * 1000) / 10}%
-                <input type="range" min="2" max="80" value={Math.round(brush.size * 1000)} onChange={(event) => setBrush((current) => ({ ...current, size: Number(event.target.value) / 1000 }))} />
+                <input type="range" min="2" max="200" value={Math.round(brush.size * 1000)} onChange={(event) => setBrush((current) => ({ ...current, size: Number(event.target.value) / 1000 }))} />
               </label>
               <div className="grid grid-cols-2 gap-2">
                 <Button type="button" variant="secondary" onClick={undo} disabled={!strokes.length}><RotateCcw className="h-[1em] w-[1em]" /> 되돌리기</Button>

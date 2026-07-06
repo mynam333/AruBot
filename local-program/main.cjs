@@ -509,6 +509,7 @@ function getUpdaterFeedUrl() {
 function configureAutoUpdater() {
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.autoRunAppAfterInstall = true;
   autoUpdater.allowPrerelease = false;
   autoUpdater.disableWebInstaller = true;
   autoUpdater.setFeedURL({ provider: 'generic', url: getUpdaterFeedUrl() });
@@ -693,7 +694,17 @@ function scheduleSilentInstallerOnQuit() {
     '  $argumentLine = "/S /currentuser"',
     '  if ($installDir) { $argumentLine = "$argumentLine /D=$installDir" }',
     '  $process = Start-Process -FilePath $installer -ArgumentList $argumentLine -WindowStyle Hidden -Wait -PassThru',
-    '  Write-UpdateResult "finished" $process.ExitCode "installer finished"',
+    '  $launchPath = $exePath',
+    '  if ((-not $launchPath -or -not (Test-Path -LiteralPath $launchPath)) -and $installDir -and (Test-Path -LiteralPath $installDir)) {',
+    '    $candidate = Get-ChildItem -LiteralPath $installDir -Filter "*.exe" -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "AruBot|Local" } | Select-Object -First 1',
+    '    if ($candidate) { $launchPath = $candidate.FullName }',
+    '  }',
+    '  if ($process.ExitCode -eq 0 -and $launchPath -and (Test-Path -LiteralPath $launchPath)) {',
+    '    Start-Process -FilePath $launchPath -WorkingDirectory (Split-Path -Parent $launchPath) -WindowStyle Normal | Out-Null',
+    '    Write-UpdateResult "finished-and-launched" $process.ExitCode "installer finished and app launched"',
+    '  } else {',
+    '    Write-UpdateResult "finished" $process.ExitCode "installer finished"',
+    '  }',
     '} catch {',
     '  Write-UpdateResult "failed" $null $_.Exception.Message',
     '} finally {',
@@ -1103,10 +1114,58 @@ function makeObsAuth(password, salt, challenge) {
   return crypto.createHash('sha256').update(`${secret}${challenge}`).digest('base64');
 }
 
+const OBS_ACTIONS = [
+  { id: 'scene.switch', name: '장면 전환', group: 'scene' },
+  { id: 'scene.preview', name: '미리보기 장면 전환', group: 'scene' },
+  { id: 'source.show', name: '소스 표시', group: 'source' },
+  { id: 'source.hide', name: '소스 숨김', group: 'source' },
+  { id: 'source.toggle', name: '소스 표시 토글', group: 'source' },
+  { id: 'input.mute', name: '입력 음소거', group: 'audio' },
+  { id: 'input.unmute', name: '입력 음소거 해제', group: 'audio' },
+  { id: 'input.toggleMute', name: '입력 음소거 토글', group: 'audio' },
+  { id: 'input.volume', name: '입력 볼륨 설정', group: 'audio' },
+  { id: 'filter.on', name: '필터 ON', group: 'filter' },
+  { id: 'filter.off', name: '필터 OFF', group: 'filter' },
+  { id: 'filter.toggle', name: '필터 토글', group: 'filter' },
+  { id: 'input.text', name: '텍스트 소스 수정', group: 'input' },
+  { id: 'input.settings', name: '입력 설정 JSON 적용', group: 'input' },
+  { id: 'media.play', name: '미디어 재생', group: 'media' },
+  { id: 'media.pause', name: '미디어 일시정지', group: 'media' },
+  { id: 'media.stop', name: '미디어 정지', group: 'media' },
+  { id: 'media.restart', name: '미디어 다시 시작', group: 'media' },
+  { id: 'media.next', name: '미디어 다음', group: 'media' },
+  { id: 'media.previous', name: '미디어 이전', group: 'media' },
+  { id: 'record.start', name: '녹화 시작', group: 'record' },
+  { id: 'record.stop', name: '녹화 중지', group: 'record' },
+  { id: 'record.toggle', name: '녹화 토글', group: 'record' },
+  { id: 'record.pause', name: '녹화 일시정지', group: 'record' },
+  { id: 'record.resume', name: '녹화 재개', group: 'record' },
+  { id: 'record.togglePause', name: '녹화 일시정지 토글', group: 'record' },
+  { id: 'record.split', name: '녹화 파일 분할', group: 'record' },
+  { id: 'record.chapter', name: '녹화 챕터 만들기', group: 'record' },
+  { id: 'stream.start', name: '방송 시작', group: 'stream' },
+  { id: 'stream.stop', name: '방송 종료', group: 'stream' },
+  { id: 'stream.toggle', name: '방송 토글', group: 'stream' },
+  { id: 'stream.caption', name: '방송 자막 전송', group: 'stream' },
+  { id: 'replay.start', name: '리플레이 버퍼 시작', group: 'replay' },
+  { id: 'replay.stop', name: '리플레이 버퍼 중지', group: 'replay' },
+  { id: 'replay.toggle', name: '리플레이 버퍼 토글', group: 'replay' },
+  { id: 'replay.save', name: '리플레이 저장', group: 'replay' },
+  { id: 'virtualcam.start', name: '가상 카메라 시작', group: 'output' },
+  { id: 'virtualcam.stop', name: '가상 카메라 중지', group: 'output' },
+  { id: 'virtualcam.toggle', name: '가상 카메라 토글', group: 'output' },
+  { id: 'transition.set', name: '전환 효과 선택', group: 'transition' },
+  { id: 'transition.duration', name: '전환 시간 설정', group: 'transition' },
+  { id: 'studio.mode.on', name: '스튜디오 모드 켜기', group: 'studio' },
+  { id: 'studio.mode.off', name: '스튜디오 모드 끄기', group: 'studio' },
+  { id: 'studio.mode.toggle', name: '스튜디오 모드 토글', group: 'studio' },
+  { id: 'hotkey.trigger', name: 'OBS 핫키 실행', group: 'hotkey' },
+];
+
 async function openObsSocket(options = {}) {
   const endpoint = getObsEndpoint(options.endpoint);
   const password = String(options.password ?? config.obsPassword ?? '').trim();
-  const ws = await openWs(endpoint, Math.max(1500, Math.min(30000, Number(options.timeoutMs || 7000))), 'OBS 연결 시간이 초과되었습니다.');
+  const ws = await openWs(endpoint, Math.max(1500, Math.min(30000, Number(options.timeoutMs || 7000))), 'OBS 연결 시간이 초과되었습니다.', 'obswebsocket.json');
   const hello = await waitObsMessage(ws, (message) => message?.op === 0, options.timeoutMs || 7000);
   const auth = hello?.d?.authentication;
   const identify = { op: 1, d: { rpcVersion: 1 } };
@@ -1122,9 +1181,9 @@ async function openObsSocket(options = {}) {
   return { ws, endpoint, negotiatedRpcVersion: identified?.d?.negotiatedRpcVersion || 1 };
 }
 
-function openWs(endpoint, timeoutMs, timeoutMessage) {
+function openWs(endpoint, timeoutMs, timeoutMessage, protocols) {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(endpoint);
+    const ws = protocols ? new WebSocket(endpoint, protocols) : new WebSocket(endpoint);
     const timer = setTimeout(() => {
       try { ws.close(); } catch {}
       reject(new Error(timeoutMessage || 'WebSocket 연결 시간이 초과되었습니다.'));
@@ -1150,6 +1209,7 @@ function waitObsMessage(ws, predicate, timeoutMs = 7000) {
       clearTimeout(timer);
       ws.off('message', onMessage);
       ws.off('error', onError);
+      ws.off('close', onClose);
     };
     const onMessage = (raw) => {
       try {
@@ -1166,8 +1226,14 @@ function waitObsMessage(ws, predicate, timeoutMs = 7000) {
       cleanup();
       reject(error);
     };
+    const onClose = (code, reason) => {
+      cleanup();
+      const text = String(reason || '').trim();
+      reject(new Error(code === 4005 ? 'OBS WebSocket 비밀번호가 올바르지 않습니다.' : `OBS 연결이 종료되었습니다.${text ? ` ${text}` : ''}`));
+    };
     ws.on('message', onMessage);
     ws.once('error', onError);
+    ws.once('close', onClose);
   });
 }
 
@@ -1183,8 +1249,12 @@ async function sendObsRequest(ws, requestType, requestData = {}, timeoutMs = 700
 async function discoverObs(options = {}) {
   const { ws, endpoint } = await openObsSocket(options);
   try {
-    const sceneData = await sendObsRequest(ws, 'GetSceneList', {}, options.timeoutMs);
-    const inputData = await sendObsRequest(ws, 'GetInputList', {}, options.timeoutMs).catch(() => ({ inputs: [] }));
+    const [sceneData, inputData, hotkeyData, transitionData] = await Promise.all([
+      sendObsRequest(ws, 'GetSceneList', {}, options.timeoutMs),
+      sendObsRequest(ws, 'GetInputList', {}, options.timeoutMs).catch(() => ({ inputs: [] })),
+      sendObsRequest(ws, 'GetHotkeyList', {}, options.timeoutMs).catch(() => ({ hotkeys: [] })),
+      sendObsRequest(ws, 'GetSceneTransitionList', {}, options.timeoutMs).catch(() => ({ transitions: [] })),
+    ]);
     const scenes = (sceneData.scenes || []).map((scene) => ({
       id: String(scene.sceneUuid || scene.sceneName || ''),
       name: String(scene.sceneName || ''),
@@ -1226,16 +1296,19 @@ async function discoverObs(options = {}) {
       scenes,
       sources,
       filters: filterRows.flat(),
-      requests: [
-        { id: 'scene.switch', name: '장면 전환', group: 'scene' },
-        { id: 'source.visibility', name: '소스 표시/숨김', group: 'source' },
-        { id: 'filter.enabled', name: '필터 켜기/끄기', group: 'filter' },
-        { id: 'record.start', name: '녹화 시작', group: 'record' },
-        { id: 'record.stop', name: '녹화 중지', group: 'record' },
-        { id: 'stream.start', name: '방송 시작', group: 'stream' },
-        { id: 'stream.stop', name: '방송 종료', group: 'stream' },
-        { id: 'replay.save', name: '리플레이 저장', group: 'replay' },
-      ],
+      hotkeys: (hotkeyData.hotkeys || []).map((hotkey) => ({
+        id: String(hotkey || ''),
+        name: String(hotkey || ''),
+      })).filter((hotkey) => hotkey.id),
+      transitions: (transitionData.transitions || []).map((transition) => {
+        const name = typeof transition === 'string' ? transition : String(transition.transitionName || transition.transitionKind || '');
+        return {
+          id: typeof transition === 'string' ? transition : String(transition.transitionKind || transition.transitionName || ''),
+          name,
+          current: name === transitionData.currentSceneTransitionName,
+        };
+      }).filter((transition) => transition.name),
+      requests: OBS_ACTIONS,
       fetchedAt: new Date().toISOString(),
     };
   } finally {
@@ -1243,44 +1316,167 @@ async function discoverObs(options = {}) {
   }
 }
 
+function parseObsObject(value, fieldName) {
+  if (!value) return {};
+  if (typeof value === 'object' && !Array.isArray(value)) return value;
+  try {
+    const parsed = JSON.parse(String(value));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('object_required');
+    return parsed;
+  } catch {
+    throw new Error(`${fieldName || 'JSON'} 형식이 올바르지 않습니다.`);
+  }
+}
+
+async function getObsSceneItem(ws, sceneName, sourceName, timeoutMs) {
+  const list = await sendObsRequest(ws, 'GetSceneItemList', { sceneName }, timeoutMs);
+  const item = (list.sceneItems || []).find((entry) => String(entry.sourceName || '') === sourceName);
+  if (!item) throw new Error('선택한 OBS 소스를 장면에서 찾지 못했습니다.');
+  return item;
+}
+
+async function setObsSceneItemEnabled(ws, payload, enabled) {
+  const sceneName = String(payload.sceneName || '').trim();
+  const sourceName = String(payload.sourceName || '').trim();
+  if (!sceneName || !sourceName) throw new Error('OBS 장면과 소스를 선택해 주세요.');
+  const item = await getObsSceneItem(ws, sceneName, sourceName, payload.timeoutMs);
+  return await sendObsRequest(ws, 'SetSceneItemEnabled', {
+    sceneName,
+    sceneItemId: Number(item.sceneItemId),
+    sceneItemEnabled: !!enabled,
+  }, payload.timeoutMs);
+}
+
 async function runObsAction(payload = {}) {
   const { ws } = await openObsSocket({ endpoint: payload.endpoint, timeoutMs: payload.timeoutMs });
   try {
     const action = String(payload.action || 'scene.switch');
+    const inputName = String(payload.sourceName || payload.inputName || '').trim();
     if (action === 'scene.switch') {
       const sceneName = String(payload.sceneName || '').trim();
       if (!sceneName) throw new Error('전환할 OBS 장면이 없습니다.');
       return await sendObsRequest(ws, 'SetCurrentProgramScene', { sceneName }, payload.timeoutMs);
     }
-    if (action === 'source.visibility') {
+    if (action === 'scene.preview') {
+      const sceneName = String(payload.sceneName || '').trim();
+      if (!sceneName) throw new Error('미리보기로 보낼 OBS 장면이 없습니다.');
+      return await sendObsRequest(ws, 'SetCurrentPreviewScene', { sceneName }, payload.timeoutMs);
+    }
+    if (action === 'source.visibility') return await setObsSceneItemEnabled(ws, payload, payload.enabled !== false);
+    if (action === 'source.show') return await setObsSceneItemEnabled(ws, payload, true);
+    if (action === 'source.hide') return await setObsSceneItemEnabled(ws, payload, false);
+    if (action === 'source.toggle') {
       const sceneName = String(payload.sceneName || '').trim();
       const sourceName = String(payload.sourceName || '').trim();
       if (!sceneName || !sourceName) throw new Error('OBS 장면과 소스를 선택해 주세요.');
-      const list = await sendObsRequest(ws, 'GetSceneItemList', { sceneName }, payload.timeoutMs);
-      const item = (list.sceneItems || []).find((entry) => String(entry.sourceName || '') === sourceName);
-      if (!item) throw new Error('선택한 OBS 소스를 장면에서 찾지 못했습니다.');
+      const item = await getObsSceneItem(ws, sceneName, sourceName, payload.timeoutMs);
+      const status = await sendObsRequest(ws, 'GetSceneItemEnabled', { sceneName, sceneItemId: Number(item.sceneItemId) }, payload.timeoutMs);
       return await sendObsRequest(ws, 'SetSceneItemEnabled', {
         sceneName,
         sceneItemId: Number(item.sceneItemId),
-        sceneItemEnabled: payload.enabled !== false,
+        sceneItemEnabled: !status.sceneItemEnabled,
       }, payload.timeoutMs);
     }
-    if (action === 'filter.enabled') {
-      const sourceName = String(payload.sourceName || '').trim();
+    if (action === 'filter.enabled' || action === 'filter.on' || action === 'filter.off' || action === 'filter.toggle') {
+      const sourceName = inputName;
       const filterName = String(payload.filterName || '').trim();
       if (!sourceName || !filterName) throw new Error('OBS 소스와 필터를 선택해 주세요.');
-      return await sendObsRequest(ws, 'SetSourceFilterEnabled', {
-        sourceName,
-        filterName,
-        filterEnabled: payload.enabled !== false,
+      let filterEnabled = payload.enabled !== false;
+      if (action === 'filter.on') filterEnabled = true;
+      if (action === 'filter.off') filterEnabled = false;
+      if (action === 'filter.toggle') {
+        const current = await sendObsRequest(ws, 'GetSourceFilter', { sourceName, filterName }, payload.timeoutMs);
+        filterEnabled = !current.filterEnabled;
+      }
+      return await sendObsRequest(ws, 'SetSourceFilterEnabled', { sourceName, filterName, filterEnabled }, payload.timeoutMs);
+    }
+    if (action === 'input.mute' || action === 'input.unmute') {
+      if (!inputName) throw new Error('OBS 입력을 선택해 주세요.');
+      return await sendObsRequest(ws, 'SetInputMute', { inputName, inputMuted: action === 'input.mute' }, payload.timeoutMs);
+    }
+    if (action === 'input.toggleMute') {
+      if (!inputName) throw new Error('OBS 입력을 선택해 주세요.');
+      return await sendObsRequest(ws, 'ToggleInputMute', { inputName }, payload.timeoutMs);
+    }
+    if (action === 'input.volume') {
+      if (!inputName) throw new Error('OBS 입력을 선택해 주세요.');
+      const inputVolumeMul = Math.max(0, Math.min(2, Number(payload.volume ?? 1)));
+      return await sendObsRequest(ws, 'SetInputVolume', { inputName, inputVolumeMul }, payload.timeoutMs);
+    }
+    if (action === 'input.text') {
+      if (!inputName) throw new Error('OBS 텍스트 소스를 선택해 주세요.');
+      return await sendObsRequest(ws, 'SetInputSettings', {
+        inputName,
+        inputSettings: { text: String(payload.text || '') },
+        overlay: true,
       }, payload.timeoutMs);
+    }
+    if (action === 'input.settings') {
+      if (!inputName) throw new Error('OBS 입력을 선택해 주세요.');
+      return await sendObsRequest(ws, 'SetInputSettings', {
+        inputName,
+        inputSettings: parseObsObject(payload.inputSettingsJson || payload.inputSettings, '입력 설정 JSON'),
+        overlay: payload.overlay !== false,
+      }, payload.timeoutMs);
+    }
+    const mediaMap = {
+      'media.play': 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY',
+      'media.pause': 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PAUSE',
+      'media.stop': 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP',
+      'media.restart': 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART',
+      'media.next': 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_NEXT',
+      'media.previous': 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PREVIOUS',
+    };
+    if (mediaMap[action]) {
+      if (!inputName) throw new Error('OBS 미디어 입력을 선택해 주세요.');
+      return await sendObsRequest(ws, 'TriggerMediaInputAction', { inputName, mediaAction: mediaMap[action] }, payload.timeoutMs);
+    }
+    if (action === 'stream.caption') {
+      return await sendObsRequest(ws, 'SendStreamCaption', { captionText: String(payload.text || '') }, payload.timeoutMs);
+    }
+    if (action === 'record.chapter') {
+      const chapterName = String(payload.chapterName || '').trim();
+      return await sendObsRequest(ws, 'CreateRecordChapter', chapterName ? { chapterName } : {}, payload.timeoutMs);
+    }
+    if (action === 'transition.set') {
+      const transitionName = String(payload.transitionName || '').trim();
+      if (!transitionName) throw new Error('전환 효과를 선택해 주세요.');
+      return await sendObsRequest(ws, 'SetCurrentSceneTransition', { transitionName }, payload.timeoutMs);
+    }
+    if (action === 'transition.duration') {
+      const transitionDuration = Math.max(0, Math.round(Number(payload.durationMs ?? 300)));
+      return await sendObsRequest(ws, 'SetCurrentSceneTransitionDuration', { transitionDuration }, payload.timeoutMs);
+    }
+    if (action === 'studio.mode.on' || action === 'studio.mode.off') {
+      return await sendObsRequest(ws, 'SetStudioModeEnabled', { studioModeEnabled: action === 'studio.mode.on' }, payload.timeoutMs);
+    }
+    if (action === 'studio.mode.toggle') {
+      const current = await sendObsRequest(ws, 'GetStudioModeEnabled', {}, payload.timeoutMs);
+      return await sendObsRequest(ws, 'SetStudioModeEnabled', { studioModeEnabled: !current.studioModeEnabled }, payload.timeoutMs);
+    }
+    if (action === 'hotkey.trigger') {
+      const hotkeyName = String(payload.hotkeyName || '').trim();
+      if (!hotkeyName) throw new Error('OBS 핫키를 선택해 주세요.');
+      return await sendObsRequest(ws, 'TriggerHotkeyByName', { hotkeyName }, payload.timeoutMs);
     }
     const requestMap = {
       'record.start': 'StartRecord',
       'record.stop': 'StopRecord',
+      'record.toggle': 'ToggleRecord',
+      'record.pause': 'PauseRecord',
+      'record.resume': 'ResumeRecord',
+      'record.togglePause': 'ToggleRecordPause',
+      'record.split': 'SplitRecordFile',
       'stream.start': 'StartStream',
       'stream.stop': 'StopStream',
+      'stream.toggle': 'ToggleStream',
+      'replay.start': 'StartReplayBuffer',
+      'replay.stop': 'StopReplayBuffer',
+      'replay.toggle': 'ToggleReplayBuffer',
       'replay.save': 'SaveReplayBuffer',
+      'virtualcam.start': 'StartVirtualCam',
+      'virtualcam.stop': 'StopVirtualCam',
+      'virtualcam.toggle': 'ToggleVirtualCam',
     };
     const requestType = requestMap[action];
     if (!requestType) throw new Error(`지원하지 않는 OBS 동작입니다: ${action}`);

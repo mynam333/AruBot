@@ -6391,6 +6391,26 @@ function blueprintAllowsMultipleOutgoing(node = {}) {
   return String(node?.type || '') === 'parallel';
 }
 
+const OBS_SCENE_ACTIONS = new Set(['scene.switch', 'scene.preview']);
+const OBS_SCENE_SOURCE_ACTIONS = new Set(['source.show', 'source.hide', 'source.toggle', 'source.visibility']);
+const OBS_FILTER_ACTIONS = new Set(['filter.on', 'filter.off', 'filter.toggle', 'filter.enabled']);
+const OBS_INPUT_ACTIONS = new Set(['input.mute', 'input.unmute', 'input.toggleMute', 'input.volume', 'input.text', 'input.settings']);
+const OBS_MEDIA_ACTIONS = new Set(['media.play', 'media.pause', 'media.stop', 'media.restart', 'media.next', 'media.previous']);
+const OBS_SUPPORTED_ACTIONS = new Set([
+  ...OBS_SCENE_ACTIONS,
+  ...OBS_SCENE_SOURCE_ACTIONS,
+  ...OBS_FILTER_ACTIONS,
+  ...OBS_INPUT_ACTIONS,
+  ...OBS_MEDIA_ACTIONS,
+  'record.start', 'record.stop', 'record.toggle', 'record.pause', 'record.resume', 'record.togglePause', 'record.split', 'record.chapter',
+  'stream.start', 'stream.stop', 'stream.toggle', 'stream.caption',
+  'replay.start', 'replay.stop', 'replay.toggle', 'replay.save',
+  'virtualcam.start', 'virtualcam.stop', 'virtualcam.toggle',
+  'transition.set', 'transition.duration',
+  'studio.mode.on', 'studio.mode.off', 'studio.mode.toggle',
+  'hotkey.trigger',
+]);
+
 function isBlankConfigValue(value) {
   return value == null || String(value).trim() === '';
 }
@@ -6475,15 +6495,30 @@ function validateBlueprintNodeConfig(node = {}) {
   }
   if (node.type === 'obs') {
     const action = String(config.action || 'scene.switch');
-    if (action === 'scene.switch') need('sceneName', '장면 이름');
-    if (action === 'source.visibility') {
+    if (!OBS_SUPPORTED_ACTIONS.has(action)) errors.push(`${label}: 지원하지 않는 OBS 동작입니다.`);
+    if (OBS_SCENE_ACTIONS.has(action)) need('sceneName', '장면 이름');
+    if (OBS_SCENE_SOURCE_ACTIONS.has(action)) {
       need('sceneName', '장면 이름');
       need('sourceName', '소스 이름');
     }
-    if (action === 'filter.enabled') {
+    if (OBS_FILTER_ACTIONS.has(action)) {
       need('sourceName', '소스 이름');
       need('filterName', '필터 이름');
     }
+    if (OBS_INPUT_ACTIONS.has(action) || OBS_MEDIA_ACTIONS.has(action)) need('sourceName', '소스/입력 이름');
+    if (action === 'input.volume') numberInRange('volume', '볼륨', 0, 2);
+    if (action === 'input.text' || action === 'stream.caption') need('text', '텍스트');
+    if (action === 'input.settings' && !isBlankConfigValue(config.inputSettingsJson)) {
+      try {
+        const parsed = typeof config.inputSettingsJson === 'object' ? config.inputSettingsJson : JSON.parse(String(config.inputSettingsJson));
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) errors.push(`${label}: 입력 설정 JSON은 객체여야 합니다.`);
+      } catch {
+        errors.push(`${label}: 입력 설정 JSON 형식이 올바르지 않습니다.`);
+      }
+    }
+    if (action === 'hotkey.trigger') need('hotkeyName', '핫키');
+    if (action === 'transition.set') need('transitionName', '전환 효과');
+    if (action === 'transition.duration') numberInRange('durationMs', '전환 시간', 0);
   }
   if (node.type === 'approval') need('message', '승인 메시지');
   return errors;
@@ -7105,9 +7140,9 @@ function computeDrawingInkUsage(strokes = []) {
     const brush = stroke?.brush || {};
     const points = Array.isArray(stroke?.points) ? stroke.points : [];
     if (!points.length) continue;
-    const size = Math.max(0.002, Math.min(0.08, Number(brush.size ?? 0.012) || 0.012));
+    const size = Math.max(0.002, Math.min(0.2, Number(brush.size ?? 0.012) || 0.012));
     const alpha = brush.type === 'eraser' ? 1 : Math.max(0.05, Math.min(1, Number(brush.alpha ?? 1) || 1));
-    const toolFactor = brush.type === 'eraser' ? 0.35 : brush.type === 'highlighter' ? 0.7 : brush.type === 'airbrush' ? 1.25 : 1;
+    const toolFactor = brush.type === 'eraser' ? 0.35 : brush.type === 'airbrush' ? 1.25 : brush.type === 'brush' ? 1.1 : 1;
     if (points.length === 1) {
       rawInk += size * alpha * toolFactor * Math.max(0.5, Number(points[0].p || 1) || 1) * 0.2;
       continue;
@@ -7140,7 +7175,7 @@ function calculateDrawingDonationCost(settings = {}, inkUsage = null) {
 
 function compactDrawingStrokePoints(points = [], brush = {}) {
   if (!Array.isArray(points) || points.length <= 2) return Array.isArray(points) ? points : [];
-  const size = Math.max(0.002, Math.min(0.08, Number(brush.size ?? 0.012) || 0.012));
+  const size = Math.max(0.002, Math.min(0.2, Number(brush.size ?? 0.012) || 0.012));
   const minDistance = Math.max(0.0007, size * 0.04);
   const compacted = [points[0]];
   for (let index = 1; index < points.length - 1; index += 1) {
@@ -7379,10 +7414,10 @@ function normalizeDrawingStrokePayload(body = {}, settings = getDefaultDrawingDo
       throw error;
     }
     const normalizedBrush = {
-      type: ['pen', 'marker', 'highlighter', 'airbrush', 'eraser'].includes(String(brush.type || 'pen')) ? String(brush.type || 'pen') : 'pen',
+      type: ['pen', 'crayon', 'brush', 'marker', 'highlighter', 'airbrush', 'eraser'].includes(String(brush.type || 'pen')) ? String(brush.type || 'pen') : 'pen',
       color: /^#[0-9a-f]{6}$/i.test(String(brush.color || '')) ? String(brush.color) : '#ff6b9a',
       alpha: String(brush.type || 'pen') === 'eraser' ? 1 : Math.max(0.05, Math.min(1, Number(brush.alpha ?? 1) || 1)),
-      size: Math.max(0.002, Math.min(0.08, Number(brush.size ?? 0.012) || 0.012)),
+      size: Math.max(0.002, Math.min(0.2, Number(brush.size ?? 0.012) || 0.012)),
     };
     const normalizedPoints = points.map((point, pointIndex) => ({
       x: Math.max(0, Math.min(1, Number(point?.x ?? 0) || 0)),
