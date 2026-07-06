@@ -4906,8 +4906,9 @@ app.post('/api/video-donation/reorder', async (req, res) => {
     const afterHead = reordered[0] ? String(reordered[0].id) : null;
     // If head changed, broadcast start (clients dedupe) and reschedule
     if (beforeHead !== afterHead) {
-      broadcastPvdStart(sid);
+      await broadcastPvdStart(sid);
     } else {
+      try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
       // Head same: still inform clients to update tail order
       const set = pvdSidSockets.get(sid);
       if (set && set.size) {
@@ -4916,9 +4917,8 @@ app.post('/api/video-donation/reorder', async (req, res) => {
           try { if (ws.readyState === 1) ws.send(msg, { compress: false }); } catch { }
         }
       }
+      scheduleNextPvdAutoPop(sid);
     }
-    try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
-    scheduleNextPvdAutoPop(sid);
     notifyPvdAdminSubscribers(sid, 'reordered').catch(() => null);
     return res.json({ ok: true });
   } catch (e) {
@@ -4940,8 +4940,7 @@ app.post('/api/video-donation/delete', async (req, res) => {
     q.splice(idx, 1);
     if (removingHead) {
       try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
-      broadcastPvdStart(sid);
-      scheduleNextPvdAutoPop(sid);
+      await broadcastPvdStart(sid);
     } else {
       notifyPvdAdminSubscribers(sid, 'deleted').catch(() => null);
     }
@@ -4998,8 +4997,7 @@ app.post('/api/video-donation/delete-refund', async (req, res) => {
     q.splice(idx, 1);
     if (removingHead) {
       try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
-      broadcastPvdStart(sid);
-      scheduleNextPvdAutoPop(sid);
+      await broadcastPvdStart(sid);
     } else {
       // Inform clients of tail change
       const set = pvdSidSockets.get(sid);
@@ -5112,6 +5110,10 @@ function createPvdPlaybackState(item) {
     pausedAtSec: null,
     durationWaitStartedAtMs: item?.awaitDurationSync ? Date.now() : null,
   };
+}
+
+function getPvdQueueItemKey(item) {
+  return String(item?.id || `${item?.mediaProvider || 'unknown'}:${item?.mediaId || item?.videoId || item?.mediaUrl || item?.embedUrl || ''}:${item?.ts || item?.createdAt || ''}`);
 }
 
 function setPvdPlaybackBaseFromAtSec(state, item, atSec) {
@@ -5265,12 +5267,16 @@ function scheduleNextPvdAutoPop(sid) {
   const total = Math.max(1, Number(item.durationSec || 0));
   const remaining = Math.max(0.5, total - elapsedSec);
   const ms = Math.max(500, remaining * 1000);
-  const timer = setTimeout(() => {
+  const scheduledItemKey = getPvdQueueItemKey(item);
+  const timer = setTimeout(async () => {
     try {
       // Confirm head unchanged and not paused before popping
       const head = getVideoQueue(sid)[0];
       const st = pvdPlaybackState.get(sid);
       if (!head || (st && st.paused)) return; // safety check
+      if (getPvdQueueItemKey(head) !== scheduledItemKey) {
+        return;
+      }
       // Extra guard: if we haven't really reached end, delay
       const curElapsed = getCurrentPvdElapsedSec(sid);
       if (curElapsed < Math.max(1, Number(head.durationSec || 0)) - 0.5) {
@@ -5278,8 +5284,7 @@ function scheduleNextPvdAutoPop(sid) {
       }
       // pop current
       getVideoQueue(sid).shift();
-      broadcastPvdStart(sid);
-      scheduleNextPvdAutoPop(sid);
+      await broadcastPvdStart(sid);
     } catch (e) {
       console.warn('[pvd:autoPop] failed', e?.message || e);
     }
@@ -5475,8 +5480,8 @@ app.post('/api/video-donation/pop-by-token', async (req, res) => {
     }
     // Broadcast next (or null) to all viewers
     if (popped) {
-      broadcastPvdStart(sid);
-      scheduleNextPvdAutoPop(sid);
+      try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
+      await broadcastPvdStart(sid);
     }
     return res.json({ item: popped });
   } catch (e) {
@@ -5601,6 +5606,7 @@ app.post('/api/video-donation/request', rateLimiters.userWrite, async (req, res)
 
     // Enqueue
     const q = getVideoQueue(sid);
+    const shouldStartPlayback = q.length === 0;
     const item = {
       id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       ts: Date.now(),
@@ -5654,9 +5660,10 @@ app.post('/api/video-donation/request', rateLimiters.userWrite, async (req, res)
       },
     });
     // If this is the first item, broadcast start & schedule auto pop
-    if (q.length === 1) {
-      broadcastPvdStart(sid);
-      scheduleNextPvdAutoPop(sid);
+    if (shouldStartPlayback) {
+      await broadcastPvdStart(sid);
+    } else {
+      notifyPvdAdminSubscribers(sid, 'queued').catch(() => null);
     }
     return res.json({ ok: true, item });
   } catch (e) {
@@ -5739,8 +5746,8 @@ app.post('/api/video-donation/pop', async (req, res) => {
     }
     // if popping current, schedule next and broadcast
     if (popped) {
-      broadcastPvdStart(sid);
-      scheduleNextPvdAutoPop(sid);
+      try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
+      await broadcastPvdStart(sid);
     }
     return res.json({ item: popped });
   } catch (e) {
@@ -7226,6 +7233,8 @@ async function fetchChzzkClipInfo(clipId) {
       try {
         const card = await axios.get('https://creatorhub-api.naver.com/api/v5.0/clipviewer/card', {
           params: {
+            userInteraction: true,
+            seedType: 'SPECIFIC',
             serviceType: 'CHZZK',
             seedMediaId,
           },
@@ -15570,8 +15579,8 @@ app.post('/api/local-remote/video-donation/pop', requireAutomationLocalAgent, as
     const q = getVideoQueue(sid);
     const popped = q.shift() || null;
     if (popped) {
-      broadcastPvdStart(sid);
-      scheduleNextPvdAutoPop(sid);
+      try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
+      await broadcastPvdStart(sid);
     }
     return res.json({ item: popped, queue: q });
   } catch (e) {
@@ -17049,6 +17058,7 @@ async function replayVideoDonationLog(sid, ownerUserId, log) {
   const item = buildReplayVideoDonationItem(log);
   if (!item) return { ok: false, error: 'video_replay_metadata_missing' };
   const q = getVideoQueue(sid);
+  const shouldStartPlayback = q.length === 0;
   q.push(item);
   await recordBotEventLogSafe(sid, {
     category: 'video_donation',
@@ -17062,9 +17072,8 @@ async function replayVideoDonationLog(sid, ownerUserId, log) {
     summary: `이벤트 로그에서 영상 후원 재생: ${item.title}`,
     metadata: { replayedFromLogId: log.id, replaySnapshot: item },
   });
-  if (q.length === 1) {
+  if (shouldStartPlayback) {
     await broadcastPvdStart(sid);
-    scheduleNextPvdAutoPop(sid);
   } else {
     await notifyPvdAdminSubscribers(sid, 'replay_queued').catch(() => null);
   }
@@ -21286,6 +21295,7 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
 
   await incrChannelPoints(channelUid, String(userId), String(username || ''), -cost);
   const q = getVideoQueue(sid);
+  const shouldStartPlayback = q.length === 0;
   const queueItem = {
     id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     ts: Date.now(),
@@ -21341,9 +21351,8 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
       replaySnapshot: queueItem,
     },
   });
-  if (q.length === 1) {
-    broadcastPvdStart(sid);
-    scheduleNextPvdAutoPop(sid);
+  if (shouldStartPlayback) {
+    await broadcastPvdStart(sid);
   } else {
     notifyPvdAdminSubscribers(sid, 'queued').catch(() => null);
   }

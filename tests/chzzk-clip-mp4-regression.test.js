@@ -31,4 +31,17 @@ describe('CHZZK clip video donation regression', () => {
     expect(chzzkBranch).toContain("title = clip?.title || '제목을 불러오지 못한 치지직 클립'");
     expect(chzzkBranch).not.toContain('`${getPvdProviderLabel(parsed.provider)} ${parsed.mediaId}`');
   });
+
+  test('auto-pop timer cannot shift a newer queue head', () => {
+    expect(serverIndex).toContain('function getPvdQueueItemKey');
+    expect(serverIndex).toContain('const scheduledItemKey = getPvdQueueItemKey(item)');
+    expect(serverIndex).toContain('if (getPvdQueueItemKey(head) !== scheduledItemKey)');
+    expect(serverIndex).toContain('await broadcastPvdStart(sid)');
+  });
+
+  test('enqueue starts playback based on pre-push queue emptiness', () => {
+    const markers = serverIndex.match(/const shouldStartPlayback = q\.length === 0;/g) || [];
+    expect(markers.length).toBeGreaterThanOrEqual(2);
+    expect(serverIndex).toMatch(/if \(shouldStartPlayback\) \{\s+await broadcastPvdStart\(sid\);/);
+  });
 });
