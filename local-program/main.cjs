@@ -1818,7 +1818,7 @@ async function processJob(job) {
     });
   }
   if (type === 'fx.play' || type === 'blueprint.fx' || type === 'sound.play' || type === 'blueprint.sound') {
-    const kind = String(payload.kind || (type.includes('sound') ? 'sound' : 'image')).toLowerCase();
+    const kind = String(payload.kind || payload.assetKind || (type.includes('sound') ? 'sound' : 'image')).toLowerCase();
     const assetId = path.basename(String(payload.assetId || payload.fileId || payload.name || ''));
     const assetUrl = payload.youtubeUrl ? '' : String(payload.assetUrl || getFxAssetUrl(assetId) || '');
     if (kind !== 'video' || !payload.youtubeUrl) {

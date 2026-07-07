@@ -37,6 +37,32 @@ type ActionDialogButtonProps = {
   trailingChevron?: boolean;
 };
 
+const ROULETTE_LAYOUT_OPTIONS = [
+  { value: 'reel', label: '릴 형태' },
+  { value: 'wheel', label: '휠 형태' },
+] as const;
+const ROULETTE_SKIN_OPTIONS = [
+  { value: 'studio', label: '스튜디오' },
+  { value: 'prism', label: '프리즘' },
+  { value: 'aurora', label: '오로라' },
+  { value: 'velvet', label: '벨벳' },
+  { value: 'mono', label: '모노' },
+  { value: 'deco', label: '아르데코' },
+  { value: 'crystal', label: '크리스탈' },
+  { value: 'ink', label: '수묵' },
+  { value: 'nova', label: '노바' },
+  { value: 'ceramic', label: '세라믹' },
+  { value: 'arcade', label: '아케이드' },
+  { value: 'sakura', label: '사쿠라' },
+  { value: 'ocean', label: '오션' },
+  { value: 'solar', label: '솔라' },
+  { value: 'cyber', label: '네온' },
+  { value: 'gold', label: '골드' },
+] as const;
+type RouletteLayout = (typeof ROULETTE_LAYOUT_OPTIONS)[number]['value'];
+type RouletteSkin = (typeof ROULETTE_SKIN_OPTIONS)[number]['value'];
+const ROULETTE_SKIN_NAMES = ROULETTE_SKIN_OPTIONS.map((option) => option.value);
+
 type ActionDialogFrameProps = ActionDialogButtonProps & {
   icon: React.ReactNode;
   badge: string;
@@ -323,6 +349,8 @@ function SwitchRow({ checked, onCheckedChange, label, className }: { checked: bo
 export function RouletteCreateDialog({ variant = 'secondary', label = '룰렛 만들기', className, trailingChevron }: ActionDialogButtonProps) {
   const [name, setName] = useState('오늘의 룰렛');
   const [command, setCommand] = useState('!룰렛');
+  const [layout, setLayout] = useState<RouletteLayout>('reel');
+  const [skin, setSkin] = useState<RouletteSkin>('studio');
   const [items, setItems] = useState<EditableRouletteItem[]>(() => createDefaultRouletteItems());
   const [pointsCost, setPointsCost] = useState('0');
   const [isPending, startTransition] = useTransition();
@@ -341,7 +369,7 @@ export function RouletteCreateDialog({ variant = 'secondary', label = '룰렛 �
             id: `rlt_${Date.now().toString(36)}`,
             name: rouletteName,
             type: 'items',
-            theme: 'pastel',
+            theme: `${layout}:${skin}`,
             items: normalizedItems,
           },
         });
@@ -392,6 +420,16 @@ export function RouletteCreateDialog({ variant = 'secondary', label = '룰렛 �
         </Field>
         <Field label="실행 명령어">
           <Input value={command} onChange={(event) => setCommand(event.target.value)} />
+        </Field>
+        <Field label="표현 형태">
+          <select value={layout} onChange={(event) => setLayout(event.target.value === 'wheel' ? 'wheel' : 'reel')} className="min-h-[var(--control-height)] rounded-[var(--radius-control)] border bg-background px-3 text-sm">
+            {ROULETTE_LAYOUT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+        </Field>
+        <Field label="스킨">
+          <select value={skin} onChange={(event) => setSkin((ROULETTE_SKIN_NAMES.includes(event.target.value as RouletteSkin) ? event.target.value : 'studio') as RouletteSkin)} className="min-h-[var(--control-height)] rounded-[var(--radius-control)] border bg-background px-3 text-sm">
+            {ROULETTE_SKIN_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
         </Field>
       </div>
       <div className="grid gap-[clamp(0.5rem,1vw,0.75rem)] text-sm font-semibold">

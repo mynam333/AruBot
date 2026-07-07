@@ -1,5 +1,7 @@
 import React from 'react';
 import { getBrowserApiBase } from '@/shared/api/http';
+import { WheelLabelsSvg, WheelSegmentsSvg, WheelSelectedSegment, WheelSkinOrnaments } from './rouletteWheelSkins';
+import { getWheelSkinFamily, splitWheelLabel } from './rouletteWheelUtils';
 
 // Module-scope overlay kind and component to avoid remounts on parent re-renders
 type OverlayKind = 'none' | 'sakura' | 'midnight' | 'sunset' | 'grid' | 'noise' | 'embers' | 'snow' | 'scan' | 'shimmer' | 'confetti' | 'leaves' | 'gold-sweep';
@@ -346,7 +348,32 @@ const OverlaySvg: React.FC<{ kind: OverlayKind }> = React.memo(({ kind }) => {
   return null;
 });
 
-type Theme = 'classic' | 'fire' | 'ice' | 'cyber' | 'gold' | 'pastel' | 'forest' | 'sakura' | 'midnight' | 'sunset';
+type Theme = 'studio' | 'prism' | 'aurora' | 'velvet' | 'mono' | 'deco' | 'crystal' | 'ink' | 'nova' | 'ceramic' | 'arcade' | 'sakura' | 'ocean' | 'solar' | 'cyber' | 'gold' | 'classic' | 'fire' | 'ice' | 'pastel' | 'forest' | 'midnight' | 'sunset';
+type RouletteLayout = 'reel' | 'wheel';
+const ROULETTE_THEME_NAMES: Theme[] = ['studio', 'prism', 'aurora', 'velvet', 'mono', 'deco', 'crystal', 'ink', 'nova', 'ceramic', 'arcade', 'sakura', 'ocean', 'solar', 'cyber', 'gold', 'classic', 'fire', 'ice', 'pastel', 'forest', 'midnight', 'sunset'];
+const ROULETTE_THEME_ALIASES: Partial<Record<Theme, Theme>> = {
+  classic: 'studio',
+  fire: 'solar',
+  ice: 'ocean',
+  pastel: 'prism',
+  forest: 'aurora',
+  midnight: 'mono',
+  sunset: 'solar',
+};
+const ROULETTE_LAYOUT_NAMES: RouletteLayout[] = ['reel', 'wheel'];
+
+function parseRouletteLook(value?: unknown): { theme?: Theme; layout?: RouletteLayout } {
+  const text = String(value || '').toLowerCase().trim();
+  if (!text) return {};
+  const parts = text.split(/[:_\-\s]+/).filter(Boolean);
+  const rawTheme = parts.find((part): part is Theme => ROULETTE_THEME_NAMES.includes(part as Theme));
+  const theme = rawTheme ? (ROULETTE_THEME_ALIASES[rawTheme] || rawTheme) : undefined;
+  const layout = parts.find((part): part is RouletteLayout => ROULETTE_LAYOUT_NAMES.includes(part as RouletteLayout));
+  return {
+    ...(theme ? { theme } : {}),
+    ...(layout ? { layout } : {}),
+  };
+}
 
 type WsPayload = {
   type: 'roulette';
@@ -356,7 +383,7 @@ type WsPayload = {
   value?: number | string | null;
   label?: string | null;
   createdAt?: number | string | null;
-  theme?: Theme | null;
+  theme?: string | null;
   items?: string[] | null;
 };
 
@@ -455,6 +482,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     return rowsHalfRef.current;
   }, [rowH]);
   const [serverTheme, setServerTheme] = React.useState<Theme | null>(null);
+  const [serverLayout, setServerLayout] = React.useState<RouletteLayout | null>(null);
   const timersRef = React.useRef<number[]>([]);
   const userInteractedRef = React.useRef(false);
   const canAutoPlayRef = React.useRef(false);
@@ -537,6 +565,12 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       return idx >= 0 && parts[idx + 1] ? parts[idx + 1] : '';
     } catch { return ''; }
   }, [viewerToken]);
+  const previewMode = React.useMemo(() => {
+    try {
+      const q = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
+      return q.get('preview') === '1';
+    } catch { return false; }
+  }, []);
 
   // 메시지 채널 ID 검증 함수
   const validateMessageChannelId = React.useCallback((message: any, expectedChannelId: string | null): boolean => {
@@ -592,15 +626,23 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       return newInfo;
     });
   }, []);
-  // URL override for theme (optional)
-  const themeOverride: Theme | null = React.useMemo(() => {
+  // URL override for theme/layout (optional)
+  const urlLook = React.useMemo(() => {
     try {
       const q = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
-      const t = (q.get('theme') || '').toLowerCase();
-      return (t === 'neon' || t === 'mono' || t === 'classic') ? (t as Theme) : null;
-    } catch { return null; }
+      return {
+        ...parseRouletteLook(q.get('theme')),
+        ...parseRouletteLook(q.get('layout')),
+      };
+    } catch { return {}; }
   }, []);
-  const theme: Theme = themeOverride || serverTheme || 'classic';
+  const theme: Theme = urlLook.theme || serverTheme || 'studio';
+  const layout: RouletteLayout = urlLook.layout || serverLayout || 'reel';
+  const applyServerLook = React.useCallback((value?: unknown) => {
+    const look = parseRouletteLook(value);
+    if (look.theme) setServerTheme(look.theme);
+    if (look.layout) setServerLayout(look.layout);
+  }, []);
   // SFX defaults to ON; allow disabling with ?sfx=off
   const sfxOn = React.useMemo(() => {
     try {
@@ -618,6 +660,24 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       return validationParam !== 'off';
     } catch { return true; }
   }, []);
+
+  React.useEffect(() => {
+    if (!previewMode) return;
+    const sampleItems = ['아루 코인', 'VIP 포인트', '한 번 더', '선물 상자', '대박', '축하 멘트', '보너스', '오늘의 주인공'];
+    const finalLabel = sampleItems[4];
+    const centerIndex = 6;
+    poolRef.current = sampleItems;
+    finalIndexRef.current = centerIndex;
+    finalLabelRef.current = finalLabel;
+    scrollItemsRef.current = ['축하 멘트', '보너스', '아루 코인', '선물 상자', 'VIP 포인트', '한 번 더', finalLabel, '오늘의 주인공', '아루 코인'];
+    setScrollItems(scrollItemsRef.current);
+    setScrollIndex(centerIndex);
+    setOffsetRows(centerIndex);
+    setState({ name: '스페셜 룰렛', username: '테스트 시청자', label: finalLabel, value: finalLabel });
+    setBatchProgress({ id: 'preview', done: 2, total: 5 });
+    setError(null);
+    setActive(true);
+  }, [previewMode]);
 
   // Simple SFX using fixed server files
   const audioCtxRef = React.useRef<AudioContext | null>(null);
@@ -716,6 +776,15 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
 
   // WebSocket 연결 및 재연결 로직 (서버에서 채널 검증 수행)
   const connectWebSocket = React.useCallback(() => {
+    if (previewMode) {
+      updateDebugInfo({
+        tokenValid: true,
+        connectionState: 'connected',
+        lastError: null
+      });
+      return;
+    }
+
     if (!token) {
       const errorMsg = 'invalid token';
       setError(errorMsg);
@@ -938,8 +1007,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
               } else {
                 // Animated spin: set state immediately and run full spin
                 setState({ name: payload.name || undefined, username: payload.username || undefined, label: payload.label || undefined, value: (payload.value != null ? payload.value : undefined) });
-                const allowedThemes = ['classic','fire','ice','cyber','gold','pastel','forest','sakura','midnight','sunset'];
-                if (payload.theme && allowedThemes.includes(String(payload.theme).toLowerCase())) setServerTheme(String(payload.theme).toLowerCase() as any);
+                applyServerLook(payload.theme);
                 startSpinAnimation(final, Array.isArray(payload.items) ? payload.items : null);
               }
             };
@@ -1025,7 +1093,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     }
   // Keep this callback stable enough to avoid reconnect churn during roulette animation state updates.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, validateToken, validateMessageChannelId, updateDebugInfo, sfxOn, channelValidationOn, primeAudio]);
+  }, [previewMode, token, validateToken, validateMessageChannelId, updateDebugInfo, sfxOn, channelValidationOn, primeAudio, applyServerLook]);
 
   React.useEffect(() => {
     const cleanup = connectWebSocket();
@@ -1045,10 +1113,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       // Prepare next label and fade in whole content layer with new result
       // Apply theme and state here so the old item stays visible during fade-out
       try {
-        const allowedThemes = ['classic','fire','ice','cyber','gold','pastel','forest','sakura','midnight','sunset'];
-        if (meta && meta.theme && allowedThemes.includes(String(meta.theme).toLowerCase())) {
-          setServerTheme(String(meta.theme).toLowerCase() as any);
-        }
+        if (meta && meta.theme) applyServerLook(meta.theme);
         if (meta) {
           setState({
             name: meta.name || undefined,
@@ -1080,7 +1145,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       timersRef.current.push(doneId);
     }, OUT_MS);
     timersRef.current.push(prepId);
-  }, [playEndSfx]);
+  }, [playEndSfx, applyServerLook]);
 
   const startSpinAnimation = React.useCallback((finalLabel: string, itemsFromServer: string[] | null) => {
     // clear previous timers
@@ -1195,8 +1260,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
         processQueuedRef.current();
         return;
       }
-      const allowedThemes = ['classic','fire','ice','cyber','gold','pastel','forest','sakura','midnight','sunset'];
-      if (payload.theme && allowedThemes.includes(String(payload.theme).toLowerCase())) setServerTheme(String(payload.theme).toLowerCase() as any);
+      applyServerLook(payload.theme);
       setState({ name: payload.name || undefined, username: payload.username || undefined, label: payload.label || undefined, value: (payload.value != null ? payload.value : undefined) });
       const final = String(payload.label || (payload.value != null ? String(payload.value) : ''));
       isSpinningRef.current = true;
@@ -1235,127 +1299,500 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     }, 50);
   };
 
-  // Theme mapping (CSS-only). Background stays transparent; only the box/text change.
-  type ThemeSpec = {
-    boxBg: string; ring: string; border: string; accent: string; result: string;
-    ringW: string; radius: string; overlay?: 'none' | 'sakura' | 'midnight' | 'sunset' | 'grid' | 'noise' | 'embers' | 'snow' | 'scan' | 'shimmer' | 'confetti' | 'leaves' | 'gold-sweep';
+  type RouletteSkin = {
+    id: Theme;
+    label: string;
+    overlay: OverlayKind;
+    palette: string[];
+    css: React.CSSProperties & Record<`--roulette-${string}`, string>;
   };
-  const pickTheme = (name?: string): ThemeSpec => {
-    switch ((name || '').toLowerCase()) {
-      case 'fire':
-        return {
-          boxBg: 'bg-red-900/50 md:bg-red-900/60',
-          ring: 'ring-orange-400/70',
-          accent: 'text-orange-300',
-          result: 'text-amber-200',
-          border: 'border-white/10',
-          ringW: 'md:ring-4',
-          radius: 'rounded-3xl',
-          overlay: 'embers'
-        };
-      case 'ice':
-        return {
-          boxBg: 'bg-cyan-900/40 md:bg-cyan-900/50',
-          ring: 'ring-cyan-400/60',
-          accent: 'text-cyan-300',
-          result: 'text-sky-200',
-          border: 'border-white/10',
-          ringW: 'md:ring-4',
-          radius: 'rounded-2xl',
-          overlay: 'snow'
-        };
-      case 'cyber':
-        return {
-          boxBg: 'bg-fuchsia-950/60 md:bg-fuchsia-950/70',
-          ring: 'ring-fuchsia-400/60',
-          accent: 'text-fuchsia-300',
-          result: 'text-lime-200',
-          border: 'border-white/10',
-          ringW: 'md:ring-2',
-          radius: 'rounded-xl',
-          overlay: 'scan'
-        };
-      case 'gold':
-        return {
-          boxBg: 'bg-zinc-900/70',
-          ring: 'ring-amber-400/70',
-          accent: 'text-amber-300',
-          result: 'text-amber-100',
-          border: 'border-amber-300/20',
-          ringW: 'md:ring-8',
-          radius: 'rounded-[28px]',
-          overlay: 'shimmer'
-        };
-      case 'pastel':
-        return {
-          boxBg: 'bg-rose-900/40 md:bg-rose-900/50',
-          ring: 'ring-pink-300/60',
-          accent: 'text-pink-200',
-          result: 'text-rose-100',
-          border: 'border-white/10',
-          ringW: 'md:ring-2',
-          radius: 'rounded-2xl',
-          overlay: 'confetti'
-        };
-      case 'forest':
-        return {
-          boxBg: 'bg-emerald-950/50 md:bg-emerald-950/60',
-          ring: 'ring-emerald-400/60',
-          accent: 'text-emerald-300',
-          result: 'text-green-100',
-          border: 'border-white/10',
-          ringW: 'md:ring-4',
-          radius: 'rounded-3xl',
-          overlay: 'leaves'
-        };
-      case 'sakura':
-        return {
-          boxBg: 'bg-rose-900/45 md:bg-rose-900/55',
-          ring: 'ring-rose-300/70',
-          accent: 'text-rose-200',
-          result: 'text-pink-100',
-          border: 'border-rose-300/20',
-          ringW: 'md:ring-4',
-          radius: 'rounded-[32px]',
-          overlay: 'sakura'
-        };
-      case 'midnight':
-        return {
-          boxBg: 'bg-slate-950/70',
-          ring: 'ring-indigo-400/60',
-          accent: 'text-indigo-300',
-          result: 'text-blue-200',
-          border: 'border-white/10',
-          ringW: 'md:ring-2',
-          radius: 'rounded-2xl',
-          overlay: 'midnight'
-        };
-      case 'sunset':
-        return {
-          boxBg: 'bg-orange-950/60 md:bg-orange-950/70',
-          ring: 'ring-amber-400/70',
-          accent: 'text-amber-300',
-          result: 'text-orange-200',
-          border: 'border-amber-300/20',
-          ringW: 'md:ring-6',
-          radius: 'rounded-[24px]',
-          overlay: 'sunset'
-        };
-      case 'classic':
-      default:
-        return {
-          boxBg: 'bg-black/70 md:bg-black/80',
-          ring: 'ring-emerald-400/50',
-          accent: 'text-emerald-300',
-          result: 'text-emerald-200',
-          border: 'border-white/10',
-          ringW: 'md:ring-4',
-          radius: 'rounded-2xl',
-          overlay: 'none'
-        };
+
+  const ROULETTE_SKINS: Record<Theme, RouletteSkin> = {
+    studio: {
+      id: 'studio',
+      label: '스튜디오',
+      overlay: 'grid',
+      palette: ['#f8fafc', '#111827', '#8b5cf6', '#06b6d4', '#f59e0b', '#e5e7eb', '#22c55e', '#64748b'],
+      css: {
+        '--roulette-panel': 'rgba(15, 18, 28, 0.80)',
+        '--roulette-panel-strong': 'rgba(10, 13, 22, 0.94)',
+        '--roulette-line': 'rgba(248, 250, 252, 0.24)',
+        '--roulette-text': '#f8fafc',
+        '--roulette-muted': 'rgba(226, 232, 240, 0.72)',
+        '--roulette-accent': '#f8fafc',
+        '--roulette-accent-2': '#38bdf8',
+        '--roulette-result': '#ffffff',
+        '--roulette-shadow': 'rgba(148, 163, 184, 0.30)',
+      },
+    },
+    prism: {
+      id: 'prism',
+      label: '프리즘',
+      overlay: 'scan',
+      palette: ['#22d3ee', '#f0abfc', '#bef264', '#fb7185', '#a78bfa', '#67e8f9', '#facc15', '#34d399'],
+      css: {
+        '--roulette-panel': 'rgba(16, 13, 32, 0.77)',
+        '--roulette-panel-strong': 'rgba(20, 16, 42, 0.93)',
+        '--roulette-line': 'rgba(217, 249, 157, 0.30)',
+        '--roulette-text': '#fffaff',
+        '--roulette-muted': 'rgba(237, 233, 254, 0.72)',
+        '--roulette-accent': '#22d3ee',
+        '--roulette-accent-2': '#bef264',
+        '--roulette-result': '#eaff9a',
+        '--roulette-shadow': 'rgba(34, 211, 238, 0.32)',
+      },
+    },
+    aurora: {
+      id: 'aurora',
+      label: '오로라',
+      overlay: 'shimmer',
+      palette: ['#5eead4', '#8b5cf6', '#2dd4bf', '#c4b5fd', '#22c55e', '#38bdf8', '#a7f3d0', '#818cf8'],
+      css: {
+        '--roulette-panel': 'rgba(4, 24, 29, 0.76)',
+        '--roulette-panel-strong': 'rgba(8, 19, 37, 0.92)',
+        '--roulette-line': 'rgba(94, 234, 212, 0.30)',
+        '--roulette-text': '#f0fffb',
+        '--roulette-muted': 'rgba(209, 250, 244, 0.70)',
+        '--roulette-accent': '#5eead4',
+        '--roulette-accent-2': '#c4b5fd',
+        '--roulette-result': '#ccfbf1',
+        '--roulette-shadow': 'rgba(94, 234, 212, 0.34)',
+      },
+    },
+    velvet: {
+      id: 'velvet',
+      label: '벨벳',
+      overlay: 'gold-sweep',
+      palette: ['#f9d27d', '#7f1d1d', '#be123c', '#fbbf24', '#581c87', '#fecdd3', '#b45309', '#fff7ed'],
+      css: {
+        '--roulette-panel': 'rgba(38, 9, 20, 0.80)',
+        '--roulette-panel-strong': 'rgba(50, 10, 24, 0.94)',
+        '--roulette-line': 'rgba(249, 210, 125, 0.32)',
+        '--roulette-text': '#fff7ed',
+        '--roulette-muted': 'rgba(255, 235, 205, 0.70)',
+        '--roulette-accent': '#f9d27d',
+        '--roulette-accent-2': '#fecdd3',
+        '--roulette-result': '#ffe8a3',
+        '--roulette-shadow': 'rgba(190, 18, 60, 0.34)',
+      },
+    },
+    mono: {
+      id: 'mono',
+      label: '모노',
+      overlay: 'noise',
+      palette: ['#f9fafb', '#1f2937', '#d1d5db', '#4b5563', '#ffffff', '#111827', '#9ca3af', '#e5e7eb'],
+      css: {
+        '--roulette-panel': 'rgba(8, 10, 14, 0.84)',
+        '--roulette-panel-strong': 'rgba(3, 5, 8, 0.96)',
+        '--roulette-line': 'rgba(255, 255, 255, 0.26)',
+        '--roulette-text': '#f9fafb',
+        '--roulette-muted': 'rgba(229, 231, 235, 0.68)',
+        '--roulette-accent': '#f9fafb',
+        '--roulette-accent-2': '#a3a3a3',
+        '--roulette-result': '#ffffff',
+        '--roulette-shadow': 'rgba(255, 255, 255, 0.20)',
+      },
+    },
+    deco: {
+      id: 'deco',
+      label: '아르데코',
+      overlay: 'gold-sweep',
+      palette: ['#f8d77e', '#121212', '#d6a33f', '#2f2414', '#fff4bf', '#0b0d11', '#b8892f', '#2b1d0d'],
+      css: {
+        '--roulette-panel': 'rgba(16, 13, 10, 0.82)',
+        '--roulette-panel-strong': 'rgba(8, 7, 6, 0.96)',
+        '--roulette-line': 'rgba(248, 215, 126, 0.34)',
+        '--roulette-text': '#fff4d2',
+        '--roulette-muted': 'rgba(255, 234, 184, 0.68)',
+        '--roulette-accent': '#f8d77e',
+        '--roulette-accent-2': '#c9912a',
+        '--roulette-result': '#fff2b6',
+        '--roulette-shadow': 'rgba(201, 145, 42, 0.36)',
+      },
+    },
+    crystal: {
+      id: 'crystal',
+      label: '크리스탈',
+      overlay: 'snow',
+      palette: ['#e0faff', '#7dd3fc', '#c4b5fd', '#38bdf8', '#f8feff', '#93c5fd', '#67e8f9', '#dbeafe'],
+      css: {
+        '--roulette-panel': 'rgba(6, 21, 36, 0.74)',
+        '--roulette-panel-strong': 'rgba(6, 30, 52, 0.92)',
+        '--roulette-line': 'rgba(186, 230, 253, 0.34)',
+        '--roulette-text': '#f8feff',
+        '--roulette-muted': 'rgba(224, 247, 255, 0.72)',
+        '--roulette-accent': '#7dd3fc',
+        '--roulette-accent-2': '#c4b5fd',
+        '--roulette-result': '#f0fdff',
+        '--roulette-shadow': 'rgba(125, 211, 252, 0.38)',
+      },
+    },
+    ink: {
+      id: 'ink',
+      label: '수묵',
+      overlay: 'noise',
+      palette: ['#f7f7f2', '#1f2933', '#e8ecef', '#0b0d10', '#d9dde0', '#3b3f46', '#c1121f', '#f5f5f0'],
+      css: {
+        '--roulette-panel': 'rgba(10, 11, 12, 0.82)',
+        '--roulette-panel-strong': 'rgba(3, 4, 5, 0.96)',
+        '--roulette-line': 'rgba(255, 255, 255, 0.24)',
+        '--roulette-text': '#f7f7f2',
+        '--roulette-muted': 'rgba(230, 232, 232, 0.66)',
+        '--roulette-accent': '#f7f7f2',
+        '--roulette-accent-2': '#c1121f',
+        '--roulette-result': '#fff8f4',
+        '--roulette-shadow': 'rgba(193, 18, 31, 0.30)',
+      },
+    },
+    nova: {
+      id: 'nova',
+      label: '노바',
+      overlay: 'midnight',
+      palette: ['#c4b5fd', '#38bdf8', '#312e81', '#f0abfc', '#0f172a', '#93c5fd', '#fef08a', '#818cf8'],
+      css: {
+        '--roulette-panel': 'rgba(8, 9, 34, 0.80)',
+        '--roulette-panel-strong': 'rgba(6, 6, 26, 0.94)',
+        '--roulette-line': 'rgba(196, 181, 253, 0.34)',
+        '--roulette-text': '#f7f4ff',
+        '--roulette-muted': 'rgba(226, 221, 255, 0.68)',
+        '--roulette-accent': '#c4b5fd',
+        '--roulette-accent-2': '#38bdf8',
+        '--roulette-result': '#fef08a',
+        '--roulette-shadow': 'rgba(124, 58, 237, 0.40)',
+      },
+    },
+    ceramic: {
+      id: 'ceramic',
+      label: '세라믹',
+      overlay: 'shimmer',
+      palette: ['#f8fbff', '#1d4ed8', '#dbeafe', '#60a5fa', '#eff6ff', '#2563eb', '#ffffff', '#93c5fd'],
+      css: {
+        '--roulette-panel': 'rgba(8, 24, 48, 0.74)',
+        '--roulette-panel-strong': 'rgba(6, 18, 42, 0.92)',
+        '--roulette-line': 'rgba(147, 197, 253, 0.34)',
+        '--roulette-text': '#f8fbff',
+        '--roulette-muted': 'rgba(219, 234, 254, 0.72)',
+        '--roulette-accent': '#60a5fa',
+        '--roulette-accent-2': '#eff6ff',
+        '--roulette-result': '#ffffff',
+        '--roulette-shadow': 'rgba(37, 99, 235, 0.34)',
+      },
+    },
+    arcade: {
+      id: 'arcade',
+      label: '아케이드',
+      overlay: 'scan',
+      palette: ['#67e8f9', '#f0abfc', '#bef264', '#111827', '#22d3ee', '#fb7185', '#facc15', '#a78bfa'],
+      css: {
+        '--roulette-panel': 'rgba(8, 7, 24, 0.80)',
+        '--roulette-panel-strong': 'rgba(4, 5, 18, 0.94)',
+        '--roulette-line': 'rgba(103, 232, 249, 0.34)',
+        '--roulette-text': '#f5fbff',
+        '--roulette-muted': 'rgba(224, 242, 254, 0.68)',
+        '--roulette-accent': '#67e8f9',
+        '--roulette-accent-2': '#bef264',
+        '--roulette-result': '#f8ff9a',
+        '--roulette-shadow': 'rgba(240, 171, 252, 0.36)',
+      },
+    },
+    ocean: {
+      id: 'ocean',
+      label: '오션',
+      overlay: 'snow',
+      palette: ['#7dd3fc', '#0ea5e9', '#5eead4', '#0369a1', '#bae6fd', '#67e8f9', '#14b8a6', '#e0f2fe'],
+      css: {
+        '--roulette-panel': 'rgba(4, 24, 43, 0.78)',
+        '--roulette-panel-strong': 'rgba(3, 31, 56, 0.93)',
+        '--roulette-line': 'rgba(125, 211, 252, 0.32)',
+        '--roulette-text': '#f0fbff',
+        '--roulette-muted': 'rgba(224, 242, 254, 0.72)',
+        '--roulette-accent': '#7dd3fc',
+        '--roulette-accent-2': '#5eead4',
+        '--roulette-result': '#dffcff',
+        '--roulette-shadow': 'rgba(14, 165, 233, 0.35)',
+      },
+    },
+    solar: {
+      id: 'solar',
+      label: '솔라',
+      overlay: 'sunset',
+      palette: ['#fbbf24', '#fb923c', '#f97316', '#fde68a', '#ef4444', '#fed7aa', '#f59e0b', '#fff7ed'],
+      css: {
+        '--roulette-panel': 'rgba(38, 18, 8, 0.78)',
+        '--roulette-panel-strong': 'rgba(54, 23, 9, 0.93)',
+        '--roulette-line': 'rgba(251, 191, 36, 0.32)',
+        '--roulette-text': '#fff8ed',
+        '--roulette-muted': 'rgba(255, 232, 195, 0.70)',
+        '--roulette-accent': '#fbbf24',
+        '--roulette-accent-2': '#fb923c',
+        '--roulette-result': '#fff0b3',
+        '--roulette-shadow': 'rgba(249, 115, 22, 0.34)',
+      },
+    },
+    classic: {
+      id: 'classic',
+      label: '스튜디오',
+      overlay: 'none',
+      palette: ['#44f5b4', '#1f8f76', '#f7d66b', '#ff7b8f', '#7bb7ff', '#c4f970', '#41d7ff', '#ffb36b'],
+      css: {
+        '--roulette-panel': 'rgba(5, 12, 20, 0.76)',
+        '--roulette-panel-strong': 'rgba(7, 18, 28, 0.92)',
+        '--roulette-line': 'rgba(180, 255, 231, 0.24)',
+        '--roulette-text': '#f5fffb',
+        '--roulette-muted': 'rgba(223, 255, 246, 0.68)',
+        '--roulette-accent': '#44f5b4',
+        '--roulette-accent-2': '#f7d66b',
+        '--roulette-result': '#f8ffcf',
+        '--roulette-shadow': 'rgba(20, 245, 184, 0.32)',
+      },
+    },
+    fire: {
+      id: 'fire',
+      label: '솔라',
+      overlay: 'embers',
+      palette: ['#ffb86b', '#ff6b40', '#ffd166', '#f94144', '#f8961e', '#f3722c', '#ffe66d', '#ff477e'],
+      css: {
+        '--roulette-panel': 'rgba(31, 8, 5, 0.78)',
+        '--roulette-panel-strong': 'rgba(42, 10, 5, 0.92)',
+        '--roulette-line': 'rgba(255, 190, 111, 0.28)',
+        '--roulette-text': '#fff8ef',
+        '--roulette-muted': 'rgba(255, 231, 203, 0.68)',
+        '--roulette-accent': '#ff9d42',
+        '--roulette-accent-2': '#ffe66d',
+        '--roulette-result': '#fff0b8',
+        '--roulette-shadow': 'rgba(255, 112, 67, 0.34)',
+      },
+    },
+    ice: {
+      id: 'ice',
+      label: '오션',
+      overlay: 'snow',
+      palette: ['#b7f7ff', '#62d2ff', '#d7fbff', '#7dd3fc', '#bae6fd', '#a5f3fc', '#93c5fd', '#e0f2fe'],
+      css: {
+        '--roulette-panel': 'rgba(4, 21, 33, 0.72)',
+        '--roulette-panel-strong': 'rgba(3, 31, 49, 0.9)',
+        '--roulette-line': 'rgba(186, 230, 253, 0.30)',
+        '--roulette-text': '#f3fbff',
+        '--roulette-muted': 'rgba(225, 247, 255, 0.70)',
+        '--roulette-accent': '#8ee7ff',
+        '--roulette-accent-2': '#c7f9ff',
+        '--roulette-result': '#e7fbff',
+        '--roulette-shadow': 'rgba(125, 211, 252, 0.34)',
+      },
+    },
+    cyber: {
+      id: 'cyber',
+      label: '네온',
+      overlay: 'scan',
+      palette: ['#f0abfc', '#22d3ee', '#bef264', '#a78bfa', '#fb7185', '#67e8f9', '#e879f9', '#facc15'],
+      css: {
+        '--roulette-panel': 'rgba(17, 7, 31, 0.78)',
+        '--roulette-panel-strong': 'rgba(20, 8, 42, 0.93)',
+        '--roulette-line': 'rgba(240, 171, 252, 0.30)',
+        '--roulette-text': '#fff6ff',
+        '--roulette-muted': 'rgba(244, 214, 255, 0.68)',
+        '--roulette-accent': '#f0abfc',
+        '--roulette-accent-2': '#bef264',
+        '--roulette-result': '#d9ff8f',
+        '--roulette-shadow': 'rgba(217, 70, 239, 0.35)',
+      },
+    },
+    gold: {
+      id: 'gold',
+      label: '골드',
+      overlay: 'shimmer',
+      palette: ['#ffd66b', '#b8892f', '#fff1b8', '#f4a261', '#d4af37', '#ffe8a3', '#c58b28', '#fff7d6'],
+      css: {
+        '--roulette-panel': 'rgba(22, 18, 9, 0.80)',
+        '--roulette-panel-strong': 'rgba(34, 25, 10, 0.94)',
+        '--roulette-line': 'rgba(255, 214, 107, 0.34)',
+        '--roulette-text': '#fff8e1',
+        '--roulette-muted': 'rgba(255, 238, 194, 0.68)',
+        '--roulette-accent': '#ffd66b',
+        '--roulette-accent-2': '#fff1b8',
+        '--roulette-result': '#fff5bf',
+        '--roulette-shadow': 'rgba(255, 214, 107, 0.36)',
+      },
+    },
+    pastel: {
+      id: 'pastel',
+      label: '프리즘',
+      overlay: 'confetti',
+      palette: ['#fecdd3', '#bfdbfe', '#bbf7d0', '#fde68a', '#ddd6fe', '#fbcfe8', '#a7f3d0', '#fed7aa'],
+      css: {
+        '--roulette-panel': 'rgba(43, 24, 38, 0.68)',
+        '--roulette-panel-strong': 'rgba(52, 28, 46, 0.88)',
+        '--roulette-line': 'rgba(255, 214, 232, 0.30)',
+        '--roulette-text': '#fff7fb',
+        '--roulette-muted': 'rgba(255, 228, 239, 0.70)',
+        '--roulette-accent': '#f9a8d4',
+        '--roulette-accent-2': '#fde68a',
+        '--roulette-result': '#fff7ad',
+        '--roulette-shadow': 'rgba(249, 168, 212, 0.34)',
+      },
+    },
+    forest: {
+      id: 'forest',
+      label: '오로라',
+      overlay: 'leaves',
+      palette: ['#86efac', '#22c55e', '#bef264', '#14b8a6', '#4ade80', '#a3e635', '#34d399', '#bbf7d0'],
+      css: {
+        '--roulette-panel': 'rgba(4, 28, 20, 0.76)',
+        '--roulette-panel-strong': 'rgba(4, 39, 26, 0.91)',
+        '--roulette-line': 'rgba(134, 239, 172, 0.28)',
+        '--roulette-text': '#f1fff5',
+        '--roulette-muted': 'rgba(222, 255, 229, 0.68)',
+        '--roulette-accent': '#86efac',
+        '--roulette-accent-2': '#bef264',
+        '--roulette-result': '#ecffc8',
+        '--roulette-shadow': 'rgba(74, 222, 128, 0.32)',
+      },
+    },
+    sakura: {
+      id: 'sakura',
+      label: '사쿠라',
+      overlay: 'sakura',
+      palette: ['#fda4af', '#fecdd3', '#f9a8d4', '#f0abfc', '#ffe4e6', '#fb7185', '#fbcfe8', '#fef3c7'],
+      css: {
+        '--roulette-panel': 'rgba(44, 16, 31, 0.72)',
+        '--roulette-panel-strong': 'rgba(54, 20, 37, 0.90)',
+        '--roulette-line': 'rgba(253, 164, 175, 0.30)',
+        '--roulette-text': '#fff7fa',
+        '--roulette-muted': 'rgba(255, 225, 233, 0.70)',
+        '--roulette-accent': '#fda4af',
+        '--roulette-accent-2': '#fef3c7',
+        '--roulette-result': '#ffe5ee',
+        '--roulette-shadow': 'rgba(251, 113, 133, 0.35)',
+      },
+    },
+    midnight: {
+      id: 'midnight',
+      label: '모노',
+      overlay: 'midnight',
+      palette: ['#93c5fd', '#6366f1', '#c4b5fd', '#38bdf8', '#818cf8', '#e0e7ff', '#a5b4fc', '#67e8f9'],
+      css: {
+        '--roulette-panel': 'rgba(5, 9, 24, 0.80)',
+        '--roulette-panel-strong': 'rgba(8, 13, 35, 0.94)',
+        '--roulette-line': 'rgba(147, 197, 253, 0.28)',
+        '--roulette-text': '#f4f7ff',
+        '--roulette-muted': 'rgba(220, 230, 255, 0.68)',
+        '--roulette-accent': '#93c5fd',
+        '--roulette-accent-2': '#c4b5fd',
+        '--roulette-result': '#e0e7ff',
+        '--roulette-shadow': 'rgba(99, 102, 241, 0.38)',
+      },
+    },
+    sunset: {
+      id: 'sunset',
+      label: '솔라',
+      overlay: 'sunset',
+      palette: ['#fbbf24', '#fb7185', '#fdba74', '#f97316', '#fde68a', '#fca5a5', '#f59e0b', '#fef3c7'],
+      css: {
+        '--roulette-panel': 'rgba(38, 16, 11, 0.78)',
+        '--roulette-panel-strong': 'rgba(50, 19, 11, 0.92)',
+        '--roulette-line': 'rgba(251, 191, 36, 0.30)',
+        '--roulette-text': '#fff8f0',
+        '--roulette-muted': 'rgba(255, 226, 204, 0.68)',
+        '--roulette-accent': '#fbbf24',
+        '--roulette-accent-2': '#fb7185',
+        '--roulette-result': '#fff0bb',
+        '--roulette-shadow': 'rgba(249, 115, 22, 0.34)',
+      },
+    },
+  };
+
+  const t = ROULETTE_SKINS[(serverTheme || theme || 'studio') as Theme] || ROULETTE_SKINS.studio;
+  const skinChrome = React.useMemo(() => {
+    const id = t.id;
+    if (id === 'deco') {
+      return {
+        metal: 'linear-gradient(135deg, rgba(255,244,191,0.30), rgba(28,22,13,0.86) 22%, rgba(5,5,5,0.96) 52%, rgba(201,145,42,0.34) 78%, rgba(255,244,191,0.22))',
+        glass: 'linear-gradient(180deg, rgba(255,244,191,0.18), rgba(0,0,0,0.62) 34%, rgba(18,14,8,0.80) 78%, rgba(201,145,42,0.12)), repeating-linear-gradient(90deg, transparent 0 34px, rgba(255,244,191,0.08) 34px 36px)',
+        bevel: 'linear-gradient(90deg, transparent, rgba(255,244,191,0.88), rgba(201,145,42,0.72), rgba(255,244,191,0.52), transparent)',
+        shadow: '0 34px 94px rgba(5,5,5,0.48), 0 0 72px var(--roulette-shadow)',
+        labelBg: 'rgba(255,244,191,0.58)',
+      };
     }
-  };
-  const t = pickTheme(serverTheme || theme || 'classic');
+    if (id === 'crystal') {
+      return {
+        metal: 'linear-gradient(135deg, rgba(248,254,255,0.34), rgba(125,211,252,0.24) 26%, rgba(7,20,38,0.82) 54%, rgba(196,181,253,0.26) 82%, rgba(248,254,255,0.20))',
+        glass: 'linear-gradient(180deg, rgba(248,254,255,0.22), rgba(15,23,42,0.46) 36%, rgba(6,30,52,0.70) 78%, rgba(248,254,255,0.14)), linear-gradient(120deg, transparent 0 36%, rgba(255,255,255,0.14) 38%, transparent 40% 64%, rgba(255,255,255,0.10) 66%, transparent 68%)',
+        bevel: 'linear-gradient(90deg, transparent, rgba(248,254,255,0.86), rgba(125,211,252,0.72), rgba(196,181,253,0.68), transparent)',
+        shadow: '0 32px 90px rgba(6,21,36,0.42), 0 0 78px var(--roulette-shadow)',
+        labelBg: 'rgba(248,254,255,0.62)',
+      };
+    }
+    if (id === 'ink') {
+      return {
+        metal: 'linear-gradient(135deg, rgba(247,247,242,0.20), rgba(31,41,51,0.48) 30%, rgba(2,3,4,0.96) 58%, rgba(193,18,31,0.16))',
+        glass: 'linear-gradient(180deg, rgba(247,247,242,0.14), rgba(0,0,0,0.54) 32%, rgba(10,11,12,0.78) 76%, rgba(193,18,31,0.08)), radial-gradient(circle at 22% 18%, rgba(255,255,255,0.12), transparent 28%)',
+        bevel: 'linear-gradient(90deg, transparent, rgba(247,247,242,0.76), rgba(193,18,31,0.54), rgba(247,247,242,0.42), transparent)',
+        shadow: '0 32px 90px rgba(0,0,0,0.50), 0 0 64px var(--roulette-shadow)',
+        labelBg: 'rgba(247,247,242,0.58)',
+      };
+    }
+    if (id === 'nova') {
+      return {
+        metal: 'linear-gradient(135deg, rgba(196,181,253,0.28), rgba(49,46,129,0.40) 30%, rgba(5,6,24,0.94) 58%, rgba(56,189,248,0.20))',
+        glass: 'radial-gradient(circle at 70% 22%, rgba(254,240,138,0.15), transparent 26%), linear-gradient(180deg, rgba(196,181,253,0.18), rgba(0,0,0,0.54) 34%, rgba(8,9,34,0.78) 78%, rgba(56,189,248,0.10))',
+        bevel: 'linear-gradient(90deg, transparent, rgba(196,181,253,0.76), rgba(56,189,248,0.72), rgba(254,240,138,0.54), transparent)',
+        shadow: '0 34px 96px rgba(8,9,34,0.52), 0 0 86px var(--roulette-shadow)',
+        labelBg: 'rgba(196,181,253,0.56)',
+      };
+    }
+    if (id === 'ceramic') {
+      return {
+        metal: 'linear-gradient(135deg, rgba(248,251,255,0.30), rgba(29,78,216,0.30) 31%, rgba(6,18,42,0.88) 56%, rgba(239,246,255,0.22))',
+        glass: 'linear-gradient(180deg, rgba(248,251,255,0.20), rgba(6,18,42,0.48) 34%, rgba(8,24,48,0.72) 78%, rgba(239,246,255,0.14)), repeating-linear-gradient(135deg, transparent 0 28px, rgba(239,246,255,0.07) 28px 30px)',
+        bevel: 'linear-gradient(90deg, transparent, rgba(248,251,255,0.86), rgba(96,165,250,0.70), rgba(239,246,255,0.72), transparent)',
+        shadow: '0 32px 90px rgba(8,24,48,0.42), 0 0 72px var(--roulette-shadow)',
+        labelBg: 'rgba(239,246,255,0.62)',
+      };
+    }
+    if (id === 'arcade') {
+      return {
+        metal: 'linear-gradient(135deg, rgba(103,232,249,0.24), rgba(240,171,252,0.28) 28%, rgba(4,5,18,0.94) 54%, rgba(190,242,100,0.24)), repeating-linear-gradient(90deg, transparent 0 18px, rgba(255,255,255,0.055) 18px 20px)',
+        glass: 'linear-gradient(180deg, rgba(103,232,249,0.16), rgba(0,0,0,0.56) 34%, rgba(8,7,24,0.76) 78%, rgba(190,242,100,0.10)), repeating-linear-gradient(0deg, rgba(255,255,255,0.055) 0 1px, transparent 1px 9px)',
+        bevel: 'linear-gradient(90deg, transparent, rgba(103,232,249,0.82), rgba(240,171,252,0.72), rgba(190,242,100,0.72), transparent)',
+        shadow: '0 32px 90px rgba(4,5,18,0.48), 0 0 78px var(--roulette-shadow)',
+        labelBg: 'rgba(103,232,249,0.56)',
+      };
+    }
+    if (id === 'velvet' || id === 'gold' || id === 'solar') {
+      return {
+        metal: 'linear-gradient(135deg, rgba(255,242,194,0.34), rgba(94,38,9,0.36) 32%, rgba(12,8,5,0.88) 52%, rgba(255,194,92,0.26))',
+        glass: 'linear-gradient(180deg, rgba(255,236,181,0.20), rgba(0,0,0,0.56) 34%, rgba(23,8,4,0.74) 78%, rgba(255,236,181,0.12))',
+        bevel: 'linear-gradient(90deg, transparent, rgba(255,236,181,0.82), rgba(255,255,255,0.62), transparent)',
+        shadow: '0 32px 90px rgba(25,9,4,0.46), 0 0 76px var(--roulette-shadow)',
+        labelBg: 'rgba(255,244,214,0.62)',
+      };
+    }
+    if (id === 'mono' || id === 'studio') {
+      return {
+        metal: 'linear-gradient(135deg, rgba(255,255,255,0.26), rgba(31,41,55,0.42) 32%, rgba(3,5,8,0.90) 55%, rgba(255,255,255,0.16))',
+        glass: 'linear-gradient(180deg, rgba(255,255,255,0.18), rgba(0,0,0,0.50) 32%, rgba(0,0,0,0.72) 76%, rgba(255,255,255,0.10))',
+        bevel: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.78), rgba(148,163,184,0.56), transparent)',
+        shadow: '0 32px 90px rgba(0,0,0,0.42), 0 0 64px var(--roulette-shadow)',
+        labelBg: 'rgba(255,255,255,0.58)',
+      };
+    }
+    if (id === 'sakura') {
+      return {
+        metal: 'linear-gradient(135deg, rgba(255,228,236,0.34), rgba(115,28,61,0.38) 35%, rgba(36,11,24,0.88) 56%, rgba(253,164,175,0.24))',
+        glass: 'linear-gradient(180deg, rgba(255,228,236,0.20), rgba(0,0,0,0.48) 34%, rgba(44,16,31,0.72) 78%, rgba(255,228,236,0.12))',
+        bevel: 'linear-gradient(90deg, transparent, rgba(255,228,236,0.80), rgba(253,164,175,0.62), transparent)',
+        shadow: '0 32px 90px rgba(44,16,31,0.40), 0 0 72px var(--roulette-shadow)',
+        labelBg: 'rgba(255,228,236,0.58)',
+      };
+    }
+    return {
+      metal: 'linear-gradient(135deg, rgba(255,255,255,0.18), rgba(34,211,238,0.20) 28%, rgba(7,10,22,0.88) 55%, rgba(190,242,100,0.18))',
+      glass: 'linear-gradient(180deg, rgba(255,255,255,0.15), rgba(0,0,0,0.46) 32%, rgba(4,12,24,0.72) 76%, rgba(255,255,255,0.10))',
+      bevel: 'linear-gradient(90deg, transparent, var(--roulette-accent-2), rgba(255,255,255,0.64), var(--roulette-accent), transparent)',
+      shadow: '0 32px 90px rgba(0,0,0,0.38), 0 0 76px var(--roulette-shadow)',
+      labelBg: 'rgba(255,255,255,0.56)',
+    };
+  }, [t.id]);
   // Memoize overlay element so it does not remount during item updates
   const overlayKind = (t.overlay || 'none') as OverlayKind;
   const overlayEl = React.useMemo(() => <OverlaySvg kind={overlayKind} />, [overlayKind]);
@@ -1417,6 +1854,20 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
 .sun-rays-pulse { animation: sunset-pulse 7.2s ease-in-out infinite; animation-delay: var(--delay2, 0s); transform-box: view-box; transform-origin: center; }
 
 @keyframes pop { 0%{ transform: scale(0.9); opacity: .2 } 60%{ transform: scale(1.04); opacity: 1 } 100%{ transform: scale(1); } }
+@keyframes result-lock { 0% { filter: brightness(1); letter-spacing: 0; } 38% { filter: brightness(1.55); letter-spacing: 0.025em; } 100% { filter: brightness(1); letter-spacing: 0; } }
+.roulette-result-lock { animation: result-lock 900ms cubic-bezier(.2,.8,.2,1) both; }
+@media (prefers-reduced-motion: reduce) {
+  .roulette-result-lock,
+  .ember,
+  .flake,
+  .scanline,
+  .shimmer,
+  .gold-sweep,
+  .confetti,
+  .leaf,
+  .petal,
+  .star { animation: none !important; }
+}
 
 /* Pause all overlay animations when parent has .overlay-paused */
 .overlay-paused .ember,
@@ -1428,6 +1879,10 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
 .overlay-paused .leaf,
 .overlay-paused .petal,
 .overlay-paused .star { animation-play-state: paused !important; }
+@media (max-width: 520px) {
+  .roulette-wheel-ornaments .roulette-wheel-ornament-secondary { display: none; }
+  .roulette-wheel-ornaments { opacity: 0.78; }
+}
     `;
     const el = document.createElement('style');
     el.id = STYLE_ID;
@@ -1437,89 +1892,333 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
   }, []);
 
 
-  return (
-    <div className="min-h-screen text-white flex items-center justify-center"
-      style={{ backgroundAttachment: active ? 'fixed' as const : undefined, backgroundColor: 'transparent' }}>
-      <div className="text-center w-full h-[100dvh] p-0">
-        {error && <div className="mb-4 text-red-400 text-sm">{error}</div>}
-        
-        {/* Keep box + overlay always mounted to avoid animation resets. Idle: blank white */}
-        <div className={`relative mx-auto w-full h-[100dvh] ${active ? `${t.radius} ${t.boxBg} md:border ${t.border} md:shadow-2xl ${t.ringW} ${t.ring}` : ''} overflow-hidden`}
-          style={{ backdropFilter: active ? 'blur(2px)' : undefined }}>
-          {active && overlayEl}
-          {/* Batch progress badge */}
-          {batchProgress.id && (
-            <div className="absolute top-3 right-3 z-20">
-              <div className="px-2.5 py-1 rounded-md text-xs font-semibold bg-black/60 border border-white/15 shadow backdrop-blur">
-                <span className="text-gray-200">연차</span>
-                <span className="mx-1 text-gray-400">•</span>
-                <span className="text-blue-300">{batchProgress.done}</span>
-                <span className="text-gray-400"> / </span>
-                <span className="text-blue-300">{batchProgress.total}</span>
-              </div>
+  const wheelSource = (poolRef.current.length ? poolRef.current : scrollItemsRef.current).slice(0, 8);
+  const wheelFallback = ['행운', '보너스', '성공', '한 번 더', '반짝', '선물', '스타', '당첨'];
+  const wheelItems = Array.from({ length: 8 }).map((_, index) => String(wheelSource[index] || wheelFallback[index] || '룰렛'));
+  const wheelLabelLines = React.useMemo(() => wheelItems.map(splitWheelLabel), [wheelItems]);
+  const wheelRotation = offsetRows * 24;
+  const wheelSkinFamily = React.useMemo(() => getWheelSkinFamily(t.id), [t.id]);
+  const selectedWheelIndex = React.useMemo(() => {
+    const target = String(state.label || state.value || '').replace(/\s+/g, '').trim();
+    if (!target) return -1;
+    return wheelItems.findIndex((item) => item.replace(/\s+/g, '').trim() === target);
+  }, [state.label, state.value, wheelItems]);
+
+  const renderReelWindow = () => (
+    <div className="relative w-full max-w-[760px]">
+      <div className="absolute inset-[-10px] rounded-[8px]" style={{ background: 'linear-gradient(135deg, var(--roulette-accent-2), transparent 30%, transparent 70%, var(--roulette-accent))', filter: 'blur(16px)', opacity: 0.58 }} />
+      <div className="relative overflow-hidden rounded-[8px] border p-[clamp(8px,1.2vw,14px)]" style={{ borderColor: 'rgba(255,255,255,0.30)', background: skinChrome.metal, boxShadow: '0 24px 64px rgba(0,0,0,0.42), inset 0 0 0 1px rgba(255,255,255,0.10)' }}>
+        <div className="pointer-events-none absolute inset-x-[4%] top-0 h-px" style={{ background: skinChrome.bevel, boxShadow: '0 0 18px var(--roulette-shadow)' }} />
+        <div className="pointer-events-none absolute inset-x-[4%] bottom-0 h-px" style={{ background: skinChrome.bevel, boxShadow: '0 0 18px var(--roulette-shadow)' }} />
+        <div className="mb-2 flex items-center justify-between px-1 text-[11px] font-black tracking-[0.18em]" style={{ color: 'var(--roulette-muted)' }}>
+          <span>RESULT</span>
+          <span style={{ color: 'var(--roulette-accent-2)' }}>{active ? 'LIVE' : 'READY'}</span>
+        </div>
+        <div className="relative h-[clamp(180px,23vw,330px)] overflow-hidden rounded-[8px] border" style={{ borderColor: 'rgba(255,255,255,0.14)', background: skinChrome.glass }}>
+          <div className="pointer-events-none absolute inset-x-0 top-0 z-20 h-[34%]" style={{ background: 'linear-gradient(180deg, rgba(255,255,255,0.16), transparent)' }} />
+          <div className="pointer-events-none absolute inset-y-0 left-0 z-20 w-[18%]" style={{ background: 'linear-gradient(90deg, rgba(0,0,0,0.58), transparent)' }} />
+          <div className="pointer-events-none absolute inset-y-0 right-0 z-20 w-[18%]" style={{ background: 'linear-gradient(270deg, rgba(0,0,0,0.58), transparent)' }} />
+          <div className="pointer-events-none absolute inset-x-[10%] top-1/2 z-20 h-px -translate-y-1/2" style={{ background: 'linear-gradient(90deg, transparent, var(--roulette-accent-2), var(--roulette-accent), transparent)', boxShadow: '0 0 22px var(--roulette-shadow)' }} />
+          <div className="pointer-events-none absolute left-1/2 top-1/2 z-30 h-0 w-0 -translate-x-1/2 -translate-y-[calc(50%+clamp(58px,8vw,122px))] border-x-[14px] border-b-[20px] border-x-transparent" style={{ borderBottomColor: 'var(--roulette-accent-2)', filter: 'drop-shadow(0 0 14px var(--roulette-shadow))' }} />
+          <div className="pointer-events-none absolute left-1/2 top-1/2 z-30 h-0 w-0 -translate-x-1/2 translate-y-[clamp(58px,8vw,122px)] border-x-[14px] border-t-[20px] border-x-transparent" style={{ borderTopColor: 'var(--roulette-accent-2)', filter: 'drop-shadow(0 0 14px var(--roulette-shadow))' }} />
+          <div ref={reelRef} className="relative h-full w-full overflow-hidden">
+            <div ref={rowRef} className="invisible absolute left-0 top-1/2 w-full -translate-y-1/2">
+              <div className="px-4 text-center text-[clamp(62px,8.6vw,132px)] font-black leading-tight">8</div>
             </div>
-          )}
-          {/* Content layer fades in/out (fade timing synced to FADE_MS) */}
-          <div
-            className={`relative z-10 transition-opacity ${active ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
-            style={{ transitionDuration: FADE_MS + 'ms' }}
-          >
-            <div className="px-5 pt-5 pb-2 text-left md:text-left">
-              <div className={`${t.accent} font-medium text-[clamp(52px,5.2vw,88px)]`}>{state.username ? `${state.username}님의` : ''}</div>
-              <div className="font-extrabold leading-tight text-[clamp(62px,6.5vw,100px)]">{state.name ? `${state.name} 룰렛!` : '룰렛!'}</div>
-            </div>
-            <div className="px-3 md:px-5 pb-5">
-              {/* Slot-machine style vertical reel (top -> bottom) */}
-              <div className="relative h-[62vh] md:h-[70vh] bg-black/40 border border-white/10 rounded-xl overflow-hidden">
-                <div ref={reelRef} className="relative w-full h-full flex items-center justify-center will-change-transform">
-                  {/* Measure a row height using hidden ghost row */}
-                  <div ref={rowRef} className="invisible absolute top-1/2 left-0 w-full -translate-y-1/2">
-                    <div className={`text-[12vw] md:text-[8vw] font-black ${t.result} leading-tight`}>8</div>
-                  </div>
-                  {/* Reel content */}
-                  {(() => {
-                    const measured = rowRef.current?.getBoundingClientRect().height || 0;
-                    const rh = rowH > 0 ? rowH : (measured > 0 ? Math.round(measured) : 0);
-                    const reelH = reelRef.current?.getBoundingClientRect().height || 0;
-                    if (!rh || !reelH) return null; // wait until measured to avoid blank flash
-                    const center = offsetRows;
-                    // Compute how many full rows fit in the reel height
-                    const rowsVisible = Math.max(3, Math.ceil(reelH / rh) + 1);
-                    const buffer = 6; // render extra rows above/below
-                    const windowRows = rowsVisible + buffer * 2 + 2;
-                    const firstIndex = Math.floor(center) - Math.ceil(rowsVisible / 2) - buffer;
-                    // Align the CENTER of the current row to the midline (not the row's top)
-                    const transformPx = Math.round((reelH / 2) - ((center - firstIndex + 0.5) * rh));
+            {(() => {
+              const measured = rowRef.current?.getBoundingClientRect().height || 0;
+              const rh = rowH > 0 ? rowH : (measured > 0 ? Math.round(measured) : 0);
+              const reelH = reelRef.current?.getBoundingClientRect().height || 0;
+              if (!rh || !reelH) return null;
+              const center = offsetRows;
+              const rowsVisible = Math.max(3, Math.ceil(reelH / rh) + 1);
+              const buffer = 6;
+              const windowRows = rowsVisible + buffer * 2 + 2;
+              const firstIndex = Math.floor(center) - Math.ceil(rowsVisible / 2) - buffer;
+              const transformPx = Math.round((reelH / 2) - ((center - firstIndex + 0.5) * rh));
+              return (
+                <div className="absolute left-0 right-0 top-0 flex flex-col items-stretch will-change-transform" style={{ transform: `translateY(${transformPx}px)` }}>
+                  {Array.from({ length: windowRows }).map((_, k) => {
+                    const idx = firstIndex + k;
+                    const label = labelFor(idx);
+                    const isCenter = idx === Math.round(center);
                     return (
-                      <div
-                        className="absolute left-0 right-0 top-0 flex flex-col items-stretch will-change-transform"
-                        style={{ transform: `translateY(${transformPx}px)` }}
-                      >
-                        {Array.from({ length: windowRows }).map((_, k) => {
-                          const idx = firstIndex + k;
-                          const label = labelFor(idx);
-                          const isCenter = idx === Math.round(center);
-                          return (
-                            <div key={idx} className="w-full flex items-center justify-center" style={{ height: rh }}>
-                              <div
-                                className={`text-[12vw] md:text-[8vw] font-black ${t.result} leading-tight transition-transform duration-150`}
-                                style={{ transform: isCenter ? 'scale(1.06)' : 'scale(1)' }}
-                              >
-                                {label}
-                              </div>
-                            </div>
-                          );
-                        })}
+                      <div key={idx} className="flex w-full items-center justify-center px-4" style={{ height: rh }}>
+                        <div
+                          className={`max-w-full truncate text-center text-[clamp(62px,8.6vw,132px)] font-black leading-tight transition-transform duration-150 ${isCenter ? 'roulette-result-lock' : ''}`}
+                          style={{
+                            color: isCenter ? 'var(--roulette-result)' : 'rgba(255,255,255,0.18)',
+                            textShadow: isCenter ? '0 0 26px var(--roulette-shadow), 0 0 10px var(--roulette-accent), 0 12px 28px rgba(0,0,0,0.62)' : 'none',
+                            transform: isCenter ? 'scale(1.02)' : 'scale(0.86)',
+                          }}
+                        >
+                          {label}
+                        </div>
                       </div>
                     );
-                  })()}
-                  {/* Center guide */}
-                  <div className="pointer-events-none absolute left-0 right-0 top-1/2 -translate-y-1/2 border-t border-b border-white/10" style={{ height: 2 }} />
+                  })}
                 </div>
-              </div>
-            </div>
+              );
+            })()}
           </div>
         </div>
+      </div>
+    </div>
+  );
+
+  const renderIdentity = (compact = false) => (
+    <div className={compact ? 'grid justify-items-center gap-3 text-center' : 'grid gap-[clamp(14px,2vw,24px)]'}>
+      <div className="grid h-[clamp(54px,5vw,78px)] w-[clamp(54px,5vw,78px)] place-items-center rounded-full border" style={{ borderColor: 'var(--roulette-line)', background: 'radial-gradient(circle, rgba(255,255,255,0.08), rgba(0,0,0,0.20))', boxShadow: '0 0 28px var(--roulette-shadow), inset 0 0 22px rgba(255,255,255,0.08)' }}>
+        <div className="h-[45%] w-[45%]" style={{ clipPath: 'polygon(50% 0, 61% 37%, 100% 50%, 61% 63%, 50% 100%, 39% 63%, 0 50%, 39% 37%)', background: 'var(--roulette-text)', filter: 'drop-shadow(0 0 14px var(--roulette-accent))' }} />
+      </div>
+      <h1 className="break-keep text-[clamp(30px,4.2vw,64px)] font-black leading-[1.02]" style={{ textShadow: '0 10px 34px rgba(0,0,0,0.38)' }}>
+        {state.name ? `${state.name}` : '룰렛'}
+      </h1>
+      <div className="flex max-w-[min(100%,410px)] items-center gap-3 rounded-[8px] border px-4 py-3" style={{ borderColor: 'var(--roulette-line)', background: 'rgba(255,255,255,0.055)', boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.12)' }}>
+        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full border" style={{ borderColor: 'var(--roulette-line)', color: 'var(--roulette-accent-2)', background: 'rgba(0,0,0,0.28)' }}>
+          <span className="h-4 w-4 rounded-full" style={{ background: 'currentColor', boxShadow: '0 14px 0 -5px currentColor' }} />
+        </span>
+        <p className="min-w-0 truncate text-[clamp(16px,1.6vw,26px)] font-extrabold leading-tight" style={{ color: 'var(--roulette-text)' }}>
+          {state.username ? `${state.username}님` : '시청자명'}
+        </p>
+      </div>
+      {batchProgress.id ? (
+        <div className="grid max-w-[min(100%,410px)] gap-2">
+          <div className="flex items-center justify-between text-[clamp(12px,1vw,14px)] font-black tracking-[0.14em]" style={{ color: 'var(--roulette-muted)' }}>
+            <span>PROGRESS</span>
+            <span style={{ color: 'var(--roulette-result)' }}>{batchProgress.done} / {batchProgress.total}</span>
+          </div>
+          <div className="h-2 overflow-hidden rounded-full border bg-black/36" style={{ borderColor: 'var(--roulette-line)' }}>
+            <div className="h-full rounded-full" style={{ width: `${Math.max(0, Math.min(100, (batchProgress.done / Math.max(1, batchProgress.total)) * 100))}%`, background: 'linear-gradient(90deg, var(--roulette-accent), var(--roulette-accent-2))', boxShadow: '0 0 18px var(--roulette-shadow)' }} />
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+
+  return (
+    <div
+      className="min-h-screen w-screen overflow-hidden text-white"
+      style={{ backgroundAttachment: active ? 'fixed' as const : undefined, backgroundColor: 'transparent', ...t.css }}
+    >
+      {error ? (
+        <div className="fixed left-1/2 top-6 z-50 -translate-x-1/2 rounded-[8px] border border-red-300/30 bg-black/70 px-3 py-2 text-[13px] font-semibold text-red-100 shadow-lg backdrop-blur-md">
+          {error}
+        </div>
+      ) : null}
+
+      <div className="grid h-[100dvh] w-full place-items-center p-[clamp(10px,2.2vw,28px)]">
+        {layout === 'wheel' ? (
+          <section
+            aria-label="룰렛 휠 오버레이"
+            className={`roulette-stage relative grid aspect-square w-[min(94vmin,790px)] place-items-center overflow-visible rounded-full transition-all duration-300 ${active ? 'scale-100 opacity-100' : 'pointer-events-none scale-[0.985] opacity-0'}`}
+            style={{
+              filter: 'drop-shadow(0 28px 70px rgba(0,0,0,0.46))',
+              color: 'var(--roulette-text)',
+              transitionDuration: FADE_MS + 'ms',
+            }}
+          >
+            {active ? (
+              <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-full">
+                {overlayEl}
+              </div>
+            ) : null}
+            <div
+              className="absolute inset-[-2.5%] rounded-full opacity-80"
+              style={{
+                background: 'radial-gradient(circle, var(--roulette-shadow), transparent 62%)',
+                filter: 'blur(20px)',
+              }}
+            />
+            <div
+              className="absolute inset-0 rounded-full border"
+              style={{
+                borderColor: 'rgba(255,255,255,0.20)',
+                background: `${skinChrome.metal}, radial-gradient(circle at 50% 42%, rgba(255,255,255,0.08), transparent 36%), radial-gradient(circle, var(--roulette-panel-strong), rgba(0,0,0,0.86) 72%)`,
+                boxShadow: `${skinChrome.shadow}, inset 0 0 0 clamp(10px,1.7vmin,16px) rgba(255,255,255,0.035), inset 0 0 0 clamp(18px,3.2vmin,28px) rgba(0,0,0,0.36), inset 0 1px 0 rgba(255,255,255,0.18)`,
+              }}
+            />
+            <WheelSkinOrnaments family={wheelSkinFamily} />
+            {wheelSkinFamily === 'mono' ? Array.from({ length: 12 }).map((_, index) => (
+              <div
+                key={`rim-panel-${index}`}
+                className="absolute left-1/2 top-1/2 h-[clamp(10px,2.2vmin,18px)] w-[clamp(28px,6.4vmin,52px)] rounded-[4px] border"
+                style={{
+                  borderColor: 'rgba(255,255,255,0.16)',
+                  background: `linear-gradient(180deg, rgba(255,255,255,0.16), rgba(0,0,0,0.30)), ${skinChrome.metal}`,
+                  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.18), 0 0 14px rgba(0,0,0,0.38)',
+                  transform: `translate(-50%, -50%) rotate(${index * 30}deg) translateY(calc(-1 * min(44vmin, 362px)))`,
+                }}
+              />
+            )) : null}
+            <div
+              className="absolute inset-[3.2%] rounded-full"
+              style={{
+                background: 'repeating-conic-gradient(from -1deg, rgba(255,255,255,0.34) 0deg 0.9deg, transparent 0.9deg 5.625deg)',
+                opacity: 0.72,
+                maskImage: 'radial-gradient(circle, transparent 65%, black 66%, black 72%, transparent 73%)',
+                WebkitMaskImage: 'radial-gradient(circle, transparent 65%, black 66%, black 72%, transparent 73%)',
+              }}
+            />
+            <div
+              className="absolute inset-[5.8%] rounded-full"
+              style={{
+                background: 'conic-gradient(from 18deg, transparent, var(--roulette-accent-2), transparent 24%, transparent 50%, var(--roulette-accent), transparent 68%, transparent)',
+                opacity: 0.62,
+                filter: 'blur(1px)',
+                boxShadow: '0 0 42px var(--roulette-shadow)',
+                maskImage: 'radial-gradient(circle, transparent 58%, black 59%, black 66%, transparent 67%)',
+                WebkitMaskImage: 'radial-gradient(circle, transparent 58%, black 59%, black 66%, transparent 67%)',
+              }}
+            />
+            <div
+              className="absolute inset-[8.8%] rounded-full"
+              style={{
+                background: 'radial-gradient(circle at 42% 30%, rgba(255,255,255,0.12), transparent 24%), radial-gradient(circle, rgba(0,0,0,0.04), rgba(0,0,0,0.36) 72%, rgba(255,255,255,0.08))',
+                boxShadow: 'inset 0 0 0 clamp(3px,0.7vmin,7px) rgba(255,255,255,0.14), inset 0 0 56px rgba(0,0,0,0.42), 0 0 42px var(--roulette-shadow)',
+              }}
+            />
+            <div
+              className="absolute inset-[12.2%] rounded-full"
+              style={{
+                transform: `rotate(${wheelRotation}deg)`,
+                background: 'radial-gradient(circle, transparent 46%, rgba(0,0,0,0.12) 47%, rgba(0,0,0,0.22) 72%, rgba(255,255,255,0.08) 73%, transparent 75%)',
+                maskImage: 'radial-gradient(circle, transparent 0 43%, black 44%)',
+                WebkitMaskImage: 'radial-gradient(circle, transparent 0 43%, black 44%)',
+              }}
+            >
+              <WheelSegmentsSvg family={wheelSkinFamily} palette={t.palette} />
+              <WheelSelectedSegment selectedIndex={selectedWheelIndex} />
+              {Array.from({ length: 8 }).map((_, index) => (
+                <div
+                  key={`divider-${index}`}
+                  className="absolute left-1/2 top-1/2 h-[43%] w-[clamp(2px,0.34vmin,4px)] origin-top -translate-x-1/2"
+                  style={{
+                    transform: `rotate(${index * 45}deg)`,
+                    background: 'linear-gradient(180deg, rgba(255,255,255,0.85), var(--roulette-accent-2) 15%, rgba(0,0,0,0.18) 82%, transparent)',
+                    boxShadow: '0 0 12px var(--roulette-shadow)',
+                  }}
+                />
+              ))}
+              {Array.from({ length: 16 }).map((_, index) => (
+                <div
+                  key={`jewel-${index}`}
+                  className="absolute left-1/2 top-1/2 h-[clamp(7px,1.55vmin,13px)] w-[clamp(7px,1.55vmin,13px)] rounded-full border"
+                  style={{
+                    borderColor: 'rgba(255,255,255,0.56)',
+                    background: index % 2 === 0 ? 'var(--roulette-accent-2)' : 'var(--roulette-accent)',
+                    boxShadow: '0 0 14px var(--roulette-shadow), inset 0 1px 0 rgba(255,255,255,0.80)',
+                    transform: `translate(-50%, -50%) rotate(${index * 22.5}deg) translateY(calc(-1 * min(39vmin, 303px)))`,
+                  }}
+                />
+              ))}
+              <WheelLabelsSvg labelLines={wheelLabelLines} selectedIndex={selectedWheelIndex} />
+            </div>
+            <div
+              className="absolute left-1/2 top-[-2.8%] z-40 grid h-[clamp(76px,13vmin,116px)] w-[clamp(58px,9.4vmin,88px)] -translate-x-1/2 place-items-center"
+              style={{ filter: 'drop-shadow(0 10px 18px rgba(0,0,0,0.48)) drop-shadow(0 0 22px var(--roulette-shadow))' }}
+            >
+              <div className="absolute inset-x-[28%] top-[8%] h-[24%] rounded-t-full" style={{ background: skinChrome.metal, border: '1px solid rgba(255,255,255,0.20)' }} />
+              <div
+                className="absolute inset-x-[6%] top-[19%] h-[69%]"
+                style={{
+                  clipPath: 'polygon(50% 0, 100% 24%, 58% 100%, 42% 100%, 0 24%)',
+                  background: 'linear-gradient(135deg, rgba(255,255,255,0.90), var(--roulette-accent-2) 30%, var(--roulette-accent) 62%, rgba(0,0,0,0.38))',
+                  boxShadow: 'inset 0 0 0 2px rgba(255,255,255,0.28), inset 0 0 24px rgba(0,0,0,0.38)',
+                }}
+              />
+              <div className="absolute top-[36%] h-[18%] w-[20%] rotate-45 bg-white/70 blur-[1px]" />
+            </div>
+            <div
+              className="absolute inset-[25.4%] z-20 rounded-full border"
+              style={{
+                borderColor: 'rgba(255,255,255,0.18)',
+                background: 'radial-gradient(circle, rgba(255,255,255,0.12), transparent 34%), radial-gradient(circle, rgba(24,18,24,0.98), rgba(3,3,7,1) 74%)',
+                boxShadow: 'inset 0 0 42px rgba(0,0,0,0.56), 0 0 0 clamp(2px,0.45vmin,4px) rgba(255,255,255,0.08)',
+              }}
+            />
+            <div
+              className="absolute inset-[27.6%] z-30 rounded-full"
+              style={{
+                background: 'repeating-conic-gradient(from 0deg, var(--roulette-accent-2) 0deg 1.1deg, rgba(255,255,255,0.10) 1.1deg 4.5deg, transparent 4.5deg 7.5deg)',
+                opacity: 0.68,
+                boxShadow: '0 0 30px var(--roulette-shadow)',
+                maskImage: 'radial-gradient(circle, transparent 62%, black 63%, black 72%, transparent 73%)',
+                WebkitMaskImage: 'radial-gradient(circle, transparent 62%, black 63%, black 72%, transparent 73%)',
+              }}
+            />
+            {Array.from({ length: 8 }).map((_, index) => (
+              <div
+                key={`hub-jewel-${index}`}
+                className="absolute left-1/2 top-1/2 z-30 h-[clamp(5px,1.15vmin,10px)] w-[clamp(5px,1.15vmin,10px)] rounded-full"
+                style={{
+                  background: 'var(--roulette-accent-2)',
+                  boxShadow: '0 0 12px var(--roulette-shadow), inset 0 1px 0 rgba(255,255,255,0.82)',
+                  transform: `translate(-50%, -50%) rotate(${index * 45}deg) translateY(calc(-1 * min(18.5vmin, 148px)))`,
+                }}
+              />
+            ))}
+            <div
+              className="absolute inset-[31%] z-30 grid place-items-center rounded-full border"
+              style={{
+                borderColor: 'rgba(255,255,255,0.28)',
+                background: 'linear-gradient(180deg, rgba(255,255,255,0.15), rgba(0,0,0,0.12)), radial-gradient(circle at 50% 18%, rgba(255,255,255,0.20), transparent 30%), radial-gradient(circle, rgba(38,28,38,0.98), #050508 76%)',
+                boxShadow: '0 0 52px var(--roulette-shadow), inset 0 1px 0 rgba(255,255,255,0.28), inset 0 -18px 42px rgba(0,0,0,0.36)',
+              }}
+            >
+              <div className="grid max-w-[76%] justify-items-center gap-[clamp(2px,0.9vmin,8px)] text-center">
+                <div className="max-w-full truncate text-[clamp(12px,1.75vmin,18px)] font-black leading-tight" style={{ color: 'var(--roulette-text)', textShadow: '0 8px 22px rgba(0,0,0,0.45)' }}>{state.name || '룰렛'}</div>
+                <div className="max-w-full truncate text-[clamp(9px,1.25vmin,13px)] font-extrabold" style={{ color: 'var(--roulette-muted)' }}>{state.username ? `${state.username}님` : '시청자명'}</div>
+                <div className="relative mt-[clamp(1px,0.4vmin,4px)] h-[clamp(22px,3.4vmin,38px)] w-[clamp(22px,3.4vmin,38px)]">
+                  <div className="absolute inset-0" style={{ clipPath: 'polygon(50% 0, 61% 37%, 100% 50%, 61% 63%, 50% 100%, 39% 63%, 0 50%, 39% 37%)', background: 'var(--roulette-result)', filter: 'drop-shadow(0 0 18px var(--roulette-shadow))' }} />
+                  <div className="absolute inset-[34%] rounded-full bg-white/75" />
+                </div>
+                <div className="text-[clamp(9px,1.12vmin,12px)] font-black tracking-[0.18em]" style={{ color: 'var(--roulette-muted)' }}>RESULT</div>
+                <div className="roulette-result-lock max-w-[210px] truncate text-[clamp(26px,4.6vmin,48px)] font-black leading-none" style={{ color: 'var(--roulette-result)', textShadow: '0 0 24px var(--roulette-shadow), 0 7px 20px rgba(0,0,0,0.48)' }}>{state.label || state.value || '준비 완료'}</div>
+              </div>
+            </div>
+            {batchProgress.id ? (
+              <div
+                className="absolute bottom-[3.4%] left-1/2 z-30 min-w-[clamp(110px,19vmin,168px)] -translate-x-1/2 rounded-[8px] border px-[clamp(14px,2.6vmin,24px)] py-[clamp(6px,1.1vmin,10px)] text-center text-[clamp(19px,3.4vmin,32px)] font-black tracking-[0.08em]"
+                style={{
+                  borderColor: 'rgba(255,255,255,0.26)',
+                  background: `linear-gradient(180deg, rgba(255,255,255,0.12), rgba(0,0,0,0.18)), ${skinChrome.metal}`,
+                  color: 'var(--roulette-result)',
+                  boxShadow: '0 0 24px var(--roulette-shadow), inset 0 1px 0 rgba(255,255,255,0.22)',
+                }}
+              >
+                {batchProgress.done} / {batchProgress.total}
+              </div>
+            ) : null}
+          </section>
+        ) : (
+            <section
+              aria-label="룰렛 릴 오버레이"
+              className={`roulette-stage relative grid w-[min(96vw,1180px)] grid-cols-1 items-stretch gap-0 overflow-hidden rounded-[8px] border shadow-2xl transition-all duration-300 lg:grid-cols-[minmax(280px,0.72fr)_minmax(420px,1.28fr)] ${active ? 'scale-100 opacity-100' : 'pointer-events-none scale-[0.985] opacity-0'}`}
+              style={{
+                minHeight: 'clamp(420px, 34vw, 560px)',
+                borderColor: 'var(--roulette-line)',
+                background: `linear-gradient(100deg, rgba(255,255,255,0.10), transparent 11%, transparent 89%, rgba(255,255,255,0.08)), radial-gradient(circle at 66% 50%, var(--roulette-shadow), transparent 27%), ${skinChrome.metal}, linear-gradient(135deg, var(--roulette-panel-strong), var(--roulette-panel))`,
+                boxShadow: `${skinChrome.shadow}, inset 0 0 0 1px rgba(255,255,255,0.10), inset 0 1px 0 rgba(255,255,255,0.16)`,
+                color: 'var(--roulette-text)',
+                clipPath: 'polygon(0 10%, 3% 0, 100% 0, 100% 90%, 97% 100%, 0 100%)',
+                transitionDuration: FADE_MS + 'ms',
+              }}
+            >
+            {active ? overlayEl : null}
+            <div className="pointer-events-none absolute inset-0 z-[1] opacity-90" style={{ background: 'linear-gradient(90deg, rgba(255,255,255,0.10), transparent 22%, transparent 78%, rgba(255,255,255,0.08)), radial-gradient(circle at 62% 50%, var(--roulette-shadow), transparent 28%)' }} />
+            <div className="pointer-events-none absolute inset-x-[4%] top-0 z-[2] h-px" style={{ background: 'linear-gradient(90deg, transparent, var(--roulette-accent), var(--roulette-accent-2), transparent)', boxShadow: '0 0 22px var(--roulette-shadow)' }} />
+            <div className="pointer-events-none absolute inset-x-[7%] bottom-[3%] z-[2] h-[3px]" style={{ background: skinChrome.bevel, boxShadow: '0 0 22px var(--roulette-shadow)' }} />
+            <div className="pointer-events-none absolute right-0 top-[10%] z-[2] h-[80%] w-[34px]" style={{ background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.16), rgba(0,0,0,0.18)), repeating-linear-gradient(180deg, transparent 0 10px, rgba(255,255,255,0.12) 10px 11px)' }} />
+            <div className="pointer-events-none absolute left-1/2 top-[7%] z-30 h-0 w-0 -translate-x-1/2 border-x-[16px] border-t-[28px] border-x-transparent" style={{ borderTopColor: 'var(--roulette-accent-2)', filter: 'drop-shadow(0 0 16px var(--roulette-shadow))' }} />
+            <div className="relative z-10 grid min-w-0 content-center border-b p-[clamp(18px,2.6vw,34px)] lg:border-b-0 lg:border-r" style={{ borderColor: 'var(--roulette-line)' }}>
+              {renderIdentity()}
+            </div>
+            <div className="relative z-20 grid min-w-0 place-items-center p-[clamp(16px,2.4vw,32px)]">
+              {renderReelWindow()}
+            </div>
+          </section>
+        )}
       </div>
     </div>
   );

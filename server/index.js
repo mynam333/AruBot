@@ -4518,8 +4518,23 @@ function normalizeRouletteDefinition(input = {}) {
   const id = String(input.id || '').trim();
   const name = String(input.name || '').trim();
   const type = String(input.type || 'items') === 'probability' ? 'probability' : 'items';
-  const themeText = String(input.theme || 'pastel').toLowerCase();
-  const allowedThemes = new Set(['classic', 'fire', 'ice', 'cyber', 'gold', 'pastel', 'forest', 'sakura', 'midnight', 'sunset']);
+  const themeText = String(input.theme || 'studio').toLowerCase();
+  const skinAliases = new Map([
+    ['classic', 'studio'],
+    ['fire', 'solar'],
+    ['ice', 'ocean'],
+    ['pastel', 'prism'],
+    ['forest', 'aurora'],
+    ['midnight', 'mono'],
+    ['sunset', 'solar'],
+  ]);
+  const allowedThemes = new Set(['studio', 'prism', 'aurora', 'velvet', 'mono', 'deco', 'crystal', 'ink', 'nova', 'ceramic', 'arcade', 'sakura', 'ocean', 'solar', 'cyber', 'gold', 'classic', 'fire', 'ice', 'pastel', 'forest', 'midnight', 'sunset']);
+  const allowedLayouts = new Set(['reel', 'wheel']);
+  const themeParts = themeText.split(/[:_\-\s]+/).filter(Boolean);
+  const rawTheme = themeParts.find((part) => allowedThemes.has(part)) || '';
+  const parsedTheme = skinAliases.get(rawTheme) || rawTheme;
+  const parsedLayout = themeParts.find((part) => allowedLayouts.has(part)) || '';
+  const normalizedTheme = parsedTheme ? (parsedLayout ? `${parsedLayout}:${parsedTheme}` : parsedTheme) : 'studio';
   const items = (Array.isArray(input.items) ? input.items : [])
     .map((item) => ({
       label: String(item?.label || '').trim(),
@@ -4532,7 +4547,7 @@ function normalizeRouletteDefinition(input = {}) {
     id: id || `rlt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
     name,
     type,
-    theme: allowedThemes.has(themeText) ? themeText : 'pastel',
+    theme: normalizedTheme,
     items,
   };
 }
@@ -4595,7 +4610,7 @@ function makeQuickStartRouletteDefinition() {
     id: 'tpl_rlt_today',
     name: '오늘의 룰렛',
     type: 'items',
-    theme: 'pastel',
+    theme: 'reel:studio',
     items: [
       { label: '칭찬 한마디', value: '채팅으로 칭찬 한마디!', weight: 3 },
       { label: '보너스 100P', value: '보너스 100P', weight: 2 },
@@ -12948,7 +12963,7 @@ function normalizeFxColor(value, fallback = '#00ff00') {
 }
 
 function normalizeFxPayload(input = {}) {
-  const kind = String(input.kind || input.type || 'image').toLowerCase();
+  const kind = String(input.kind || input.type || input.assetKind || 'image').toLowerCase();
   const normalizedKind = FX_ASSET_KINDS.has(kind) ? kind : 'image';
   return {
     id: String(input.id || `fx_${Date.now().toString(36)}_${crypto.randomBytes(3).toString('hex')}`),
@@ -24157,8 +24172,22 @@ function getRouletteDefsFromSettings(settings) {
         })).filter(x => x.label) : [],
         theme: (() => {
           const t = String(d?.theme || '').toLowerCase();
-          const allowed = new Set(['classic', 'fire', 'ice', 'cyber', 'gold', 'pastel', 'forest', 'sakura', 'midnight', 'sunset']);
-          return allowed.has(t) ? t : undefined;
+          const aliases = new Map([
+            ['classic', 'studio'],
+            ['fire', 'solar'],
+            ['ice', 'ocean'],
+            ['pastel', 'prism'],
+            ['forest', 'aurora'],
+            ['midnight', 'mono'],
+            ['sunset', 'solar'],
+          ]);
+          const allowed = new Set(['studio', 'prism', 'aurora', 'velvet', 'mono', 'deco', 'crystal', 'ink', 'nova', 'ceramic', 'arcade', 'sakura', 'ocean', 'solar', 'cyber', 'gold', 'classic', 'fire', 'ice', 'pastel', 'forest', 'midnight', 'sunset']);
+          const layouts = new Set(['reel', 'wheel']);
+          const parts = t.split(/[:_\-\s]+/).filter(Boolean);
+          const rawTheme = parts.find((part) => allowed.has(part));
+          const theme = aliases.get(rawTheme) || rawTheme;
+          const layout = parts.find((part) => layouts.has(part));
+          return theme ? (layout ? `${layout}:${theme}` : theme) : undefined;
         })(),
       }))
       .filter(d => d.items.length > 0);

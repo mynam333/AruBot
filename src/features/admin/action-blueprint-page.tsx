@@ -823,7 +823,7 @@ function nodePreview(node: BlueprintNode) {
   if (node.type === 'action') return String(node.config.actionId || '블루프린트 미선택');
   if (node.type === 'approval') return String(node.config.message || '승인 메시지 미설정').slice(0, 54);
   if (node.type === 'log' || node.type === 'highlight') return String(node.config.message || node.config.label || '로그 내용 미설정').slice(0, 54);
-  if (node.type === 'fx') return `${String(node.config.kind || 'image')} · ${String(node.config.assetName || node.config.assetId || node.config.youtubeUrl || '에셋 미선택')}`;
+  if (node.type === 'fx') return `${String(node.config.kind || '종류 미지정')} · ${String(node.config.assetName || node.config.assetId || node.config.youtubeUrl || '에셋 미선택')}`;
   if (node.type === 'sound') return String(node.config.fileId || '사운드 미선택');
   if (node.type === 'tits') return String(node.config.triggerName || node.config.triggerId || '트리거 미선택');
   if (node.type === 'vtube') {
@@ -1250,7 +1250,7 @@ function BlueprintCanvasNode({ data, selected }: NodeProps<BlueprintFlowNode>) {
         ) : outputHintCount ? (
           <div className="grid gap-1 text-[0.64rem] font-semibold text-muted-foreground">
             <span className="truncate">{spec.body}</span>
-            <span className="text-[0.58rem]">출력 변수 {outputHintCount}개 · 선택하면 전체 확인</span>
+            <span className="text-[0.58rem]">출력 변수 {outputHintCount}개</span>
           </div>
         ) : (
           <div className="flex items-center justify-between gap-2 text-[0.66rem] font-semibold text-muted-foreground">
@@ -2979,6 +2979,7 @@ export function ActionBlueprintPage() {
                     노드 이름
                     <Input value={editingNode.name} onChange={(event) => updateNodeNameById(editingNode.id, event.target.value)} className="w-full min-w-0" />
                   </label>
+                  <NodeReferencePanel node={editingNode} />
                   <ConfigFields
                     node={editingNode}
                     onChange={(key, value) => updateNodeConfigById(editingNode.id, key, value)}
@@ -3202,8 +3203,11 @@ function ConfigFields({
     );
   }
   if (node.type === 'fx') {
-    const kind = String(cfg.kind || 'image');
-    const assets = fxAssets.filter((asset) => asset.kind === kind || (kind === 'sticker' && asset.kind === 'image'));
+    const kind = typeof cfg.kind === 'string' ? cfg.kind : 'image';
+    const normalizedKind = kind.trim().toLowerCase();
+    const assets = normalizedKind
+      ? fxAssets.filter((asset) => asset.kind === normalizedKind || (normalizedKind === 'sticker' && asset.kind === 'image'))
+      : fxAssets;
     const selectedAsset = fxAssets.find((asset) => asset.id === cfg.assetId);
     const chromaKeyColor = String(cfg.chromaKeyColor || '#00ff00');
     const pickColor = async () => {
@@ -3223,17 +3227,18 @@ function ConfigFields({
             onChange('assetId', '');
             onChange('assetName', '');
           }}
-          placeholder="image, sticker, video, sound"
+          placeholder="비워두거나 image, sticker, video, sound"
           examples={['image', 'sticker', 'video', 'sound']}
         />
-        {kind === 'video' ? <Field label="YouTube 링크" value={String(cfg.youtubeUrl || '')} onChange={(value) => onChange('youtubeUrl', value)} /> : null}
+        {normalizedKind === 'video' ? <Field label="YouTube 링크" value={String(cfg.youtubeUrl || '')} onChange={(value) => onChange('youtubeUrl', value)} /> : null}
         <SelectField
-          label={kind === 'sound' ? '사운드 에셋' : kind === 'video' ? '로컬 비디오 에셋' : '이미지/스티커 에셋'}
+          label={normalizedKind === 'sound' ? '사운드 에셋' : normalizedKind === 'video' ? '로컬 비디오 에셋' : normalizedKind ? '이미지/스티커 에셋' : 'FX 에셋'}
           value={String(cfg.assetId || '')}
           onChange={(value) => {
             const asset = fxAssets.find((item) => item.id === value);
             onChange('assetId', value);
             onChange('assetName', asset?.name || '');
+            onChange('assetKind', asset?.kind || '');
           }}
           placeholder={assets.length ? '로컬 에셋 선택' : '로컬 프로그램에서 에셋 목록을 불러오세요'}
           options={assets.map((asset) => ({ value: asset.id, label: asset.name || asset.id }))}
@@ -3243,7 +3248,7 @@ function ConfigFields({
             <img src={selectedAsset.previewDataUrl} alt="" className="max-h-36 max-w-full rounded-[calc(var(--radius-control)*0.8)] object-contain" />
           </div>
         ) : null}
-        {kind !== 'sound' ? (
+        {normalizedKind !== 'sound' ? (
           <>
             <div className="grid gap-3 md:grid-cols-2">
               <Field label="위치 X(%)" value={String(cfg.x ?? 50)} onChange={(value) => onChange('x', value)} />
@@ -3265,6 +3270,8 @@ function ConfigFields({
               placeholder="비워두면 애니메이션 없음"
               examples={['fx-fade-out 280ms ease-in both', 'fade-out 280ms ease-in both', 'fx-slide-up 260ms ease-in reverse both', 'fx-pop-in 240ms ease-in reverse both']}
             />
+            <Field label="적용할 CSS 키" value={String(cfg.animationKey || '')} onChange={(value) => onChange('animationKey', value)} />
+            <LongField label="CSS 코드" value={String(cfg.cssCode || '')} onChange={(value) => onChange('cssCode', value)} />
             <label className="flex items-center gap-2 rounded-[var(--radius-control)] border bg-background/70 p-3 text-sm font-semibold">
               <input type="checkbox" checked={cfg.chromaKey === true} onChange={(event) => onChange('chromaKey', event.target.checked)} />
               크로마키 사용
@@ -3281,7 +3288,7 @@ function ConfigFields({
             ) : null}
           </>
         ) : null}
-        <Field label={kind === 'sound' ? '볼륨(0-1)' : '유지 시간(ms)'} value={String(kind === 'sound' ? cfg.volume ?? 1 : cfg.durationMs ?? 4000)} onChange={(value) => onChange(kind === 'sound' ? 'volume' : 'durationMs', value)} />
+        <Field label={normalizedKind === 'sound' ? '볼륨(0-1)' : '유지 시간(ms)'} value={String(normalizedKind === 'sound' ? cfg.volume ?? 1 : cfg.durationMs ?? 4000)} onChange={(value) => onChange(normalizedKind === 'sound' ? 'volume' : 'durationMs', value)} />
       </div>
     );
   }
