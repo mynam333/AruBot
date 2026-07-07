@@ -170,12 +170,82 @@ function singleFlight(key, fn) {
   return request;
 }
 
+const realtimeResponseCache = new Map();
+const REALTIME_CACHE_SWEEP_MS = 60 * 1000;
+const REALTIME_CACHE_MAX_AGE_MS = 2 * 60 * 1000;
+
+function cloneRealtimePayload(payload) {
+  if (!payload || typeof payload !== 'object') return payload;
+  return Array.isArray(payload) ? payload.slice() : { ...payload };
+}
+
+async function readRealtimeCached(key, options, loader) {
+  const ttlMs = Math.max(250, Number(options?.ttlMs || 1000));
+  const staleMs = Math.max(ttlMs, Number(options?.staleMs || ttlMs));
+  const now = Date.now();
+  const existing = realtimeResponseCache.get(key);
+  if (existing?.value && now - existing.updatedAt <= ttlMs) {
+    return cloneRealtimePayload(existing.value);
+  }
+  if (existing?.promise) {
+    if (existing.value) return cloneRealtimePayload(existing.value);
+    return cloneRealtimePayload(await existing.promise);
+  }
+  if (existing?.value && now - existing.updatedAt <= staleMs) {
+    const refresh = Promise.resolve()
+      .then(loader)
+      .then((value) => {
+        realtimeResponseCache.set(key, { value, updatedAt: Date.now() });
+        return value;
+      })
+      .catch((error) => {
+        realtimeResponseCache.set(key, { value: existing.value, updatedAt: existing.updatedAt });
+        console.warn('[Realtime Cache] background refresh failed:', key, error?.message || error);
+        return existing.value;
+      });
+    realtimeResponseCache.set(key, { ...existing, promise: refresh });
+    refresh.catch(() => { });
+    return cloneRealtimePayload(existing.value);
+  }
+  const request = Promise.resolve()
+    .then(loader)
+    .then((value) => {
+      realtimeResponseCache.set(key, { value, updatedAt: Date.now() });
+      return value;
+    })
+    .catch((error) => {
+      if (existing?.value) realtimeResponseCache.set(key, { value: existing.value, updatedAt: existing.updatedAt });
+      else realtimeResponseCache.delete(key);
+      throw error;
+    });
+  realtimeResponseCache.set(key, { value: existing?.value, updatedAt: existing?.updatedAt || 0, promise: request });
+  return cloneRealtimePayload(await request);
+}
+
+function invalidateRealtimePointCaches(channelUid) {
+  const uid = String(channelUid || '').trim();
+  for (const key of realtimeResponseCache.keys()) {
+    if (key.startsWith('viewer:points:') || (uid && key.includes(`:points:${uid}:`))) {
+      realtimeResponseCache.delete(key);
+    }
+  }
+}
+
 setInterval(() => {
   const now = Date.now();
   for (const [key, bucket] of rateLimitBuckets.entries()) {
     if (!bucket || bucket.resetAt <= now) rateLimitBuckets.delete(key);
   }
 }, 5 * 60 * 1000).unref?.();
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of realtimeResponseCache.entries()) {
+    if (!entry?.promise && (!entry?.updatedAt || now - entry.updatedAt > REALTIME_CACHE_MAX_AGE_MS)) {
+      realtimeResponseCache.delete(key);
+    }
+  }
+}, REALTIME_CACHE_SWEEP_MS).unref?.();
 
 function rejectUntrustedBrowserOrigin(req, res, next) {
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
@@ -15100,34 +15170,39 @@ app.get('/api/viewer/points', async (req, res) => {
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
 
-    const platforms = await listPlatformAccounts(ownerUserId).catch(() => []);
-    const identityKeys = collectViewerPointIdentityKeys(ownerUserId, platforms);
-    const balances = await listViewerPointBalancesForUserIds(identityKeys);
-    const stationChannelEntries = await Promise.all(
-      balances.map(async (balance) => [balance.channelUid, await listStationChannelsForViewerBalance(balance)])
-    );
-    const stationChannelsByChannel = new Map(stationChannelEntries);
-    const normalizedBalances = balances.map((balance) => ({
-      ...balance,
-      stationChannels: stationChannelsByChannel.get(balance.channelUid) || [],
-      publicLinks: {
-        home: `/c/${encodeURIComponent(balance.channelUid)}`,
-        commands: `/c/${encodeURIComponent(balance.channelUid)}/commands`,
-        points: `/c/${encodeURIComponent(balance.channelUid)}/points`,
-        roulette: `/c/${encodeURIComponent(balance.channelUid)}/roulette`,
-      },
-    }));
+    const payload = await readRealtimeCached(`viewer:points:${ownerUserId}`, { ttlMs: 5000, staleMs: 30000 }, async () => {
+      const platforms = await listPlatformAccounts(ownerUserId).catch(() => []);
+      const identityKeys = collectViewerPointIdentityKeys(ownerUserId, platforms);
+      const balances = await listViewerPointBalancesForUserIds(identityKeys);
+      const stationChannelEntries = await Promise.all(
+        balances.map(async (balance) => [balance.channelUid, await listStationChannelsForViewerBalance(balance)])
+      );
+      const stationChannelsByChannel = new Map(stationChannelEntries);
+      const normalizedBalances = balances.map((balance) => ({
+        ...balance,
+        stationChannels: stationChannelsByChannel.get(balance.channelUid) || [],
+        publicLinks: {
+          home: `/c/${encodeURIComponent(balance.channelUid)}`,
+          commands: `/c/${encodeURIComponent(balance.channelUid)}/commands`,
+          points: `/c/${encodeURIComponent(balance.channelUid)}/points`,
+          roulette: `/c/${encodeURIComponent(balance.channelUid)}/roulette`,
+        },
+      }));
 
-    return res.json({
-      userId: ownerUserId,
-      platforms,
-      viewerIdentity: {
-        arubotUuid: makeArubotViewerUuid(ownerUserId),
-        identityKeys,
-      },
-      balances: normalizedBalances,
-      totalPoints: normalizedBalances.reduce((sum, balance) => sum + Number(balance.points || 0), 0),
+      return {
+        userId: ownerUserId,
+        platforms,
+        viewerIdentity: {
+          arubotUuid: makeArubotViewerUuid(ownerUserId),
+          identityKeys,
+        },
+        balances: normalizedBalances,
+        totalPoints: normalizedBalances.reduce((sum, balance) => sum + Number(balance.points || 0), 0),
+        updatedAt: new Date().toISOString(),
+      };
     });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json(payload);
   } catch (e) {
     console.error('[Viewer Points] Failed to load viewer balances:', e?.message || e);
     return res.status(500).json({ error: 'Failed to load viewer points' });
@@ -16387,17 +16462,21 @@ app.get('/api/public/:uid/live', async (req, res) => {
   const uid = String(req.params.uid || '').trim();
   if (!uid) return res.status(400).json({ error: 'uid required' });
   try {
-    const r = await axiosGetWithRetry(`https://api.chzzk.naver.com/service/v2/channels/${encodeURIComponent(uid)}/live-detail`);
-    const content = r?.data?.content || r?.data || {};
-    const status = String(content?.status || '').toLowerCase();
-    const channelName = content?.channel?.channelName || content?.channel?.name || '';
-    const title = content?.liveTitle || content?.title || '';
-    const category = content?.liveCategory?.categoryType || content?.categoryType || content?.liveCategoryName || '';
-    const viewers = Number(content?.concurrentUserCount || content?.currentViewerCount || 0);
-    const startedCandidate = content?.startedAt || content?.started_at || content?.openDate || content?.openTime || content?.openedAt || content?.liveStartAt || content?.startTime || content?.createdAt || null;
-    const startedAtTs = parseChzzkLiveTimestamp(startedCandidate, null);
-    const startedAt = startedAtTs ? new Date(startedAtTs + 9 * 60 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 16) : '';
-    return res.json({ live: isChzzkLiveDetailOpen(content), status, channelName, title, category, viewers, startedAt, startedAtTs });
+    const payload = await readRealtimeCached(`public:live:${uid}`, { ttlMs: 8000, staleMs: 30000 }, async () => {
+      const r = await axiosGetWithRetry(`https://api.chzzk.naver.com/service/v2/channels/${encodeURIComponent(uid)}/live-detail`);
+      const content = r?.data?.content || r?.data || {};
+      const status = String(content?.status || '').toLowerCase();
+      const channelName = content?.channel?.channelName || content?.channel?.name || '';
+      const title = content?.liveTitle || content?.title || '';
+      const category = content?.liveCategory?.categoryType || content?.categoryType || content?.liveCategoryName || '';
+      const viewers = Number(content?.concurrentUserCount || content?.currentViewerCount || 0);
+      const startedCandidate = content?.startedAt || content?.started_at || content?.openDate || content?.openTime || content?.openedAt || content?.liveStartAt || content?.startTime || content?.createdAt || null;
+      const startedAtTs = parseChzzkLiveTimestamp(startedCandidate, null);
+      const startedAt = startedAtTs ? new Date(startedAtTs + 9 * 60 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 16) : '';
+      return { live: isChzzkLiveDetailOpen(content), status, channelName, title, category, viewers, startedAt, startedAtTs, updatedAt: new Date().toISOString() };
+    });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json(payload);
   } catch (e) {
     return res.json({ live: false });
   }
@@ -17016,6 +17095,7 @@ app.post('/api/channelpoints/set', async (req, res) => {
   if (!uid) return res.status(409).json({ error: 'No streamer channel configured' });
   try {
     await setChannelPoints(uid, String(userId), username ? String(username) : null, Number(points) || 0);
+    invalidateRealtimePointCaches(uid);
     return res.json({ ok: true });
   } catch (e) {
     console.error('[channelpoints:set] error', e?.message || e);
@@ -17033,6 +17113,7 @@ app.post('/api/channelpoints/incr', async (req, res) => {
   if (!uid) return res.status(409).json({ error: 'No streamer channel configured' });
   try {
     await incrChannelPoints(uid, String(userId), username ? String(username) : null, Number(delta) || 0);
+    invalidateRealtimePointCaches(uid);
     return res.json({ ok: true });
   } catch (e) {
     console.error('[channelpoints:incr] error', e?.message || e);
@@ -17287,6 +17368,7 @@ app.post('/api/channelpoints/delete', async (req, res) => {
   if (!uid) return res.status(409).json({ error: 'No streamer channel configured' });
   try {
     await deleteChannelPoints(uid, String(userId));
+    invalidateRealtimePointCaches(uid);
     return res.json({ ok: true });
   } catch (e) {
     console.error('[channelpoints:delete] error', e?.message || e);
@@ -17351,6 +17433,7 @@ app.post('/api/channelpoints/import', async (req, res) => {
       .map((r) => ({ user_id: String(r.user_id || r.userId || ''), username: r.username ?? null, points: Number(r.points || 0) }))
       .filter((r) => r.user_id);
     await bulkUpsertChannelPoints(uid, norm);
+    invalidateRealtimePointCaches(uid);
     return res.json({ ok: true, count: norm.length, seq: seq || null });
   } catch (e) {
     console.error('[channelpoints:import] error', e?.message || e);
@@ -17366,6 +17449,7 @@ app.post('/api/channelpoints/clear', async (req, res) => {
   if (!uid) return res.status(409).json({ error: 'No streamer channel configured' });
   try {
     await clearAllChannelPoints(uid);
+    invalidateRealtimePointCaches(uid);
     return res.json({ ok: true });
   } catch (e) {
     console.error('[channelpoints:clear] error', e?.message || e);
@@ -17596,8 +17680,32 @@ app.get('/api/public/:uid/points', async (req, res) => {
   const uid = String(req.params.uid || '').trim();
   if (!uid) return res.status(400).json({ error: 'uid required' });
   try {
-    const rows = await singleFlight(`public:points:${uid}`, () => listChannelPoints(uid));
-    return res.json({ uid, points: rows });
+    const requestedLimit = Number(req.query.limit || 0) || 0;
+    const limit = requestedLimit > 0 ? Math.max(1, Math.min(500, requestedLimit)) : 0;
+    const payload = await readRealtimeCached(`public:points:${uid}:${limit || 'all'}`, { ttlMs: 5000, staleMs: 30000 }, async () => {
+      if (limit > 0) {
+        const page = await listChannelPointsPage(uid, { offset: 0, limit });
+        return {
+          uid,
+          points: page.rows || [],
+          total: Number(page.total || 0),
+          totalPoints: Number(page.totalPoints || 0),
+          offset: 0,
+          limit,
+          updatedAt: new Date().toISOString(),
+        };
+      }
+      const rows = await listChannelPoints(uid);
+      return {
+        uid,
+        points: rows,
+        total: rows.length,
+        totalPoints: rows.reduce((sum, row) => sum + Number(row?.points || 0), 0),
+        updatedAt: new Date().toISOString(),
+      };
+    });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json(payload);
   } catch (e) {
     return res.status(500).json({ error: 'Failed to load points' });
   }

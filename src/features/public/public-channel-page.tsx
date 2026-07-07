@@ -3,9 +3,9 @@ import { ChevronRight, Coins, ImagePlus, ListChecks, Radio, Sparkles } from 'luc
 import { Badge } from '@/components/ui/badge';
 import { LegalFooter } from '@/components/app-shell/legal-footer';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { DataView } from '@/components/ui/data-view';
 import { cn } from '@/shared/lib/utils';
 import { readPublicChannelData, readPublicChannelHub, type PublicChannelKind } from '@/shared/api/public';
+import { PublicRealtimeDataView } from './public-realtime-data-view';
 
 const meta = {
   commands: { title: '명령어', description: '채팅에 바로 입력해 참여할 수 있는 말들을 모았어요.', icon: ListChecks, tone: 'sky' },
@@ -37,6 +37,15 @@ function isLive(data: unknown) {
   if (!data || typeof data !== 'object') return false;
   const object = data as Record<string, unknown>;
   return object.live === true || object.isLive === true || object.status === 'live';
+}
+
+function publicItemCount(data: unknown) {
+  if (data && typeof data === 'object') {
+    const object = data as Record<string, unknown>;
+    const total = Number(object.total);
+    if (Number.isFinite(total) && total >= 0) return total;
+  }
+  return pickRows(data).length;
 }
 
 function PublicCommands({ data }: { data: unknown }) {
@@ -179,12 +188,7 @@ export async function PublicChannelPage({ channelUid, kind }: { channelUid: stri
       {kind === 'commands' ? (
         <PublicCommands data={data} />
       ) : (
-        <DataView
-          title="공개 목록"
-          description="지금 방송에서 열려 있는 참여 항목입니다."
-          data={data}
-          empty="아직 공개된 항목이 없어요."
-        />
+        <PublicRealtimeDataView channelUid={channelUid} kind={kind} initialData={data} />
       )}
     </PublicShell>
   );
@@ -195,7 +199,7 @@ export async function PublicChannelHub({ channelUid }: { channelUid: string }) {
   const cards = [
     { href: `/viewer/login?returnTo=${encodeURIComponent(`/viewer/drawing/${channelUid}`)}`, title: '그림 후원', body: '로그인하고 방송 화면 위에 내 그림을 그려요.', count: 1, icon: ImagePlus, tone: 'mint', direct: true },
     { href: 'commands', title: '명령어', body: '채팅에 입력할 수 있는 말을 바로 찾아요.', count: pickRows(data.commands).length, icon: ListChecks, tone: 'sky', direct: false },
-    { href: 'points', title: '포인트', body: '내 참여가 얼마나 쌓였는지 살펴봐요.', count: pickRows(data.points).length, icon: Coins, tone: 'mint', direct: false },
+    { href: 'points', title: '포인트', body: '내 참여가 얼마나 쌓였는지 살펴봐요.', count: publicItemCount(data.points), icon: Coins, tone: 'mint', direct: false },
     { href: 'roulette', title: '룰렛', body: '참여 가능한 룰렛과 당첨 항목을 봐요.', count: pickRows(data.roulette).length, icon: Sparkles, tone: 'lemon', direct: false },
     { href: 'live', title: '라이브', body: isLive(data.live) ? '지금 방송 중이에요.' : '방송 정보가 준비되면 표시돼요.', count: isLive(data.live) ? 1 : 0, icon: Radio, tone: 'coral', direct: false },
   ] as const;

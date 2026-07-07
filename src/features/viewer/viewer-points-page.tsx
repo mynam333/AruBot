@@ -24,7 +24,7 @@ import { Button, LinkButton } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Pagination } from '@/components/ui/pagination';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
-import { apiUrl, readJson } from '@/shared/api/http';
+import { apiUrl } from '@/shared/api/http';
 import { cn, formatNumber } from '@/shared/lib/utils';
 
 type PlatformAccount = {
@@ -88,15 +88,14 @@ type ViewerPointsResponse = {
   };
   balances?: ViewerBalance[];
   totalPoints?: number;
+  updatedAt?: string;
   error?: string;
 };
 
-type AccountPlatformsResponse = {
-  userId?: string | null;
-  platforms?: PlatformAccount[];
-};
-
 const VIEWER_POINTS_PAGE_SIZE = 10;
+const VIEWER_POINTS_REFRESH_MS = 9000;
+const VIEWER_LIVE_REFRESH_MS = 8000;
+const VIEWER_LIVE_CHANNEL_LIMIT = 40;
 
 function providerLabel(provider?: string | null) {
   const value = String(provider || '').toLowerCase();
@@ -224,14 +223,16 @@ function getStationChannels(balance: ViewerBalance | null) {
   });
 }
 
-function PlatformLiveBadges({ balance, className }: { balance: ViewerBalance; className?: string }) {
+function PlatformLiveBadges({ balance, liveStatus, className }: { balance: ViewerBalance; liveStatus?: LiveStatus; className?: string }) {
   const channels = getStationChannels(balance);
   if (!channels.length) return null;
   return (
     <div className={cn('flex flex-wrap gap-1.5', className)}>
       {channels.map((channel) => {
         const provider = channel.provider || balance.provider || 'chzzk';
-        const live = channel.live === true;
+        const channelId = String(channel.channelId || channel.channel_id || channel.platformUserId || channel.platform_user_id || '').trim();
+        const isPrimaryChannel = !channelId || channelId === balance.channelUid;
+        const live = channel.live === true || (isPrimaryChannel && liveStatus?.live === true);
         const label = `${providerLabel(provider)} ${live ? '라이브' : '오프라인'}`;
         return (
           <Badge key={`${provider}:${channel.channelId || channel.url}`} tone={live ? 'rose' : providerTone(provider)}>
@@ -350,17 +351,11 @@ export function ViewerPointsPage() {
   const [liveByChannel, setLiveByChannel] = useState<Record<string, LiveStatus>>({});
   const [stationBalance, setStationBalance] = useState<ViewerBalance | null>(null);
 
-  const load = useCallback(async (silent = false) => {
-    if (silent) setRefreshing(true);
-    else setLoading(true);
+  const load = useCallback(async (options: { silent?: boolean; showRefreshing?: boolean } = {}) => {
+    const silent = options.silent === true;
+    if (options.showRefreshing) setRefreshing(true);
+    if (!silent) setLoading(true);
     try {
-      const accountPayload = await readJson<AccountPlatformsResponse>('/api/account/platforms');
-      if (!accountPayload?.userId) {
-        setUnauthorized(true);
-        setData(null);
-        return;
-      }
-
       const response = await fetch(apiUrl('/api/viewer/points'), {
         credentials: 'include',
         cache: 'no-store',
@@ -372,9 +367,9 @@ export function ViewerPointsPage() {
       }
       const payload = (await response.json().catch(() => null)) as ViewerPointsResponse | null;
       setUnauthorized(false);
-      setData(payload || { userId: accountPayload.userId, platforms: accountPayload.platforms || [], balances: [], totalPoints: 0 });
+      setData(payload || { platforms: [], balances: [], totalPoints: 0 });
     } catch {
-      setData(null);
+      if (!silent) setData(null);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -383,6 +378,22 @@ export function ViewerPointsPage() {
 
   useEffect(() => {
     load();
+  }, [load]);
+
+  useEffect(() => {
+    const tick = () => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      load({ silent: true });
+    };
+    const timer = window.setInterval(tick, VIEWER_POINTS_REFRESH_MS);
+    const handleVisibility = () => {
+      if (!document.hidden) load({ silent: true });
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
   }, [load]);
 
   const platforms = data?.platforms || [];
@@ -427,14 +438,16 @@ export function ViewerPointsPage() {
     if (page > totalPages) setPage(totalPages);
   }, [page, totalPages]);
 
-  useEffect(() => {
-    if (!balances.length) return;
-    const controller = new AbortController();
-    const channels = balances.map((balance) => balance.channelUid).filter(Boolean).slice(0, 40);
-    Promise.all(channels.map(async (channelUid) => {
+  const refreshLiveStatuses = useCallback(async (signal?: AbortSignal) => {
+    const channels = balances.map((balance) => balance.channelUid).filter(Boolean).slice(0, VIEWER_LIVE_CHANNEL_LIMIT);
+    if (!channels.length) {
+      setLiveByChannel({});
+      return;
+    }
+    const entries = await Promise.all(channels.map(async (channelUid) => {
       try {
         const response = await fetch(apiUrl(`/api/public/${encodeURIComponent(channelUid)}/live`), {
-          signal: controller.signal,
+          signal,
           cache: 'no-store',
         });
         if (!response.ok) return [channelUid, { live: false }] as const;
@@ -443,12 +456,32 @@ export function ViewerPointsPage() {
       } catch {
         return [channelUid, { live: false }] as const;
       }
-    })).then((entries) => {
-      if (controller.signal.aborted) return;
-      setLiveByChannel(Object.fromEntries(entries));
-    });
-    return () => controller.abort();
+    }));
+    if (signal?.aborted) return;
+    setLiveByChannel(Object.fromEntries(entries));
   }, [balances]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    refreshLiveStatuses(controller.signal);
+    return () => controller.abort();
+  }, [refreshLiveStatuses]);
+
+  useEffect(() => {
+    const tick = () => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      refreshLiveStatuses();
+    };
+    const timer = window.setInterval(tick, VIEWER_LIVE_REFRESH_MS);
+    const handleVisibility = () => {
+      if (!document.hidden) refreshLiveStatuses();
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [refreshLiveStatuses]);
 
   if (loading) return <LoadingState />;
 
@@ -526,7 +559,7 @@ export function ViewerPointsPage() {
                   <Badge tone="mint">{balances.length}개 방송</Badge>
                   <Badge tone={hasBothPlatforms ? 'sky' : 'neutral'}>{platforms.length}개 플랫폼</Badge>
                 </div>
-                <Button type="button" variant="outline" className="mt-5 w-full justify-center bg-background/70" onClick={() => load(true)} disabled={refreshing}>
+                <Button type="button" variant="outline" className="mt-5 w-full justify-center bg-background/70" onClick={() => load({ silent: true, showRefreshing: true })} disabled={refreshing}>
                   <RefreshCw className={cn('h-4 w-4', refreshing && 'animate-spin')} />
                   새로고침
                 </Button>
@@ -648,7 +681,7 @@ export function ViewerPointsPage() {
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
                           <h2 className="truncate text-lg font-semibold">{balance.channelName || balance.channelUid}</h2>
-                          <PlatformLiveBadges balance={balance} />
+                          <PlatformLiveBadges balance={balance} liveStatus={live} />
                         </div>
                         <p className="mt-1 truncate text-sm text-muted-foreground">{live?.live && live.title ? live.title : balance.channelUid}</p>
                       </div>

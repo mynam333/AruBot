@@ -23,7 +23,10 @@ export function getPublicEndpoint(channelUid: string, kind: PublicChannelKind) {
 }
 
 export async function readPublicChannelData(channelUid: string, kind: PublicChannelKind) {
-  return readServerJson<unknown>(getPublicEndpoint(channelUid, kind), {
+  const endpoint = kind === 'points'
+    ? `${getPublicEndpoint(channelUid, kind)}?limit=100`
+    : getPublicEndpoint(channelUid, kind);
+  return readServerJson<unknown>(endpoint, {
     next: { revalidate: cacheSeconds[kind] },
   });
 }
