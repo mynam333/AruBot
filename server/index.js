@@ -5064,7 +5064,16 @@ app.post('/api/video-donation/reorder', async (req, res) => {
       // Head same: still inform clients to update tail order
       const set = pvdSidSockets.get(sid);
       if (set && set.size) {
-        const msg = JSON.stringify({ type: 'start', item: reordered[0] || null, queue: reordered, startedAt: pvdPlaybackState.get(sid)?.baseStartMs || null, paused: pvdPlaybackState.get(sid)?.paused || false });
+        const msg = JSON.stringify({
+          type: 'start',
+          item: reordered[0] || null,
+          queue: reordered,
+          startedAt: pvdPlaybackState.get(sid)?.baseStartMs || null,
+          paused: pvdPlaybackState.get(sid)?.paused || false,
+          atSec: reordered[0] ? getCurrentAtSec(sid) : 0,
+          elapsedSec: reordered[0] ? getCurrentPvdElapsedSec(sid) : 0,
+          serverNow: Date.now(),
+        });
         for (const ws of Array.from(set)) {
           try { if (ws.readyState === 1) ws.send(msg, { compress: false }); } catch { }
         }
@@ -5154,7 +5163,16 @@ app.post('/api/video-donation/delete-refund', async (req, res) => {
       // Inform clients of tail change
       const set = pvdSidSockets.get(sid);
       if (set && set.size) {
-        const msg = JSON.stringify({ type: 'start', item: q[0] || null, queue: q, startedAt: pvdPlaybackState.get(sid)?.baseStartMs || null, paused: pvdPlaybackState.get(sid)?.paused || false });
+        const msg = JSON.stringify({
+          type: 'start',
+          item: q[0] || null,
+          queue: q,
+          startedAt: pvdPlaybackState.get(sid)?.baseStartMs || null,
+          paused: pvdPlaybackState.get(sid)?.paused || false,
+          atSec: q[0] ? getCurrentAtSec(sid) : 0,
+          elapsedSec: q[0] ? getCurrentPvdElapsedSec(sid) : 0,
+          serverNow: Date.now(),
+        });
         for (const ws of Array.from(set)) {
           try { if (ws.readyState === 1) ws.send(msg, { compress: false }); } catch { }
         }
@@ -5266,6 +5284,29 @@ function createPvdPlaybackState(item) {
 
 function getPvdQueueItemKey(item) {
   return String(item?.id || `${item?.mediaProvider || 'unknown'}:${item?.mediaId || item?.videoId || item?.mediaUrl || item?.embedUrl || ''}:${item?.ts || item?.createdAt || ''}`);
+}
+
+async function popCurrentVideoDonationItem(sid, options = {}) {
+  const q = getVideoQueue(sid);
+  const head = q[0] || null;
+  const expectedItemId = String(options.expectedItemId || '').trim();
+  if (!head) return { popped: null, queue: q, empty: true };
+  if (expectedItemId && String(head.id || '') !== expectedItemId && getPvdQueueItemKey(head) !== expectedItemId) {
+    return { popped: null, queue: q, head, mismatch: true };
+  }
+
+  const popped = q.shift() || null;
+  if (popped && options.refundOnError && String(options.cause || '').toLowerCase() === 'error') {
+    try {
+      const uid = await resolveStreamerUidForSid(sid);
+      if (uid && popped.userId && popped.cost) {
+        await incrChannelPoints(uid, String(popped.userId), popped.username ? String(popped.username) : null, Number(popped.cost));
+      }
+    } catch (e) {
+      console.warn('[pvd:refund] failed', e?.message || e);
+    }
+  }
+  return { popped, queue: q };
 }
 
 function setPvdPlaybackBaseFromAtSec(state, item, atSec) {
@@ -5434,9 +5475,8 @@ function scheduleNextPvdAutoPop(sid) {
       if (curElapsed < Math.max(1, Number(head.durationSec || 0)) - 0.5) {
         return scheduleNextPvdAutoPop(sid);
       }
-      // pop current
-      getVideoQueue(sid).shift();
-      await broadcastPvdStart(sid);
+      const result = await popCurrentVideoDonationItem(sid, { cause: 'auto_timer', expectedItemId: scheduledItemKey });
+      if (result.popped) await broadcastPvdStart(sid);
     } catch (e) {
       console.warn('[pvd:autoPop] failed', e?.message || e);
     }
@@ -5619,23 +5659,18 @@ app.post('/api/video-donation/pop-by-token', async (req, res) => {
     } catch { }
 
     const cause = String(req.body?.cause || '').toLowerCase();
-    const q = getVideoQueue(sid);
-    const popped = q.shift() || null;
-    // Refund on error cause
-    if (popped && cause === 'error') {
-      try {
-        const uid = await resolveStreamerUidForSid(sid);
-        if (uid && popped.userId && popped.cost) {
-          await incrChannelPoints(uid, String(popped.userId), popped.username ? String(popped.username) : null, Number(popped.cost));
-        }
-      } catch (e) { console.warn('[pvd:refund] failed (token)', e?.message || e); }
-    }
+    const expectedItemId = String(req.body?.itemId || req.body?.expectedItemId || '').trim();
+    const { popped, queue, mismatch, head } = await popCurrentVideoDonationItem(sid, {
+      cause,
+      expectedItemId,
+      refundOnError: true,
+    });
     // Broadcast next (or null) to all viewers
     if (popped) {
       try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
       await broadcastPvdStart(sid);
     }
-    return res.json({ item: popped });
+    return res.json({ item: popped, queue, mismatch: mismatch === true, currentItem: head || queue[0] || null });
   } catch (e) {
     return res.status(500).json({ error: 'failed' });
   }
@@ -5891,23 +5926,18 @@ app.post('/api/video-donation/pop', async (req, res) => {
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
     const cause = String(req.body?.cause || '').toLowerCase();
-    const q = getVideoQueue(sid);
-    const popped = q.shift() || null;
-    // Refund on error cause
-    if (popped && cause === 'error') {
-      try {
-        const uid = await resolveStreamerUidForSid(sid);
-        if (uid && popped.userId && popped.cost) {
-          await incrChannelPoints(uid, String(popped.userId), popped.username ? String(popped.username) : null, Number(popped.cost));
-        }
-      } catch (e) { console.warn('[pvd:refund] failed', e?.message || e); }
-    }
+    const expectedItemId = String(req.body?.itemId || req.body?.expectedItemId || '').trim();
+    const { popped, queue, mismatch, head } = await popCurrentVideoDonationItem(sid, {
+      cause,
+      expectedItemId,
+      refundOnError: true,
+    });
     // if popping current, schedule next and broadcast
     if (popped) {
       try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
       await broadcastPvdStart(sid);
     }
-    return res.json({ item: popped });
+    return res.json({ item: popped, queue, mismatch: mismatch === true, currentItem: head || queue[0] || null });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to pop queue' });
   }
@@ -15805,13 +15835,17 @@ app.post('/api/local-remote/video-donation/pop', requireAutomationLocalAgent, as
   try {
     const sid = getLocalRemoteSid(req);
     if (!sid) return res.status(401).json({ error: 'Invalid local program token' });
-    const q = getVideoQueue(sid);
-    const popped = q.shift() || null;
+    const expectedItemId = String(req.body?.itemId || req.body?.expectedItemId || '').trim();
+    const { popped, queue, mismatch, head } = await popCurrentVideoDonationItem(sid, {
+      cause: req.body?.cause || 'local_remote',
+      expectedItemId,
+      refundOnError: false,
+    });
     if (popped) {
       try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
       await broadcastPvdStart(sid);
     }
-    return res.json({ item: popped, queue: q });
+    return res.json({ item: popped, queue, mismatch: mismatch === true, currentItem: head || queue[0] || null });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to pop video donation queue' });
   }
