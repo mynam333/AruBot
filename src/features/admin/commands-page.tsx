@@ -31,7 +31,10 @@ type RulesResponse = {
 
 type BotSettingsResponse = {
   settings?: {
+    attendanceEnabled?: boolean;
     attendanceAnnounce?: boolean;
+    attendanceCommandOnly?: boolean;
+    attendanceCommandKeyword?: string;
     attendanceMessage?: string;
     channelPointsPerAttendance?: number;
   };
@@ -91,7 +94,10 @@ export function CommandsPage() {
   const [editingRule, setEditingRule] = useState<BotRule | null>(null);
   const [form, setForm] = useState<CommandForm | null>(null);
   const [attendanceOpen, setAttendanceOpen] = useState(false);
+  const [attendanceEnabled, setAttendanceEnabled] = useState(true);
   const [attendanceAnnounce, setAttendanceAnnounce] = useState(true);
+  const [attendanceCommandOnly, setAttendanceCommandOnly] = useState(false);
+  const [attendanceCommandKeyword, setAttendanceCommandKeyword] = useState('!출석');
   const [attendanceMessage, setAttendanceMessage] = useState(DEFAULT_ATTENDANCE_MESSAGE);
   const [attendancePoints, setAttendancePoints] = useState('0');
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -113,7 +119,10 @@ export function CommandsPage() {
   const loadAttendanceSettings = useCallback(async () => {
     const data = await readJson<BotSettingsResponse>('/api/bot/settings');
     const settings = data?.settings || {};
+    setAttendanceEnabled(settings.attendanceEnabled !== false);
     setAttendanceAnnounce(settings.attendanceAnnounce !== false);
+    setAttendanceCommandOnly(settings.attendanceCommandOnly === true);
+    setAttendanceCommandKeyword(settings.attendanceCommandKeyword || '!출석');
     setAttendanceMessage(settings.attendanceMessage || DEFAULT_ATTENDANCE_MESSAGE);
     setAttendancePoints(String(settings.channelPointsPerAttendance ?? 0));
   }, []);
@@ -216,7 +225,10 @@ export function CommandsPage() {
       await postJson('/api/bot/settings', {
         settings: {
           ...(current?.settings || {}),
+          attendanceEnabled,
           attendanceAnnounce,
+          attendanceCommandOnly,
+          attendanceCommandKeyword: normalizeCommand(attendanceCommandKeyword || '!출석'),
           attendanceMessage: attendanceMessage.trim() || DEFAULT_ATTENDANCE_MESSAGE,
           channelPointsPerAttendance: Math.max(0, Number(attendancePoints || 0)),
         },
@@ -273,11 +285,13 @@ export function CommandsPage() {
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
                 <h2 className="text-lg font-bold">출석 체크</h2>
+                <Badge tone={attendanceEnabled ? 'mint' : 'neutral'}>{attendanceEnabled ? '사용 중' : '꺼짐'}</Badge>
+                <Badge tone={attendanceCommandOnly ? 'sky' : 'lemon'}>{attendanceCommandOnly ? `${attendanceCommandKeyword || '!출석'} 전용` : '첫 채팅 자동'}</Badge>
                 <Badge tone={attendanceAnnounce ? 'mint' : 'neutral'}>{attendanceAnnounce ? '메시지 표시' : '메시지 숨김'}</Badge>
                 <Badge tone="lemon">{Number(attendancePoints || 0).toLocaleString('ko-KR')}P 지급</Badge>
               </div>
               <p className="mt-2 max-w-3xl break-keep text-sm leading-6 text-muted-foreground">
-                첫 인사를 놓치지 않고 반갑게 맞이하고, 꾸준히 찾아오는 시청자에게 포인트로 작은 즐거움을 더해요.
+                첫 채팅 자동 기록 또는 지정 명령어 전용 기록 중 방송 운영 방식에 맞게 선택합니다.
               </p>
             </div>
           </div>
@@ -385,9 +399,9 @@ export function CommandsPage() {
             <div className="flex items-start justify-between gap-4 border-b p-[clamp(1rem,2.4vw,1.5rem)]">
               <div>
                 <Badge tone="lemon">출석 설정</Badge>
-                <h2 className="mt-3 text-xl font-bold">방송 첫 채팅을 출석으로 기록합니다.</h2>
+                <h2 className="mt-3 text-xl font-bold">출석 기록 방식을 정합니다.</h2>
                 <p className="mt-2 break-keep text-sm leading-6 text-muted-foreground">
-                  메시지는 방송 중 새로운 출석이 기록될 때만 표시됩니다. 출석 포인트는 시청자 포인트에 함께 적립됩니다.
+                  첫 채팅 자동 출석과 지정 명령어 출석 중 선택할 수 있습니다. 출석 포인트는 시청자 포인트에 함께 적립됩니다.
                 </p>
               </div>
               <Button type="button" variant="outline" size="icon" onClick={() => setAttendanceOpen(false)} aria-label="닫기">
@@ -395,12 +409,34 @@ export function CommandsPage() {
               </Button>
             </div>
             <div className="grid min-h-0 gap-4 overflow-y-auto p-[clamp(1rem,2.4vw,1.5rem)]">
+              <div className="grid gap-3 rounded-[var(--radius-control)] border bg-background/70 p-3">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Button type="button" variant={attendanceEnabled ? 'soft' : 'outline'} onClick={() => setAttendanceEnabled((value) => !value)}>
+                    {attendanceEnabled ? '출석 기능 사용' : '출석 기능 꺼짐'}
+                  </Button>
+                  <Button type="button" variant={attendanceCommandOnly ? 'soft' : 'outline'} onClick={() => setAttendanceCommandOnly((value) => !value)} disabled={!attendanceEnabled}>
+                    {attendanceCommandOnly ? '명령어로만 출석' : '첫 채팅 자동 출석'}
+                  </Button>
+                </div>
+                <label className="grid gap-2 text-sm font-semibold">
+                  출석 명령어
+                  <Input
+                    value={attendanceCommandKeyword}
+                    onChange={(event) => setAttendanceCommandKeyword(event.target.value)}
+                    disabled={!attendanceEnabled}
+                    placeholder="!출석"
+                  />
+                </label>
+                <p className="text-xs leading-5 text-muted-foreground">
+                  명령어 전용 모드를 켜면 일반 첫 채팅은 출석으로 기록하지 않고, 이 명령어를 입력했을 때만 출석을 기록합니다.
+                </p>
+              </div>
               <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(var(--control-height),0.42fr)] md:items-end">
                 <label className="grid gap-2 text-sm font-semibold">
                   출석 포인트
-                  <Input value={attendancePoints} onChange={(event) => setAttendancePoints(event.target.value)} inputMode="numeric" />
+                  <Input value={attendancePoints} onChange={(event) => setAttendancePoints(event.target.value)} inputMode="numeric" disabled={!attendanceEnabled} />
                 </label>
-                <Button type="button" variant={attendanceAnnounce ? 'soft' : 'outline'} onClick={() => setAttendanceAnnounce((value) => !value)}>
+                <Button type="button" variant={attendanceAnnounce ? 'soft' : 'outline'} onClick={() => setAttendanceAnnounce((value) => !value)} disabled={!attendanceEnabled}>
                   {attendanceAnnounce ? '출석 메시지 표시' : '출석 메시지 숨김'}
                 </Button>
               </div>
@@ -409,6 +445,7 @@ export function CommandsPage() {
                 <textarea
                   value={attendanceMessage}
                   onChange={(event) => setAttendanceMessage(event.target.value)}
+                  disabled={!attendanceEnabled}
                   className="box-border min-h-[clamp(8rem,20svh,12rem)] w-full min-w-0 max-w-full resize-y rounded-[var(--radius-control)] border bg-background/80 px-[clamp(0.85rem,1.6vw,1.1rem)] py-[clamp(0.85rem,1.6vw,1.1rem)] text-sm leading-7 outline-none focus:border-primary/45 focus:ring-2 focus:ring-ring"
                 />
               </label>

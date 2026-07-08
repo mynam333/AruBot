@@ -4818,6 +4818,9 @@ app.post('/api/setup/templates/apply', rateLimiters.userWrite, async (req, res) 
     const nextSettings = {
       ...settings,
       botEnabled: true,
+      attendanceEnabled: settings.attendanceEnabled ?? true,
+      attendanceCommandOnly: settings.attendanceCommandOnly === true,
+      attendanceCommandKeyword: normalizeAttendanceCommandKeyword(settings),
       attendanceAnnounce: settings.attendanceAnnounce ?? true,
       attendanceMessage: settings.attendanceMessage || '{user.name}님 출석체크 완료! (연속 {attendance.streak}일, 누적 {attendance.totalDays}일)',
       channelPointsPerChat: Number.isFinite(Number(settings.channelPointsPerChat)) ? Number(settings.channelPointsPerChat) : 1,
@@ -10127,6 +10130,27 @@ const ownerInfoCache = new Map();
 const attendanceDedupe = new Set();
 const DEFAULT_ATTENDANCE_MESSAGE = '{user.name}님 출석체크 완료! (연속 {attendance.streak}일, 누적 {attendance.totalDays}일)';
 
+function normalizeAttendanceCommandKeyword(settings = {}) {
+  const value = String(settings.attendanceCommandKeyword || '!출석').trim();
+  if (!value) return '!출석';
+  return value.startsWith('!') ? value : `!${value}`;
+}
+
+function attendanceFeatureEnabled(settings = {}) {
+  return settings.attendanceEnabled !== false;
+}
+
+function shouldRecordAttendanceAutomatically(settings = {}) {
+  return attendanceFeatureEnabled(settings) && settings.attendanceCommandOnly !== true;
+}
+
+function isAttendanceCommandText(text = '', settings = {}) {
+  if (!attendanceFeatureEnabled(settings)) return false;
+  const command = normalizeAttendanceCommandKeyword(settings).toLowerCase();
+  const value = String(text || '').trim().toLowerCase();
+  return value === command || value.startsWith(`${command} `);
+}
+
 function renderAttendanceMessage(template, context = {}) {
   const source = String(template || DEFAULT_ATTENDANCE_MESSAGE).trim() || DEFAULT_ATTENDANCE_MESSAGE;
   const replacements = {
@@ -10141,6 +10165,46 @@ function renderAttendanceMessage(template, context = {}) {
     (message, [token, value]) => message.split(token).join(String(value)),
     source
   ).slice(0, 100);
+}
+
+async function recordAttendanceFromCommand({ sid, settings, userId, username, channelUid = null, isOwner = false, isBotSelf = false } = {}) {
+  if (!sid || !userId || !attendanceFeatureEnabled(settings)) return null;
+  const resolvedUserId = String(userId);
+  if (isOwner || isBotSelf) return null;
+  const excludedFromText = typeof settings.attendanceExcludeUserIdsText === 'string'
+    ? settings.attendanceExcludeUserIdsText.split(/\r?\n/).map(s => s.trim()).filter(Boolean)
+    : [];
+  const excluded = Array.isArray(settings.attendanceExcludeUserIds) ? settings.attendanceExcludeUserIds.map(String) : [];
+  const excludedSet = new Set([...excluded, ...excludedFromText].map(String));
+  if (excludedSet.has(resolvedUserId)) return null;
+
+  const attendDate = await getAttendanceDate(sid);
+  const attKey = `${sid}:${resolvedUserId}:${attendDate}`;
+  const result = await recordAttendanceAndGetStreak(sid, resolvedUserId, username || resolvedUserId, attendDate);
+  attendanceDedupe.add(attKey);
+  let totalDays = 0;
+  try { totalDays = await getUserAttendanceTotalDays(sid, resolvedUserId); } catch { }
+  const attendanceBonus = Math.max(0, Number(settings.channelPointsPerAttendance || 0));
+  if (result?.isNew && attendanceBonus > 0) {
+    const pointChannelUid = channelUid || await resolveStreamerUidForSid(sid).catch(() => null);
+    if (pointChannelUid && !(await isChannelPointExcluded(settings, resolvedUserId))) {
+      await incrChannelPoints(pointChannelUid, resolvedUserId, username || resolvedUserId, attendanceBonus).catch(() => { });
+    }
+  }
+  return {
+    ...result,
+    totalDays,
+    points: attendanceBonus,
+    date: attendDate,
+    response: renderAttendanceMessage(settings.attendanceMessage, {
+      username,
+      userId: resolvedUserId,
+      streak: result?.streak || 0,
+      totalDays,
+      points: attendanceBonus,
+      date: attendDate,
+    }),
+  };
 }
 // Track active sids seen by the server to enable background live checks
 const liveChatEnsurePromises = new Map(); // sid:channelId -> Promise
@@ -19263,7 +19327,8 @@ async function ensureSession(sid, channelId) {
 
           // Attendance: only when actually live. If not live, always skip attendance.
           const currentlyLive = !!liveState.live;
-          if (currentlyLive) {
+          const attendanceSettings = currentlyLive ? (await getBotSettings(sid).catch(() => ({})) || {}) : {};
+          if (currentlyLive && shouldRecordAttendanceAutomatically(attendanceSettings)) {
             const attendanceStartTime = Date.now();
             const attendDate = await getAttendanceDate(sid);
             const attKey = `${sid}:${resolvedUserId}:${attendDate}`;
@@ -19288,7 +19353,7 @@ async function ensureSession(sid, channelId) {
             try {
               if (!attendanceDedupe.has(attKey)) {
                 // Skip attendance for bot owner and excluded user IDs
-                const settings = await getBotSettings(sid) || {};
+                const settings = attendanceSettings;
                 const owner = await getOwnerInfoForSid(sid);
                 const excludedFromText = typeof settings.attendanceExcludeUserIdsText === 'string'
                   ? settings.attendanceExcludeUserIdsText.split(/\r?\n/).map(s => s.trim()).filter(Boolean)
@@ -19393,9 +19458,10 @@ async function ensureSession(sid, channelId) {
 
           // Global bot enable gate: if disabled, skip rule processing by loading no rules
           let botDisabled = false;
+          let commandSettings = attendanceSettings;
           try {
-            const settings = await getBotSettings(sid) || {};
-            if (settings.botEnabled === false) botDisabled = true;
+            commandSettings = await getBotSettings(sid) || {};
+            if (commandSettings.botEnabled === false) botDisabled = true;
           } catch { }
           if (!botDisabled) {
             try {
@@ -19422,6 +19488,37 @@ async function ensureSession(sid, channelId) {
             } catch (e) {
               console.error('[Prediction] CHZZK command error', e?.message || e);
             }
+          }
+
+          if (!botDisabled && currentlyLive && commandSettings.attendanceCommandOnly === true && isAttendanceCommandText(text, commandSettings)) {
+            try {
+              const attendanceResult = await recordAttendanceFromCommand({
+                sid,
+                settings: commandSettings,
+                userId: resolvedUserId,
+                username: resolvedUsername,
+                channelUid: liveState.channelId || null,
+                isOwner,
+                isBotSelf,
+              });
+              const reply = attendanceResult?.response || renderAttendanceMessage(commandSettings.attendanceMessage, {
+                username: resolvedUsername,
+                userId: resolvedUserId,
+                streak: 0,
+                totalDays: 0,
+                points: Math.max(0, Number(commandSettings.channelPointsPerAttendance || 0)),
+                date: await getAttendanceDate(sid),
+              });
+              const accessToken = await getValidAccessToken(sid);
+              if (entry.sessionKey && accessToken && reply) {
+                await axios.post(`${OPENAPI_BASE}/open/v1/chats/send`, { message: reply }, {
+                  params: { sessionKey: entry.sessionKey },
+                  headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }
+                }).catch(() => { });
+                rememberOutboundMessage(entry, reply);
+              }
+              return;
+            } catch { }
           }
 
           // Load per-user rules (empty if disabled)
@@ -19478,6 +19575,24 @@ async function ensureSession(sid, channelId) {
             let commandPointAfter = null;
             const commandFeatures = [];
             const commandActionJobs = [];
+
+            if (allowExecute && currentlyLive && commandSettings.attendanceCommandOnly === true && isAttendanceCommandText(text, commandSettings)) {
+              try {
+                const attendanceResult = await recordAttendanceFromCommand({
+                  sid,
+                  settings: commandSettings,
+                  userId: resolvedUserId,
+                  username: resolvedUsername,
+                  channelUid: liveState.channelId || null,
+                  isOwner,
+                  isBotSelf,
+                });
+                if (attendanceResult?.response) {
+                  response = attendanceResult.response;
+                  commandFeatures.push('attendance');
+                }
+              } catch { }
+            }
 
             const executionContext = msg?.executionContext || { source: 'chat', shouldDeductPoints: true };
             const shouldSkipPointsDeduction = executionContext.source === 'roulette' || !executionContext.shouldDeductPoints;
@@ -20833,6 +20948,7 @@ async function processYoutubeChatAutomation(entry, ev) {
     const isBotSelf = isLikelyYoutubeSelfEcho(entry, ev);
 
     if (liveState.live) {
+      if (shouldRecordAttendanceAutomatically(settings)) {
       try {
         const attendDate = await getAttendanceDate(sid);
         const attKey = `${sid}:${resolvedUserId}:${attendDate}`;
@@ -20864,6 +20980,7 @@ async function processYoutubeChatAutomation(entry, ev) {
           }
         }
       } catch { }
+      }
 
       try {
         const perChat = Math.max(0, Number(settings.channelPointsPerChat ?? 1));
@@ -20889,6 +21006,30 @@ async function processYoutubeChatAutomation(entry, ev) {
       }
     } catch (e) {
       console.error('[Prediction] YouTube command error', e?.message || e);
+    }
+
+    if (liveState.live && settings.attendanceCommandOnly === true && isAttendanceCommandText(text, settings)) {
+      try {
+        const attendanceResult = await recordAttendanceFromCommand({
+          sid,
+          settings,
+          userId: resolvedUserId,
+          username: resolvedUsername,
+          channelUid: entry.channelId || null,
+          isOwner,
+          isBotSelf,
+        });
+        const reply = attendanceResult?.response || renderAttendanceMessage(settings.attendanceMessage, {
+          username: resolvedUsername,
+          userId: resolvedUserId,
+          streak: 0,
+          totalDays: 0,
+          points: Math.max(0, Number(settings.channelPointsPerAttendance || 0)),
+          date: await getAttendanceDate(sid),
+        });
+        if (reply) await sendYoutubeChat(ownerUserId, entry.liveChatId, reply).catch(() => { });
+        return;
+      } catch { }
     }
 
     const rules = await getBotRulesWithDefaults(sid);
@@ -20926,6 +21067,23 @@ async function processYoutubeChatAutomation(entry, ev) {
       let commandPointAfter = null;
       const commandFeatures = [];
       const commandActionJobs = [];
+      if (allowExecute && liveState.live && settings.attendanceCommandOnly === true && isAttendanceCommandText(text, settings)) {
+        try {
+          const attendanceResult = await recordAttendanceFromCommand({
+            sid,
+            settings,
+            userId: resolvedUserId,
+            username: resolvedUsername,
+            channelUid: entry.channelId || null,
+            isOwner,
+            isBotSelf,
+          });
+          if (attendanceResult?.response) {
+            response = attendanceResult.response;
+            commandFeatures.push('attendance');
+          }
+        } catch { }
+      }
       if (!isRouletteRule && commandCost > 0 && entry.channelId && resolvedUserId) {
         const have = await getChannelPoints(entry.channelId, resolvedUserId).catch(() => 0);
         if (Number(have || 0) < commandCost) {
@@ -21677,6 +21835,7 @@ async function processCimeChatAutomation(entry, ev) {
     if (isBotSelf) return;
 
     if (currentlyLive) {
+      if (shouldRecordAttendanceAutomatically(settings)) {
       try {
         const attendDate = await getAttendanceDate(sid);
         const attKey = `${sid}:${resolvedUserId}:${attendDate}`;
@@ -21710,6 +21869,7 @@ async function processCimeChatAutomation(entry, ev) {
           }
         }
       } catch { }
+      }
 
       try {
         const perChat = Math.max(0, Number(settings.channelPointsPerChat ?? 1));
@@ -21737,6 +21897,30 @@ async function processCimeChatAutomation(entry, ev) {
       }
     } catch (e) {
       console.error('[Prediction] CIME command error', e?.message || e);
+    }
+
+    if (currentlyLive && settings.attendanceCommandOnly === true && isAttendanceCommandText(text, settings)) {
+      try {
+        const attendanceResult = await recordAttendanceFromCommand({
+          sid,
+          settings,
+          userId: resolvedUserId,
+          username: resolvedUsername,
+          channelUid: pointChannelUid || entry.channelId || null,
+          isOwner,
+          isBotSelf,
+        });
+        const reply = attendanceResult?.response || renderAttendanceMessage(settings.attendanceMessage, {
+          username: resolvedUsername,
+          userId: resolvedUserId,
+          streak: 0,
+          totalDays: 0,
+          points: Math.max(0, Number(settings.channelPointsPerAttendance || 0)),
+          date: await getAttendanceDate(sid),
+        });
+        if (reply) await sendCimeChat(ownerUserId, reply).catch(() => { });
+        return;
+      } catch { }
     }
 
     const rules = await getBotRulesWithDefaults(sid);
@@ -21775,6 +21959,23 @@ async function processCimeChatAutomation(entry, ev) {
       let commandPointAfter = null;
       const commandFeatures = [];
       const commandActionJobs = [];
+      if (allowExecute && currentlyLive && settings.attendanceCommandOnly === true && isAttendanceCommandText(text, settings)) {
+        try {
+          const attendanceResult = await recordAttendanceFromCommand({
+            sid,
+            settings,
+            userId: resolvedUserId,
+            username: resolvedUsername,
+            channelUid: pointChannelUid || entry.channelId || null,
+            isOwner,
+            isBotSelf,
+          });
+          if (attendanceResult?.response) {
+            response = attendanceResult.response;
+            commandFeatures.push('attendance');
+          }
+        } catch { }
+      }
       if (!isRouletteRule && commandCost > 0 && pointChannelUid && resolvedUserId) {
         const have = await getChannelPoints(pointChannelUid, resolvedUserId).catch(() => 0);
         if (Number(have || 0) < commandCost) {
