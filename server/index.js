@@ -4513,6 +4513,73 @@ setInterval(async () => {
 }, 1000);
 
 // Donation settings and rules APIs (stored under bot settings per sid)
+function normalizeDonationAmountOperator(value) {
+  const text = String(value || '').toLowerCase();
+  if (['lt', 'below', 'less_than'].includes(text)) return 'lt';
+  if (['eq', 'equal', 'equals'].includes(text)) return 'eq';
+  if (['range', 'between'].includes(text)) return 'range';
+  return 'gte';
+}
+
+function normalizeDonationAmountNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(0, number) : 0;
+}
+
+function normalizeDonationAmountConditions(rule = {}) {
+  const rawConditions = Array.isArray(rule.amountConditions) ? rule.amountConditions : [];
+  const conditions = rawConditions
+    .map((condition) => {
+      const operator = normalizeDonationAmountOperator(condition?.operator);
+      const amount = normalizeDonationAmountNumber(condition?.amount);
+      const amountTo = operator === 'range' ? normalizeDonationAmountNumber(condition?.amountTo) : null;
+      return {
+        id: String(condition?.id || `cond_${Math.random().toString(36).slice(2, 8)}`),
+        operator,
+        amount,
+        amountTo,
+      };
+    })
+    .filter((condition) => condition.operator !== 'range' || Number(condition.amountTo || 0) >= condition.amount);
+  if (conditions.length) return conditions;
+
+  const min = rule.minAmount != null ? normalizeDonationAmountNumber(rule.minAmount) : 0;
+  const max = rule.maxAmount != null && Number(rule.maxAmount) > 0 ? normalizeDonationAmountNumber(rule.maxAmount) : null;
+  if (max != null) return [{ id: 'legacy_range', operator: 'range', amount: min, amountTo: max }];
+  return [{ id: 'legacy_min', operator: 'gte', amount: min, amountTo: null }];
+}
+
+function deriveLegacyDonationAmountFields(conditions = []) {
+  const first = conditions[0];
+  if (!first) return { minAmount: 0, maxAmount: null };
+  if (first.operator === 'range') return { minAmount: Number(first.amount || 0), maxAmount: Number(first.amountTo || 0) || null };
+  if (first.operator === 'lt') return { minAmount: 0, maxAmount: Number(first.amount || 0) };
+  if (first.operator === 'eq') return { minAmount: Number(first.amount || 0), maxAmount: Number(first.amount || 0) };
+  return { minAmount: Number(first.amount || 0), maxAmount: null };
+}
+
+function normalizeDonationRuleForStorage(rule = {}) {
+  const amountConditions = normalizeDonationAmountConditions(rule);
+  return {
+    ...rule,
+    ...deriveLegacyDonationAmountFields(amountConditions),
+    amountConditions,
+    enabled: rule.enabled !== false,
+  };
+}
+
+function donationRuleMatchesAmount(rule = {}, amountValue = 0) {
+  const amount = normalizeDonationAmountNumber(amountValue);
+  const conditions = normalizeDonationAmountConditions(rule);
+  return conditions.every((condition) => {
+    const target = Number(condition.amount || 0);
+    if (condition.operator === 'lt') return amount < target;
+    if (condition.operator === 'eq') return amount === target;
+    if (condition.operator === 'range') return amount >= target && amount <= Number(condition.amountTo || 0);
+    return amount >= target;
+  });
+}
+
 // GET settings
 app.get('/api/donation/settings', async (req, res) => {
   try {
@@ -4544,7 +4611,7 @@ app.get('/api/donation/rules', async (req, res) => {
     if (!sid) return res.status(401).json({ error: 'Login required' });
     const s = await getBotSettings(sid) || {};
     const rules = Array.isArray(s.donationRules) ? s.donationRules : [];
-    return res.json({ rules });
+    return res.json({ rules: rules.map(normalizeDonationRuleForStorage) });
   } catch { return res.status(500).json({ error: 'failed' }); }
 });
 
@@ -4557,16 +4624,16 @@ app.post('/api/donation/rules/upsert', async (req, res) => {
     const incoming = req.body?.rule || {};
     const rules = Array.isArray(s.donationRules) ? s.donationRules.slice() : [];
     let idx = rules.findIndex(r => String(r.id || '') === String(incoming.id || ''));
+    const normalizedIncoming = normalizeDonationRuleForStorage(incoming);
     if (idx < 0) {
-      incoming.id = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      incoming.enabled = incoming.enabled !== false;
-      rules.push(incoming);
+      normalizedIncoming.id = normalizedIncoming.id || `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      rules.push(normalizedIncoming);
     } else {
-      rules[idx] = { ...rules[idx], ...incoming };
+      rules[idx] = normalizeDonationRuleForStorage({ ...rules[idx], ...incoming });
     }
     const next = { ...s, donationRules: rules };
     await setBotSettings(sid, next);
-    return res.json({ ok: true, rule: incoming });
+    return res.json({ ok: true, rule: idx < 0 ? normalizedIncoming : rules[idx] });
   } catch { return res.status(500).json({ error: 'failed' }); }
 });
 
@@ -19775,10 +19842,7 @@ async function ensureSession(sid, channelId) {
             const lowerMsg = donorMessage.toLowerCase();
             for (const r of rules) {
               if (!r || r.enabled === false) continue;
-              const min = r.minAmount != null ? Number(r.minAmount) : null;
-              const max = r.maxAmount != null ? Number(r.maxAmount) : null;
-              if (min != null && amount < min) continue;
-              if (max != null && amount > max) continue;
+              if (!donationRuleMatchesAmount(r, amount)) continue;
               const pat = String(r.message || '').trim();
               const wildcard = !!r.wildcard;
               let passed = true;
@@ -20642,10 +20706,7 @@ async function processYoutubeDonationAutomation(entry, ev) {
     const lowerMsg = donorMessage.toLowerCase();
     for (const r of rules) {
       if (!r || r.enabled === false) continue;
-      const min = r.minAmount != null ? Number(r.minAmount) : null;
-      const max = r.maxAmount != null ? Number(r.maxAmount) : null;
-      if (min != null && amount < min) continue;
-      if (max != null && amount > max) continue;
+      if (!donationRuleMatchesAmount(r, amount)) continue;
       const pat = String(r.message || '').trim();
       if (pat) {
         const needle = pat.toLowerCase();
@@ -21864,10 +21925,7 @@ async function processCimeDonationAutomation(entry, ev) {
     const lowerMsg = donorMessage.toLowerCase();
     for (const r of rules) {
       if (!r || r.enabled === false) continue;
-      const min = r.minAmount != null ? Number(r.minAmount) : null;
-      const max = r.maxAmount != null ? Number(r.maxAmount) : null;
-      if (min != null && amount < min) continue;
-      if (max != null && amount > max) continue;
+      if (!donationRuleMatchesAmount(r, amount)) continue;
       const pat = String(r.message || '').trim();
       if (pat) {
         const needle = pat.toLowerCase();

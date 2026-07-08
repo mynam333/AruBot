@@ -1,6 +1,6 @@
 'use client';
 
-import { Edit3, Gift, Loader2, RefreshCw, Search, Settings2, Trash2 } from 'lucide-react';
+import { Edit3, Gift, Loader2, Plus, RefreshCw, Search, Settings2, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState, useTransition } from 'react';
 import { toast } from 'sonner';
 import { DonationRuleCreateDialog, DonationSettingsDialog } from '@/features/admin/admin-action-dialogs';
@@ -9,6 +9,16 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { apiUrl, readJson } from '@/shared/api/http';
+import {
+  deriveLegacyAmountFields,
+  describeDonationAmountRule,
+  DONATION_AMOUNT_OPERATOR_OPTIONS,
+  normalizeDonationAmountConditionForms,
+  serializeDonationAmountConditions,
+  type DonationAmountCondition,
+  type DonationAmountConditionForm,
+  type DonationAmountOperator,
+} from './donation-rule-amount-conditions';
 
 type DonationRule = {
   id: string;
@@ -16,6 +26,7 @@ type DonationRule = {
   enabled?: boolean;
   minAmount?: number;
   maxAmount?: number | null;
+  amountConditions?: DonationAmountCondition[];
   message?: string;
   wildcard?: boolean;
   response?: string;
@@ -28,8 +39,7 @@ type DonationRulesResponse = {
 
 type DonationForm = {
   name: string;
-  minAmount: string;
-  maxAmount: string;
+  amountConditions: DonationAmountConditionForm[];
   message: string;
   response: string;
   enabled: boolean;
@@ -49,8 +59,7 @@ async function postJson(path: string, body: unknown) {
 function toForm(rule: DonationRule): DonationForm {
   return {
     name: rule.name || '',
-    minAmount: String(rule.minAmount ?? 0),
-    maxAmount: rule.maxAmount == null ? '' : String(rule.maxAmount),
+    amountConditions: normalizeDonationAmountConditionForms(rule),
     message: rule.message || '',
     response: rule.response || '',
     enabled: rule.enabled !== false,
@@ -58,9 +67,7 @@ function toForm(rule: DonationRule): DonationForm {
 }
 
 function amountRange(rule: DonationRule) {
-  const min = Number(rule.minAmount || 0).toLocaleString('ko-KR');
-  if (rule.maxAmount == null || Number(rule.maxAmount) <= 0) return `${min}원 이상`;
-  return `${min}원 - ${Number(rule.maxAmount).toLocaleString('ko-KR')}원`;
+  return describeDonationAmountRule(rule);
 }
 
 export function DonationRulesPage() {
@@ -110,16 +117,18 @@ export function DonationRulesPage() {
   const saveEdit = async () => {
     if (!editingRule || !form) return;
     if (!form.response.trim()) return toast.warning('후원 반응 문구를 입력해 주세요.');
+    const amountConditions = serializeDonationAmountConditions(form.amountConditions);
+    if (!amountConditions.length) return toast.warning('금액 조건을 하나 이상 입력해 주세요.');
+    const legacyAmounts = deriveLegacyAmountFields(amountConditions);
     setBusyId(editingRule.id);
     try {
-      const maxAmount = form.maxAmount.trim() ? Math.max(0, Number(form.maxAmount || 0)) : null;
       await postJson('/api/donation/rules/upsert', {
         rule: {
           ...editingRule,
-          name: form.name.trim() || `${Number(form.minAmount || 0).toLocaleString('ko-KR')}원 이상 반응`,
+          name: form.name.trim() || `${describeDonationAmountRule({ amountConditions })} 반응`,
           enabled: form.enabled,
-          minAmount: Math.max(0, Number(form.minAmount || 0)),
-          maxAmount,
+          ...legacyAmounts,
+          amountConditions,
           message: form.message.trim(),
           wildcard: editingRule.wildcard ?? true,
           response: form.response.trim(),
@@ -147,6 +156,36 @@ export function DonationRulesPage() {
     } finally {
       setBusyId(null);
     }
+  };
+
+  const updateAmountCondition = (id: string, patch: Partial<DonationAmountConditionForm>) => {
+    if (!form) return;
+    setForm({
+      ...form,
+      amountConditions: form.amountConditions.map((condition) => (
+        condition.id === id ? { ...condition, ...patch } : condition
+      )),
+    });
+  };
+
+  const addAmountCondition = () => {
+    if (!form) return;
+    setForm({
+      ...form,
+      amountConditions: [
+        ...form.amountConditions,
+        { id: `cond_${Date.now().toString(36)}`, operator: 'gte', amount: '1000', amountTo: '' },
+      ],
+    });
+  };
+
+  const removeAmountCondition = (id: string) => {
+    if (!form) return;
+    if (form.amountConditions.length <= 1) return toast.warning('금액 조건은 하나 이상 필요합니다.');
+    setForm({
+      ...form,
+      amountConditions: form.amountConditions.filter((condition) => condition.id !== id),
+    });
   };
 
   return (
@@ -236,15 +275,48 @@ export function DonationRulesPage() {
                 <Input value={form.message} onChange={(event) => setForm({ ...form, message: event.target.value })} placeholder="특정 문구가 없으면 금액만 볼게요." />
               </label>
             </div>
-            <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(var(--control-height),0.42fr)] md:items-end">
-              <label className="grid gap-2 text-sm font-semibold">
-                최소 금액
-                <Input value={form.minAmount} onChange={(event) => setForm({ ...form, minAmount: event.target.value })} inputMode="numeric" />
-              </label>
-              <label className="grid gap-2 text-sm font-semibold">
-                최대 금액
-                <Input value={form.maxAmount} onChange={(event) => setForm({ ...form, maxAmount: event.target.value })} inputMode="numeric" placeholder="없음" />
-              </label>
+            <div className="grid gap-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-sm font-semibold">트리거 금액 조건</div>
+                <Button type="button" variant="outline" size="sm" onClick={addAmountCondition}>
+                  <Plus className="h-4 w-4" />
+                  조건 추가
+                </Button>
+              </div>
+              <div className="grid gap-2">
+                {form.amountConditions.map((condition) => (
+                  <div key={condition.id} className="grid gap-2 rounded-[var(--radius-control)] border bg-background/55 p-3 md:grid-cols-[minmax(8rem,0.36fr)_minmax(0,1fr)_minmax(0,1fr)_var(--control-height)] md:items-center">
+                    <select
+                      value={condition.operator}
+                      onChange={(event) => updateAmountCondition(condition.id, { operator: event.target.value as DonationAmountOperator })}
+                      className="min-h-[var(--control-height)] rounded-[var(--radius-control)] border bg-background px-3 text-sm"
+                    >
+                      {DONATION_AMOUNT_OPERATOR_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                    <Input
+                      value={condition.amount}
+                      onChange={(event) => updateAmountCondition(condition.id, { amount: event.target.value })}
+                      inputMode="numeric"
+                      placeholder={condition.operator === 'range' ? '시작 금액' : '금액'}
+                    />
+                    {condition.operator === 'range' ? (
+                      <Input
+                        value={condition.amountTo}
+                        onChange={(event) => updateAmountCondition(condition.id, { amountTo: event.target.value })}
+                        inputMode="numeric"
+                        placeholder="끝 금액"
+                      />
+                    ) : (
+                      <div className="hidden md:block" />
+                    )}
+                    <Button type="button" variant="ghost" size="icon" aria-label="금액 조건 삭제" onClick={() => removeAmountCondition(condition.id)}>
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
               <Button type="button" variant={form.enabled ? 'soft' : 'outline'} onClick={() => setForm({ ...form, enabled: !form.enabled })}>
                 {form.enabled ? '사용 중' : '꺼짐'}
               </Button>

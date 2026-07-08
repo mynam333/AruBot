@@ -8,9 +8,11 @@ import {
   Loader2,
   MessageSquare,
   PlaySquare,
+  Plus,
   ChevronRight,
   Settings,
   Sparkles,
+  Trash2,
   X,
 } from 'lucide-react';
 import { useMemo, useState, useTransition } from 'react';
@@ -27,6 +29,14 @@ import {
 } from '@/features/admin/roulette-item-editor';
 import { apiUrl } from '@/shared/api/http';
 import { cn } from '@/shared/lib/utils';
+import {
+  deriveLegacyAmountFields,
+  describeDonationAmountRule,
+  DONATION_AMOUNT_OPERATOR_OPTIONS,
+  serializeDonationAmountConditions,
+  type DonationAmountConditionForm,
+  type DonationAmountOperator,
+} from './donation-rule-amount-conditions';
 
 type DialogButtonVariant = 'default' | 'secondary' | 'outline' | 'soft';
 
@@ -622,7 +632,9 @@ export function DonationSettingsDialog({ variant = 'secondary', label = '후원 
 
 export function DonationRuleCreateDialog({ variant = 'secondary', label = '반응 만들기', className }: ActionDialogButtonProps) {
   const [name, setName] = useState('');
-  const [minAmount, setMinAmount] = useState('1000');
+  const [amountConditions, setAmountConditions] = useState<DonationAmountConditionForm[]>([
+    { id: 'cond_initial', operator: 'gte', amount: '1000', amountTo: '' },
+  ]);
   const [messageIncludes, setMessageIncludes] = useState('');
   const [response, setResponse] = useState('');
   const [enabled, setEnabled] = useState(true);
@@ -630,14 +642,18 @@ export function DonationRuleCreateDialog({ variant = 'secondary', label = '반�
 
   const submit = (close: () => void) => {
     if (!response.trim()) return toast.warning('후원 반응 문구를 입력해 주세요.');
+    const normalizedAmountConditions = serializeDonationAmountConditions(amountConditions);
+    if (!normalizedAmountConditions.length) return toast.warning('금액 조건을 하나 이상 입력해 주세요.');
+    const legacyAmounts = deriveLegacyAmountFields(normalizedAmountConditions);
     startTransition(async () => {
       try {
         await postJson('/api/donation/rules/upsert', {
           rule: {
             id: `don_${Date.now().toString(36)}`,
-            name: name.trim() || `${Number(minAmount || 0).toLocaleString('ko-KR')}원 이상 반응`,
+            name: name.trim() || `${describeDonationAmountRule({ amountConditions: normalizedAmountConditions })} 반응`,
             enabled,
-            minAmount: Math.max(0, Number(minAmount || 0)),
+            ...legacyAmounts,
+            amountConditions: normalizedAmountConditions,
             message: messageIncludes.trim(),
             wildcard: true,
             response: response.trim(),
@@ -648,11 +664,30 @@ export function DonationRuleCreateDialog({ variant = 'secondary', label = '반�
         setName('');
         setResponse('');
         setMessageIncludes('');
+        setAmountConditions([{ id: 'cond_initial', operator: 'gte', amount: '1000', amountTo: '' }]);
         close();
       } catch {
         toast.error('후원 반응을 저장하지 못했어요.');
       }
     });
+  };
+
+  const updateAmountCondition = (id: string, patch: Partial<DonationAmountConditionForm>) => {
+    setAmountConditions((current) => current.map((condition) => (
+      condition.id === id ? { ...condition, ...patch } : condition
+    )));
+  };
+
+  const addAmountCondition = () => {
+    setAmountConditions((current) => [
+      ...current,
+      { id: `cond_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`, operator: 'gte', amount: '1000', amountTo: '' },
+    ]);
+  };
+
+  const removeAmountCondition = (id: string) => {
+    if (amountConditions.length <= 1) return toast.warning('금액 조건은 하나 이상 필요합니다.');
+    setAmountConditions((current) => current.filter((condition) => condition.id !== id));
   };
 
   return (
@@ -669,13 +704,53 @@ export function DonationRuleCreateDialog({ variant = 'secondary', label = '반�
       className={className}
       testId="donation-rule-create-trigger"
     >
-      <div className="grid gap-[clamp(1rem,2vw,1.35rem)] md:grid-cols-[repeat(2,minmax(0,1fr))]">
+      <div className="grid gap-[clamp(1rem,2vw,1.35rem)]">
         <Field label="반응 이름">
           <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="예: 큰손 감사 인사" />
         </Field>
-        <Field label="최소 금액">
-          <Input value={minAmount} onChange={(event) => setMinAmount(event.target.value)} inputMode="numeric" />
-        </Field>
+        <div className="grid gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-sm font-semibold">트리거 금액 조건</div>
+            <Button type="button" variant="outline" size="sm" onClick={addAmountCondition}>
+              <Plus className="h-4 w-4" />
+              조건 추가
+            </Button>
+          </div>
+          <div className="grid gap-2">
+            {amountConditions.map((condition) => (
+              <div key={condition.id} className="grid gap-2 rounded-[var(--radius-control)] border bg-background/55 p-3 md:grid-cols-[minmax(8rem,0.36fr)_minmax(0,1fr)_minmax(0,1fr)_var(--control-height)] md:items-center">
+                <select
+                  value={condition.operator}
+                  onChange={(event) => updateAmountCondition(condition.id, { operator: event.target.value as DonationAmountOperator })}
+                  className="min-h-[var(--control-height)] rounded-[var(--radius-control)] border bg-background px-3 text-sm"
+                >
+                  {DONATION_AMOUNT_OPERATOR_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+                <Input
+                  value={condition.amount}
+                  onChange={(event) => updateAmountCondition(condition.id, { amount: event.target.value })}
+                  inputMode="numeric"
+                  placeholder={condition.operator === 'range' ? '시작 금액' : '금액'}
+                />
+                {condition.operator === 'range' ? (
+                  <Input
+                    value={condition.amountTo}
+                    onChange={(event) => updateAmountCondition(condition.id, { amountTo: event.target.value })}
+                    inputMode="numeric"
+                    placeholder="끝 금액"
+                  />
+                ) : (
+                  <div className="hidden md:block" />
+                )}
+                <Button type="button" variant="ghost" size="icon" aria-label="금액 조건 삭제" onClick={() => removeAmountCondition(condition.id)}>
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
       <Field label="메시지 포함 조건">
         <Input value={messageIncludes} onChange={(event) => setMessageIncludes(event.target.value)} placeholder="특정 문구가 없으면 금액만 볼게요." />
