@@ -1,11 +1,12 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Coins, Loader2, Radio, RefreshCw, Trophy } from 'lucide-react';
+import { Coins, History, Loader2, Radio, RefreshCw, Search, Sparkles, Trophy } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { DataView } from '@/components/ui/data-view';
+import { Input } from '@/components/ui/input';
 import { apiUrl } from '@/shared/api/http';
 import type { PublicChannelKind } from '@/shared/api/public';
 import { cn, compactDateTime, formatNumber } from '@/shared/lib/utils';
@@ -35,6 +36,42 @@ type LivePayload = {
   updatedAt?: string;
 };
 
+type RouletteItem = {
+  label?: string;
+  value?: unknown;
+  weight?: number | null;
+  probabilityPercent?: number | null;
+};
+
+type RouletteDefinition = {
+  name?: string;
+  type?: string;
+  theme?: string | null;
+  items?: RouletteItem[];
+};
+
+type RouletteLogRow = {
+  id?: string | number;
+  token?: string;
+  roulette_name?: string;
+  rouletteName?: string;
+  username?: string | null;
+  user_id?: string | null;
+  userId?: string | null;
+  result_label?: string | null;
+  resultLabel?: string | null;
+  result_value?: unknown;
+  resultValue?: unknown;
+  created_at?: string | null;
+  createdAt?: string | null;
+};
+
+type RouletteHistoryPayload = {
+  items?: RouletteLogRow[];
+  viewerKnown?: boolean | null;
+  updatedAt?: string;
+};
+
 const refreshMsByKind: Record<PublicChannelKind, number> = {
   commands: 30000,
   points: 7000,
@@ -47,12 +84,50 @@ function rowsFromData(data: unknown): Record<string, unknown>[] {
   if (Array.isArray(data)) return data.filter((item): item is Record<string, unknown> => !!item && typeof item === 'object');
   if (!data || typeof data !== 'object') return [];
   const object = data as Record<string, unknown>;
-  const rows = ['items', 'rules', 'rows', 'data', 'points', 'logs', 'definitions']
+  const rows = ['items', 'rules', 'rows', 'data', 'points', 'logs', 'definitions', 'defs']
     .map((key) => object[key])
     .find(Array.isArray);
   return Array.isArray(rows)
     ? rows.filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
     : [];
+}
+
+function rouletteDefsFromData(data: unknown): RouletteDefinition[] {
+  const rows = rowsFromData(data);
+  return rows.map((row) => ({
+    name: String(row.name || ''),
+    type: String(row.type || 'items'),
+    theme: typeof row.theme === 'string' ? row.theme : null,
+    items: Array.isArray(row.items) ? row.items as RouletteItem[] : [],
+  })).filter((row) => row.name || row.items.length);
+}
+
+function formatPercent(value: unknown) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return '0%';
+  if (numeric > 0 && numeric < 0.01) return '<0.01%';
+  const fractionDigits = numeric >= 10 || Number.isInteger(numeric) ? 0 : numeric >= 1 ? 1 : 2;
+  return `${numeric.toFixed(fractionDigits)}%`;
+}
+
+function rouletteItemLabel(item: RouletteItem) {
+  return String(item.label || item.value || '당첨 항목');
+}
+
+function rouletteLogRouletteName(row: RouletteLogRow) {
+  return String(row.roulette_name || row.rouletteName || '룰렛');
+}
+
+function rouletteLogResult(row: RouletteLogRow) {
+  const label = row.result_label || row.resultLabel;
+  if (label) return String(label);
+  const value = row.result_value ?? row.resultValue;
+  if (value == null || value === '') return '결과 없음';
+  return typeof value === 'string' ? value : JSON.stringify(value);
+}
+
+function rouletteLogUser(row: RouletteLogRow) {
+  return String(row.username || row.userId || row.user_id || '나');
 }
 
 function pointName(row: PointRow) {
@@ -227,6 +302,274 @@ function PublicLiveStatus({ data }: { data: unknown }) {
   );
 }
 
+function PublicRouletteDashboard({
+  channelUid,
+  data,
+}: {
+  channelUid: string;
+  data: unknown;
+}) {
+  const definitions = useMemo(() => rouletteDefsFromData(data), [data]);
+  const rouletteNames = useMemo(() => definitions.map((definition) => String(definition.name || '')).filter(Boolean), [definitions]);
+  const totalItems = useMemo(() => definitions.reduce((sum, definition) => sum + (definition.items?.length || 0), 0), [definitions]);
+  const highestProbability = useMemo(() => {
+    let best: { roulette: string; label: string; percent: number } | null = null;
+    for (const definition of definitions) {
+      for (const item of definition.items || []) {
+        const percent = Number(item.probabilityPercent || 0);
+        if (!Number.isFinite(percent)) continue;
+        if (!best || percent > best.percent) {
+          best = { roulette: String(definition.name || '룰렛'), label: rouletteItemLabel(item), percent };
+        }
+      }
+    }
+    return best;
+  }, [definitions]);
+
+  const [queryInput, setQueryInput] = useState('');
+  const [query, setQuery] = useState('');
+  const [rouletteFilter, setRouletteFilter] = useState('');
+  const [history, setHistory] = useState<RouletteHistoryPayload>({ items: [] });
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyUpdated, setHistoryUpdated] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setQuery(queryInput.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [queryInput]);
+
+  const loadHistory = useCallback(async (showLoading = false) => {
+    if (showLoading) setHistoryLoading(true);
+    try {
+      const params = new URLSearchParams({
+        uid: channelUid,
+        mine: '1',
+        limit: '100',
+      });
+      if (query) params.set('q', query);
+      if (rouletteFilter) params.set('roulette', rouletteFilter);
+      const response = await fetch(apiUrl(`/api/roulette/logs?${params.toString()}`), {
+        credentials: 'include',
+        cache: 'no-store',
+      });
+      if (response.status === 404) {
+        setHistory({ items: [], viewerKnown: true, updatedAt: new Date().toISOString() });
+        setHistoryUpdated(Date.now());
+        return;
+      }
+      if (!response.ok) return;
+      const payload = await response.json().catch(() => null);
+      if (!payload) return;
+      setHistory(payload as RouletteHistoryPayload);
+      setHistoryUpdated(Date.now());
+    } finally {
+      if (showLoading) setHistoryLoading(false);
+    }
+  }, [channelUid, query, rouletteFilter]);
+
+  useEffect(() => {
+    loadHistory(true);
+  }, [loadHistory]);
+
+  useEffect(() => {
+    const tick = () => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      loadHistory(false);
+    };
+    const timer = window.setInterval(tick, refreshMsByKind.rouletteLogs);
+    const handleVisibility = () => {
+      if (!document.hidden) loadHistory(false);
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [loadHistory]);
+
+  const historyRows = useMemo(() => {
+    const rows = Array.isArray(history.items) ? history.items : [];
+    return rows.filter((row): row is RouletteLogRow => !!row && typeof row === 'object');
+  }, [history]);
+  const viewerKnown = history.viewerKnown !== false;
+
+  return (
+    <div className="grid gap-4">
+      <section className="grid gap-3 md:grid-cols-3">
+        <Card className="bg-card/88">
+          <CardContent className="flex h-full items-center justify-between gap-4 p-[clamp(1rem,2vw,1.25rem)]">
+            <div>
+              <p className="text-sm text-muted-foreground">현재 열린 룰렛</p>
+              <div className="mt-2 text-2xl font-semibold">{formatNumber(definitions.length)}개</div>
+            </div>
+            <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-pastel-lemon/75 text-amber-700 dark:text-amber-100">
+              <Sparkles className="h-5 w-5" />
+            </span>
+          </CardContent>
+        </Card>
+        <Card className="bg-card/88">
+          <CardContent className="flex h-full items-center justify-between gap-4 p-[clamp(1rem,2vw,1.25rem)]">
+            <div>
+              <p className="text-sm text-muted-foreground">당첨 항목</p>
+              <div className="mt-2 text-2xl font-semibold">{formatNumber(totalItems)}개</div>
+            </div>
+            <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-pastel-mint/75 text-teal-700 dark:text-teal-100">
+              <Trophy className="h-5 w-5" />
+            </span>
+          </CardContent>
+        </Card>
+        <Card className="bg-card/88">
+          <CardContent className="flex h-full items-center justify-between gap-4 p-[clamp(1rem,2vw,1.25rem)]">
+            <div className="min-w-0">
+              <p className="text-sm text-muted-foreground">최고 확률</p>
+              <div className="mt-2 truncate text-2xl font-semibold">{highestProbability ? formatPercent(highestProbability.percent) : '-'}</div>
+              {highestProbability ? <p className="mt-1 truncate text-xs text-muted-foreground">{highestProbability.roulette} · {highestProbability.label}</p> : null}
+            </div>
+            <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-pastel-sky/75 text-sky-700 dark:text-sky-100">
+              <Coins className="h-5 w-5" />
+            </span>
+          </CardContent>
+        </Card>
+      </section>
+
+      <Card className="overflow-hidden bg-card/88">
+        <CardHeader>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <CardTitle>현재 열린 룰렛과 확률</CardTitle>
+              <CardDescription>참여 가능한 룰렛의 당첨 항목과 계산된 확률을 표시합니다.</CardDescription>
+            </div>
+            <Badge tone={definitions.length ? 'lemon' : 'neutral'}>{definitions.length}개 룰렛</Badge>
+          </div>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          {definitions.length ? definitions.map((definition) => {
+            const items = Array.isArray(definition.items) ? definition.items : [];
+            return (
+              <section key={String(definition.name)} className="rounded-[var(--radius-card)] border bg-background/60 p-[clamp(1rem,2vw,1.25rem)]">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <h3 className="truncate text-lg font-semibold">{definition.name || '이름 없는 룰렛'}</h3>
+                    <p className="mt-1 text-sm text-muted-foreground">{definition.type === 'probability' ? '확률형 룰렛' : '가중치 룰렛'} · {items.length}개 항목</p>
+                  </div>
+                  <Badge tone="sky">{definition.theme || '기본 스킨'}</Badge>
+                </div>
+                <div className="mt-4 grid gap-2">
+                  {items.length ? items.map((item, index) => {
+                    const percent = Math.max(0, Math.min(100, Number(item.probabilityPercent || 0)));
+                    return (
+                      <div key={`${rouletteItemLabel(item)}-${index}`} className="grid gap-2 rounded-[var(--radius-control)] border bg-card/72 p-3">
+                        <div className="flex items-center justify-between gap-3 text-sm">
+                          <span className="min-w-0 truncate font-semibold">{rouletteItemLabel(item)}</span>
+                          <span className="shrink-0 font-semibold text-primary">{formatPercent(item.probabilityPercent)}</span>
+                        </div>
+                        <div className="h-2 overflow-hidden rounded-full bg-muted">
+                          <div className="h-full rounded-full bg-primary/75" style={{ width: `${percent}%` }} />
+                        </div>
+                      </div>
+                    );
+                  }) : (
+                    <div className="rounded-[var(--radius-control)] border bg-card/72 p-3 text-sm text-muted-foreground">
+                      표시할 당첨 항목이 없습니다.
+                    </div>
+                  )}
+                </div>
+              </section>
+            );
+          }) : (
+            <div className="rounded-[var(--radius-control)] border bg-background/55 p-[clamp(1.25rem,2.6vw,1.75rem)] text-sm text-muted-foreground">
+              아직 공개된 룰렛이 없습니다.
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="overflow-hidden bg-card/88">
+        <CardHeader>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <CardTitle>내 룰렛 당첨 내역</CardTitle>
+              <CardDescription>로그인한 시청자 계정의 당첨 내역만 검색하고 필터링합니다.</CardDescription>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge tone={viewerKnown ? 'mint' : 'neutral'}>{viewerKnown ? `${historyRows.length}개 표시` : '로그인 필요'}</Badge>
+              <Button type="button" variant="outline" size="sm" onClick={() => loadHistory(true)} disabled={historyLoading}>
+                {historyLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                내역 갱신
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(12rem,16rem)]">
+            <label className="relative block">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={queryInput}
+                onChange={(event) => setQueryInput(event.target.value)}
+                placeholder="결과, 룰렛명, 닉네임 검색"
+                className="pl-9"
+              />
+            </label>
+            <select
+              value={rouletteFilter}
+              onChange={(event) => setRouletteFilter(event.target.value)}
+              className="box-border min-h-[var(--control-height)] w-full min-w-0 rounded-[var(--radius-control)] border bg-background/80 px-[clamp(0.75rem,1.4vw,1rem)] text-sm font-semibold outline-none transition focus:border-primary/45 focus:ring-2 focus:ring-ring"
+            >
+              <option value="">전체 룰렛</option>
+              {rouletteNames.map((name) => <option key={name} value={name}>{name}</option>)}
+            </select>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <History className="h-4 w-4" />
+            <span>마지막 확인 {lastUpdatedLabel(history.updatedAt || historyUpdated)}</span>
+          </div>
+
+          {!viewerKnown ? (
+            <div className="rounded-[var(--radius-control)] border bg-background/55 p-[clamp(1.25rem,2.6vw,1.75rem)] text-sm text-muted-foreground">
+              로그인하면 이 채널에서 본인이 당첨된 룰렛 내역을 볼 수 있습니다.
+              <Button asChild variant="soft" size="sm" className="mt-4 w-full sm:w-auto">
+                <a href={`/viewer/login?returnTo=${encodeURIComponent(`/c/${channelUid}/roulette`)}`}>시청자 로그인</a>
+              </Button>
+            </div>
+          ) : historyRows.length ? (
+            <div className="overflow-hidden rounded-[var(--radius-control)] border">
+              <table className="min-w-full text-left text-sm">
+                <thead className="bg-muted/70 text-xs text-muted-foreground">
+                  <tr>
+                    <th className="px-[clamp(0.75rem,1.4vw,1rem)] py-3 font-semibold">룰렛</th>
+                    <th className="px-[clamp(0.75rem,1.4vw,1rem)] py-3 font-semibold">결과</th>
+                    <th className="px-[clamp(0.75rem,1.4vw,1rem)] py-3 font-semibold">시청자</th>
+                    <th className="w-40 px-[clamp(0.75rem,1.4vw,1rem)] py-3 text-right font-semibold">시간</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {historyRows.map((row, index) => {
+                    const createdAt = row.created_at || row.createdAt || '';
+                    return (
+                      <tr key={String(row.id || `${rouletteLogRouletteName(row)}-${createdAt}-${index}`)} className="border-t bg-background/45">
+                        <td className="max-w-[12rem] truncate px-[clamp(0.75rem,1.4vw,1rem)] py-3 font-semibold">{rouletteLogRouletteName(row)}</td>
+                        <td className="max-w-[16rem] truncate px-[clamp(0.75rem,1.4vw,1rem)] py-3">{rouletteLogResult(row)}</td>
+                        <td className="max-w-[10rem] truncate px-[clamp(0.75rem,1.4vw,1rem)] py-3 text-muted-foreground">{rouletteLogUser(row)}</td>
+                        <td className="px-[clamp(0.75rem,1.4vw,1rem)] py-3 text-right text-muted-foreground">{createdAt ? compactDateTime(String(createdAt)) : '-'}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="rounded-[var(--radius-control)] border bg-background/55 p-[clamp(1.25rem,2.6vw,1.75rem)] text-sm text-muted-foreground">
+              조건에 맞는 내 룰렛 당첨 내역이 없습니다.
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 export function PublicRealtimeDataView({
   channelUid,
   kind,
@@ -288,6 +631,8 @@ export function PublicRealtimeDataView({
       </div>
       {kind === 'points' ? (
         <PublicPointsRanking data={data} />
+      ) : kind === 'roulette' ? (
+        <PublicRouletteDashboard channelUid={channelUid} data={data} />
       ) : kind === 'live' ? (
         <PublicLiveStatus data={data} />
       ) : (

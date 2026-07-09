@@ -81,7 +81,16 @@ describe('룰렛 오버레이 레이아웃 회귀 방지', () => {
     expect(rouletteViewer).toContain('WheelSegmentsSvg');
     expect(rouletteViewer).toContain('WheelSkinOrnaments');
     expect(rouletteViewer).toContain('WheelLabelsSvg');
-    expect(rouletteViewer).toContain('selectedWheelIndex');
+    expect(rouletteViewer).toContain('wheelSelectedIndex');
+    expect(rouletteViewer).toContain('wheelRotationDeg');
+    expect(rouletteViewer).toContain('wheelSettled');
+    expect(rouletteViewer).toContain('function wheelStopRotationForIndex');
+    expect(rouletteViewer).toContain('function equivalentForwardRotation');
+    expect(rouletteViewer).toContain('function buildWheelItemsForResult');
+    expect(rouletteViewer).toContain('const nextWheelItems = buildWheelItemsForResult(pool, finalLabel, wheelTargetIndex)');
+    expect(rouletteViewer).toContain('wheelStopRotationForIndex(wheelTargetIndex)');
+    expect(rouletteViewer).toContain("{wheelSettled ? (state.label || state.value || '준비 완료') : '회전 중'}");
+    expect(rouletteViewer).not.toContain('const wheelRotation = offsetRows * 24');
     expect(rouletteWheelUtils).toContain('function splitWheelLabel');
     expect(rouletteWheelUtils).toContain('const splitAt = Math.ceil(parts.length / 2)');
     expect(rouletteWheelSkins).toContain('textAnchor="middle"');

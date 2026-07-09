@@ -27,7 +27,7 @@ function pickRows(data: unknown) {
   if (!data || typeof data !== 'object') return [];
   const object = data as Record<string, unknown>;
   return (
-    (['items', 'rules', 'rows', 'data', 'points', 'logs', 'definitions']
+    (['items', 'rules', 'rows', 'data', 'points', 'logs', 'definitions', 'defs']
       .map((key) => object[key])
       .find(Array.isArray) as unknown[] | undefined) || []
   );

@@ -6377,10 +6377,22 @@ export async function getRouletteStatsByChannel(channelId, days = 7) {
   }
 }
 
-export async function listRouletteSessionsByToken(token, { q, limit = 50, offset = 0 } = {}) {
+export async function listRouletteSessionsByToken(token, { q, limit = 50, offset = 0, rouletteName, userId, userIds } = {}) {
   ensure();
   await ensureRouletteSessions();
   let query = supabase.from('roulette_sessions').select('*').eq('token', token);
+  const normalizedRouletteName = String(rouletteName || '').trim();
+  if (normalizedRouletteName) {
+    query = query.eq('roulette_name', normalizedRouletteName);
+  }
+  const identityFilters = Array.isArray(userIds)
+    ? userIds.map((value) => String(value || '').trim()).filter(Boolean)
+    : (userId ? [String(userId).trim()].filter(Boolean) : []);
+  if (identityFilters.length === 1) {
+    query = query.eq('user_id', identityFilters[0]);
+  } else if (identityFilters.length > 1) {
+    query = query.in('user_id', identityFilters.slice(0, 50));
+  }
   if (q && String(q).trim()) {
     const s = `%${String(q).trim()}%`;
     query = query.or(`username.ilike.${s},roulette_name.ilike.${s},result_label.ilike.${s}`);

@@ -407,6 +407,45 @@ type RouletteViewerProps = {
   viewerToken?: string;
 };
 
+const WHEEL_SEGMENT_COUNT = 8;
+const WHEEL_SEGMENT_DEG = 360 / WHEEL_SEGMENT_COUNT;
+const WHEEL_FALLBACK_ITEMS = ['행운', '보너스', '성공', '한 번 더', '반짝', '선물', '스타', '당첨'];
+
+function normalizeWheelResultLabel(value: unknown) {
+  return String(value || '').replace(/\s+/g, '').trim();
+}
+
+function wheelStopRotationForIndex(index: number) {
+  return -((index * WHEEL_SEGMENT_DEG) + (WHEEL_SEGMENT_DEG / 2));
+}
+
+function equivalentForwardRotation(currentRotation: number, targetModuloRotation: number, turns = 6) {
+  const currentModulo = ((currentRotation % 360) + 360) % 360;
+  const targetModulo = ((targetModuloRotation % 360) + 360) % 360;
+  const delta = (targetModulo - currentModulo + 360) % 360;
+  return currentRotation + delta + (Math.max(1, turns) * 360);
+}
+
+function buildWheelItemsForResult(pool: string[], finalLabel: string, selectedIndex: number) {
+  const target = finalLabel.trim() || '룰렛';
+  const targetKey = normalizeWheelResultLabel(target);
+  const candidates = [
+    ...pool.map((item) => String(item || '').trim()).filter(Boolean),
+    ...WHEEL_FALLBACK_ITEMS,
+  ].filter((item) => normalizeWheelResultLabel(item) !== targetKey);
+  const items: string[] = [];
+  let cursor = 0;
+  for (let index = 0; index < WHEEL_SEGMENT_COUNT; index += 1) {
+    if (index === selectedIndex) {
+      items.push(target);
+      continue;
+    }
+    items.push(candidates[cursor % candidates.length] || WHEEL_FALLBACK_ITEMS[index] || '룰렛');
+    cursor += 1;
+  }
+  return items;
+}
+
 export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps) {
   const [state, setState] = React.useState<{ name?: string | null; username?: string | null; label?: string | null; value?: number | string | null }>(() => ({}));
   const [error, setError] = React.useState<string | null>(null);
@@ -420,6 +459,11 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
   const [rowH, setRowH] = React.useState(0);
   const rowsHalfRef = React.useRef(6);
   const rowsHalfSpinRef = React.useRef<number | null>(null);
+  const [wheelItemsState, setWheelItemsState] = React.useState<string[]>(WHEEL_FALLBACK_ITEMS);
+  const [wheelSelectedIndex, setWheelSelectedIndex] = React.useState(-1);
+  const [wheelRotationDeg, setWheelRotationDeg] = React.useState(0);
+  const [wheelSettled, setWheelSettled] = React.useState(false);
+  const wheelRotationRef = React.useRef(0);
   // RAF physics refs
   const rafIdRef = React.useRef<number | null>(null);
   const animStartRef = React.useRef<number>(0);
@@ -665,6 +709,8 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     if (!previewMode) return;
     const sampleItems = ['아루 코인', 'VIP 포인트', '한 번 더', '선물 상자', '대박', '축하 멘트', '보너스', '오늘의 주인공'];
     const finalLabel = sampleItems[4];
+    const wheelPreviewIndex = 4;
+    const wheelPreviewRotation = wheelStopRotationForIndex(wheelPreviewIndex);
     const centerIndex = 6;
     poolRef.current = sampleItems;
     finalIndexRef.current = centerIndex;
@@ -673,6 +719,11 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     setScrollItems(scrollItemsRef.current);
     setScrollIndex(centerIndex);
     setOffsetRows(centerIndex);
+    setWheelItemsState(sampleItems.slice(0, WHEEL_SEGMENT_COUNT));
+    setWheelSelectedIndex(wheelPreviewIndex);
+    wheelRotationRef.current = wheelPreviewRotation;
+    setWheelRotationDeg(wheelPreviewRotation);
+    setWheelSettled(true);
     setState({ name: '스페셜 룰렛', username: '테스트 시청자', label: finalLabel, value: finalLabel });
     setBatchProgress({ id: 'preview', done: 2, total: 5 });
     setError(null);
@@ -1104,6 +1155,10 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     // Cancel outstanding timers
     timersRef.current.forEach(id => window.clearTimeout(id));
     timersRef.current = [];
+    if (rafIdRef.current) {
+      cancelAnimationFrame(rafIdRef.current);
+      rafIdRef.current = null;
+    }
     // Fade out whole content layer first
     setActive(false);
     const OUT_MS = FADE_MS;
@@ -1125,6 +1180,14 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       } catch {}
       setScrollItems([finalLabel]);
       setScrollIndex(0);
+      const instantWheelIndex = 0;
+      const instantWheelRotation = wheelStopRotationForIndex(instantWheelIndex);
+      const instantWheelItems = buildWheelItemsForResult(poolRef.current, finalLabel, instantWheelIndex);
+      setWheelItemsState(instantWheelItems);
+      setWheelSelectedIndex(instantWheelIndex);
+      wheelRotationRef.current = instantWheelRotation;
+      setWheelRotationDeg(instantWheelRotation);
+      setWheelSettled(true);
       playEndSfx();
       setActive(true);
       const doneId = window.setTimeout(() => {
@@ -1159,6 +1222,17 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     const cleaned = baseItems.map(s => String(s)).filter(s => s.length > 0);
     const pool = cleaned.length ? cleaned : ['행운!', '룰렛', '고!'];
     poolRef.current = pool.slice();
+    const wheelTargetIndex = Math.floor(Math.random() * WHEEL_SEGMENT_COUNT);
+    const nextWheelItems = buildWheelItemsForResult(pool, finalLabel, wheelTargetIndex);
+    setWheelItemsState(nextWheelItems);
+    setWheelSelectedIndex(wheelTargetIndex);
+    setWheelSettled(false);
+    const wheelStartRotation = wheelRotationRef.current;
+    const wheelFinalRotation = equivalentForwardRotation(
+      wheelStartRotation,
+      wheelStopRotationForIndex(wheelTargetIndex),
+      6 + Math.floor(Math.random() * 3)
+    );
     const rand = () => pool[Math.floor(Math.random() * pool.length)];
     const seq: string[] = [];
     // Initial head padding based on viewport
@@ -1200,22 +1274,33 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       const clamped = Math.min(T, Math.max(0, t));
       const s = (v0 * clamped) - (0.5 * a * clamped * clamped); // px
       const currentCenter = startIdx + (s / rowHpx);
+      const wheelProgress = distancePx > 0 ? Math.max(0, Math.min(1, s / distancePx)) : Math.max(0, Math.min(1, clamped / T));
+      const currentWheelRotation = wheelStartRotation + ((wheelFinalRotation - wheelStartRotation) * wheelProgress);
       setOffsetRows(currentCenter);
       setScrollIndex(Math.floor(currentCenter));
+      wheelRotationRef.current = currentWheelRotation;
+      setWheelRotationDeg(currentWheelRotation);
       if (t < T) {
         rafIdRef.current = requestAnimationFrame(run);
       } else {
         // Final snap to exact center and small overshoot bounce
         setOffsetRows(targetIdx);
         setScrollIndex(targetIdx);
+        wheelRotationRef.current = wheelFinalRotation;
+        setWheelRotationDeg(wheelFinalRotation);
         // Overshoot: +2px then settle back
         const px2rows = (px: number) => px / rowHpx;
         const overshoot = () => {
           setOffsetRows(targetIdx + px2rows(2));
+          setWheelRotationDeg(wheelFinalRotation + 1.4);
           requestAnimationFrame(() => {
             setOffsetRows(targetIdx - px2rows(1));
+            setWheelRotationDeg(wheelFinalRotation - 0.45);
             requestAnimationFrame(() => {
               setOffsetRows(targetIdx);
+              wheelRotationRef.current = wheelFinalRotation;
+              setWheelRotationDeg(wheelFinalRotation);
+              setWheelSettled(true);
               // done
               playEndSfx();
               const hideId = window.setTimeout(() => {
@@ -1892,17 +1977,12 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
   }, []);
 
 
-  const wheelSource = (poolRef.current.length ? poolRef.current : scrollItemsRef.current).slice(0, 8);
-  const wheelFallback = ['행운', '보너스', '성공', '한 번 더', '반짝', '선물', '스타', '당첨'];
-  const wheelItems = Array.from({ length: 8 }).map((_, index) => String(wheelSource[index] || wheelFallback[index] || '룰렛'));
+  const wheelItems = React.useMemo(
+    () => Array.from({ length: WHEEL_SEGMENT_COUNT }).map((_, index) => String(wheelItemsState[index] || WHEEL_FALLBACK_ITEMS[index] || '룰렛')),
+    [wheelItemsState]
+  );
   const wheelLabelLines = React.useMemo(() => wheelItems.map(splitWheelLabel), [wheelItems]);
-  const wheelRotation = offsetRows * 24;
   const wheelSkinFamily = React.useMemo(() => getWheelSkinFamily(t.id), [t.id]);
-  const selectedWheelIndex = React.useMemo(() => {
-    const target = String(state.label || state.value || '').replace(/\s+/g, '').trim();
-    if (!target) return -1;
-    return wheelItems.findIndex((item) => item.replace(/\s+/g, '').trim() === target);
-  }, [state.label, state.value, wheelItems]);
 
   const renderReelWindow = () => (
     <div className="relative w-full max-w-[760px]">
@@ -2081,14 +2161,14 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
             <div
               className="absolute inset-[12.2%] rounded-full"
               style={{
-                transform: `rotate(${wheelRotation}deg)`,
+                transform: `rotate(${wheelRotationDeg}deg)`,
                 background: 'radial-gradient(circle, transparent 46%, rgba(0,0,0,0.12) 47%, rgba(0,0,0,0.22) 72%, rgba(255,255,255,0.08) 73%, transparent 75%)',
                 maskImage: 'radial-gradient(circle, transparent 0 43%, black 44%)',
                 WebkitMaskImage: 'radial-gradient(circle, transparent 0 43%, black 44%)',
               }}
             >
               <WheelSegmentsSvg family={wheelSkinFamily} palette={t.palette} />
-              <WheelSelectedSegment selectedIndex={selectedWheelIndex} />
+              <WheelSelectedSegment selectedIndex={wheelSelectedIndex} />
               {Array.from({ length: 8 }).map((_, index) => (
                 <div
                   key={`divider-${index}`}
@@ -2112,7 +2192,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
                   }}
                 />
               ))}
-              <WheelLabelsSvg labelLines={wheelLabelLines} selectedIndex={selectedWheelIndex} />
+              <WheelLabelsSvg labelLines={wheelLabelLines} selectedIndex={wheelSelectedIndex} />
             </div>
             <div
               className="absolute left-1/2 top-[-2.8%] z-40 grid h-[clamp(76px,13vmin,116px)] w-[clamp(58px,9.4vmin,88px)] -translate-x-1/2 place-items-center"
@@ -2174,7 +2254,9 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
                   <div className="absolute inset-[34%] rounded-full bg-white/75" />
                 </div>
                 <div className="text-[clamp(9px,1.12vmin,12px)] font-black tracking-[0.18em]" style={{ color: 'var(--roulette-muted)' }}>RESULT</div>
-                <div className="roulette-result-lock max-w-[210px] truncate text-[clamp(26px,4.6vmin,48px)] font-black leading-none" style={{ color: 'var(--roulette-result)', textShadow: '0 0 24px var(--roulette-shadow), 0 7px 20px rgba(0,0,0,0.48)' }}>{state.label || state.value || '준비 완료'}</div>
+                <div className={wheelSettled ? 'roulette-result-lock max-w-[210px] truncate text-[clamp(26px,4.6vmin,48px)] font-black leading-none' : 'max-w-[210px] truncate text-[clamp(20px,3.2vmin,34px)] font-black leading-none'} style={{ color: 'var(--roulette-result)', textShadow: '0 0 24px var(--roulette-shadow), 0 7px 20px rgba(0,0,0,0.48)' }}>
+                  {wheelSettled ? (state.label || state.value || '준비 완료') : '회전 중'}
+                </div>
               </div>
             </div>
             {batchProgress.id ? (

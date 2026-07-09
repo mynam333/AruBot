@@ -4983,7 +4983,7 @@ app.get('/api/public/:uid/roulette-defs', async (req, res) => {
       });
       return { name: String(def?.name || ''), type: 'items', theme: def?.theme || null, items: outItems };
     });
-    return res.json({ ok: true, defs: result });
+    return res.json({ ok: true, defs: result, definitions: result, total: result.length, updatedAt: new Date().toISOString() });
   } catch (e) {
     return res.status(500).json({ error: 'failed' });
   }
@@ -6541,8 +6541,23 @@ app.get('/api/roulette/resolve-token', async (req, res) => {
   }
 });
 
-// Public: list roulette logs by channel UID (no auth)
-// GET /api/roulette/logs?uid=<channelUid>&q=&limit=&offset=
+async function resolveCurrentViewerRouletteUserIds(req) {
+  const ownerUserId = await getCurrentSessionUserId(req).catch(() => null);
+  if (!ownerUserId) return [];
+  const normalizedOwnerUserId = String(ownerUserId).replace(/^user:/, '');
+  const ids = new Set([String(ownerUserId), normalizedOwnerUserId, `user:${normalizedOwnerUserId}`]);
+  const accounts = await listPlatformAccounts(ownerUserId).catch(() => []);
+  for (const account of Array.isArray(accounts) ? accounts : []) {
+    for (const key of ['platform_user_id', 'platformUserId', 'channel_id', 'channelId']) {
+      const value = String(account?.[key] || '').trim();
+      if (value) ids.add(value);
+    }
+  }
+  return Array.from(ids).filter(Boolean);
+}
+
+// Public: list roulette logs by channel UID.
+// GET /api/roulette/logs?uid=<channelUid>&q=&roulette=&mine=&limit=&offset=
 app.get('/api/roulette/logs', async (req, res) => {
   try {
     const uid = String(req.query.uid || '').trim();
@@ -6552,10 +6567,24 @@ app.get('/api/roulette/logs', async (req, res) => {
     const token = settings.rouletteViewerToken;
     if (!token) return res.status(404).json({ error: 'not_found' });
     const q = req.query?.q ? String(req.query.q) : '';
+    const rouletteName = req.query?.roulette ? String(req.query.roulette) : '';
+    const mine = ['1', 'true', 'yes'].includes(String(req.query?.mine || '').toLowerCase());
+    const viewerUserIds = mine ? await resolveCurrentViewerRouletteUserIds(req) : [];
     const limit = req.query?.limit ? Math.max(1, Math.min(200, parseInt(String(req.query.limit)))) : 50;
     const offset = req.query?.offset ? Math.max(0, parseInt(String(req.query.offset))) : 0;
-    const rows = await listRouletteSessionsByToken(token, { q, limit, offset });
-    return res.json({ items: rows, limit, offset });
+    const rows = mine && viewerUserIds.length === 0
+      ? []
+      : await listRouletteSessionsByToken(token, { q, rouletteName, userIds: viewerUserIds, limit, offset });
+    return res.json({
+      items: rows,
+      limit,
+      offset,
+      q,
+      roulette: rouletteName,
+      mine,
+      viewerKnown: mine ? viewerUserIds.length > 0 : null,
+      updatedAt: new Date().toISOString()
+    });
   } catch (e) {
     return res.status(500).json({ error: 'failed' });
   }
@@ -22737,7 +22766,7 @@ async function bootstrapEnsureSessions() {
   try {
     const sids = await listAllSidsWithTokens();
     if (!Array.isArray(sids) || sids.length === 0) return;
-    console.log(`[bootstrap] Ensuring sessions for ${sids.length} sid(s)`);
+    console.log(`[bootstrap] Checking CHZZK live status for ${sids.length} sid(s)`);
     // Process sequentially with small delay to avoid burst
     for (const sid of sids) {
       try {
@@ -22749,24 +22778,33 @@ async function bootstrapEnsureSessions() {
         if (channelId) {
           await refreshChzzkLiveStatusForSid(sid, { channelUids: [String(channelId)], force: true });
         }
-      } catch { }
-      await new Promise(r => setTimeout(r, 100));
+      } catch (e) {
+        console.warn('[bootstrap] CHZZK live status check skipped:', sid, e?.response?.data || e?.message || e);
+      }
+      await sleep(100);
     }
-  } catch { }
+  } catch (e) {
+    console.warn('[bootstrap] CHZZK live status bootstrap failed:', e?.message || e);
+  }
 }
 
 async function bootstrapEnsureCimeSessions() {
   try {
     const users = await listPlatformTokenUsers('cime');
     if (!Array.isArray(users) || users.length === 0) return;
-    console.log(`[bootstrap] Ensuring CIME sessions for ${users.length} account(s)`);
+    console.log(`[bootstrap] Checking CIME live status for ${users.length} account(s)`);
     for (const user of users) {
       const ownerUserId = String(user?.userId || '').trim();
       if (!ownerUserId) continue;
-      try { await ensureCimeSession(ownerUserId); } catch (e) {
-        console.warn('[bootstrap] CIME session skipped:', ownerUserId, e?.response?.data || e?.message || e);
+      const sid = `user:${ownerUserId}`;
+      const channelId = String(user?.platformUserId || '').trim() || null;
+      try {
+        await refreshCimeLiveStatus(ownerUserId, sid, channelId);
+        await ensureCimeSession(ownerUserId);
+      } catch (e) {
+        console.warn('[bootstrap] CIME live status/session skipped:', ownerUserId, e?.response?.data || e?.message || e);
       }
-      await new Promise(r => setTimeout(r, 150));
+      await sleep(150);
     }
   } catch (e) {
     console.warn('[bootstrap] CIME session bootstrap failed:', e?.message || e);
@@ -22777,24 +22815,38 @@ async function bootstrapEnsureYoutubeSessions() {
   try {
     const users = await listPlatformTokenUsers('youtube');
     if (!Array.isArray(users) || users.length === 0) return;
-    console.log(`[bootstrap] Ensuring YouTube sessions for ${users.length} account(s)`);
+    console.log(`[bootstrap] Checking YouTube live status for ${users.length} account(s)`);
     for (const user of users) {
       const ownerUserId = String(user?.userId || '').trim();
       if (!ownerUserId) continue;
-      try { await ensureYoutubeSession(ownerUserId); } catch (e) {
-        console.warn('[bootstrap] YouTube session skipped:', ownerUserId, e?.response?.data || e?.message || e);
+      const sid = `user:${ownerUserId}`;
+      try {
+        await refreshYoutubeLiveStatus(ownerUserId, sid, { force: true, allowSearch: true });
+        await ensureYoutubeSession(ownerUserId);
+      } catch (e) {
+        console.warn('[bootstrap] YouTube live status/session skipped:', ownerUserId, e?.response?.data || e?.message || e);
       }
-      await new Promise(r => setTimeout(r, 150));
+      await sleep(150);
     }
   } catch (e) {
     console.warn('[bootstrap] YouTube session bootstrap failed:', e?.message || e);
   }
 }
 
+async function bootstrapRegisteredChannelLiveStatuses() {
+  console.log('[bootstrap] Starting sequential live status check for registered channels');
+  await bootstrapEnsureSessions();
+  await sleep(250);
+  await bootstrapEnsureCimeSessions();
+  await sleep(250);
+  await bootstrapEnsureYoutubeSessions();
+  console.log('[bootstrap] Sequential live status check completed');
+}
+
 setTimeout(() => {
-  bootstrapEnsureSessions().catch(() => { });
-  bootstrapEnsureCimeSessions().catch(() => { });
-  bootstrapEnsureYoutubeSessions().catch(() => { });
+  bootstrapRegisteredChannelLiveStatuses().catch((e) => {
+    console.warn('[bootstrap] Sequential live status check failed:', e?.message || e);
+  });
 }, 0);
 
 // =============================

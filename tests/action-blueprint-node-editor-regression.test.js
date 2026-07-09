@@ -62,4 +62,16 @@ describe('action blueprint node editor regressions', () => {
     expect(serverIndex).toContain('const xUnit = normalizeFxLengthUnit(input.xUnit ?? input.leftUnit)');
     expect(serverIndex).toContain('widthUnit');
   });
+
+  test('condition node editor exposes the command variable help modal button', () => {
+    const configFieldsStart = blueprintPage.indexOf('function ConfigFields');
+    const conditionEditorStart = blueprintPage.indexOf("if (node.type === 'condition' || node.type === 'rouletteCompare')", configFieldsStart);
+    const conditionEditorEnd = blueprintPage.indexOf("if (node.type === 'action')", conditionEditorStart);
+    const conditionEditor = blueprintPage.slice(conditionEditorStart, conditionEditorEnd);
+
+    expect(blueprintPage).toContain("import { CommandVariableHelpButton } from '@/features/admin/command-variable-help'");
+    expect(conditionEditor).toContain("node.type === 'condition'");
+    expect(conditionEditor).toContain('<CommandVariableHelpButton />');
+    expect(conditionEditor).toContain('조건에 사용할 변수');
+  });
 });

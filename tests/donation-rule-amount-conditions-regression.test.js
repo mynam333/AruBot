@@ -36,4 +36,14 @@ describe('후원 반응 금액 조건 회귀 방지', () => {
     expect(adminActionDialogs).toContain('조건 추가');
     expect(adminActionDialogs).toContain('serializeDonationAmountConditions');
   });
+
+  test('후원 반응 만들기 모달은 변수 도움말 버튼을 제공해야 함', () => {
+    const dialogStart = adminActionDialogs.indexOf('export function DonationRuleCreateDialog');
+    const dialogEnd = adminActionDialogs.indexOf('export function', dialogStart + 1);
+    const dialog = adminActionDialogs.slice(dialogStart, dialogEnd);
+
+    expect(adminActionDialogs).toContain("import { CommandVariableHelpButton } from '@/features/admin/command-variable-help'");
+    expect(dialog).toContain('title="후원 조건에 맞는 반응을 만들어요."');
+    expect(dialog).toContain('headerAction={<CommandVariableHelpButton />}');
+  });
 });

@@ -63,6 +63,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { CommandVariableHelpButton } from '@/features/admin/command-variable-help';
 import { cn, compactDateTime } from '@/shared/lib/utils';
 import { apiUrl, readJson } from '@/shared/api/http';
 
@@ -3131,6 +3132,15 @@ function ConfigFields({
   if (node.type === 'condition' || node.type === 'rouletteCompare') {
     return (
       <div className="grid gap-3">
+        {node.type === 'condition' ? (
+          <div className="flex items-center justify-between gap-3 rounded-[var(--radius-control)] border bg-[linear-gradient(135deg,hsl(var(--background)/0.82),hsl(var(--accent-lemon)/0.16))] p-3 shadow-subtle">
+            <div className="min-w-0">
+              <div className="text-sm font-extrabold">조건에 사용할 변수</div>
+              <div className="text-xs font-medium leading-5 text-muted-foreground">좌변이나 우변에 넣을 수 있는 치환 변수를 모아봅니다.</div>
+            </div>
+            <CommandVariableHelpButton />
+          </div>
+        ) : null}
         <Field label="좌변" value={String(cfg.left || '')} onChange={(value) => onChange('left', value)} />
         <label className="grid gap-2 text-sm font-semibold">
           연산자
