@@ -361,7 +361,7 @@ const nodeCatalog: Array<{
   { type: 'overlayUpdate', title: '오버레이 수정', body: '표시 내용/진행률 수정', group: '연출', icon: Layers3, tone: 'sky', config: { overlayId: '{node.overlay.overlayId}', text: '', progress: '', animation: '', cssCode: '', animationKey: '' } },
   { type: 'overlayHide', title: '오버레이 숨김', body: '표시 중인 오버레이 닫기', group: '연출', icon: Layers3, tone: 'neutral', config: { overlayId: '{node.overlay.overlayId}' } },
   { type: 'tts', title: 'TTS', body: '말할 내용 입력', group: '연출', icon: Volume2, tone: 'coral', config: { text: '{user.name}님 축하합니다!', voice: '', rate: 1, pitch: 1 } },
-  { type: 'fx', title: 'FX 오버레이', body: '이미지/스티커/비디오/사운드', group: '연출', icon: Volume2, tone: 'coral', config: { kind: 'image', assetId: '', x: 50, y: 50, width: 28, height: 28, durationMs: 4000, enterCss: '', exitCss: '', chromaKey: false, chromaKeyColor: '#00ff00', volume: 1 } },
+  { type: 'fx', title: 'FX 오버레이', body: '이미지/스티커/비디오/사운드', group: '연출', icon: Volume2, tone: 'coral', config: { kind: 'image', assetId: '', x: 50, y: 50, width: 28, height: 28, xUnit: '%', yUnit: '%', widthUnit: '%', heightUnit: '%', durationMs: 4000, enterCss: '', exitCss: '', chromaKey: false, chromaKeyColor: '#00ff00', volume: 1 } },
   { type: 'obs', title: 'OBS', body: '장면/소스/필터 제어', group: '연동', icon: Radio, tone: 'mint', config: { connectionId: '', action: 'scene.switch', sceneName: '', sourceName: '', filterName: '', enabled: true } },
   { type: 'http', title: 'HTTP 요청', body: '외부 도구 깨우기', group: '연동', icon: Network, tone: 'neutral', config: { method: 'POST', url: '', body: '{}' } },
   { type: 'websocket', title: 'WebSocket', body: '로컬 도구에 메시지', group: '연동', icon: Network, tone: 'neutral', config: { url: '', message: '{}', timeoutMs: 8000 } },
@@ -3250,11 +3250,48 @@ function ConfigFields({
         ) : null}
         {normalizedKind !== 'sound' ? (
           <>
-            <div className="grid gap-3 md:grid-cols-2">
-              <Field label="위치 X(%)" value={String(cfg.x ?? 50)} onChange={(value) => onChange('x', value)} />
-              <Field label="위치 Y(%)" value={String(cfg.y ?? 50)} onChange={(value) => onChange('y', value)} />
-              <Field label="너비(%)" value={String(cfg.width ?? 28)} onChange={(value) => onChange('width', value)} />
-              <Field label="높이(%)" value={String(cfg.height ?? 28)} onChange={(value) => onChange('height', value)} />
+            <div className="relative overflow-hidden rounded-[var(--radius-control)] border bg-[radial-gradient(circle_at_12%_0%,hsl(var(--accent-sky)/0.22),transparent_38%),linear-gradient(135deg,hsl(var(--background)/0.84),hsl(var(--card)/0.92))] p-3 shadow-subtle">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className="grid h-8 w-8 shrink-0 place-items-center rounded-[var(--radius-control)] border bg-card/78 text-primary shadow-subtle">
+                    <Move className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0">
+                    <div className="text-sm font-extrabold">배치와 크기</div>
+                    <div className="text-xs font-medium text-muted-foreground">%와 px를 항목별로 섞어 쓸 수 있습니다.</div>
+                  </div>
+                </div>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <LengthField
+                  label="위치 X"
+                  value={String(cfg.x ?? 50)}
+                  unit={String(cfg.xUnit || '%')}
+                  onValueChange={(value) => onChange('x', value)}
+                  onUnitChange={(unit) => onChange('xUnit', unit)}
+                />
+                <LengthField
+                  label="위치 Y"
+                  value={String(cfg.y ?? 50)}
+                  unit={String(cfg.yUnit || '%')}
+                  onValueChange={(value) => onChange('y', value)}
+                  onUnitChange={(unit) => onChange('yUnit', unit)}
+                />
+                <LengthField
+                  label="너비"
+                  value={String(cfg.width ?? 28)}
+                  unit={String(cfg.widthUnit || '%')}
+                  onValueChange={(value) => onChange('width', value)}
+                  onUnitChange={(unit) => onChange('widthUnit', unit)}
+                />
+                <LengthField
+                  label="높이"
+                  value={String(cfg.height ?? 28)}
+                  unit={String(cfg.heightUnit || '%')}
+                  onValueChange={(value) => onChange('height', value)}
+                  onUnitChange={(unit) => onChange('heightUnit', unit)}
+                />
+              </div>
             </div>
             <ExampleField
               label="등장 CSS animation"
@@ -3775,6 +3812,62 @@ function SelectField({
           <option key={option.value} value={option.value}>{option.label}</option>
         ))}
       </select>
+    </label>
+  );
+}
+
+type FxLengthUnit = '%' | 'px';
+
+function normalizeFxLengthUnit(unit: string): FxLengthUnit {
+  return unit === 'px' ? 'px' : '%';
+}
+
+function LengthField({
+  label,
+  value,
+  unit,
+  onValueChange,
+  onUnitChange,
+}: {
+  label: string;
+  value: string;
+  unit: string;
+  onValueChange: (value: string) => void;
+  onUnitChange: (unit: FxLengthUnit) => void;
+}) {
+  const selectedUnit = normalizeFxLengthUnit(unit);
+  return (
+    <label className="grid min-w-0 gap-2 text-sm font-semibold">
+      <span className="flex items-center justify-between gap-2">
+        <span>{label}</span>
+        <span className="text-[0.7rem] font-bold uppercase tracking-normal text-muted-foreground">{selectedUnit}</span>
+      </span>
+      <span className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] overflow-hidden rounded-[var(--radius-control)] border bg-background/76 shadow-[inset_0_1px_0_hsl(var(--card)/0.82)] transition focus-within:border-primary/45 focus-within:ring-2 focus-within:ring-ring">
+        <Input
+          value={value}
+          inputMode="decimal"
+          onChange={(event) => onValueChange(event.target.value)}
+          className="min-h-[var(--control-height)] rounded-none border-0 bg-transparent shadow-none focus:border-transparent focus:ring-0"
+        />
+        <span className="flex items-center gap-1 border-l bg-card/70 p-1">
+          {(['%', 'px'] as FxLengthUnit[]).map((option) => (
+            <button
+              key={option}
+              type="button"
+              aria-pressed={selectedUnit === option}
+              onClick={() => onUnitChange(option)}
+              className={cn(
+                'grid h-8 min-w-9 place-items-center rounded-[calc(var(--radius-control)*0.72)] px-2 text-xs font-extrabold tabular-nums transition',
+                selectedUnit === option
+                  ? 'bg-primary text-primary-foreground shadow-subtle'
+                  : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+              )}
+            >
+              {option}
+            </button>
+          ))}
+        </span>
+      </span>
     </label>
   );
 }

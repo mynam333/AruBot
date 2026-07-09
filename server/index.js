@@ -13170,10 +13170,15 @@ function publicAutomationSettings(settings = {}) {
   };
 }
 
-function normalizeFxPercent(value, fallback, min = 0, max = 100) {
+function normalizeFxLengthUnit(value) {
+  return String(value || '').trim().toLowerCase() === 'px' ? 'px' : '%';
+}
+
+function normalizeFxLength(value, fallback, unit, percentMin = 0, percentMax = 100, pxMin = -10000, pxMax = 10000) {
   const number = Number(value);
-  if (!Number.isFinite(number)) return fallback;
-  return Math.max(min, Math.min(max, number));
+  const resolved = Number.isFinite(number) ? number : fallback;
+  if (unit === 'px') return Math.max(pxMin, Math.min(pxMax, resolved));
+  return Math.max(percentMin, Math.min(percentMax, resolved));
 }
 
 function normalizeFxCss(value, fallback = '') {
@@ -13196,6 +13201,12 @@ function normalizeFxColor(value, fallback = '#00ff00') {
 function normalizeFxPayload(input = {}) {
   const kind = String(input.kind || input.type || input.assetKind || 'image').toLowerCase();
   const normalizedKind = FX_ASSET_KINDS.has(kind) ? kind : 'image';
+  const xUnit = normalizeFxLengthUnit(input.xUnit ?? input.leftUnit);
+  const yUnit = normalizeFxLengthUnit(input.yUnit ?? input.topUnit);
+  const widthUnit = normalizeFxLengthUnit(input.widthUnit);
+  const heightUnit = normalizeFxLengthUnit(input.heightUnit);
+  const visualFallbackWidth = normalizedKind === 'sound' || normalizedKind === 'tts' ? 0 : normalizedKind === 'text' ? 46 : 30;
+  const visualFallbackHeight = normalizedKind === 'sound' || normalizedKind === 'tts' ? 0 : normalizedKind === 'text' ? 16 : 30;
   return {
     id: String(input.id || `fx_${Date.now().toString(36)}_${crypto.randomBytes(3).toString('hex')}`),
     kind: normalizedKind,
@@ -13211,10 +13222,14 @@ function normalizeFxPayload(input = {}) {
     voice: typeof input.voice === 'string' ? input.voice.slice(0, 120) : '',
     rate: Math.min(2, Math.max(0.5, Number(input.rate || 1))),
     pitch: Math.min(2, Math.max(0.5, Number(input.pitch || 1))),
-    x: normalizeFxPercent(input.x ?? input.left, 50),
-    y: normalizeFxPercent(input.y ?? input.top, 50),
-    width: normalizeFxPercent(input.width, normalizedKind === 'sound' || normalizedKind === 'tts' ? 0 : normalizedKind === 'text' ? 46 : 30, 1, 100),
-    height: normalizeFxPercent(input.height, normalizedKind === 'sound' || normalizedKind === 'tts' ? 0 : normalizedKind === 'text' ? 16 : 30, 1, 100),
+    x: normalizeFxLength(input.x ?? input.left, 50, xUnit, 0, 100, -20000, 20000),
+    y: normalizeFxLength(input.y ?? input.top, 50, yUnit, 0, 100, -20000, 20000),
+    width: normalizeFxLength(input.width, visualFallbackWidth, widthUnit, 1, 100, 1, 20000),
+    height: normalizeFxLength(input.height, visualFallbackHeight, heightUnit, 1, 100, 1, 20000),
+    xUnit,
+    yUnit,
+    widthUnit,
+    heightUnit,
     durationMs: Math.max(250, Math.min(60000, Number(input.durationMs ?? Number(input.durationSec || 4) * 1000) || 4000)),
     enterCss: normalizeFxCss(input.enterCss),
     exitCss: normalizeFxCss(input.exitCss),

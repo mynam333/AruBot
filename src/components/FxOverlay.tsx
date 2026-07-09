@@ -18,6 +18,10 @@ type FxPayload = {
   y?: number;
   width?: number;
   height?: number;
+  xUnit?: '%' | 'px';
+  yUnit?: '%' | 'px';
+  widthUnit?: '%' | 'px';
+  heightUnit?: '%' | 'px';
   durationMs?: number;
   enterCss?: string;
   exitCss?: string;
@@ -45,6 +49,12 @@ function getWsUrl(token: string) {
   base.protocol = base.protocol === 'https:' ? 'wss:' : 'ws:';
   base.searchParams.set('token', token);
   return base.toString();
+}
+
+function fxLength(value: unknown, unit: unknown, fallback: number) {
+  const number = Number(value);
+  const resolved = Number.isFinite(number) ? number : fallback;
+  return `${resolved}${unit === 'px' ? 'px' : '%'}`;
 }
 
 function parseColor(hex = '#00ff00') {
@@ -269,10 +279,10 @@ export function FxOverlay({ token }: { token: string }) {
           key={item.id}
           className={`absolute ${String(item.animationKey || '').replace(/[^\w:-]+/g, ' ').trim()}`}
           style={{
-            left: `${Number(item.x ?? 50)}%`,
-            top: `${Number(item.y ?? 50)}%`,
-            width: `${Number(item.width ?? 30)}vw`,
-            height: `${Number(item.height ?? 30)}vh`,
+            left: fxLength(item.x, item.xUnit, 50),
+            top: fxLength(item.y, item.yUnit, 50),
+            width: fxLength(item.width, item.widthUnit, 30),
+            height: fxLength(item.height, item.heightUnit, 30),
             transform: 'translate(-50%, -50%)',
             animation: item.exiting ? (item.exitCss || undefined) : (item.animation || item.enterCss || undefined),
           }}

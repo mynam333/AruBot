@@ -43,4 +43,23 @@ describe('action blueprint node editor regressions', () => {
     expect(modal).toContain('<NodeReferencePanel node={editingNode} />');
     expect(blueprintPage).not.toContain('선택하면 전체 확인');
   });
+
+  test('FX overlay placement and size support independent percent or pixel units', () => {
+    const fxEditorStart = blueprintPage.indexOf("if (node.type === 'fx')");
+    const fxEditorEnd = blueprintPage.indexOf("if (node.type === 'overlay')", fxEditorStart);
+    const fxEditor = blueprintPage.slice(fxEditorStart, fxEditorEnd);
+
+    expect(blueprintPage).toContain('function LengthField');
+    expect(fxEditor).toContain('<LengthField');
+    expect(fxEditor).toContain("onChange('xUnit', unit)");
+    expect(fxEditor).toContain("onChange('yUnit', unit)");
+    expect(fxEditor).toContain("onChange('widthUnit', unit)");
+    expect(fxEditor).toContain("onChange('heightUnit', unit)");
+    expect(blueprintPage).toContain("xUnit: '%'");
+    expect(fxOverlay).toContain('left: fxLength(item.x, item.xUnit, 50)');
+    expect(fxOverlay).toContain('width: fxLength(item.width, item.widthUnit, 30)');
+    expect(fxOverlay).toContain("return `${resolved}${unit === 'px' ? 'px' : '%'}`");
+    expect(serverIndex).toContain('const xUnit = normalizeFxLengthUnit(input.xUnit ?? input.leftUnit)');
+    expect(serverIndex).toContain('widthUnit');
+  });
 });
