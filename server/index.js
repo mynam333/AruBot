@@ -296,6 +296,7 @@ const youtubeSendQueues = new Map(); // ownerUserId -> Promise
 const cimeSessionStore = new Map(); // ownerUserId -> entry
 const cimeSessionCreatePromises = new Map(); // ownerUserId -> Promise(entry)
 const disconnectedProviderRuntimeGuards = new Map(); // `${ownerUserId}:${provider}` -> { at, platformUserId, reason }
+const runtimeConfigurationRevisions = new Map(); // sid -> monotonically increasing config revision
 const CACHE_TTL = 5 * 60 * 1000;
 
 const CONNECTION_CLEANUP_INTERVAL = 5 * 60 * 1000;
@@ -6894,6 +6895,31 @@ async function resolveBlueprintChannelUid(ownerUserId, context = {}) {
   return uids[0] || ownerUserId;
 }
 
+async function getRuntimeActionBlueprint(ownerUserId, idOrSlug) {
+  const owner = String(ownerUserId || '').replace(/^user:/, '').trim();
+  const keyPart = String(idOrSlug || '').trim();
+  if (!owner || !keyPart) return null;
+  const sid = `user:${owner}`;
+  const loadRunnableBlueprint = async () => {
+    const blueprint = await getActionBlueprint(owner, keyPart);
+    if (!blueprint || blueprint.version?.published) return blueprint;
+    const versions = await listActionBlueprintVersions(owner, blueprint.id, 100).catch(() => []);
+    const publishedVersion = versions.find((version) => version?.published === true) || null;
+    if (!publishedVersion) return blueprint;
+    return {
+      ...blueprint,
+      currentVersionId: publishedVersion.id,
+      version: publishedVersion,
+    };
+  };
+  const revisionBeforeRead = getRuntimeConfigurationRevision(sid);
+  const blueprint = await loadRunnableBlueprint();
+  if (getRuntimeConfigurationRevision(sid) !== revisionBeforeRead) {
+    return loadRunnableBlueprint();
+  }
+  return blueprint;
+}
+
 async function executeBlueprintChatNode(ownerUserId, sid, node, text, context = {}) {
   const platform = String(context.platform || context.trigger?.platform || context.chatPost?.platform || '').toLowerCase();
   if (context.dryRun || context.source === 'manual_test') {
@@ -6914,7 +6940,7 @@ async function executeBlueprintChatNode(ownerUserId, sid, node, text, context = 
 }
 
 async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}) {
-  const blueprint = await getActionBlueprint(ownerUserId, idOrSlug);
+  const blueprint = await getRuntimeActionBlueprint(ownerUserId, idOrSlug);
   if (!blueprint || blueprint.enabled === false) return { ok: false, error: 'blueprint_not_found' };
   const dryRun = context.dryRun === true || context.source === 'manual_test';
   const suppressPointMutations = context.replayNoCost === true || context.noPointCost === true;
@@ -8414,7 +8440,7 @@ async function executeActionVariableTokens(sid, text, context = {}) {
     const actionId = String(match?.[1] || '').trim();
     if (!actionId) continue;
     try {
-      const blueprint = await getActionBlueprint(ownerUserId, actionId).catch(() => null);
+      const blueprint = await getRuntimeActionBlueprint(ownerUserId, actionId).catch(() => null);
       if (blueprint?.version?.published) {
         const runResult = await executeActionBlueprint(ownerUserId, actionId, {
           ...context,
@@ -10443,6 +10469,48 @@ async function isLiveAllowedForSid(sid) {
   } catch {
     return true;
   }
+}
+
+function getRuntimeConfigurationRevision(sid) {
+  return Number(runtimeConfigurationRevisions.get(String(sid || '')) || 0);
+}
+
+async function wakeConnectedProviderRuntimes(sid, reason = 'configuration_changed') {
+  const normalizedSid = String(sid || '').trim();
+  if (!normalizedSid) return;
+  const ownerUserId = ownerUserIdFromSid(normalizedSid);
+
+  const chzzkEntry = sessionStore.get(normalizedSid);
+  if (chzzkEntry) chzzkEntry.primarySid = normalizedSid;
+  const cimeEntry = cimeSessionStore.get(ownerUserId);
+  if (cimeEntry) cimeEntry.primarySid = normalizedSid;
+  const youtubeEntry = youtubeSessionStore.get(ownerUserId);
+  if (youtubeEntry) youtubeEntry.primarySid = normalizedSid;
+
+  await Promise.allSettled([
+    refreshChzzkLiveStatusForSid(normalizedSid, { force: true }),
+    cimeEntry
+      ? refreshCimeLiveStatus(ownerUserId, normalizedSid, cimeEntry.channelId).then(() => ensureCimeSession(ownerUserId))
+      : Promise.resolve(null),
+    youtubeEntry
+      ? refreshYoutubeLiveStatus(ownerUserId, normalizedSid, { force: true, allowSearch: true }).then(() => ensureYoutubeSession(ownerUserId))
+      : Promise.resolve(null),
+  ]);
+  console.log(`[Runtime Config] Active provider sessions refreshed sid=${normalizedSid} reason=${reason}`);
+}
+
+function markRuntimeConfigurationChanged(sid, reason = 'configuration_changed') {
+  const normalizedSid = String(sid || '').trim();
+  if (!normalizedSid) return 0;
+  const revision = getRuntimeConfigurationRevision(normalizedSid) + 1;
+  runtimeConfigurationRevisions.set(normalizedSid, revision);
+  activeSids.set(normalizedSid, Date.now());
+  queueMicrotask(() => {
+    wakeConnectedProviderRuntimes(normalizedSid, reason).catch((error) => {
+      console.warn(`[Runtime Config] Failed to refresh active sessions sid=${normalizedSid}:`, error?.message || error);
+    });
+  });
+  return revision;
 }
 
 // Optional Redis (for multi-instance fan-out)
@@ -15664,7 +15732,8 @@ app.post('/api/action-blueprints', rateLimiters.userWrite, async (req, res) => {
       edges,
       viewport: body.viewport
     });
-    return res.json({ blueprint, validationErrors });
+    const runtimeRevision = markRuntimeConfigurationChanged(`user:${ownerUserId}`, 'action_blueprint_saved');
+    return res.json({ blueprint, validationErrors, runtimeRevision });
   } catch (e) {
     console.error('[Blueprint] save error', e?.message || e);
     return res.status(500).json({ error: 'Failed to save blueprint' });
@@ -15680,7 +15749,8 @@ app.post('/api/action-blueprints/:id/publish', rateLimiters.userWrite, async (re
     const validationErrors = validateBlueprintGraph(blueprint.version?.nodes || [], blueprint.version?.edges || []);
     if (validationErrors.length) return res.status(400).json({ error: 'Blueprint is invalid', validationErrors });
     const published = await publishActionBlueprint(ownerUserId, blueprint.id);
-    return res.json({ blueprint: published });
+    const runtimeRevision = markRuntimeConfigurationChanged(`user:${ownerUserId}`, 'action_blueprint_published');
+    return res.json({ blueprint: published, runtimeRevision });
   } catch (e) {
     console.error('[Blueprint] publish error', e?.message || e);
     return res.status(500).json({ error: 'Failed to publish blueprint' });
@@ -15693,7 +15763,8 @@ app.post('/api/action-blueprints/:id/versions/:versionId/restore', rateLimiters.
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
     const blueprint = await restoreActionBlueprintVersion(ownerUserId, req.params.id, req.params.versionId);
     if (!blueprint) return res.status(404).json({ error: 'Not found' });
-    return res.json({ blueprint });
+    const runtimeRevision = markRuntimeConfigurationChanged(`user:${ownerUserId}`, 'action_blueprint_restored');
+    return res.json({ blueprint, runtimeRevision });
   } catch (e) {
     console.error('[Blueprint] restore error', e?.message || e);
     return res.status(500).json({ error: 'Failed to restore blueprint version' });
@@ -15705,7 +15776,8 @@ app.delete('/api/action-blueprints/:id', rateLimiters.userWrite, async (req, res
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
     const ok = await deleteActionBlueprint(ownerUserId, req.params.id);
-    return res.json({ ok });
+    const runtimeRevision = markRuntimeConfigurationChanged(`user:${ownerUserId}`, 'action_blueprint_deleted');
+    return res.json({ ok, runtimeRevision });
   } catch (e) {
     console.error('[Blueprint] delete error', e?.message || e);
     return res.status(500).json({ error: 'Failed to delete blueprint' });
@@ -15980,7 +16052,8 @@ app.post('/api/local-remote/commands/upsert', requireAutomationLocalAgent, async
     };
     await upsertBotRule(sid, rule);
     await markDefaultBotRulesInitialized(sid);
-    return res.json({ rule });
+    const runtimeRevision = markRuntimeConfigurationChanged(sid, 'local_bot_rule_upserted');
+    return res.json({ rule, runtimeRevision });
   } catch (e) {
     console.error('[Local Remote] command upsert error', e?.message || e);
     return res.status(500).json({ error: 'Failed to save command' });
@@ -15994,7 +16067,8 @@ app.post('/api/local-remote/commands/delete', requireAutomationLocalAgent, async
     const id = String(req.body?.id || '').trim();
     if (!id) return res.status(400).json({ error: 'id is required' });
     await deleteBotRule(sid, id);
-    return res.json({ deleted: true });
+    const runtimeRevision = markRuntimeConfigurationChanged(sid, 'local_bot_rule_deleted');
+    return res.json({ deleted: true, runtimeRevision });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to delete command' });
   }
@@ -16828,7 +16902,8 @@ app.post('/api/bot/settings', async (req, res) => {
   const body = req.body || {};
   const settings = body.settings || {};
   await setBotSettings(sid, settings);
-  return res.json({ ok: true });
+  const runtimeRevision = markRuntimeConfigurationChanged(sid, 'bot_settings_saved');
+  return res.json({ ok: true, runtimeRevision });
 });
 
 const BOT_VARIABLE_PROVIDERS = ['chzzk', 'cime', 'youtube'];
@@ -17024,6 +17099,17 @@ async function getBotRulesWithDefaults(sid) {
   return Array.isArray(seededRules) && seededRules.length > 0 ? seededRules : defaultRules;
 }
 
+async function getRuntimeBotRulesWithDefaults(sid) {
+  const normalizedSid = String(sid || '').trim();
+  if (!normalizedSid) return [];
+  const revisionBeforeRead = getRuntimeConfigurationRevision(normalizedSid);
+  const rules = await getBotRulesWithDefaults(normalizedSid);
+  if (getRuntimeConfigurationRevision(normalizedSid) !== revisionBeforeRead) {
+    return getBotRulesWithDefaults(normalizedSid);
+  }
+  return rules;
+}
+
 app.get('/api/bot/rules', async (req, res) => {
   try {
     const sid = await getBotRulesOwnerSid(req, res);
@@ -17061,7 +17147,8 @@ app.post('/api/bot/rules/upsert', async (req, res) => {
 
     await upsertBotRule(sid, rule);
     await markDefaultBotRulesInitialized(sid);
-    return res.json({ ok: true });
+    const runtimeRevision = markRuntimeConfigurationChanged(sid, 'bot_rule_upserted');
+    return res.json({ ok: true, runtimeRevision });
   } catch (e) {
     console.error('Rule upsert failed:', e?.message || e, e?.hint || '', e?.details || '');
     return res.status(500).json({ error: 'Failed to save rule' });
@@ -17075,7 +17162,8 @@ app.post('/api/bot/rules/delete', async (req, res) => {
   if (!id) return res.status(400).json({ error: 'id is required' });
   try {
     await deleteBotRule(sid, id);
-    return res.json({ ok: true });
+    const runtimeRevision = markRuntimeConfigurationChanged(sid, 'bot_rule_deleted');
+    return res.json({ ok: true, runtimeRevision });
   } catch (e) {
     console.error('Rule delete failed:', e?.message || e, e?.hint || '', e?.details || '');
     return res.status(500).json({ error: 'Failed to delete rule' });
@@ -19657,7 +19745,7 @@ async function ensureSession(sid, channelId) {
           }
 
           // Load per-user rules (empty if disabled)
-          const rules = botDisabled ? [] : await getBotRulesWithDefaults(sid);
+          const rules = botDisabled ? [] : await getRuntimeBotRulesWithDefaults(sid);
           if (!Array.isArray(rules)) {
             throw new Error('rules is not iterable');
           }
@@ -21167,7 +21255,7 @@ async function processYoutubeChatAutomation(entry, ev) {
       } catch { }
     }
 
-    const rules = await getBotRulesWithDefaults(sid);
+    const rules = await getRuntimeBotRulesWithDefaults(sid);
     if (!Array.isArray(rules)) return;
     const lower = text.toLowerCase();
     const now = Date.now();
@@ -22059,7 +22147,7 @@ async function processCimeChatAutomation(entry, ev) {
       } catch { }
     }
 
-    const rules = await getBotRulesWithDefaults(sid);
+    const rules = await getRuntimeBotRulesWithDefaults(sid);
     if (!Array.isArray(rules)) return;
 
     const lower = text.toLowerCase();
@@ -22877,12 +22965,10 @@ async function bootstrapEnsureSessions() {
     for (const sid of sids) {
       try {
         activeSids.set(sid, Date.now());
-        const accessToken = await getValidAccessToken(sid);
-        const me = await axios.get(`${OPENAPI_BASE}/open/v1/users/me`, { headers: { Authorization: `Bearer ${accessToken}` } });
-        const content = me?.data?.content || me?.data || {};
-        const channelId = content.channelId || content.channel_id || null;
-        if (channelId) {
-          await refreshChzzkLiveStatusForSid(sid, { channelUids: [String(channelId)], force: true });
+        const settings = await getBotSettings(sid).catch(() => ({})) || {};
+        const channelUids = await resolveChzzkChannelUidsForSid(sid, settings);
+        if (channelUids.length) {
+          await refreshChzzkLiveStatusForSid(sid, { settings, channelUids, force: true });
         }
       } catch (e) {
         console.warn('[bootstrap] CHZZK live status check skipped:', sid, e?.response?.data || e?.message || e);
@@ -22939,21 +23025,47 @@ async function bootstrapEnsureYoutubeSessions() {
   }
 }
 
-async function bootstrapRegisteredChannelLiveStatuses() {
-  console.log('[bootstrap] Starting sequential live status check for registered channels');
+async function bootstrapRegisteredChannelLiveStatuses(reason = 'startup') {
+  console.log(`[bootstrap] Starting sequential live status check for registered channels reason=${reason}`);
   await bootstrapEnsureSessions();
   await sleep(250);
   await bootstrapEnsureCimeSessions();
   await sleep(250);
   await bootstrapEnsureYoutubeSessions();
-  console.log('[bootstrap] Sequential live status check completed');
+  console.log(`[bootstrap] Sequential live status check completed reason=${reason}`);
+}
+
+const REGISTERED_RUNTIME_MONITOR_INTERVAL_MS = Math.max(5000, Number(process.env.REGISTERED_RUNTIME_MONITOR_INTERVAL_MS || 10000));
+let registeredRuntimeMonitorRunning = false;
+
+async function runRegisteredRuntimeMonitor(reason = 'scheduled') {
+  if (registeredRuntimeMonitorRunning) return false;
+  registeredRuntimeMonitorRunning = true;
+  try {
+    if (reason === 'startup') {
+      await bootstrapRegisteredChannelLiveStatuses(reason);
+    } else {
+      // CIME keeps a reconnecting websocket and YouTube uses WebSub push notifications.
+      // Only CHZZK needs a short-interval registered-channel live poll.
+      await bootstrapEnsureSessions();
+    }
+    return true;
+  } finally {
+    registeredRuntimeMonitorRunning = false;
+  }
 }
 
 setTimeout(() => {
-  bootstrapRegisteredChannelLiveStatuses().catch((e) => {
+  runRegisteredRuntimeMonitor('startup').catch((e) => {
     console.warn('[bootstrap] Sequential live status check failed:', e?.message || e);
   });
 }, 0);
+
+setInterval(() => {
+  runRegisteredRuntimeMonitor('scheduled').catch((e) => {
+    console.warn('[runtime-monitor] Registered channel refresh failed:', e?.message || e);
+  });
+}, REGISTERED_RUNTIME_MONITOR_INTERVAL_MS).unref?.();
 
 // =============================
 //
@@ -24117,6 +24229,7 @@ function registerRouletteRoutes() {
           let meta = rouletteTokenLastBatch.get(token) || null;
           const payload = {
             type: 'roulette',
+            initialSnapshot: true,
             token,
             channelId,
             name: row.roulette_name || null,

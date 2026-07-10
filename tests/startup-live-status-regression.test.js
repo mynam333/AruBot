@@ -4,7 +4,7 @@ const path = require('path');
 describe('startup live status refresh regression', () => {
   const serverIndex = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
 
-  test('startup checks registered channel live statuses sequentially once', () => {
+  test('startup and recurring monitor check registered channel live statuses sequentially without overlap', () => {
     const bootstrapStart = serverIndex.indexOf('async function bootstrapRegisteredChannelLiveStatuses');
     const bootstrapEnd = serverIndex.indexOf('setTimeout(() =>', bootstrapStart);
     const bootstrapBody = serverIndex.slice(bootstrapStart, bootstrapEnd);
@@ -17,7 +17,13 @@ describe('startup live status refresh regression', () => {
     expect(bootstrapBody).toContain('await bootstrapEnsureYoutubeSessions()');
     expect(bootstrapBody.indexOf('await bootstrapEnsureSessions()')).toBeLessThan(bootstrapBody.indexOf('await bootstrapEnsureCimeSessions()'));
     expect(bootstrapBody.indexOf('await bootstrapEnsureCimeSessions()')).toBeLessThan(bootstrapBody.indexOf('await bootstrapEnsureYoutubeSessions()'));
-    expect(startupBody).toContain('bootstrapRegisteredChannelLiveStatuses().catch');
+    expect(serverIndex).toContain('async function runRegisteredRuntimeMonitor');
+    expect(serverIndex).toContain('if (registeredRuntimeMonitorRunning) return false');
+    expect(startupBody).toContain("runRegisteredRuntimeMonitor('startup').catch");
+    expect(startupBody).toContain("runRegisteredRuntimeMonitor('scheduled').catch");
+    expect(startupBody).toContain('REGISTERED_RUNTIME_MONITOR_INTERVAL_MS');
+    expect(serverIndex).toContain("if (reason === 'startup')");
+    expect(serverIndex).toContain('await bootstrapEnsureSessions()');
     expect(startupBody).not.toContain('bootstrapEnsureSessions().catch');
     expect(startupBody).not.toContain('bootstrapEnsureCimeSessions().catch');
     expect(startupBody).not.toContain('bootstrapEnsureYoutubeSessions().catch');
@@ -37,5 +43,15 @@ describe('startup live status refresh regression', () => {
     expect(youtubeBody).toContain("listPlatformTokenUsers('youtube')");
     expect(youtubeBody).toContain('await refreshYoutubeLiveStatus(ownerUserId, sid, { force: true, allowSearch: true })');
     expect(youtubeBody).toContain('await ensureYoutubeSession(ownerUserId)');
+  });
+
+  test('CHZZK monitor resolves registered channels without depending on an open dashboard session', () => {
+    const chzzkStart = serverIndex.indexOf('async function bootstrapEnsureSessions');
+    const chzzkEnd = serverIndex.indexOf('async function bootstrapEnsureCimeSessions', chzzkStart);
+    const chzzkBody = serverIndex.slice(chzzkStart, chzzkEnd);
+
+    expect(chzzkBody).toContain('listAllSidsWithTokens()');
+    expect(chzzkBody).toContain('resolveChzzkChannelUidsForSid(sid, settings)');
+    expect(chzzkBody).toContain('refreshChzzkLiveStatusForSid(sid, { settings, channelUids, force: true })');
   });
 });

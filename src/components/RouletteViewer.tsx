@@ -379,6 +379,7 @@ function parseRouletteLook(value?: unknown): { theme?: Theme; layout?: RouletteL
 
 type WsPayload = {
   type: 'roulette';
+  initialSnapshot?: boolean;
   token?: string;
   name?: string | null;
   username?: string | null;
@@ -985,6 +986,13 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
               updateDebugInfo({ 
                 channelId: (data as any).channelId
               });
+            }
+
+            // The server sends the last persisted result as connection context.
+            // It is history, not a new spin request, so the overlay must remain idle.
+            if (data.initialSnapshot === true) {
+              updateDebugInfo((prev) => ({ initialMessagesSkipped: prev.initialMessagesSkipped + 1 }));
+              return;
             }
             
             // 개선된 초기 메시지 처리 로직

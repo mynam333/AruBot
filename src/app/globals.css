@@ -98,9 +98,17 @@ body {
   font-feature-settings: "rlig" 1, "calt" 1;
 }
 
+html.arubot-viewer-root,
+html:has(body .viewer-route),
+body.arubot-viewer-body,
+html:has(body .viewer-route) body {
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+}
+
 body.arubot-viewer-body {
   overflow: hidden;
-  background: transparent !important;
 }
 
 body.arubot-viewer-body .viewer-route,
