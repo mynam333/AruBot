@@ -41,6 +41,9 @@ describe('disconnected channel runtime regression', () => {
     const youtubeStart = serverIndex.indexOf("app.post('/api/auth/youtube/revoke'");
     const youtubeEnd = serverIndex.indexOf("app.get('/api/auth/cime/login'", youtubeStart);
     const youtubeBody = serverIndex.slice(youtubeStart, youtubeEnd);
+    const youtubeDeleteStart = serverIndex.indexOf('async function deleteYoutubeAuthorizedData');
+    const youtubeDeleteEnd = serverIndex.indexOf("app.post('/api/auth/youtube/revoke'", youtubeDeleteStart);
+    const youtubeDeleteBody = serverIndex.slice(youtubeDeleteStart, youtubeDeleteEnd);
     const cimeStart = serverIndex.indexOf("app.post('/api/auth/cime/revoke'");
     const cimeEnd = serverIndex.indexOf("app.get('/api/cime/me'", cimeStart);
     const cimeBody = serverIndex.slice(cimeStart, cimeEnd);
@@ -48,7 +51,9 @@ describe('disconnected channel runtime regression', () => {
     const chzzkEnd = serverIndex.indexOf("app.get('/api/channel/cache-stats'", chzzkStart);
     const chzzkBody = serverIndex.slice(chzzkStart, chzzkEnd);
 
-    expect(youtubeBody).toContain('await deletePlatformTokens(\'youtube\', ownerUserId)');
+    expect(youtubeBody).toContain("await deleteYoutubeAuthorizedData(ownerUserId, platformUserId, 'revoked')");
+    expect(youtubeDeleteBody).toContain('await deleteYoutubeStreamerChannel(owner)');
+    expect(youtubeDeleteBody).toContain("await deletePlatformAccount('youtube', owner, platformUserId)");
     expect(cimeBody).toContain('await deletePlatformTokens(\'cime\', ownerUserId)');
     expect(chzzkBody).toContain('await updateTokens(sid, null)');
   });

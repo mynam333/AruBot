@@ -4,10 +4,10 @@ import * as Dialog from '@radix-ui/react-dialog';
 import * as Switch from '@radix-ui/react-switch';
 import {
   Check,
+  Clapperboard,
   Gift,
   Loader2,
   MessageSquare,
-  PlaySquare,
   Plus,
   ChevronRight,
   Settings,
@@ -520,7 +520,7 @@ export function VideoDonationSettingsDialog({ variant = 'secondary', label = '�
 
   return (
     <ActionDialogFrame
-      icon={<PlaySquare className="h-[1em] w-[1em]" />}
+      icon={<Clapperboard className="h-[1em] w-[1em]" />}
       badge="영상 후원"
       title="영상 후원 접수 방식을 설정해요."
       description="시청자가 포인트로 영상을 신청하고 방송 화면에 자연스럽게 이어지도록 비용과 길이를 정합니다."

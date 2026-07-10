@@ -3,6 +3,10 @@ const path = require('path');
 
 describe('YouTube live chat integration regression', () => {
   const serverIndex = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  const serverDb = fs.readFileSync(path.join(__dirname, '..', 'server', 'supabase.js'), 'utf8');
+  const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+  const termsPage = fs.readFileSync(path.join(__dirname, '..', 'src', 'app', '(public)', 'terms', 'page.tsx'), 'utf8');
+  const privacyPage = fs.readFileSync(path.join(__dirname, '..', 'src', 'app', '(public)', 'privacy', 'page.tsx'), 'utf8');
   const connectionPage = fs.readFileSync(path.join(__dirname, '..', 'src', 'features', 'admin', 'connection-page.tsx'), 'utf8');
   const arubotAdminPage = fs.readFileSync(path.join(__dirname, '..', 'src', 'features', 'admin', 'arubot-admin-page.tsx'), 'utf8');
   const dashboardPage = fs.readFileSync(path.join(__dirname, '..', 'src', 'features', 'admin', 'dashboard-page.tsx'), 'utf8');
@@ -10,15 +14,14 @@ describe('YouTube live chat integration regression', () => {
   const navigation = fs.readFileSync(path.join(__dirname, '..', 'src', 'shared', 'config', 'navigation.ts'), 'utf8');
   const realtimeDiagnosticsPage = fs.readFileSync(path.join(__dirname, '..', 'src', 'app', '(admin)', 'diagnostics', 'realtime', 'page.tsx'), 'utf8');
 
-  test('uses youtube-chat for receiving live chat', () => {
-    expect(serverIndex).toContain("import youtubeChatPackage from 'youtube-chat'");
-    expect(serverIndex).toContain('const { LiveChat: YoutubeLiveChat } = youtubeChatPackage');
-    expect(serverIndex).toContain('new YoutubeLiveChat(youtubeId, intervalMs)');
-    expect(serverIndex).toContain('handleYoutubeChatLibraryItem(entry, chatItem)');
+  test('retains the optional chat dependency while receiving through the official API', () => {
+    expect(packageJson.dependencies['youtube-chat']).toBe('^2.2.0');
     expect(serverIndex).toContain('openYoutubeChatStream(entry)');
     expect(serverIndex).toContain('scheduleYoutubeReconnect(entry.ownerUserId,');
-    expect(serverIndex).not.toContain('pollingIntervalMillis');
-    expect(serverIndex).not.toContain("youtubeApiGet('liveChat/messages'");
+    expect(serverIndex).toContain("youtubeApiGetWithAccessToken('liveChat/messages'");
+    expect(serverIndex).toContain('payload.pollingIntervalMillis');
+    expect(serverIndex).toContain('pageToken: entry.nextPageToken || null');
+    expect(serverIndex).not.toContain('new YoutubeLiveChat(');
     expect(serverIndex).not.toContain("'/liveChat/messages/stream'");
   });
 
@@ -36,7 +39,7 @@ describe('YouTube live chat integration regression', () => {
 
   test('Super Stickers are not routed through donation rules', () => {
     const itemStart = serverIndex.indexOf('function normalizeYoutubeLiveChatItem');
-    const itemEnd = serverIndex.indexOf('function getYoutubeChatLibraryMessageText', itemStart);
+    const itemEnd = serverIndex.indexOf('function makeYoutubeChatPost', itemStart);
     const itemBody = serverIndex.slice(itemStart, itemEnd);
 
     expect(itemBody).toContain("type === 'superStickerEvent'");
@@ -137,7 +140,7 @@ describe('YouTube live chat integration regression', () => {
   test('operational status and health include YouTube sessions', () => {
     expect(serverIndex).toContain("app.get('/api/youtube/status'");
     expect(serverIndex).toContain("app.get('/api/platforms/status'");
-    expect(serverIndex).toContain("mode: 'youtube-chat'");
+    expect(serverIndex).toContain("mode: 'youtube-live-chat-api'");
     expect(serverIndex).toContain('reauthRequired: isYoutubeReauthRequired');
     expect(serverIndex).toContain('ignoredDonations: getYoutubeIgnoredDonationSummary');
     expect(serverIndex).toContain('youtube: typeof youtubeSessionStore');
@@ -151,6 +154,18 @@ describe('YouTube live chat integration regression', () => {
     expect(serverIndex).toContain('function isYoutubeReauthRequired');
     expect(serverIndex).toContain("text.includes('invalid_grant')");
     expect(serverIndex).toContain('lastStatus: entry?.lastStatus || null');
+  });
+
+  test('YouTube consent can be revoked and stale authorization is revalidated', () => {
+    expect(serverIndex).toContain('async function revokeYoutubeOAuthGrant');
+    expect(serverIndex).toContain("await deleteYoutubeAuthorizedData(ownerUserId, platformUserId, 'revoked')");
+    expect(serverIndex).toContain('async function validateYoutubeAuthorizations');
+    expect(serverIndex).toContain("await markPlatformTokenValidated('youtube', ownerUserId)");
+    expect(serverDb).toContain('last_validated_at timestamptz not null default now()');
+    expect(termsPage).toContain('YouTube 서비스 약관에 구속되는 것에 동의합니다.');
+    expect(privacyPage).toContain('AruBot은 YouTube API Services를 사용합니다.');
+    expect(privacyPage).toContain('https://myaccount.google.com/connections?filters=3,4');
+    expect(privacyPage).toContain('광고가 포함되거나 노출될 수 있습니다.');
   });
 
   test('admin surfaces list YouTube consistently', () => {

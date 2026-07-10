@@ -11,7 +11,7 @@ export const metadata: Metadata = {
   description: 'AruBot 서비스의 개인정보 수집, 이용, 보관, 삭제 및 외부 서비스 연동에 관한 안내입니다.',
 };
 
-const effectiveDate = '2026년 7월 6일';
+const effectiveDate = '2026년 7월 11일';
 const controllerName = 'AruBot 운영자';
 const privacyContact = 'mynam33333@gmail.com';
 
@@ -23,6 +23,7 @@ const summaryItems = [
 ] as const;
 
 const contents = [
+  '개인정보처리방침의 적용 범위',
   '개인정보의 처리 목적, 항목 및 보유기간',
   '개인정보 처리의 법적 근거',
   '만 14세 미만 아동의 개인정보 처리',
@@ -31,6 +32,7 @@ const contents = [
   '개인정보 처리업무의 위탁',
   '개인정보의 국외 이전',
   '쿠키 및 자동 수집 장치',
+  'YouTube API Services 데이터 및 권한 관리',
   '정보주체와 법정대리인의 권리',
   '자동화된 처리와 공개 페이지',
   '안전성 확보조치',
@@ -78,6 +80,14 @@ const processingRows = [
       'IP 주소, User-Agent, 요청 URL과 시각, 쿠키 및 세션 정보, API 호출 기록, 오류 로그, 접속 기록, 보안 진단 정보, 문의 내용과 회신 기록',
     basis: '개인정보 보호법 제15조 제1항 제4호(서비스 이용계약 이행), 제6호(서비스 안정성·보안·부정이용 방지를 위한 정당한 이익), 관련 법령상 의무',
     retention: '목적 달성 시까지. 단, 로그·분쟁·부정이용 대응 및 법령상 의무 이행에 필요한 기록은 필요한 기간 동안 보관',
+  },
+  {
+    service: 'YouTube API Services 연동',
+    purpose: 'YouTube 채널 식별, 라이브 감지, Live Chat 명령·이벤트 처리, 봇 응답 전송, 운영자 권한 확인, 영상 후원 메타데이터 조회',
+    items:
+      'YouTube 채널 ID·채널명·핸들·프로필 이미지, OAuth 권한 범위·access token·refresh token·만료 시각, 방송·영상 ID·제목·썸네일·길이·라이브 상태·Live Chat ID, 채팅 메시지 ID·내용·게시 시각, 작성자 채널 ID·표시 이름·프로필 이미지·운영자/소유자/회원 여부, Super Chat 금액·통화·표시 금액·사용자 코멘트',
+    basis: '사용자의 명시적 OAuth 동의, 서비스 이용계약 이행, YouTube API Services 정책 준수',
+    retention: 'OAuth 토큰은 연결 유지와 동의 목적에 필요한 기간 동안 암호화하여 보관하고 30일 이내 주기로 권한 유효성을 재확인. 그 밖의 Authorized Data는 목적에 필요한 기간 동안 보관하되 30일 이내 삭제 또는 새로고침. 연결 해제·권한 철회 시 지체 없이, 늦어도 7일 이내 삭제',
   },
 ] as const;
 
@@ -144,7 +154,7 @@ const sections = [
     title: '1. 개인정보 처리방침의 적용 범위',
     body: [
       `이 방침은 ${controllerName}가 제공하는 AruBot 웹 서비스, 백엔드 API, OBS 오버레이, 공개 페이지, 로컬 프로그램 연동 기능에 적용됩니다.`,
-      '공식 서비스 주소는 프론트엔드 http://arubot.yuaru.com/ 및 백엔드 http://arubotapi.yuaru.com/ 입니다.',
+      '공식 서비스 주소는 프론트엔드 https://arubot.yuaru.com/ 및 백엔드 https://arubotapi.yuaru.com/ 입니다.',
       '로컬 프로그램 설치 파일은 GitHub Releases를 통해 배포될 수 있고, 브라우저 확장 프로그램은 Chrome Web Store 또는 Firefox Add-ons 등 공식 스토어에서 배포될 수 있습니다. 다만 AruBot이 해당 배포 채널로 서비스 이용자의 개인정보를 직접 이전하거나 보관하도록 위탁하지는 않습니다.',
     ],
   },
@@ -218,7 +228,24 @@ const sections = [
     ],
   },
   {
-    title: '10. 정보주체와 법정대리인의 권리 및 행사방법',
+    title: '10. YouTube API Services 데이터 및 권한 관리',
+    body: [
+      'AruBot은 YouTube API Services를 사용합니다. 사용자가 Google OAuth 화면에서 허용한 읽기 또는 채팅 기능 범위 안에서만 Authorized Data에 접근하며, 고지되지 않은 별도 목적으로 사용하지 않습니다.',
+      'AruBot은 YouTube 채널 식별과 등록, 라이브 방송·채팅 감지, 채팅 명령어·포인트·후원 이벤트 처리, 봇 응답 전송, 운영자 권한 확인 및 영상 후원 메타데이터 조회를 위해 위 표에 기재된 YouTube API Data를 접근·수집·저장·처리합니다.',
+      'OAuth 토큰은 서버 데이터베이스에 암호화하여 저장하고 브라우저나 공개 페이지에 노출하지 않습니다. 채널·방송·영상·채팅 관련 Authorized Data는 AruBot 서버와 Oracle Cloud 대한민국 춘천 리전 데이터베이스에서 서비스 제공에 필요한 범위로 처리되며, Google/YouTube API 요청 외의 제3자에게 판매하지 않습니다.',
+      'AruBot의 YouTube 동영상 표시 기능은 YouTube IFrame Player를 사용할 수 있습니다. 이 과정에서 Google/YouTube 등 제3자가 콘텐츠를 제공하며 광고가 포함되거나 노출될 수 있습니다. AruBot은 YouTube가 제공하는 광고나 플레이어 기능을 변경하거나 차단하지 않습니다.',
+      '사용자는 플랫폼 연결 화면에서 YouTube 연결 해제를 선택하여 AruBot의 권한을 철회하고 저장된 YouTube OAuth 토큰과 Authorized Data를 삭제할 수 있습니다. AruBot은 연결 해제 요청을 받으면 Google에 토큰 철회를 요청하고 관련 데이터를 지체 없이 삭제합니다.',
+      '사용자는 Google 계정의 서드 파티 앱 연결 페이지에서도 AruBot의 접근 권한을 직접 철회할 수 있습니다. AruBot은 토큰 유효성을 30일 이내 주기로 재확인하고 갱신할 수 없는 사용자에 관한 YouTube API Data를 삭제합니다.',
+      `YouTube API Data 처리, 삭제 또는 권한 철회에 관한 문의는 ${privacyContact}로 접수할 수 있습니다.`,
+    ],
+    links: [
+      { href: 'https://myaccount.google.com/connections?filters=3,4', label: 'Google 서드 파티 연결 관리' },
+      { href: 'https://policies.google.com/privacy', label: 'Google 개인정보처리방침' },
+      { href: 'https://developers.google.com/youtube/terms/api-services-terms-of-service', label: 'YouTube API Services 약관' },
+    ],
+  },
+  {
+    title: '11. 정보주체와 법정대리인의 권리 및 행사방법',
     body: [
       '정보주체는 자신의 개인정보에 대해 열람, 정정, 삭제, 처리정지, 동의 철회, 플랫폼 연결 해제를 요청할 수 있습니다.',
       '서비스 화면에서 제공되는 로그아웃, 연결 해제, 토큰 재발급, 삭제 기능을 우선 사용할 수 있으며, 직접 처리가 어렵거나 별도 확인이 필요한 경우 개인정보 보호담당자에게 요청할 수 있습니다.',
@@ -227,7 +254,7 @@ const sections = [
     ],
   },
   {
-    title: '11. 자동화된 처리 및 공개 페이지',
+    title: '12. 자동화된 처리 및 공개 페이지',
     body: [
       'AruBot은 포인트 계산, 룰렛 추첨, 예측 정산, 후원 규칙 실행, 자동화 작업 실행 등 사용자가 설정한 규칙에 따라 일부 처리를 자동으로 수행할 수 있습니다.',
       '위 자동 처리는 방송 운영 기능 제공을 위한 것이며, 이용자의 권리 또는 의무에 중대한 영향을 미치는 법률적 결정을 자동으로 내리기 위한 것이 아닙니다. 결과에 이의가 있는 경우 방송인 또는 AruBot 개인정보 보호담당자에게 검토를 요청할 수 있습니다.',
@@ -235,7 +262,7 @@ const sections = [
     ],
   },
   {
-    title: '12. 개인정보의 안전성 확보조치',
+    title: '13. 개인정보의 안전성 확보조치',
     body: [
       'AruBot은 개인정보 보호를 위해 접근 권한 제한, 인증 토큰 암호화 또는 해시 처리, HTTPS 통신, 환경변수 기반 비밀정보 관리, 세션 관리, 보안 로그 확인, 오류 수정, 백업 및 복구 관리 등 합리적으로 가능한 보호조치를 적용합니다.',
       'OAuth 토큰, API 키, 오버레이 토큰, 로컬 프로그램 pairing token은 기능 제공에 필요한 범위에서만 처리하며, 유출이 의심되는 경우 사용자는 즉시 재발급, 연결 해제 또는 비밀번호 변경을 해야 합니다.',
@@ -243,7 +270,7 @@ const sections = [
     ],
   },
   {
-    title: '13. 개인정보 보호담당자 및 권익침해 구제',
+    title: '14. 개인정보 보호담당자 및 권익침해 구제',
     body: [
       `AruBot은 개인정보 처리에 관한 문의, 불만처리, 피해구제 및 열람청구를 처리하기 위해 개인정보 보호담당자를 두고 있습니다.`,
       `개인정보처리자: ${controllerName}`,
@@ -253,7 +280,7 @@ const sections = [
     ],
   },
   {
-    title: '14. 개인정보 처리방침의 변경',
+    title: '15. 개인정보 처리방침의 변경',
     body: [
       '이 개인정보 처리방침은 시행일로부터 적용됩니다.',
       'AruBot은 서비스 기능, 운영 환경, 법령, 외부 플랫폼 정책 변경에 따라 이 방침을 개정할 수 있습니다.',
@@ -436,6 +463,16 @@ export default function PrivacyPage() {
               ))}
             </ul>
             {'table' in section ? <PolicyTable rows={section.table} /> : null}
+            {'links' in section ? (
+              <div className="mt-5 flex flex-wrap gap-2">
+                {section.links.map((item) => (
+                  <LinkButton key={item.href} href={item.href} variant="outline">
+                    {item.label}
+                    <ExternalLink className="h-4 w-4" />
+                  </LinkButton>
+                ))}
+              </div>
+            ) : null}
           </article>
         ))}
       </section>

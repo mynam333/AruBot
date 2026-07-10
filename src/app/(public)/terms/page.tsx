@@ -11,7 +11,7 @@ export const metadata: Metadata = {
   description: 'AruBot 서비스 이용 조건, 이용자의 의무, 서비스 제한, 책임 범위 및 외부 플랫폼 연동에 관한 약관입니다.',
 };
 
-const effectiveDate = '2026년 7월 6일';
+const effectiveDate = '2026년 7월 11일';
 const providerName = 'AruBot 운영자';
 const contactEmail = 'mynam33333@gmail.com';
 
@@ -95,8 +95,14 @@ const sections = [
       '서비스는 CHZZK/Naver, CIME, Google/YouTube 등 외부 플랫폼의 API, OAuth, 채팅, 라이브 상태, 영상 메타데이터, 후원·구독 이벤트 및 기타 기능에 의존할 수 있습니다.',
       '이용자는 외부 플랫폼을 사용할 때 해당 플랫폼의 약관, 정책, 커뮤니티 가이드, API 정책, 권한 범위 및 운영 기준을 준수해야 합니다.',
       '외부 플랫폼의 장애, 지연, API 변경, 정책 변경, 권한 회수, 계정 제한, 심사 지연, 데이터 오류, 네트워크 문제로 서비스 기능이 제한되거나 중단될 수 있으며, 운영자는 법령상 책임이 인정되는 경우를 제외하고 이에 대해 책임을 지지 않습니다.',
-      'YouTube 연동 기능을 이용하는 경우 이용자는 YouTube 서비스 약관 및 YouTube API Services Terms of Service, Developer Policies 등 Google/YouTube의 적용 정책을 준수해야 합니다.',
+      '이용자는 AruBot의 YouTube API 연동 기능을 사용함으로써 YouTube 서비스 약관에 구속되는 것에 동의합니다.',
+      'YouTube 연동 기능에는 YouTube API Services Terms of Service, Developer Policies 및 Branding Guidelines 등 Google/YouTube의 적용 정책도 함께 적용됩니다.',
       '로컬 프로그램 설치 파일은 GitHub Releases, 브라우저 확장 프로그램은 Chrome Web Store 또는 Firefox Add-ons 등 배포 채널을 통해 제공될 수 있습니다. 해당 배포 채널 자체의 이용, 계정, 다운로드, 심사, 차단, 업데이트 문제는 각 채널의 정책에 따릅니다.',
+    ],
+    links: [
+      { href: 'https://www.youtube.com/t/terms', label: 'YouTube 서비스 약관' },
+      { href: 'https://developers.google.com/youtube/terms/api-services-terms-of-service', label: 'YouTube API Services 약관' },
+      { href: 'https://developers.google.com/youtube/terms/developer-policies', label: 'YouTube Developer Policies' },
     ],
   },
   {
@@ -270,6 +276,16 @@ export default function TermsPage() {
                 </li>
               ))}
             </ul>
+            {'links' in section ? (
+              <div className="mt-5 flex flex-wrap gap-2">
+                {section.links.map((item) => (
+                  <LinkButton key={item.href} href={item.href} variant="outline">
+                    {item.label}
+                    <ExternalLink className="h-4 w-4" />
+                  </LinkButton>
+                ))}
+              </div>
+            ) : null}
             {'link' in section ? (
               <LinkButton href={section.link.href} variant="outline" className="mt-5">
                 {section.link.label}

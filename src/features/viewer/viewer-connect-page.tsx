@@ -108,7 +108,7 @@ function ViewerShell({ children }: { children: React.ReactNode }) {
 }
 
 function ProviderMark({ provider }: { provider: typeof providers[number] }) {
-  return (
+  const mark = (
     <span
       className={cn(
         'grid aspect-square w-[calc(var(--icon-box)*1.2)] shrink-0 place-items-center overflow-hidden rounded-[var(--radius-card)] border shadow-subtle',
@@ -120,6 +120,11 @@ function ProviderMark({ provider }: { provider: typeof providers[number] }) {
       <img src={provider.iconPath} alt="" aria-hidden="true" className="h-[78%] w-[78%] object-contain" draggable={false} />
     </span>
   );
+  return provider.id === 'youtube' ? (
+    <a href="https://www.youtube.com/" target="_blank" rel="noreferrer" aria-label="YouTube 열기">
+      {mark}
+    </a>
+  ) : mark;
 }
 
 function AccountAvatar({ account, provider }: { account: PlatformAccount; provider: typeof providers[number] }) {
@@ -149,8 +154,8 @@ function ProviderLoginButton({
       )}
     >
       <a href={apiUrl(provider.loginPath)}>
-        <span className="grid aspect-square h-7 w-7 shrink-0 place-items-center rounded-[calc(var(--radius-control)*0.55)] border bg-white shadow-[inset_0_0_0_1px_rgba(15,23,42,0.04)]">
-          <img src={provider.iconPath} alt="" aria-hidden="true" className="max-h-[70%] max-w-[70%] object-contain" draggable={false} />
+        <span className={cn('grid h-8 shrink-0 place-items-center rounded-[calc(var(--radius-control)*0.55)] border bg-white shadow-[inset_0_0_0_1px_rgba(15,23,42,0.04)]', provider.id === 'youtube' ? 'w-10' : 'aspect-square w-8')}>
+          <img src={provider.iconPath} alt="" aria-hidden="true" className={provider.id === 'youtube' ? 'h-5 w-auto object-contain' : 'max-h-[70%] max-w-[70%] object-contain'} draggable={false} />
         </span>
         <span>{connected ? `${provider.label} 추가 연결` : `${provider.label}로 로그인`}</span>
         <ExternalLink className="h-4 w-4 text-muted-foreground" />

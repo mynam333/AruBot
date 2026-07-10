@@ -4,10 +4,10 @@ import {
   Activity,
   Cable,
   ChevronRight,
+  Clapperboard,
   Coins,
   HeartHandshake,
   MessageSquare,
-  PlaySquare,
   Radio,
   RefreshCw,
   Settings,
@@ -78,7 +78,7 @@ const featureLinks = [
   { href: '/commands', title: '채팅 명령어', description: '반복 안내와 참여 명령을 관리합니다.', icon: MessageSquare },
   { href: '/points', title: '시청자 포인트', description: '적립 정책과 시청자 잔액을 관리합니다.', icon: Coins },
   { href: '/roulette', title: '룰렛', description: '참여 항목과 방송 오버레이를 설정합니다.', icon: Sparkles },
-  { href: '/video-donations/queue', title: '영상 후원', description: '재생 대기열과 현재 후원을 제어합니다.', icon: PlaySquare },
+  { href: '/video-donations/queue', title: '영상 후원', description: '재생 대기열과 현재 후원을 제어합니다.', icon: Clapperboard },
   { href: '/donations/rules', title: '후원 반응', description: '금액과 조건별 반응 규칙을 구성합니다.', icon: HeartHandshake },
   { href: '/macros', title: '자동 알림', description: '주기적인 채팅 공지를 예약합니다.', icon: Timer },
 ] as const;
@@ -275,7 +275,7 @@ export function DashboardPage() {
   const metrics = [
     { label: '연결 채널', value: loading ? '—' : `${visibleAccounts.length}개`, detail: visibleAccounts.length ? '연결 정상' : '연결 필요', icon: Cable, status: visibleAccounts.length ? 'success' : 'warning' },
     { label: '봇 상태', value: loading || settingsLoading ? '—' : botEnabled == null ? '확인 불가' : botEnabled ? '사용 중' : '중지', detail: settingsLoading ? '설정 확인 중' : botEnabled ? '응답 가능' : botEnabled === false ? '설정에서 켜기' : '채널 연결 후 확인', icon: Radio, status: botEnabled ? 'success' : botEnabled === false ? 'danger' : 'neutral' },
-    { label: '영상 대기열', value: loading || queueLoading ? '—' : `${queueCount}개`, detail: queueLoading ? '대기열 확인 중' : queueCount ? '재생 대기 중' : '대기 없음', icon: PlaySquare, status: queueCount ? 'info' : 'neutral' },
+    { label: '영상 대기열', value: loading || queueLoading ? '—' : `${queueCount}개`, detail: queueLoading ? '대기열 확인 중' : queueCount ? '재생 대기 중' : '대기 없음', icon: Clapperboard, status: queueCount ? 'info' : 'neutral' },
     { label: '명령 응답', value: loading || statsLoading ? '—' : commandCount == null ? '확인 불가' : `${commandCount}회`, detail: statsLoading ? '통계 확인 중' : commandCount ? '누적 처리' : '기록 없음', icon: Activity, status: commandCount ? 'success' : 'neutral' },
   ] as const;
 
@@ -347,7 +347,7 @@ export function DashboardPage() {
           <CardContent className="grid gap-2">
             <CommandCreateDialog variant="outline" label="명령어 만들기" trailingChevron className="w-full justify-between" />
             <RouletteCreateDialog variant="outline" label="룰렛 만들기" trailingChevron className="w-full justify-between" />
-            <LinkButton href="/video-donations/queue" variant="outline" className="w-full justify-between"><span className="inline-flex items-center gap-2"><PlaySquare className="h-4 w-4 text-primary" />영상 후원 대기열</span><ChevronRight className="h-4 w-4 text-muted-foreground" /></LinkButton>
+            <LinkButton href="/video-donations/queue" variant="outline" className="w-full justify-between"><span className="inline-flex items-center gap-2"><Clapperboard className="h-4 w-4 text-primary" />영상 후원 대기열</span><ChevronRight className="h-4 w-4 text-muted-foreground" /></LinkButton>
             <LinkButton href="/settings" variant="outline" className="w-full justify-between"><span className="inline-flex items-center gap-2"><Settings className="h-4 w-4 text-primary" />방송 설정</span><ChevronRight className="h-4 w-4 text-muted-foreground" /></LinkButton>
           </CardContent>
         </Card>
@@ -362,7 +362,7 @@ export function DashboardPage() {
               const href = provider.id === 'youtube' ? youtubeLoginHref : apiUrl(provider.loginPath);
               return (
                 <Button key={provider.id} asChild variant={connected ? 'secondary' : 'default'}>
-                  <a href={href}><img src={provider.iconPath} alt="" aria-hidden="true" className="h-5 w-5 rounded-sm object-contain" />{provider.label}{connected ? ' 다시 연결' : '로 로그인'}</a>
+                  <a href={href}><img src={provider.iconPath} alt="" aria-hidden="true" className={provider.id === 'youtube' ? 'h-5 w-auto shrink-0 object-contain' : 'h-5 w-5 rounded-sm object-contain'} />{provider.label}{connected ? ' 다시 연결' : '로 로그인'}</a>
                 </Button>
               );
             })}

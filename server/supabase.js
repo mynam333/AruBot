@@ -4337,6 +4337,7 @@ async function ensurePlatformIdentityTables() {
         token_type text,
         expires_at timestamptz,
         scope text,
+        last_validated_at timestamptz not null default now(),
         updated_at timestamptz not null default now(),
         primary key (provider, user_id),
         unique (provider, platform_user_id)
@@ -4344,6 +4345,8 @@ async function ensurePlatformIdentityTables() {
       create index if not exists idx_platform_accounts_user_provider on platform_accounts(user_id, provider);
       create index if not exists idx_platform_accounts_provider_channel on platform_accounts(provider, channel_id);
       create index if not exists idx_platform_tokens_expiry on platform_tokens(provider, expires_at) where expires_at is not null;
+      alter table platform_tokens add column if not exists last_validated_at timestamptz not null default now();
+      create index if not exists idx_platform_tokens_validation on platform_tokens(provider, last_validated_at);
       alter table sessions add column if not exists account_user_id text;
       create index if not exists idx_sessions_account_user_id on sessions(account_user_id);
     `);
@@ -4691,8 +4694,8 @@ export async function upsertPlatformTokens(provider, userId, platformUserId, { a
   await withPgClient(async (pg) => {
     await pg.query(
       `insert into platform_tokens
-        (provider, user_id, platform_user_id, access_token, refresh_token, token_type, expires_at, scope, updated_at)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, now())
+        (provider, user_id, platform_user_id, access_token, refresh_token, token_type, expires_at, scope, last_validated_at, updated_at)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, now(), now())
        on conflict (provider, user_id) do update set
          platform_user_id = excluded.platform_user_id,
          access_token = excluded.access_token,
@@ -4700,6 +4703,7 @@ export async function upsertPlatformTokens(provider, userId, platformUserId, { a
          token_type = excluded.token_type,
          expires_at = excluded.expires_at,
          scope = excluded.scope,
+         last_validated_at = now(),
          updated_at = now()`,
       [p, String(userId).replace(/^user:/, ''), String(platformUserId), protectSecret(accessToken), protectSecret(refreshToken || null), tokenType || 'Bearer', expiresAt || null, scope || null]
     );
@@ -4712,7 +4716,7 @@ export async function getPlatformTokens(provider, userId) {
   await ensurePlatformIdentityTables();
   return withPgClient(async (pg) => {
     const { rows } = await pg.query(
-      `select provider, user_id, platform_user_id, access_token, refresh_token, token_type, expires_at, scope
+      `select provider, user_id, platform_user_id, access_token, refresh_token, token_type, expires_at, scope, last_validated_at
        from platform_tokens
        where provider = $1 and user_id = $2
        limit 1`,
@@ -4741,7 +4745,8 @@ export async function getPlatformTokens(provider, userId) {
       refreshToken,
       tokenType: row.token_type,
       expiresAt: row.expires_at,
-      scope: row.scope
+      scope: row.scope,
+      lastValidatedAt: row.last_validated_at
     };
   });
 }
@@ -4752,7 +4757,7 @@ export async function listPlatformTokenUsers(provider) {
   await ensurePlatformIdentityTables();
   return withPgClient(async (pg) => {
     const { rows } = await pg.query(
-      `select user_id, platform_user_id, expires_at, scope
+      `select user_id, platform_user_id, expires_at, scope, last_validated_at
          from platform_tokens
         where provider = $1
           and access_token is not null
@@ -4763,8 +4768,24 @@ export async function listPlatformTokenUsers(provider) {
       userId: row.user_id,
       platformUserId: row.platform_user_id,
       expiresAt: row.expires_at,
-      scope: row.scope
+      scope: row.scope,
+      lastValidatedAt: row.last_validated_at
     }));
+  });
+}
+
+export async function markPlatformTokenValidated(provider, userId) {
+  const p = normalizeProvider(provider);
+  if (!p || !userId || !getDbUrl()) return false;
+  await ensurePlatformIdentityTables();
+  return withPgClient(async (pg) => {
+    const result = await pg.query(
+      `update platform_tokens
+          set last_validated_at = now(), updated_at = now()
+        where provider = $1 and user_id = $2`,
+      [p, String(userId).replace(/^user:/, '')]
+    );
+    return (result.rowCount || 0) > 0;
   });
 }
 

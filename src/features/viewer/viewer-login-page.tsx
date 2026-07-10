@@ -103,7 +103,7 @@ export function ViewerLoginPage({ returnTo: rawReturnTo }: { returnTo?: string |
               <Button key={provider.id} asChild variant="outline" className="min-h-[var(--control-height-lg)] justify-start bg-background/75">
                 <a href={loginHref(provider, returnTo)}>
                   <span className="grid aspect-square h-8 w-8 place-items-center rounded-[var(--radius-control)] border bg-white">
-                    <img src={provider.iconPath} alt="" aria-hidden="true" className="max-h-[72%] max-w-[72%] object-contain" />
+                    <img src={provider.iconPath} alt="" aria-hidden="true" className={provider.id === 'youtube' ? 'h-5 w-auto object-contain' : 'max-h-[72%] max-w-[72%] object-contain'} />
                   </span>
                   {provider.label}로 로그인
                 </a>

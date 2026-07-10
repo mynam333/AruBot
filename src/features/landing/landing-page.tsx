@@ -3,11 +3,12 @@ import Link from 'next/link';
 import {
   ArrowRight,
   Cable,
+  Clapperboard,
   Coins,
   Download,
   HeartHandshake,
   MessageSquare,
-  PlaySquare,
+  Puzzle,
   Radio,
   ShieldCheck,
   Sparkles,
@@ -21,7 +22,7 @@ const features = [
   { title: '채팅 명령어', description: '반복 안내와 시청자 참여 명령을 채널별로 운영합니다.', icon: MessageSquare },
   { title: '통합 포인트', description: '플랫폼별 참여 내역과 시청자 잔액을 한곳에서 관리합니다.', icon: Coins },
   { title: '예측 베팅', description: '실시간 예측을 열고 참여 포인트와 결과를 확정합니다.', icon: Vote },
-  { title: '영상·그림 후원', description: '대기열, 재생 상태와 시청자 그림을 방송 화면으로 연결합니다.', icon: PlaySquare },
+  { title: '영상·그림 후원', description: '대기열, 재생 상태와 시청자 그림을 방송 화면으로 연결합니다.', icon: Clapperboard },
   { title: '룰렛 오버레이', description: '실제 항목과 결과를 OBS 브라우저 소스에 바로 표시합니다.', icon: Sparkles },
   { title: '방송 자동화', description: 'OBS, TTS, VTube Studio와 로컬 액션을 순서대로 실행합니다.', icon: Workflow },
 ] as const;
@@ -85,7 +86,10 @@ export function LandingPage() {
               <h2 className="mt-3 text-2xl font-bold tracking-tight md:text-3xl">방송 운영에 필요한 핵심 기능</h2>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              {platforms.map((platform) => <span key={platform.name} className="inline-flex items-center gap-2 rounded-lg border bg-card px-3 py-2 text-xs font-semibold shadow-subtle"><Image src={platform.icon} alt="" width={18} height={18} className="h-[1.125rem] w-[1.125rem] object-contain" />{platform.name}</span>)}
+              {platforms.map((platform) => {
+                const mark = <span className="inline-flex items-center gap-2 rounded-lg border bg-card px-3 py-2 text-xs font-semibold shadow-subtle"><Image src={platform.icon} alt="" width={platform.name === 'YouTube' ? 29 : 20} height={20} className="object-contain" style={{ width: 'auto', height: '20px' }} />{platform.name}</span>;
+                return platform.name === 'YouTube' ? <Link key={platform.name} href="https://www.youtube.com/" target="_blank" rel="noreferrer" aria-label="YouTube 열기">{mark}</Link> : <span key={platform.name}>{mark}</span>;
+              })}
             </div>
           </div>
 
@@ -112,7 +116,7 @@ export function LandingPage() {
           </div>
           <div className="flex flex-wrap gap-2">
             <LinkButton href="/downloads/local-program" variant="outline"><Download className="h-4 w-4" />로컬 프로그램</LinkButton>
-            <LinkButton href="/downloads/browser-extension" variant="outline"><PlaySquare className="h-4 w-4" />브라우저 확장</LinkButton>
+            <LinkButton href="/downloads/browser-extension" variant="outline"><Puzzle className="h-4 w-4" />브라우저 확장</LinkButton>
           </div>
         </div>
       </section>

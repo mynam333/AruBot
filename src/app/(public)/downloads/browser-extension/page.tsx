@@ -1,6 +1,6 @@
 import Image from 'next/image';
 import Link from 'next/link';
-import { ArrowRight, BellOff, CheckCircle2, Clock3, PlaySquare, Settings2, ShieldCheck, Sparkles } from 'lucide-react';
+import { ArrowRight, BellOff, CheckCircle2, Clock3, Puzzle, Settings2, ShieldCheck, Sparkles } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button, LinkButton } from '@/components/ui/button';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
@@ -68,7 +68,7 @@ export default function BrowserExtensionPage() {
           <aside className="animate-fade-up rounded-[var(--radius-panel)] border bg-card/78 p-[clamp(1.15rem,2.4vw,1.75rem)] shadow-glow backdrop-blur-2xl" style={{ animationDelay: '80ms' }}>
             <div className="flex items-center justify-between gap-3">
               <div className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-pastel-mint/80 text-primary">
-                <PlaySquare className="h-5 w-5" />
+                <Puzzle className="h-5 w-5" />
               </div>
               <Badge tone="mint">스토어 배포</Badge>
             </div>

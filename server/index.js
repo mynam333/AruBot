@@ -9,14 +9,11 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
-import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, revokeSession, getSessionUserId, listChannelPoints, listChannelPointsPage, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, deductChannelPointsIfEnough, getChannelPoints, getChannelPointBalanceSummary, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, issueApiWebSocketTicket, consumeApiWebSocketTicket, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, findSidByChannelViewerTokenSupabase, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, findAppUserIdByChannelUid, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, deletePlatformTokens, deletePlatformAccount, getAppUserAdminStatus, getYoutubeBotProfile, upsertYoutubeBotProfile, updateYoutubeBotProfileTokens, markYoutubeBotProfileStatus, deleteYoutubeBotProfile, getYoutubeStreamerChannel, upsertYoutubeStreamerChannel, markYoutubeStreamerChannelModeratorRegistered, deleteYoutubeStreamerChannel, listYoutubeStreamerChannelsByYoutubeChannelId, updateYoutubeStreamerChannelLive, updateYoutubeStreamerChannelWebsub, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, claimBotRuleCooldown, enqueueDurableRuntimeJob, enqueuePaidDurableRuntimeJob, claimDurableRuntimeJobs, completeDurableRuntimeJob, failDurableRuntimeJob, claimRuntimeLease, releaseRuntimeLease, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps, recordBotEventLog, listBotEventLogs, getBotEventLog, insertDrawingDonationItem, listDrawingDonationItems, getDrawingDonationItem, getCurrentDrawingDonationItem, updateDrawingDonationItemStatus, deleteDrawingDonationItem, reorderDrawingDonationItems, uploadDrawingDonationObject, deleteDrawingDonationObjectKeys, deleteAccountData, cleanupPrivacyRetentionData, validateSecretEncryptionConfig, getPgPoolStatus, checkDatabaseReady, closeDatabaseConnections } from './supabase.js';
+import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, revokeSession, getSessionUserId, listChannelPoints, listChannelPointsPage, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, deductChannelPointsIfEnough, getChannelPoints, getChannelPointBalanceSummary, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, issueApiWebSocketTicket, consumeApiWebSocketTicket, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, findSidByChannelViewerTokenSupabase, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, findAppUserIdByChannelUid, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, markPlatformTokenValidated, deletePlatformTokens, deletePlatformAccount, getAppUserAdminStatus, getYoutubeBotProfile, upsertYoutubeBotProfile, updateYoutubeBotProfileTokens, markYoutubeBotProfileStatus, deleteYoutubeBotProfile, getYoutubeStreamerChannel, upsertYoutubeStreamerChannel, markYoutubeStreamerChannelModeratorRegistered, deleteYoutubeStreamerChannel, listYoutubeStreamerChannelsByYoutubeChannelId, updateYoutubeStreamerChannelLive, updateYoutubeStreamerChannelWebsub, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, claimBotRuleCooldown, enqueueDurableRuntimeJob, enqueuePaidDurableRuntimeJob, claimDurableRuntimeJobs, completeDurableRuntimeJob, failDurableRuntimeJob, claimRuntimeLease, releaseRuntimeLease, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps, recordBotEventLog, listBotEventLogs, getBotEventLog, insertDrawingDonationItem, listDrawingDonationItems, getDrawingDonationItem, getCurrentDrawingDonationItem, updateDrawingDonationItemStatus, deleteDrawingDonationItem, reorderDrawingDonationItems, uploadDrawingDonationObject, deleteDrawingDonationObjectKeys, deleteAccountData, cleanupPrivacyRetentionData, validateSecretEncryptionConfig, getPgPoolStatus, checkDatabaseReady, closeDatabaseConnections } from './supabase.js';
 import { createPlatformProfileService } from './platform-profiles.js';
 import { WebSocketServer, WebSocket } from 'ws';
-import youtubeChatPackage from 'youtube-chat';
 
 dotenv.config();
-
-const { LiveChat: YoutubeLiveChat } = youtubeChatPackage;
 
 const VERBOSE_LOGS = process.env.ARUBOT_VERBOSE_LOGS === 'true' || process.env.NODE_ENV !== 'production';
 if (!VERBOSE_LOGS) {
@@ -10912,7 +10909,7 @@ const YOUTUBE_API_BASE = process.env.YOUTUBE_API_BASE || 'https://www.googleapis
 const YOUTUBE_AUTH_URL = process.env.YOUTUBE_AUTH_URL || 'https://accounts.google.com/o/oauth2/v2/auth';
 const YOUTUBE_TOKEN_URL = process.env.YOUTUBE_TOKEN_URL || 'https://oauth2.googleapis.com/token';
 const YOUTUBE_REVOKE_URL = process.env.YOUTUBE_REVOKE_URL || 'https://oauth2.googleapis.com/revoke';
-const YOUTUBE_CHAT_FETCH_INTERVAL_MS = Number(process.env.YOUTUBE_CHAT_FETCH_INTERVAL_MS || 1000);
+const YOUTUBE_CHAT_FETCH_INTERVAL_MS = Math.max(1000, Number(process.env.YOUTUBE_CHAT_FETCH_INTERVAL_MS || 5000));
 const YOUTUBE_BOT_PROFILE_ID = process.env.YOUTUBE_BOT_PROFILE_ID || 'default';
 const YOUTUBE_WEBSUB_HUB_URL = process.env.YOUTUBE_WEBSUB_HUB_URL || 'https://pubsubhubbub.appspot.com/subscribe';
 const YOUTUBE_WEBSUB_CALLBACK_PATH = process.env.YOUTUBE_WEBSUB_CALLBACK_PATH || '/api/youtube/websub/callback';
@@ -14904,6 +14901,30 @@ app.get('/api/auth/youtube/token', async (req, res) => {
   }
 });
 
+async function revokeYoutubeOAuthGrant(tokens) {
+  const token = tokens?.refreshToken || tokens?.accessToken || String(tokens || '').trim();
+  if (!token) return { attempted: false, alreadyRevoked: false };
+  try {
+    await axios.post(YOUTUBE_REVOKE_URL, new URLSearchParams({ token }).toString(), {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      timeout: DEFAULT_TIMEOUT
+    });
+    return { attempted: true, alreadyRevoked: false };
+  } catch (error) {
+    if (isAlreadyRevokedOAuthError(error)) return { attempted: true, alreadyRevoked: true };
+    throw error;
+  }
+}
+
+async function deleteYoutubeAuthorizedData(ownerUserId, platformUserId = null, reason = 'youtube_authorization_removed') {
+  const owner = String(ownerUserId || '').replace(/^user:/, '').trim();
+  if (!owner) return { tokensDeleted: 0, accountsDeleted: 0, streamerChannelDeleted: false };
+  const streamerChannelDeleted = await deleteYoutubeStreamerChannel(owner).catch(() => false);
+  const deleted = await deletePlatformAccount('youtube', owner, platformUserId);
+  disconnectProviderRuntimeState(owner, 'youtube', platformUserId, reason);
+  return { ...deleted, streamerChannelDeleted };
+}
+
 app.post('/api/auth/youtube/revoke', async (req, res) => {
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
@@ -14912,24 +14933,16 @@ app.post('/api/auth/youtube/revoke', async (req, res) => {
     const tokens = await getPlatformTokens('youtube', ownerUserId);
     const platformUserId = requestedPlatformUserId || tokens?.platformUserId || null;
     const tokenMatchesRequest = tokens && (!requestedPlatformUserId || String(tokens.platformUserId || '') === requestedPlatformUserId);
+    let revokeResult = { attempted: false, alreadyRevoked: false };
     if (tokenMatchesRequest) {
-      const token = tokens.refreshToken || tokens.accessToken;
-      if (token) {
-        try {
-          await axios.post(YOUTUBE_REVOKE_URL, new URLSearchParams({ token }).toString(), {
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            timeout: DEFAULT_TIMEOUT
-          });
-        } catch { }
-      }
-      await deletePlatformTokens('youtube', ownerUserId);
+      revokeResult = await revokeYoutubeOAuthGrant(tokens);
     }
-    try { await deletePlatformAccount('youtube', ownerUserId, platformUserId); } catch { }
-    const runtime = disconnectProviderRuntimeState(ownerUserId, 'youtube', platformUserId, 'revoked');
+    const deleted = await deleteYoutubeAuthorizedData(ownerUserId, platformUserId, 'revoked');
     const platforms = await listPlatformAccounts(ownerUserId).catch(() => []);
-    return res.json({ ok: true, platforms, runtime });
+    return res.json({ ok: true, platforms, revoked: revokeResult, deleted });
   } catch (e) {
-    return res.status(500).json({ error: 'Failed to revoke YouTube tokens' });
+    console.warn('[YouTube] OAuth revoke failed; local Authorized Data retained for retry:', e?.response?.data || e?.message || e);
+    return res.status(502).json({ error: 'Failed to revoke YouTube authorization. Local YouTube data was retained; please retry.' });
   }
 });
 
@@ -15260,19 +15273,12 @@ app.delete('/api/youtube/bot', rateLimiters.userWrite, async (req, res) => {
     const admin = await requireCurrentAdminUser(req, res);
     if (!admin) return;
     const profile = await getYoutubeBotProfile(YOUTUBE_BOT_PROFILE_ID);
-    if (profile?.accessToken) {
-      try {
-        await axios.post(YOUTUBE_REVOKE_URL, new URLSearchParams({ token: profile.accessToken }).toString(), {
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          timeout: DEFAULT_TIMEOUT
-        });
-      } catch { }
-    }
+    if (profile?.accessToken || profile?.refreshToken) await revokeYoutubeOAuthGrant(profile);
     await deleteYoutubeBotProfile(YOUTUBE_BOT_PROFILE_ID);
     for (const key of Array.from(youtubeSessionStore.keys())) closeYoutubeSession(key, 'bot_profile_deleted');
     return res.json({ ok: true });
   } catch (e) {
-    return res.status(500).json({ error: 'Failed to delete YouTube bot profile' });
+    return res.status(502).json({ error: 'Failed to revoke and delete YouTube bot profile' });
   }
 });
 
@@ -15579,7 +15585,7 @@ app.get('/api/youtube/status', async (req, res) => {
       liveChatId: liveState?.liveChatId || entry?.liveChatId || null,
       broadcastId: liveState?.broadcastId || entry?.broadcastId || null,
       streamConnected: !!entry?.connected,
-      hasStream: !!entry?.chatClient,
+      hasStream: !!entry?.stream,
       queueSize: Array.isArray(entry?.queue) ? entry.queue.length : 0,
       lastMessageAt: entry?.lastMessageAt || null,
       lastError: entry?.lastError || null,
@@ -15587,7 +15593,7 @@ app.get('/api/youtube/status', async (req, res) => {
       reauthRequired: isYoutubeReauthRequired(entry),
       ignoredDonations: getYoutubeIgnoredDonationSummary(entry),
       reconnectAttempts: Number(entry?.reconnectAttempts || 0),
-      mode: 'youtube-chat'
+      mode: 'youtube-live-chat-api'
     });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to load YouTube status' });
@@ -21060,118 +21066,6 @@ function normalizeYoutubeLiveChatItem(item) {
   return null;
 }
 
-function getYoutubeChatLibraryMessageText(chatItem = {}) {
-  return (Array.isArray(chatItem.message) ? chatItem.message : [])
-    .map((part) => {
-      if (typeof part?.text === 'string') return part.text;
-      return String(part?.emojiText || part?.alt || '');
-    })
-    .join('');
-}
-
-function parseYoutubeChatLibraryAmount(amountText) {
-  const raw = String(amountText || '').trim();
-  const upper = raw.toUpperCase();
-  let currency = '';
-  if (/[₩원]/.test(raw) || upper.includes('KRW')) currency = 'KRW';
-  else if (upper.includes('JPY') || /[¥￥]/.test(raw)) currency = 'JPY';
-  else if (upper.includes('USD') || raw.includes('$')) currency = 'USD';
-  else if (upper.includes('EUR') || raw.includes('€')) currency = 'EUR';
-  else if (upper.includes('GBP') || raw.includes('£')) currency = 'GBP';
-
-  const numericText = raw.replace(/[^\d.,-]/g, '');
-  if (!numericText) return { currency, amountMicros: 0 };
-
-  let amount = 0;
-  if (currency === 'KRW' || currency === 'JPY') {
-    amount = Number(numericText.replace(/[^\d-]/g, ''));
-  } else {
-    const lastComma = numericText.lastIndexOf(',');
-    const lastDot = numericText.lastIndexOf('.');
-    const decimalSeparator = lastComma > lastDot ? ',' : '.';
-    const normalized = numericText
-      .replace(decimalSeparator === ',' ? /\./g : /,/g, '')
-      .replace(decimalSeparator === ',' ? ',' : '.', '.');
-    amount = Number(normalized);
-  }
-
-  return {
-    currency,
-    amountMicros: Number.isFinite(amount) && amount > 0 ? Math.round(amount * 1000000) : 0
-  };
-}
-
-function normalizeYoutubeChatLibraryItem(chatItem) {
-  if (!chatItem || typeof chatItem !== 'object') return null;
-  const message = getYoutubeChatLibraryMessageText(chatItem);
-  const author = chatItem.author || {};
-  const timestamp = chatItem.timestamp instanceof Date ? chatItem.timestamp : new Date(chatItem.timestamp || Date.now());
-  const ts = Number.isFinite(timestamp.getTime()) ? timestamp.getTime() : Date.now();
-  const publishedAt = new Date(ts).toISOString();
-  const id = String(chatItem.id || `${author.channelId || 'youtube-chat'}:${publishedAt}:${String(message).slice(0, 80)}`);
-  const authorDetails = {
-    channelId: author.channelId || '',
-    displayName: author.name || 'Unknown',
-    isVerified: chatItem.isVerified === true,
-    isChatOwner: chatItem.isOwner === true,
-    isChatSponsor: chatItem.isMembership === true,
-    isChatModerator: chatItem.isModerator === true,
-    profileImageUrl: author.thumbnail?.url || null
-  };
-
-  if (chatItem.superchat?.sticker) {
-    return {
-      eventName: 'DONATION_IGNORED',
-      ev: {
-        type: 'donation_ignored',
-        provider: 'youtube',
-        ignoredReason: 'super_sticker_not_supported',
-        id,
-        ts,
-        user: authorDetails.displayName,
-        userId: authorDetails.channelId,
-        message,
-        amountDisplayString: chatItem.superchat.amount || '',
-        raw: chatItem
-      }
-    };
-  }
-
-  if (chatItem.superchat) {
-    const amount = parseYoutubeChatLibraryAmount(chatItem.superchat.amount);
-    return normalizeYoutubeLiveChatItem({
-      id,
-      snippet: {
-        type: 'superChatEvent',
-        publishedAt,
-        authorChannelId: authorDetails.channelId,
-        displayMessage: message,
-        superChatDetails: {
-          amountMicros: amount.amountMicros,
-          currency: amount.currency,
-          amountDisplayString: chatItem.superchat.amount || '',
-          userComment: message
-        }
-      },
-      authorDetails,
-      youtubeChat: chatItem
-    });
-  }
-
-  return normalizeYoutubeLiveChatItem({
-    id,
-    snippet: {
-      type: 'textMessageEvent',
-      publishedAt,
-      authorChannelId: authorDetails.channelId,
-      displayMessage: message,
-      textMessageDetails: { messageText: message }
-    },
-    authorDetails,
-    youtubeChat: chatItem
-  });
-}
-
 function makeYoutubeChatPost(ownerUserId, liveChatId, resolvedUsername, extra = {}) {
   return { provider: 'youtube', ownerUserId, liveChatId, resolvedUsername, ...extra };
 }
@@ -21770,8 +21664,8 @@ async function processYoutubeChatAutomation(entry, ev) {
           args,
           from: { userId: resolvedUserId, username: resolvedUsername },
           at: Date.now(),
-          source: 'youtube-chat',
-          executionContext: { source: 'youtube-chat', pointsDeducted: commandCost > 0, commandCost }
+          source: 'youtube-live-chat',
+          executionContext: { source: 'youtube-live-chat', pointsDeducted: commandCost > 0, commandCost }
         };
         try { emitWarudoEvent(sid, payload); } catch { }
         try { broadcastToDesktop(sid, { ...payload, metadata: payload.executionContext }); } catch { }
@@ -21791,7 +21685,7 @@ async function processYoutubeChatAutomation(entry, ev) {
             response: cleaned,
             vdReAll,
             context: {
-              source: 'youtube-chat-command',
+              source: 'youtube-live-chat-command',
               provider: 'youtube',
               command: { keyword: matchedKeyword || '', ruleId: r.id || null, ruleName: r.name || null },
             },
@@ -21842,14 +21736,14 @@ async function processYoutubeChatAutomation(entry, ev) {
               ...base,
               instant: false,
               eventContext: {
-                source: 'youtube-chat-command',
+                source: 'youtube-live-chat-command',
                 triggerName: matchedKeyword || '',
                 pointDelta: commandPointDelta,
                 pointBefore: commandPointBefore,
                 pointAfter: commandPointAfter,
               },
             });
-            for (let i = 1; i < count; i++) await enqueueRouletteSpin(sid, { ...base, instant: true, eventContext: { source: 'youtube-chat-command', triggerName: matchedKeyword || '' } });
+            for (let i = 1; i < count; i++) await enqueueRouletteSpin(sid, { ...base, instant: true, eventContext: { source: 'youtube-live-chat-command', triggerName: matchedKeyword || '' } });
             cleaned = '';
             commandFeatures.push('roulette');
           }
@@ -21860,7 +21754,7 @@ async function processYoutubeChatAutomation(entry, ev) {
 
       if (allowExecute) {
         const actionResult = await executeAndStripActionVariableTokens(sid, cleaned, {
-          source: 'youtube-chat-command',
+          source: 'youtube-live-chat-command',
           platform: 'youtube',
           command: { keyword: matchedKeyword || '', text, ruleId: r.id || null, ruleName: r.name || null },
           user: { userId: resolvedUserId, username: resolvedUsername },
@@ -21902,7 +21796,7 @@ async function processYoutubeChatAutomation(entry, ev) {
         pointAfter: commandPointAfter,
         features: commandFeatures,
         actionJobs: commandActionJobs,
-        source: 'youtube-chat',
+        source: 'youtube-live-chat',
         summary: `명령어 실행: ${matchedKeyword || ''}${r.name ? ` · ${r.name}` : ''}`,
       });
       break;
@@ -21928,13 +21822,6 @@ function handleYoutubeParsedLiveChatEvent(entry, eventName, ev) {
     processYoutubeDonationAutomation(entry, ev).catch(() => { });
   }
   return true;
-}
-
-function handleYoutubeChatLibraryItem(entry, chatItem) {
-  entry.lastMessageAt = Date.now();
-  const parsed = normalizeYoutubeChatLibraryItem(chatItem);
-  if (!parsed) return;
-  handleYoutubeParsedLiveChatEvent(entry, parsed.eventName, parsed.ev);
 }
 
 function handleYoutubeLiveChatResponse(entry, payload) {
@@ -21980,6 +21867,7 @@ function closeYoutubeSession(ownerUserId, reason = 'closed') {
   entry.connected = false;
   entry.closeReason = reason;
   if (entry.reconnectTimer) clearTimeout(entry.reconnectTimer);
+  if (entry.pollTimer) clearTimeout(entry.pollTimer);
   try { entry.chatClient?.stop?.(reason); } catch { }
   try { entry.abortController?.abort(); } catch { }
   try { entry.stream?.destroy?.(); } catch { }
@@ -21989,50 +21877,55 @@ function closeYoutubeSession(ownerUserId, reason = 'closed') {
 }
 
 async function openYoutubeChatStream(entry) {
-  if (typeof YoutubeLiveChat !== 'function') throw new Error('youtube-chat LiveChat is not available');
-  const youtubeId = entry.channelId
-    ? { channelId: String(entry.channelId) }
-    : entry.broadcastId
-      ? { liveId: String(entry.broadcastId) }
-      : null;
-  if (!youtubeId) throw new Error('No YouTube channelId or liveId for youtube-chat');
-
-  const intervalMs = Math.max(1000, Number.isFinite(YOUTUBE_CHAT_FETCH_INTERVAL_MS) ? YOUTUBE_CHAT_FETCH_INTERVAL_MS : 1000);
-  const liveChat = new YoutubeLiveChat(youtubeId, intervalMs);
-  entry.chatClient = liveChat;
-  entry.stream = null;
-
-  liveChat.on('start', (liveId) => {
-    entry.connected = true;
-    entry.broadcastId = liveId || entry.broadcastId || null;
-    entry.lastError = null;
-    entry.lastStatus = null;
-    entry.reconnectAttempts = 0;
-  });
-  liveChat.on('chat', (chatItem) => {
-    try { handleYoutubeChatLibraryItem(entry, chatItem); } catch (e) {
-      console.warn('[YouTube] Failed to handle youtube-chat item:', e?.message || e);
+  if (!entry?.liveChatId) throw new Error('No YouTube liveChatId for official live chat polling');
+  entry.chatClient = null;
+  entry.pollTimer = null;
+  entry.stream = {
+    destroy() {
+      if (entry.pollTimer) clearTimeout(entry.pollTimer);
+      entry.pollTimer = null;
+      entry.abortController?.abort();
     }
-  });
-  liveChat.on('error', (err) => {
-    entry.connected = false;
-    entry.lastError = err?.response?.data?.error?.message || err?.message || String(err || 'youtube_chat_error');
-    entry.lastStatus = err?.status || err?.response?.status || null;
-    if (!entry.closed) {
-      try { liveChat.stop('error'); } catch { }
-    }
-  });
-  liveChat.on('end', (reason) => {
-    entry.connected = false;
-    entry.stream = null;
-    if (!entry.closed) scheduleYoutubeReconnect(entry.ownerUserId, reason === 'error' ? getYoutubeReconnectDelayForError(entry) : undefined);
-  });
+  };
 
-  const ok = await liveChat.start();
-  if (!ok) {
-    entry.connected = false;
-    throw new Error(entry.lastError || 'youtube-chat start failed');
-  }
+  const poll = async (initial = false) => {
+    if (entry.closed) return;
+    const controller = new AbortController();
+    entry.abortController = controller;
+    try {
+      const accessToken = await getValidYoutubeBotAccessToken();
+      const response = await youtubeApiGetWithAccessToken('liveChat/messages', accessToken, {
+        part: 'id,snippet,authorDetails',
+        liveChatId: entry.liveChatId,
+        pageToken: entry.nextPageToken || null,
+        maxResults: 200,
+        profileImageSize: 88,
+        hl: 'ko'
+      }, { signal: controller.signal, timeout: 30 * 1000 });
+      const payload = response?.data || {};
+      handleYoutubeLiveChatResponse(entry, payload);
+      if (entry.closed) return;
+      entry.connected = true;
+      entry.lastError = null;
+      entry.lastStatus = null;
+      entry.reconnectAttempts = 0;
+      const pollingIntervalMs = Math.max(
+        YOUTUBE_CHAT_FETCH_INTERVAL_MS,
+        Number(payload.pollingIntervalMillis || YOUTUBE_CHAT_FETCH_INTERVAL_MS)
+      );
+      entry.pollTimer = setTimeout(() => { poll(false).catch(() => null); }, pollingIntervalMs);
+    } catch (error) {
+      if (entry.closed || error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
+      entry.connected = false;
+      entry.lastError = error?.response?.data?.error?.message || error?.message || String(error || 'youtube_live_chat_error');
+      entry.lastStatus = error?.status || error?.response?.status || null;
+      entry.stream = null;
+      if (initial) throw error;
+      scheduleYoutubeReconnect(entry.ownerUserId, getYoutubeReconnectDelayForError(error));
+    }
+  };
+
+  await poll(true);
 }
 
 async function ensureYoutubeSession(ownerUserId) {
@@ -23411,7 +23304,7 @@ app.get('/api/platforms/status', async (req, res) => {
         live: youtubeState?.provider === 'youtube' ? !!youtubeState.live : null,
         streamConnected: !!youtubeEntry?.connected,
         queueSize: Array.isArray(youtubeEntry?.queue) ? youtubeEntry.queue.length : 0,
-        mode: 'youtube-chat',
+        mode: 'youtube-live-chat-api',
         lastError: youtubeEntry?.lastError || null,
         lastStatus: youtubeEntry?.lastStatus || null,
         reauthRequired: isYoutubeReauthRequired(youtubeEntry) || youtubeBotProfile?.status === 'reauth_required',
@@ -23561,6 +23454,67 @@ async function renewExpiringYoutubeWebsubSubscriptions() {
   });
   return renewed;
 }
+
+const YOUTUBE_AUTH_VALIDATION_INTERVAL_MS = Math.max(
+  60 * 60 * 1000,
+  Number(process.env.YOUTUBE_AUTH_VALIDATION_INTERVAL_MS || 24 * 60 * 60 * 1000)
+);
+const YOUTUBE_AUTH_VALIDATION_MAX_AGE_MS = Math.min(
+  30 * 24 * 60 * 60 * 1000,
+  Math.max(24 * 60 * 60 * 1000, Number(process.env.YOUTUBE_AUTH_VALIDATION_MAX_AGE_MS || 29 * 24 * 60 * 60 * 1000))
+);
+let youtubeAuthorizationValidationRunning = false;
+
+async function validateYoutubeAuthorizations(reason = 'scheduled') {
+  if (youtubeAuthorizationValidationRunning) return null;
+  youtubeAuthorizationValidationRunning = true;
+  const summary = { reason, checked: 0, valid: 0, deleted: 0, deferred: 0 };
+  try {
+    const users = await listPlatformTokenUsers('youtube');
+    await forEachWithConcurrency(users, Math.min(REGISTERED_RUNTIME_MONITOR_CONCURRENCY, 3), async (user) => {
+      const ownerUserId = String(user?.userId || '').trim();
+      if (!ownerUserId) return;
+      const lastValidatedAt = new Date(user?.lastValidatedAt || 0).getTime();
+      if (Number.isFinite(lastValidatedAt) && Date.now() - lastValidatedAt < YOUTUBE_AUTH_VALIDATION_MAX_AGE_MS) return;
+      summary.checked += 1;
+      try {
+        const accessToken = await getValidYoutubeAccessToken(ownerUserId);
+        const profile = await fetchYoutubeMyChannelWithAccessToken(accessToken);
+        await upsertPlatformIdentity('youtube', profile, ownerUserId);
+        const currentChannel = await getYoutubeStreamerChannel(ownerUserId).catch(() => null);
+        if (currentChannel?.youtubeChannelId === profile.channelId) {
+          const refreshedChannel = buildYoutubeStreamerChannelFromProfile(profile, { id: currentChannel.botProfileId });
+          await upsertYoutubeStreamerChannel(ownerUserId, {
+            ...refreshedChannel,
+            botProfileId: currentChannel.botProfileId,
+            websubSecret: currentChannel.websubSecret,
+            websubStatus: currentChannel.websubStatus,
+            lastError: currentChannel.lastError,
+            metadata: { ...(currentChannel.metadata || {}), ...(refreshedChannel?.metadata || {}), source: 'youtube_oauth_revalidation' }
+          });
+        }
+        await markPlatformTokenValidated('youtube', ownerUserId);
+        summary.valid += 1;
+      } catch (error) {
+        if (isYoutubeReauthRequired(error)) {
+          await deleteYoutubeAuthorizedData(ownerUserId, user?.platformUserId || null, 'authorization_invalid');
+          summary.deleted += 1;
+          console.warn('[YouTube] Deleted Authorized Data after failed consent validation:', ownerUserId);
+          return;
+        }
+        summary.deferred += 1;
+        console.warn('[YouTube] Authorization validation deferred after transient error:', ownerUserId, error?.response?.data || error?.message || error);
+      }
+    });
+    console.log('[YouTube] Authorization validation completed:', summary);
+    return summary;
+  } finally {
+    youtubeAuthorizationValidationRunning = false;
+  }
+}
+
+setTimeout(() => { validateYoutubeAuthorizations('startup').catch(() => null); }, 45 * 1000).unref?.();
+setInterval(() => { validateYoutubeAuthorizations('scheduled').catch(() => null); }, YOUTUBE_AUTH_VALIDATION_INTERVAL_MS).unref?.();
 
 async function bootstrapRegisteredChannelLiveStatuses(reason = 'startup') {
   console.log(`[bootstrap] Starting sequential live status check for registered channels reason=${reason}`);

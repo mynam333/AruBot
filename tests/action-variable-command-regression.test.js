@@ -7,7 +7,7 @@ describe('action variable command regression', () => {
   test('command responses execute action variables before chat delivery', () => {
     expect(serverIndex).toContain('async function executeAndStripActionVariableTokens');
     expect(serverIndex).toContain("source: 'chat-command'");
-    expect(serverIndex).toContain("source: 'youtube-chat-command'");
+    expect(serverIndex).toContain("source: 'youtube-live-chat-command'");
     expect(serverIndex).toContain("source: 'cime-chat-command'");
     expect(serverIndex).toContain("source: 'roulette-command'");
   });

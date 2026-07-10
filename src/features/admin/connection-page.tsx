@@ -134,7 +134,7 @@ function formatYoutubeModeratorError(verification?: YoutubeModeratorVerification
 }
 
 function ProviderMark({ label, color, iconPath }: { label: string; color: string; iconPath: string }) {
-  return (
+  const mark = (
     <span
       className={cn(
         'grid aspect-square w-[calc(var(--icon-box)*1.22)] shrink-0 place-items-center overflow-hidden rounded-[var(--radius-card)] border shadow-subtle',
@@ -151,6 +151,11 @@ function ProviderMark({ label, color, iconPath }: { label: string; color: string
       />
     </span>
   );
+  return label === 'YouTube' ? (
+    <a href="https://www.youtube.com/" target="_blank" rel="noreferrer" aria-label="YouTube 열기">
+      {mark}
+    </a>
+  ) : mark;
 }
 
 function AccountAvatar({ account, label, color, iconPath }: { account: PlatformAccount; label: string; color: string; iconPath: string }) {
@@ -523,7 +528,7 @@ export function ConnectionPage() {
                             src={config.iconPath}
                             alt=""
                             aria-hidden="true"
-                            className="h-6 w-6 shrink-0 rounded-[calc(var(--radius-control)*0.35)] object-contain"
+                            className="h-5 w-auto shrink-0 object-contain"
                             draggable={false}
                           />
                           {youtubeRegistered ? 'YouTube 다시 연결' : 'YouTube로 시작'}

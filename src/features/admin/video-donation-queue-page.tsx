@@ -1,6 +1,6 @@
 'use client';
 
-import { GripVertical, Loader2, PlaySquare, RefreshCw, RotateCcw, Trash2, UserRound, Volume2, VolumeX } from 'lucide-react';
+import { Clapperboard, GripVertical, Loader2, RefreshCw, RotateCcw, Trash2, UserRound, Volume2, VolumeX } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { toast } from 'sonner';
 import { VideoDonationSettingsDialog } from '@/features/admin/admin-action-dialogs';
@@ -155,7 +155,7 @@ function VideoDonationItemCard({
             <img src={thumb} alt="" className="h-full w-full object-cover" loading="lazy" referrerPolicy="no-referrer" />
           ) : (
             <div className="grid h-full place-items-center text-muted-foreground">
-              <PlaySquare className="h-[2rem] w-[2rem]" />
+              <Clapperboard className="h-[2rem] w-[2rem]" />
             </div>
           )}
           {current ? <Badge tone="mint" className="absolute left-2 top-2">재생 중</Badge> : null}
@@ -391,7 +391,7 @@ export function VideoDonationQueuePage() {
           <div className="max-w-4xl">
             <div className="mb-4 flex flex-wrap items-center gap-2">
               <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-primary/12 text-primary ring-1 ring-primary/25">
-                <PlaySquare className="h-5 w-5" />
+                <Clapperboard className="h-5 w-5" />
               </span>
               <Badge tone="mint">영상 후원</Badge>
               <Badge tone="sky">{waitingItems.length}개 대기</Badge>
