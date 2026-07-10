@@ -1,4 +1,3 @@
-/* eslint-disable react-refresh/only-export-components */
 import type { Metadata } from 'next';
 import { ViewerLoginPage } from '@/features/viewer/viewer-login-page';
 

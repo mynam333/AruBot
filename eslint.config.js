@@ -33,7 +33,7 @@ export default tseslint.config(
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
-      '@typescript-eslint/no-explicit-any': 'off',
+      '@typescript-eslint/no-explicit-any': 'warn',
       '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
       '@typescript-eslint/no-unused-expressions': 'off',
       'no-empty': ['warn', { allowEmptyCatch: true }],
@@ -41,6 +41,13 @@ export default tseslint.config(
         'warn',
         { allowConstantExport: true },
       ],
+    },
+  },
+  {
+    files: ['src/app/**/page.tsx', 'src/app/**/layout.tsx'],
+    rules: {
+      // Next.js route modules intentionally export metadata/config alongside their component.
+      'react-refresh/only-export-components': 'off',
     },
   }
 );

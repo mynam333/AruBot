@@ -14,11 +14,13 @@ import { EmptyState, PageHeader } from '@/components/ui/page';
 import { Pagination } from '@/components/ui/pagination';
 import { RouletteThemeSwatch } from '@/components/rouletteThemeSwatch';
 import {
-  normalizeEditableRouletteItems,
   RouletteItemsEditor,
+} from '@/features/admin/roulette-item-editor';
+import {
+  normalizeEditableRouletteItems,
   toEditableRouletteItems,
   type EditableRouletteItem,
-} from '@/features/admin/roulette-item-editor';
+} from '@/features/admin/roulette-item-model';
 import { apiUrl, readJson } from '@/shared/api/http';
 
 type RouletteItem = {

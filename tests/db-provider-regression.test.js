@@ -18,8 +18,11 @@ describe('database provider regression', () => {
   test('exposes explicit Supabase/Postgres provider selection', () => {
     expect(supabaseSource).toContain('export function getDbProvider()');
     expect(supabaseSource).toContain("DB_PROVIDER_POSTGRES = 'postgres'");
-    expect(envExample).toContain('ARUBOT_DB_PROVIDER=supabase');
+    expect(envExample).toContain('ARUBOT_DB_PROVIDER=postgres');
+    expect(envExample).toContain('Use "supabase" only for legacy/local Supabase deployments.');
     expect(envExample).toContain('POSTGRES_URL=');
+    expect(envExample).toContain('POSTGRES_RUNTIME_URL=');
+    expect(envExample).toContain('POSTGRES_MIGRATION_URL=');
   });
 
   test('postgres provider initializes without Supabase URL or service role key', () => {
@@ -87,6 +90,14 @@ describe('database provider regression', () => {
     expect(dbCommon).toContain('setval($1::regclass, $2, false)');
     expect(packageJson).toContain('"db:compare-checksums": "node scripts/db-compare-checksums.js"');
     expect(packageJson).toContain('"db:cutover-verify": "node scripts/db-cutover-verify.js"');
+  });
+
+  test('separates runtime and migration database credentials and verifies TLS', () => {
+    expect(supabaseSource).toContain('process.env.POSTGRES_RUNTIME_URL || process.env.POSTGRES_URL');
+    expect(dbCommon).toContain("normalized === 'migration'");
+    expect(dbCommon).toContain('process.env.POSTGRES_MIGRATION_URL || process.env.POSTGRES_URL');
+    expect(dbCommon).toContain('rejectUnauthorized: true');
+    expect(dbCommon).toContain('Remote PostgreSQL migration connections must use verified TLS in production');
   });
 
   test('count comparison ignores migration_log metadata by default', () => {
@@ -178,7 +189,7 @@ describe('database provider regression', () => {
   test('health endpoints expose active database provider for smoke checks', () => {
     const versionStart = serverIndex.indexOf("app.get('/api/version'");
     const healthStart = serverIndex.indexOf("app.get('/api/health'");
-    const readyStart = serverIndex.indexOf("app.get(['/healthz', '/readyz']");
+    const readyStart = serverIndex.indexOf("app.get('/readyz'");
     const versionBody = serverIndex.slice(versionStart, serverIndex.indexOf('});', versionStart));
     const healthBody = serverIndex.slice(healthStart, serverIndex.indexOf('});', healthStart));
     const readyBody = serverIndex.slice(readyStart, serverIndex.indexOf('});', readyStart));

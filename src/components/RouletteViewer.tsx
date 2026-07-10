@@ -7,6 +7,12 @@ import { splitWheelLabel } from './rouletteWheelUtils';
 
 // Module-scope overlay kind and component to avoid remounts on parent re-renders
 type OverlayKind = 'none' | 'sakura' | 'midnight' | 'sunset' | 'grid' | 'noise' | 'embers' | 'snow' | 'scan' | 'shimmer' | 'confetti' | 'leaves' | 'gold-sweep';
+type CssVariableStyle = React.CSSProperties & Record<`--${string}`, string | number>;
+type WindowWithLegacyAudioContext = Window & { webkitAudioContext?: typeof AudioContext };
+
+function cssVariables(style: CssVariableStyle): React.CSSProperties {
+  return style;
+}
 
 const DEFAULT_PRODUCTION_API_BASE = 'https://arubotapi.yuaru.com';
 
@@ -150,12 +156,12 @@ const OverlaySvg: React.FC<{ kind: OverlayKind }> = React.memo(({ kind }) => {
           {embers.map(p => (
             <g key={p.id} transform={`translate(${p.cx}, ${p.cy})`}>
               {/* 상승 애니메이션은 .ember, 깜빡임은 .ember-shape */}
-              <g className="ember" style={{ ['--dx' as any]: `${p.dx}%`, ['--dur' as any]: `${p.dur}s`, ['--delay' as any]: `${p.delay}s` }}>
+              <g className="ember" style={cssVariables({ '--dx': `${p.dx}%`, '--dur': `${p.dur}s`, '--delay': `${p.delay}s` })}>
                 <g transform={`rotate(${p.rot}) scale(${p.s})`}>
                   {/* 눈물방울 형태의 불티 */}
                   <path className="ember-shape" d="M0,-1.6 C0.55,-0.6 0.45,0.5 0,1.3 C-0.45,0.5 -0.55,-0.6 0,-1.6 Z"
                     fill={p.fill} stroke={p.stroke} strokeWidth={0.15}
-                    style={{ ['--fDur' as any]: `${p.fDur}s`, ['--fDelay' as any]: `${p.fDelay}s` }} />
+                    style={cssVariables({ '--fDur': `${p.fDur}s`, '--fDelay': `${p.fDelay}s` })} />
                 </g>
               </g>
             </g>
@@ -169,7 +175,7 @@ const OverlaySvg: React.FC<{ kind: OverlayKind }> = React.memo(({ kind }) => {
       <svg className="absolute inset-0 z-0 w-full h-full pointer-events-none opacity-65" viewBox="0 0 100 100" preserveAspectRatio="none">
         <g stroke="#e0f2fe" strokeOpacity="0.95" strokeWidth="0.6" strokeLinecap="round">
           {snowFlakes.map(f => (
-            <g key={f.id} className="flake" style={{ ['--dx' as any]: `${f.dx}px`, ['--dur' as any]: `${f.dur}s`, ['--delay' as any]: `${f.delay}s`, ['--yStart' as any]: `${f.yStart}%` }}>
+            <g key={f.id} className="flake" style={cssVariables({ '--dx': `${f.dx}px`, '--dur': `${f.dur}s`, '--delay': `${f.delay}s`, '--yStart': `${f.yStart}%` })}>
               <g transform={`translate(${f.cx}, ${f.cy}) rotate(${f.rot}) scale(${f.s})`} className="flake-shape">
                 <line x1="0" y1="-2" x2="0" y2="2" />
                 <line x1="-2" y1="0" x2="2" y2="0" />
@@ -215,7 +221,7 @@ const OverlaySvg: React.FC<{ kind: OverlayKind }> = React.memo(({ kind }) => {
             <stop offset="100%" stopColor="#fbbf24" stopOpacity="0" />
           </linearGradient>
         </defs>
-        <rect className="gold-sweep" x="-20" y="-50" width="40" height="200" fill="url(#shim-grad)" style={{ ['--delay' as any]: `${-(rnd() * 7).toFixed(2)}s`, ['--phase' as any]: `${-(rnd() * 7).toFixed(2)}s` }} />
+        <rect className="gold-sweep" x="-20" y="-50" width="40" height="200" fill="url(#shim-grad)" style={cssVariables({ '--delay': `${-(rnd() * 7).toFixed(2)}s`, '--phase': `${-(rnd() * 7).toFixed(2)}s` })} />
       </svg>
     );
   }
@@ -224,7 +230,7 @@ const OverlaySvg: React.FC<{ kind: OverlayKind }> = React.memo(({ kind }) => {
       <svg className="absolute inset-0 z-0 w-full h-full pointer-events-none opacity-70 mix-blend-screen" viewBox="0 0 100 100" preserveAspectRatio="none">
         <g>
           {confettiPieces.map(c => (
-            <rect key={c.id} className="confetti" width={c.w} height={c.h} x={c.x} y={c.y} fill={c.fill} style={{ ['--dx' as any]: `${c.dx}px`, ['--rot' as any]: `${c.rot}deg`, ['--dur' as any]: `${c.dur}s`, ['--delay' as any]: `${c.delay}s` }} />
+            <rect key={c.id} className="confetti" width={c.w} height={c.h} x={c.x} y={c.y} fill={c.fill} style={cssVariables({ '--dx': `${c.dx}px`, '--rot': `${c.rot}deg`, '--dur': `${c.dur}s`, '--delay': `${c.delay}s` })} />
           ))}
         </g>
       </svg>
@@ -237,7 +243,7 @@ const OverlaySvg: React.FC<{ kind: OverlayKind }> = React.memo(({ kind }) => {
           {leavesPieces.map(l => (
             <path key={l.id} className="leaf" d="M10 20 C 15 10, 25 10, 30 20 C 25 30, 15 30, 10 20 Z"
               transform={`translate(${l.x},${l.y}) scale(${l.s}) rotate(${l.rot})`}
-              style={{ ['--yStart' as any]: `${l.yStart}%`, animationDuration: `${l.dur}s`, animationDelay: `${l.delay}s` }} />
+              style={cssVariables({ '--yStart': `${l.yStart}%`, animationDuration: `${l.dur}s`, animationDelay: `${l.delay}s` })} />
           ))}
         </g>
       </svg>
@@ -261,7 +267,7 @@ const OverlaySvg: React.FC<{ kind: OverlayKind }> = React.memo(({ kind }) => {
           {sakuraPetals.map(p => (
             <path key={p.id} className="petal" d="M5 20c2-3 6-3 8 0c2 3-1 6-4 7c-3-1-6-4-4-7z"
               transform={`translate(${p.x},0) rotate(${p.rot}) scale(${p.s})`}
-              style={{ ['--dur' as any]: `${p.dur}s`, ['--delay' as any]: `${p.delay}s`, ['--yStart' as any]: `${p.yStart}%` }} />
+              style={cssVariables({ '--dur': `${p.dur}s`, '--delay': `${p.delay}s`, '--yStart': `${p.yStart}%` })} />
           ))}
         </g>
         <rect x="0" y="0" width="100" height="100" fill="url(#sak-glow)" />
@@ -280,7 +286,7 @@ const OverlaySvg: React.FC<{ kind: OverlayKind }> = React.memo(({ kind }) => {
         <rect x="0" y="0" width="100" height="100" fill="url(#mid-vignette)" />
         <g strokeLinejoin="round" strokeLinecap="round">
           {midnightStars.map(s => (
-            <g key={s.id} className="star" style={{ ['--t' as any]: `${s.t}s`, ['--delay' as any]: `${s.delay}s` }}>
+            <g key={s.id} className="star" style={cssVariables({ '--t': `${s.t}s`, '--delay': `${s.delay}s` })}>
               <defs>
                 <radialGradient id={`mid-star-${s.id}`} cx="50%" cy="50%" r="70%">
                   <stop offset="0%" stopColor={s.c1} stopOpacity="1" />
@@ -288,8 +294,8 @@ const OverlaySvg: React.FC<{ kind: OverlayKind }> = React.memo(({ kind }) => {
                 </radialGradient>
               </defs>
               <g transform={`translate(${s.cx}, ${s.cy})`}>
-                <g className="star-drift" style={{ ['--ax' as any]: `${s.ax}`, ['--ay' as any]: `${s.ay}`, ['--bx' as any]: `${s.bx}`, ['--by' as any]: `${s.by}`, ['--driftDur' as any]: `${s.driftDur}s`, ['--driftDelay' as any]: `${s.driftDelay}s` }}>
-                  <g className="star-rot" style={{ ['--rotAmp' as any]: `${s.rotAmp}deg`, ['--rotDur' as any]: `${s.rotDur}s` }} transform={`rotate(${s.baseRot}) scale(${s.s})`}>
+                <g className="star-drift" style={cssVariables({ '--ax': `${s.ax}`, '--ay': `${s.ay}`, '--bx': `${s.bx}`, '--by': `${s.by}`, '--driftDur': `${s.driftDur}s`, '--driftDelay': `${s.driftDelay}s` })}>
+                  <g className="star-rot" style={cssVariables({ '--rotAmp': `${s.rotAmp}deg`, '--rotDur': `${s.rotDur}s` })} transform={`rotate(${s.baseRot}) scale(${s.s})`}>
                     <path className="star-shape" d="M0,-2.2 L0.35,-0.5 L1.2,0 L0.35,0.5 L0,2.2 L-0.35,0.5 L-1.2,0 L-0.35,-0.5 Z" fill={`url(#mid-star-${s.id})`} stroke={s.c1} strokeWidth="0.32" />
                   </g>
                 </g>
@@ -313,8 +319,8 @@ const OverlaySvg: React.FC<{ kind: OverlayKind }> = React.memo(({ kind }) => {
             <stop offset="100%" stopColor="#000" stopOpacity="0" />
           </linearGradient>
         </defs>
-        <rect x="0" y="0" width="100" height="100" fill="url(#sun-core)" className="sun-core-pulse" style={{ ['--delay' as any]: `${-(rnd() * 6).toFixed(2)}s` }} />
-        <g stroke="url(#sun-rays)" strokeWidth="2" strokeOpacity="0.5" className="sun-rays-pulse" style={{ ['--delay2' as any]: `${-(rnd() * 7.2).toFixed(2)}s` }}>
+        <rect x="0" y="0" width="100" height="100" fill="url(#sun-core)" className="sun-core-pulse" style={cssVariables({ '--delay': `${-(rnd() * 6).toFixed(2)}s` })} />
+        <g stroke="url(#sun-rays)" strokeWidth="2" strokeOpacity="0.5" className="sun-rays-pulse" style={cssVariables({ '--delay2': `${-(rnd() * 7.2).toFixed(2)}s` })}>
           <line x1="0" y1="0" x2="40" y2="0" />
           <line x1="0" y1="0" x2="0" y2="40" />
           <line x1="0" y1="0" x2="35" y2="15" />
@@ -388,6 +394,10 @@ type WsPayload = {
   createdAt?: number | string | null;
   theme?: string | null;
   items?: string[] | null;
+  channelId?: string | null;
+  instant?: boolean;
+  batchId?: string | null;
+  batchCount?: number | string | null;
 };
 
 // WebSocket 연결 상태 추적을 위한 인터페이스
@@ -603,7 +613,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
   }, []);
 
   // Queue for incoming roulette events while a spin is in progress (to support multi-spin)
-  const queuedEventsRef = React.useRef<any[]>([]);
+  const queuedEventsRef = React.useRef<WsPayload[]>([]);
   const processQueuedRef = React.useRef<() => void>(() => {});
   // Batch progress tracking (server sends batchId, batchCount)
   const currentBatchIdRef = React.useRef<string | null>(null);
@@ -618,8 +628,8 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     window.addEventListener('pointerdown', onInteract, { once: true });
     window.addEventListener('keydown', onInteract, { once: true });
     return () => {
-      window.removeEventListener('pointerdown', onInteract as any);
-      window.removeEventListener('keydown', onInteract as any);
+      window.removeEventListener('pointerdown', onInteract);
+      window.removeEventListener('keydown', onInteract);
     };
   }, []);
   const token = React.useMemo(() => {
@@ -639,7 +649,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
   }, []);
 
   // 메시지 채널 ID 검증 함수
-  const validateMessageChannelId = React.useCallback((message: any, expectedChannelId: string | null): boolean => {
+  const validateMessageChannelId = React.useCallback((message: WsPayload, expectedChannelId: string | null): boolean => {
     try {
       // 메시지에 channelId가 없으면 검증 통과 (하위 호환성)
       if (!message.channelId) {
@@ -795,9 +805,9 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     // Prefer front-end static assets at /public/files (served at same-origin /files)
     // Fallback to backend API host if same-origin is missing
     try {
-      const loc = (typeof window !== 'undefined' ? window.location : { origin: 'https://arubot.yuaru.com' }) as Location | any;
+      const origin = typeof window !== 'undefined' ? window.location.origin : 'https://arubot.yuaru.com';
       const backendBase = getRouletteApiBase();
-      const a = new Audio(`${loc.origin}/files/roulette_start.weba`);
+      const a = new Audio(`${origin}/files/roulette_start.weba`);
       // Avoid crossOrigin to reduce CORS influence
       a.preload = 'auto';
       a.addEventListener('canplaythrough', () => { if (!canAutoPlayRef.current) { primeAudio().catch(()=>{}); } }, { once: true });
@@ -808,7 +818,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
           a.load();
           a.onerror = () => {
             // Last resort: try mp3 with same name if provided later
-            a.src = `${loc.origin}/files/roulette_start.mp3`;
+            a.src = `${origin}/files/roulette_start.mp3`;
             a.load();
           };
         } catch { startAudioRef.current = null; }
@@ -816,9 +826,9 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       startAudioRef.current = a;
     } catch {}
     try {
-      const loc = (typeof window !== 'undefined' ? window.location : { origin: 'https://arubot.yuaru.com' }) as Location | any;
+      const origin = typeof window !== 'undefined' ? window.location.origin : 'https://arubot.yuaru.com';
       const backendBase = getRouletteApiBase();
-      const b = new Audio(`${loc.origin}/files/roulette_end.mp3`);
+      const b = new Audio(`${origin}/files/roulette_end.mp3`);
       b.preload = 'auto';
       b.addEventListener('canplaythrough', () => { if (!canAutoPlayRef.current) { primeAudio().catch(()=>{}); } }, { once: true });
       b.onerror = () => {
@@ -858,7 +868,9 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
   const playBeep = React.useCallback((freq: number, durMs = 120, type: OscillatorType = 'sine', gain = 0.02) => {
     if (!sfxOn) return;
     try {
-      if (!audioCtxRef.current) audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const AudioContextCtor = window.AudioContext || (window as WindowWithLegacyAudioContext).webkitAudioContext;
+      if (!audioCtxRef.current && AudioContextCtor) audioCtxRef.current = new AudioContextCtor();
+      if (!audioCtxRef.current) return;
       const ctx = audioCtxRef.current!;
       const osc = ctx.createOscillator();
       const g = ctx.createGain();
@@ -959,7 +971,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
           if (data && data.type === 'roulette') {
             // 채널 ID 검증 로직 추가
             if (channelIdValidationEnabledRef.current) {
-              const messageChannelId = (data as any).channelId;
+              const messageChannelId = data.channelId;
               
               // 첫 번째 메시지에서 예상 채널 ID 설정
               if (!expectedChannelIdRef.current && messageChannelId) {
@@ -982,9 +994,9 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
             }
             
             // 채널 ID 정보 업데이트 (서버에서 전송된 경우)
-            if ((data as any).channelId) {
+            if (data.channelId) {
               updateDebugInfo({ 
-                channelId: (data as any).channelId
+                channelId: data.channelId
               });
             }
 
@@ -1031,8 +1043,8 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
             const key = `${data.token || ''}|${data.label || ''}|${data.value ?? ''}|${data.createdAt || ''}`;
             
             // Ignore if in cooldown window to avoid quick re-triggers, except for instant/batched roulette events
-            const isInstantPayload = (data as any).instant === true;
-            const hasBatch = !!(data as any).batchId;
+            const isInstantPayload = data.instant === true;
+            const hasBatch = !!data.batchId;
             if (now < spinCooldownUntilRef.current && !isInstantPayload && !hasBatch) {
               return;
             }
@@ -1048,10 +1060,10 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
               let priority = 0;
               
               // 즉시 실행 메시지는 높은 우선순위
-              if ((payload as any).instant === true) priority += 100;
+              if (payload.instant === true) priority += 100;
               
               // 배치 메시지는 중간 우선순위
-              if ((payload as any).batchId) priority += 50;
+              if (payload.batchId) priority += 50;
               
               // 최근 메시지일수록 높은 우선순위
               const createdAt = Number(payload.createdAt) || now;
@@ -1085,17 +1097,17 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
             }
             
             const applyEvent = (payload: WsPayload) => {
-              const isInstant = (payload as any).instant === true;
+              const isInstant = payload.instant === true;
               const final = String(payload.label || (payload.value != null ? String(payload.value) : ''));
               isSpinningRef.current = true;
               lastSpinKeyRef.current = key;
               lastSpinAtRef.current = now;
               
               // Update batch progress markers
-              if ((payload as any).batchId && (payload as any).batchCount && Number((payload as any).batchCount) > 0) {
-                if (currentBatchIdRef.current !== String((payload as any).batchId)) {
-                  currentBatchIdRef.current = String((payload as any).batchId);
-                  currentBatchTotalRef.current = Math.max(1, Number((payload as any).batchCount));
+              if (payload.batchId && payload.batchCount && Number(payload.batchCount) > 0) {
+                if (currentBatchIdRef.current !== String(payload.batchId)) {
+                  currentBatchIdRef.current = String(payload.batchId);
+                  currentBatchTotalRef.current = Math.max(1, Number(payload.batchCount));
                   currentBatchDoneRef.current = 1;
                 } else {
                   currentBatchDoneRef.current = Math.min(currentBatchTotalRef.current, currentBatchDoneRef.current + 1);
@@ -1118,7 +1130,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
               
               if (isInstant) {
                 // Defer state/theme updates to inside showInstantResult, after fade-out completes
-                showInstantResult(final, payload as any);
+                showInstantResult(final, payload);
               } else {
                 // Animated spin: set state immediately and run full spin
                 setState({ name: payload.name || undefined, username: payload.username || undefined, label: payload.label || undefined, value: (payload.value != null ? payload.value : undefined) });
@@ -1215,7 +1227,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     return cleanup;
   }, [connectWebSocket]);
 
-  const showInstantResult = React.useCallback((finalLabel: string, meta?: any) => {
+  const showInstantResult = React.useCallback((finalLabel: string, meta?: WsPayload) => {
     // Cancel outstanding timers
     timersRef.current.forEach(id => window.clearTimeout(id));
     timersRef.current = [];
@@ -1416,10 +1428,10 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     // Apply next immediately; if instant, reveal instantly; else run full spin
     setTimeout(() => {
       // mimic onmessage path
-      const payload: any = next;
+      const payload: WsPayload = next;
       const key = `${payload.token || ''}|${payload.label || ''}|${payload.value ?? ''}|${payload.createdAt || ''}`;
       const now = Date.now();
-      const isBatch = !!(payload as any).batchId;
+      const isBatch = !!payload.batchId;
       if (!isBatch && lastSpinKeyRef.current === key && (now - lastSpinAtRef.current) < 5000) {
         processQueuedRef.current();
         return;
@@ -1431,10 +1443,10 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       lastSpinKeyRef.current = key;
       lastSpinAtRef.current = now;
       // Update batch progress for queued payload
-      if ((payload as any).batchId && (payload as any).batchCount && Number((payload as any).batchCount) > 0) {
-        if (currentBatchIdRef.current !== String((payload as any).batchId)) {
-          currentBatchIdRef.current = String((payload as any).batchId);
-          currentBatchTotalRef.current = Math.max(1, Number((payload as any).batchCount));
+      if (payload.batchId && payload.batchCount && Number(payload.batchCount) > 0) {
+        if (currentBatchIdRef.current !== String(payload.batchId)) {
+          currentBatchIdRef.current = String(payload.batchId);
+          currentBatchTotalRef.current = Math.max(1, Number(payload.batchCount));
           currentBatchDoneRef.current = 1;
         } else {
           currentBatchDoneRef.current = Math.min(currentBatchTotalRef.current, currentBatchDoneRef.current + 1);

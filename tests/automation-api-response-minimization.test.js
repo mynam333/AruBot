@@ -23,7 +23,9 @@ describe('automation API response minimization', () => {
 
   test('public automation DTOs remove raw internal fields and use generic mode names', () => {
     const dtoStart = serverIndex.indexOf('function publicExecutionMode');
-    const dtoEnd = serverIndex.indexOf('function normalizeFxPercent', dtoStart);
+    const dtoEnd = serverIndex.indexOf('function normalizeFxLengthUnit', dtoStart);
+    expect(dtoStart).toBeGreaterThanOrEqual(0);
+    expect(dtoEnd).toBeGreaterThan(dtoStart);
     const body = serverIndex.slice(dtoStart, dtoEnd);
 
     expect(body).toContain("'local' : 'web'");

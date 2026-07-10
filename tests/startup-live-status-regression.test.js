@@ -19,7 +19,9 @@ describe('startup live status refresh regression', () => {
     expect(bootstrapBody.indexOf('await bootstrapEnsureCimeSessions()')).toBeLessThan(bootstrapBody.indexOf('await bootstrapEnsureYoutubeSessions()'));
     expect(serverIndex).toContain('async function runRegisteredRuntimeMonitor');
     expect(serverIndex).toContain('if (registeredRuntimeMonitorRunning) return false');
-    expect(startupBody).toContain("runRegisteredRuntimeMonitor('startup').catch");
+    expect(startupBody).toContain("runRegisteredRuntimeMonitor('startup')");
+    expect(startupBody).toContain('runtimeReadinessState.initialBootstrapCompleted = true');
+    expect(startupBody).toContain('.catch((e) =>');
     expect(startupBody).toContain("runRegisteredRuntimeMonitor('scheduled').catch");
     expect(startupBody).toContain('REGISTERED_RUNTIME_MONITOR_INTERVAL_MS');
     expect(serverIndex).toContain("if (reason === 'startup')");

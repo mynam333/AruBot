@@ -23,11 +23,13 @@ import { Input } from '@/components/ui/input';
 import { RouletteThemeSwatch } from '@/components/rouletteThemeSwatch';
 import { CommandVariableHelpButton } from '@/features/admin/command-variable-help';
 import {
+  RouletteItemsEditor,
+} from '@/features/admin/roulette-item-editor';
+import {
   createDefaultRouletteItems,
   normalizeEditableRouletteItems,
-  RouletteItemsEditor,
   type EditableRouletteItem,
-} from '@/features/admin/roulette-item-editor';
+} from '@/features/admin/roulette-item-model';
 import { apiUrl } from '@/shared/api/http';
 import { cn } from '@/shared/lib/utils';
 import {

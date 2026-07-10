@@ -11,10 +11,13 @@ dotenv.config();
 
 async function main() {
   const provider = getDbProvider();
-  const dbUrl = resolveDatabaseUrl('current');
+  const dbUrl = resolveDatabaseUrl('migration');
   if (!dbUrl) {
-    throw new Error(`Missing direct database URL for ${provider}. Set ${provider === 'postgres' ? 'POSTGRES_URL' : 'SUPABASE_DB_URL'}.`);
+    throw new Error(`Missing migration database URL for ${provider}. Set ${provider === 'postgres' ? 'POSTGRES_MIGRATION_URL or POSTGRES_URL' : 'SUPABASE_DB_MIGRATION_URL or SUPABASE_DB_URL'}.`);
   }
+
+  if (provider === 'postgres') process.env.POSTGRES_RUNTIME_URL = dbUrl;
+  else process.env.SUPABASE_DB_URL = dbUrl;
 
   console.log(`[db:migrate] provider=${provider}`);
   console.log('[db:migrate] Initializing database bootstrap...');

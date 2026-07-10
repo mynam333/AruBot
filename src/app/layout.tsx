@@ -1,4 +1,3 @@
-/* eslint-disable react-refresh/only-export-components */
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { Providers } from './providers';

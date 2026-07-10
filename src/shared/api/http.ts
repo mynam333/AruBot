@@ -31,6 +31,7 @@ export function apiWsUrl(path: string, base = getBrowserApiBase()) {
 }
 
 const pendingJsonReads = new Map<string, Promise<unknown>>();
+const pendingJsonResultReads = new Map<string, Promise<JsonResult<unknown>>>();
 
 function canDedupeJsonRead(init?: RequestInit) {
   const method = String(init?.method || 'GET').toUpperCase();
@@ -78,29 +79,42 @@ export type JsonResult<T> =
   | { ok: false; data: null; status: number | null; message: string };
 
 export async function readJsonResult<T>(path: string, init?: RequestInit): Promise<JsonResult<T>> {
-  try {
-    const response = await fetch(apiUrl(path), {
-      ...init,
-      credentials: init?.credentials ?? 'include',
-      cache: init?.cache ?? 'no-store',
-    });
-    if (!response.ok) {
-      const body = await response.json().catch(() => null) as { error?: string; message?: string } | null;
+  const dedupe = canDedupeJsonRead(init);
+  const key = dedupe ? jsonReadKey(path, init) : '';
+  if (dedupe && pendingJsonResultReads.has(key)) {
+    return pendingJsonResultReads.get(key) as Promise<JsonResult<T>>;
+  }
+
+  const request = (async (): Promise<JsonResult<T>> => {
+    try {
+      const response = await fetch(apiUrl(path), {
+        ...init,
+        credentials: init?.credentials ?? 'include',
+        cache: init?.cache ?? 'no-store',
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => null) as { error?: string; message?: string } | null;
+        return {
+          ok: false,
+          data: null,
+          status: response.status,
+          message: body?.message || body?.error || `요청 실패 (${response.status})`,
+        };
+      }
+      return { ok: true, data: await response.json() as T, status: response.status };
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') throw error;
       return {
         ok: false,
         data: null,
-        status: response.status,
-        message: body?.message || body?.error || `요청 실패 (${response.status})`,
+        status: null,
+        message: error instanceof Error ? error.message : '서버에 연결할 수 없습니다.',
       };
+    } finally {
+      if (dedupe) pendingJsonResultReads.delete(key);
     }
-    return { ok: true, data: await response.json() as T, status: response.status };
-  } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') throw error;
-    return {
-      ok: false,
-      data: null,
-      status: null,
-      message: error instanceof Error ? error.message : '서버에 연결할 수 없습니다.',
-    };
-  }
+  })();
+
+  if (dedupe) pendingJsonResultReads.set(key, request as Promise<JsonResult<unknown>>);
+  return request;
 }

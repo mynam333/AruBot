@@ -16,6 +16,7 @@ import {
   Layers3,
   Loader2,
   MessageSquare,
+  MoreHorizontal,
   MousePointer2,
   Move,
   Network,
@@ -38,6 +39,7 @@ import {
   X,
   ZoomIn,
   ZoomOut,
+  type LucideIcon,
 } from 'lucide-react';
 import {
   Background,
@@ -66,6 +68,85 @@ import { Input } from '@/components/ui/input';
 import { CommandVariableHelpButton } from '@/features/admin/command-variable-help';
 import { cn, compactDateTime } from '@/shared/lib/utils';
 import { apiUrl, readJson } from '@/shared/api/http';
+
+type ActionMenuEntry = {
+  label: string;
+  icon: LucideIcon;
+  onSelect: () => void;
+  disabled?: boolean;
+  danger?: boolean;
+  separatorBefore?: boolean;
+};
+
+function ActionMenu({ label, entries }: { label: string; entries: ActionMenuEntry[] }) {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('pointerdown', closeOnOutsidePointer);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePointer);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [open]);
+
+  return (
+    <div ref={menuRef} className="relative">
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        aria-label={`${label} 메뉴`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <MoreHorizontal className="h-4 w-4" />
+        {label}
+      </Button>
+      {open ? (
+        <div
+          role="menu"
+          aria-label={`${label} 메뉴 항목`}
+          className="absolute right-0 top-[calc(100%+0.5rem)] z-50 min-w-48 rounded-[var(--radius-control)] border bg-card p-1.5 text-foreground shadow-lift"
+        >
+          {entries.map((entry) => {
+            const Icon = entry.icon;
+            return (
+              <div key={entry.label}>
+                {entry.separatorBefore ? <div role="separator" className="my-1 h-px bg-border" /> : null}
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={entry.disabled}
+                  onClick={() => {
+                    setOpen(false);
+                    entry.onSelect();
+                  }}
+                  className={cn(
+                    'flex min-h-9 w-full select-none items-center gap-2 rounded-[calc(var(--radius-control)*0.8)] px-2.5 text-left text-sm font-medium outline-none transition-colors hover:bg-muted focus-visible:bg-muted disabled:pointer-events-none disabled:opacity-45',
+                    entry.danger ? 'text-destructive hover:bg-destructive/10 focus-visible:bg-destructive/10' : null,
+                  )}
+                >
+                  <Icon className="h-4 w-4" />
+                  {entry.label}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 type NodeType =
   | 'start'
@@ -467,10 +548,10 @@ function createId(prefix: string) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(16).slice(2, 8)}`;
 }
 
-function createNode(type: NodeType, position: { x: number; y: number }): BlueprintNode {
+function createNode(type: NodeType, position: { x: number; y: number }, id = createId(type)): BlueprintNode {
   const spec = nodeCatalog.find((item) => item.type === type) || nodeCatalog[0];
   return {
-    id: createId(type),
+    id,
     type,
     name: spec.title,
     position,
@@ -488,16 +569,16 @@ function normalizeNodeName(node: BlueprintNode): BlueprintNode {
 
 function defaultNodes(): BlueprintNode[] {
   return [
-    createNode('start', { x: 0, y: 3 }),
-    createNode('chat', { x: 24, y: 1 }),
-    createNode('end', { x: 48, y: 3 }),
+    createNode('start', { x: 0, y: 3 }, 'starter_start'),
+    createNode('chat', { x: 24, y: 1 }, 'starter_chat'),
+    createNode('end', { x: 48, y: 3 }, 'starter_end'),
   ];
 }
 
 function defaultEdges(nodes: BlueprintNode[]): BlueprintEdge[] {
   return [
-    { id: createId('edge'), source: nodes[0].id, sourcePort: 'out', target: nodes[1].id, targetPort: 'in' },
-    { id: createId('edge'), source: nodes[1].id, sourcePort: 'out', target: nodes[2].id, targetPort: 'in' },
+    { id: 'starter_edge_start_chat', source: nodes[0].id, sourcePort: 'out', target: nodes[1].id, targetPort: 'in' },
+    { id: 'starter_edge_chat_end', source: nodes[1].id, sourcePort: 'out', target: nodes[2].id, targetPort: 'in' },
   ];
 }
 
@@ -2440,9 +2521,6 @@ export function ActionBlueprintPage() {
               </Badge>
             </div>
             <h1 className="max-w-[22ch] break-keep text-[clamp(1.75rem,3.2vw,2.7rem)] font-bold leading-tight tracking-tight">방송 액션 설계</h1>
-            <p className="mt-4 max-w-3xl break-keep text-sm leading-7 text-muted-foreground md:text-base">
-              캔버스를 드래그해 이동하고, 휠로 확대/축소하고, 포트끼리 연결해 채팅·포인트·룰렛·오버레이·로컬 프로그램 액션을 실행합니다.
-            </p>
             <div className="mt-4 flex flex-wrap gap-2">
               {[
                 ['노드', nodes.length],
@@ -2457,7 +2535,7 @@ export function ActionBlueprintPage() {
               ))}
             </div>
           </div>
-          <div className="grid min-w-0 gap-2 sm:grid-cols-[repeat(2,minmax(0,1fr))] xl:max-w-[min(100%,32rem)] xl:grid-cols-[repeat(3,minmax(0,1fr))]">
+          <div className="grid min-w-0 gap-2 sm:grid-cols-[repeat(2,minmax(0,1fr))] xl:max-w-[min(100%,42rem)] xl:grid-cols-[repeat(5,minmax(0,1fr))]">
             <input
               ref={importInputRef}
               type="file"
@@ -2471,7 +2549,7 @@ export function ActionBlueprintPage() {
                 const next = blueprints.find((item) => item.id === event.target.value);
                 if (next) void loadBlueprint(next);
               }}
-              className="min-h-[var(--control-height-sm)] rounded-[var(--radius-control)] border bg-card/75 px-3 text-sm font-semibold outline-none transition focus:border-primary/45 focus:ring-2 focus:ring-ring sm:col-span-2 xl:col-span-3"
+              className="min-h-[var(--control-height-sm)] rounded-[var(--radius-control)] border bg-card/75 px-3 text-sm font-semibold outline-none transition focus:border-primary/45 focus:ring-2 focus:ring-ring sm:col-span-2 xl:col-span-5"
               aria-label="저장된 블루프린트 선택"
             >
               <option value="">{blueprints.length ? '저장된 블루프린트 선택' : '저장된 블루프린트 없음'}</option>
@@ -2485,26 +2563,16 @@ export function ActionBlueprintPage() {
               <Plus className="h-4 w-4" />
               새 블루프린트
             </Button>
-            <Button type="button" variant="outline" size="sm" onClick={exportBlueprintJson}>
-              <Download className="h-4 w-4" />
-              JSON 내보내기
-            </Button>
-            <Button type="button" variant="outline" size="sm" onClick={() => importInputRef.current?.click()}>
-              <Upload className="h-4 w-4" />
-              JSON 불러오기
-            </Button>
-            <Button type="button" variant="outline" size="sm" onClick={restoreAutosaveDraft}>
-              <RefreshCw className="h-4 w-4" />
-              임시 초안
-            </Button>
-            <Button type="button" variant="outline" size="sm" onClick={deleteBlueprint} disabled={!blueprint.id}>
-              <Trash2 className="h-4 w-4" />
-              블루프린트 삭제
-            </Button>
-            <Button type="button" variant="outline" size="sm" onClick={copyVariable} disabled={!blueprint.id && !blueprint.slug}>
-              <Copy className="h-4 w-4" />
-              특수 변수
-            </Button>
+            <ActionMenu
+              label="관리"
+              entries={[
+                { label: 'JSON 내보내기', icon: Download, onSelect: exportBlueprintJson },
+                { label: 'JSON 불러오기', icon: Upload, onSelect: () => importInputRef.current?.click() },
+                { label: '임시 초안 복원', icon: RefreshCw, onSelect: restoreAutosaveDraft },
+                { label: '특수 변수 복사', icon: Copy, onSelect: copyVariable, disabled: !blueprint.id && !blueprint.slug },
+                { label: '블루프린트 삭제', icon: Trash2, onSelect: deleteBlueprint, disabled: !blueprint.id, danger: true, separatorBefore: true },
+              ]}
+            />
             <Button type="button" variant="outline" size="sm" onClick={testRun} disabled={testing || saving}>
               {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
               테스트
@@ -2617,42 +2685,26 @@ export function ActionBlueprintPage() {
                   <Move className="h-4 w-4" />
                   전체 보기
                 </Button>
-                <Button type="button" variant="outline" size="sm" onClick={focusSelection} disabled={!nodes.length}>
-                  <MousePointer2 className="h-4 w-4" />
-                  선택 보기
-                </Button>
-                <Button type="button" variant="outline" size="sm" onClick={autoLayout}>
+                <Button type="button" variant="outline" size="icon" onClick={autoLayout} aria-label="자동 정렬" title="자동 정렬">
                   <Workflow className="h-4 w-4" />
-                  자동 정렬
                 </Button>
-                <Button type="button" variant="outline" size="sm" onClick={undoBlueprint} disabled={!historyCount.past}>
+                <Button type="button" variant="outline" size="icon" onClick={undoBlueprint} disabled={!historyCount.past} aria-label="되돌리기" title="되돌리기">
                   <Undo2 className="h-4 w-4" />
-                  되돌리기
                 </Button>
-                <Button type="button" variant="outline" size="sm" onClick={redoBlueprint} disabled={!historyCount.future}>
+                <Button type="button" variant="outline" size="icon" onClick={redoBlueprint} disabled={!historyCount.future} aria-label="다시 실행" title="다시 실행">
                   <Redo2 className="h-4 w-4" />
-                  다시 실행
                 </Button>
-                <Button type="button" variant="outline" size="sm" onClick={() => replayRunSteps()} disabled={!runSteps.length}>
-                  <Play className="h-4 w-4" />
-                  실행 재생
-                </Button>
-                <Button type="button" variant="outline" size="sm" onClick={duplicateSelection} disabled={!selectedIds.length}>
-                  <Copy className="h-4 w-4" />
-                  복제
-                </Button>
-                <Button type="button" variant="outline" size="sm" onClick={() => void copySelection()} disabled={!selectedIds.length}>
-                  <Copy className="h-4 w-4" />
-                  복사
-                </Button>
-                <Button type="button" variant="outline" size="sm" onClick={() => void pasteSelection()}>
-                  <Upload className="h-4 w-4" />
-                  붙여넣기
-                </Button>
-                <Button type="button" variant="outline" size="sm" onClick={removeSelection} disabled={!selectedIds.length && !selectedEdgeId}>
-                  <Trash2 className="h-4 w-4" />
-                  선택 삭제
-                </Button>
+                <ActionMenu
+                  label="편집"
+                  entries={[
+                    { label: '선택 보기', icon: MousePointer2, onSelect: focusSelection, disabled: !nodes.length },
+                    { label: '실행 재생', icon: Play, onSelect: () => replayRunSteps(), disabled: !runSteps.length },
+                    { label: '선택 복제', icon: Copy, onSelect: duplicateSelection, disabled: !selectedIds.length, separatorBefore: true },
+                    { label: '선택 복사', icon: Copy, onSelect: () => void copySelection(), disabled: !selectedIds.length },
+                    { label: '붙여넣기', icon: Upload, onSelect: () => void pasteSelection() },
+                    { label: '선택 삭제', icon: Trash2, onSelect: removeSelection, disabled: !selectedIds.length && !selectedEdgeId, danger: true, separatorBefore: true },
+                  ]}
+                />
               </div>
             </div>
           </CardHeader>
@@ -2665,10 +2717,6 @@ export function ActionBlueprintPage() {
               className="relative h-[min(72svh,46rem)] min-h-[32rem] overflow-hidden bg-background outline-none focus-visible:ring-2 focus-visible:ring-ring"
               onKeyDown={handleCanvasKeyDown}
             >
-              <div className="absolute left-3 right-3 top-3 z-20 flex items-center gap-2 rounded-full border bg-card/88 px-3 py-2 text-[0.68rem] font-semibold text-muted-foreground shadow-subtle backdrop-blur-xl sm:right-auto sm:text-xs">
-                <Move className="h-3.5 w-3.5" />
-                배경 드래그 · 휠/핀치 확대 · Ctrl 클릭 다중 선택 · 핸들 드래그 연결 · Ctrl+Z/C/V
-              </div>
               <div className="absolute bottom-3 left-3 z-20 hidden items-center gap-2 rounded-full border bg-card/88 px-3 py-2 text-[0.68rem] font-bold text-muted-foreground shadow-subtle backdrop-blur-xl sm:flex">
                 <span className="h-2 w-2 rounded-full bg-primary" />
                 <span>{selectedIds.length || selectedEdgeId ? `${selectedIds.length + (selectedEdgeId ? 1 : 0)}개 선택` : '선택 없음'}</span>

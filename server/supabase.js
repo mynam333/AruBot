@@ -69,7 +69,7 @@ const PG_POOL_MAX = Math.max(1, Number(
 function getDbUrl() {
   const provider = getDbProvider();
   const dbUrl = provider === DB_PROVIDER_POSTGRES
-    ? (process.env.POSTGRES_URL || '')
+    ? (process.env.POSTGRES_RUNTIME_URL || process.env.POSTGRES_URL || '')
     : (process.env.SUPABASE_DB_URL || '');
   return validateDatabaseUrlForProvider(provider, dbUrl);
 }
@@ -115,22 +115,51 @@ function providerSslEnv(provider) {
     : process.env.SUPABASE_DB_SSL;
 }
 
+function isLocalDatabaseUrl(dbUrl) {
+  try {
+    const host = new URL(dbUrl).hostname.toLowerCase();
+    return ['localhost', '127.0.0.1', '::1', 'host.docker.internal'].includes(host);
+  } catch {
+    return false;
+  }
+}
+
+function readPgSslCa(provider) {
+  const prefix = provider === DB_PROVIDER_POSTGRES ? 'POSTGRES' : 'SUPABASE_DB';
+  const inline = String(process.env[`${prefix}_SSL_CA`] || '').trim();
+  if (inline) return inline.replace(/\\n/g, '\n');
+  const filePath = String(process.env[`${prefix}_SSL_CA_FILE`] || '').trim();
+  if (!filePath) return undefined;
+  return fs.readFileSync(path.resolve(filePath), 'utf8');
+}
+
 function shouldUsePgSsl(dbUrl = getDbUrl()) {
   const provider = getDbProvider();
   const explicit = String(providerSslEnv(provider) || '').trim().toLowerCase();
-  if (['false', '0', 'no', 'disable', 'disabled'].includes(explicit)) return false;
-  if (['true', '1', 'yes', 'require', 'required'].includes(explicit)) return { rejectUnauthorized: false };
-  try {
-    const parsed = new URL(dbUrl);
-    const sslMode = String(parsed.searchParams.get('sslmode') || '').toLowerCase();
-    if (sslMode === 'disable') return false;
-    if (['require', 'prefer', 'verify-ca', 'verify-full'].includes(sslMode)) return { rejectUnauthorized: false };
-    const host = parsed.hostname.toLowerCase();
-    if (['localhost', '127.0.0.1', '::1', 'host.docker.internal'].includes(host)) return false;
-  } catch {
-    // Fall through to the production-safe default.
+  const localDatabase = isLocalDatabaseUrl(dbUrl);
+  if (['false', '0', 'no', 'disable', 'disabled'].includes(explicit)) {
+    if (process.env.NODE_ENV === 'production' && !localDatabase) {
+      throw new Error('Remote PostgreSQL connections must use verified TLS in production');
+    }
+    return false;
   }
-  return isPostgresProvider() ? false : { rejectUnauthorized: false };
+  const ca = readPgSslCa(provider);
+  if (['true', '1', 'yes', 'require', 'required', 'verify-ca', 'verify-full'].includes(explicit)) {
+    return { rejectUnauthorized: true, ...(ca ? { ca } : {}) };
+  }
+  let sslMode = '';
+  try { sslMode = String(new URL(dbUrl).searchParams.get('sslmode') || '').toLowerCase(); } catch { }
+  if (sslMode === 'disable') {
+    if (process.env.NODE_ENV === 'production' && !localDatabase) {
+      throw new Error('sslmode=disable is not allowed for remote PostgreSQL in production');
+    }
+    return false;
+  }
+  if (['require', 'prefer', 'verify-ca', 'verify-full'].includes(sslMode)) {
+    return { rejectUnauthorized: true, ...(ca ? { ca } : {}) };
+  }
+  if (localDatabase) return false;
+  return { rejectUnauthorized: true, ...(ca ? { ca } : {}) };
 }
 
 function pgClientOptions(dbUrl = getDbUrl()) {
@@ -502,10 +531,61 @@ function getSecretEncryptionKey() {
   return crypto.createHash('sha256').update(secret).digest();
 }
 
+const PLACEHOLDER_SECRET_VALUES = new Set([
+  'replace_with_stable_random_32_bytes',
+  'arubot-oauth-state-development-secret',
+  'default_secret',
+  'change_me',
+  'changeme',
+]);
+
+function isPlaceholderSecret(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return false;
+  return PLACEHOLDER_SECRET_VALUES.has(normalized) || /^(replace_with_|your_|example_|placeholder)/.test(normalized);
+}
+
 export function validateSecretEncryptionConfig() {
   const explicit = String(process.env.ARUBOT_SECRET_ENCRYPTION_KEY || process.env.TOKEN_ENCRYPTION_SECRET || '').trim();
   const hasFallback = !!getSecretEncryptionKey();
-  const requireExplicit = process.env.NODE_ENV === 'production' && process.env.ARUBOT_REQUIRE_TOKEN_ENCRYPTION_KEY !== 'false';
+  const isProduction = process.env.NODE_ENV === 'production';
+  const requireExplicit = isProduction && process.env.ARUBOT_REQUIRE_TOKEN_ENCRYPTION_KEY !== 'false';
+  if (isProduction) {
+    const configuredSecrets = [
+      ['ARUBOT_SECRET_ENCRYPTION_KEY', process.env.ARUBOT_SECRET_ENCRYPTION_KEY],
+      ['TOKEN_ENCRYPTION_SECRET', process.env.TOKEN_ENCRYPTION_SECRET],
+      ['OAUTH_STATE_SECRET', process.env.OAUTH_STATE_SECRET],
+      ['SESSION_SECRET', process.env.SESSION_SECRET],
+      ['CHZZK_CLIENT_SECRET', process.env.CHZZK_CLIENT_SECRET],
+      ['CIME_CLIENT_SECRET', process.env.CIME_CLIENT_SECRET],
+      ['YOUTUBE_CLIENT_SECRET', process.env.YOUTUBE_CLIENT_SECRET],
+      ['GOOGLE_YOUTUBE_CLIENT_SECRET', process.env.GOOGLE_YOUTUBE_CLIENT_SECRET],
+      ['OPS_ADMIN_TOKEN', process.env.OPS_ADMIN_TOKEN],
+      ['ADMIN_API_TOKEN', process.env.ADMIN_API_TOKEN],
+      ['ADMIN_TOKEN', process.env.ADMIN_TOKEN],
+      ['TOKEN_SECRET', process.env.TOKEN_SECRET],
+      ['PVD_TOKEN_SECRET', process.env.PVD_TOKEN_SECRET],
+      ['DRAWING_DONATION_TOKEN_SECRET', process.env.DRAWING_DONATION_TOKEN_SECRET],
+      ['YOUTUBE_WEBSUB_VERIFY_TOKEN', process.env.YOUTUBE_WEBSUB_VERIFY_TOKEN],
+    ];
+    for (const [name, value] of configuredSecrets) {
+      if (value && isPlaceholderSecret(value)) {
+        throw new Error(`${name} must not use a placeholder value in production`);
+      }
+    }
+    const resolvedOAuthStateSecret = String(
+      process.env.OAUTH_STATE_SECRET ||
+      process.env.SESSION_SECRET ||
+      process.env.CHZZK_CLIENT_SECRET ||
+      process.env.CIME_CLIENT_SECRET ||
+      process.env.YOUTUBE_CLIENT_SECRET ||
+      process.env.GOOGLE_YOUTUBE_CLIENT_SECRET ||
+      'arubot-oauth-state-development-secret'
+    );
+    if (isPlaceholderSecret(resolvedOAuthStateSecret)) {
+      throw new Error('OAuth state signing must use a non-placeholder secret in production');
+    }
+  }
   if (requireExplicit && explicit.length < 16) {
     throw new Error('ARUBOT_SECRET_ENCRYPTION_KEY or TOKEN_ENCRYPTION_SECRET must be set to at least 16 characters in production');
   }
@@ -582,41 +662,69 @@ async function ensureApiKeysTable() {
         owner_pid text not null,
         created_at timestamptz default now(),
         last_used timestamptz,
+        scopes text[] not null default array['user-api','desktop','warudo']::text[],
+        expires_at timestamptz not null default (now() + interval '90 days'),
+        device_id text,
         revoked boolean default false
       );
       alter table api_keys add column if not exists api_key_hash text;
       alter table api_keys add column if not exists api_key_hint text;
+      alter table api_keys add column if not exists scopes text[] not null default array['user-api','desktop','warudo']::text[];
+      alter table api_keys add column if not exists expires_at timestamptz;
+      alter table api_keys add column if not exists device_id text;
+      update api_keys set expires_at = coalesce(expires_at, now() + interval '90 days');
+      alter table api_keys alter column expires_at set not null;
       create unique index if not exists idx_api_keys_hash on api_keys(api_key_hash) where api_key_hash is not null;
+      create index if not exists idx_api_keys_owner_active on api_keys(owner_pid, expires_at desc) where revoked = false;
     `);
   });
 }
 
-export async function issueApiKey(ownerPid) {
+const API_KEY_SCOPES = new Set(['user-api', 'desktop', 'warudo']);
+
+function normalizeApiKeyScopes(scopes) {
+  const values = Array.isArray(scopes) ? scopes : String(scopes || '').split(',');
+  const normalized = [...new Set(values.map((value) => String(value || '').trim().toLowerCase()).filter((value) => API_KEY_SCOPES.has(value)))];
+  return normalized.length ? normalized : ['user-api', 'desktop', 'warudo'];
+}
+
+export async function issueApiKey(ownerPid, options = {}) {
   await ensureApiKeysTable();
   const key = crypto.randomBytes(32).toString('hex');
   const hash = secretHash(key);
   const hint = `${key.slice(0, 8)}...${key.slice(-4)}`;
+  const scopes = normalizeApiKeyScopes(options.scopes);
+  const ttlDays = Math.max(1, Math.min(365, Number(options.ttlDays || process.env.API_KEY_TTL_DAYS || 90)));
+  const expiresAt = new Date(Date.now() + ttlDays * 24 * 60 * 60 * 1000);
   await withPgClient(async (pg) => {
     await pg.query(
-      `insert into api_keys (api_key, api_key_hash, api_key_hint, owner_pid) values ($1, $2, $3, $4)`,
-      [protectSecret(key), hash, hint, String(ownerPid)]
+      `insert into api_keys (api_key, api_key_hash, api_key_hint, owner_pid, scopes, expires_at, device_id)
+       values ($1, $2, $3, $4, $5::text[], $6, $7)`,
+      [protectSecret(key), hash, hint, String(ownerPid), scopes, expiresAt.toISOString(), options.deviceId ? String(options.deviceId) : null]
     );
   });
   return key;
 }
 
-export async function getOwnerPidForApiKey(key) {
+export async function getOwnerPidForApiKey(key, options = {}) {
   if (!key) return null;
   await ensureApiKeysTable();
   let row = null;
   const hash = secretHash(key);
+  const requiredScope = String(options.requiredScope || '').trim().toLowerCase();
   await withPgClient(async (pg) => {
     const r = await pg.query(
-      `select api_key, api_key_hash, owner_pid, revoked from api_keys where api_key_hash = $1 or api_key = $2 limit 1`,
+      `select api_key, api_key_hash, owner_pid, revoked, scopes, expires_at, device_id
+         from api_keys
+        where (api_key_hash = $1 or api_key = $2)
+          and revoked = false
+          and expires_at > now()
+        limit 1`,
       [hash, String(key)]
     );
     row = r?.rows?.[0] || null;
-    if (row && row.revoked) row = null;
+    if (row && requiredScope && !normalizeApiKeyScopes(row.scopes).includes(requiredScope)) row = null;
+    if (row && options.deviceId && row.device_id && String(row.device_id) !== String(options.deviceId)) row = null;
     if (row && !row.api_key_hash) {
       await pg.query(
         `update api_keys set api_key = $1, api_key_hash = $2, api_key_hint = $3 where api_key = $4`,
@@ -625,6 +733,65 @@ export async function getOwnerPidForApiKey(key) {
     }
   });
   return row ? String(row.owner_pid) : null;
+}
+
+async function ensureApiWebSocketTicketsTable() {
+  await withPgClient(async (pg) => {
+    await pg.query(`
+      create table if not exists api_websocket_tickets (
+        ticket_hash text primary key,
+        owner_pid text not null,
+        scope text not null check (scope in ('desktop', 'warudo')),
+        created_at timestamptz not null default now(),
+        expires_at timestamptz not null,
+        consumed_at timestamptz
+      );
+      create index if not exists idx_api_websocket_tickets_expiry
+        on api_websocket_tickets(expires_at)
+        where consumed_at is null;
+    `);
+  });
+}
+
+export async function issueApiWebSocketTicket(ownerPid, scope, ttlMs = 30_000) {
+  const owner = String(ownerPid || '').trim();
+  const normalizedScope = String(scope || '').trim().toLowerCase();
+  if (!owner) throw new Error('ownerPid is required');
+  if (!['desktop', 'warudo'].includes(normalizedScope)) throw new Error('Unsupported WebSocket ticket scope');
+  const ttl = Math.max(5_000, Math.min(60_000, Math.floor(Number(ttlMs || 30_000))));
+  const ticket = `ws_${crypto.randomBytes(32).toString('base64url')}`;
+  const ticketHash = secretHash(ticket);
+  const expiresAt = new Date(Date.now() + ttl);
+  await ensureApiWebSocketTicketsTable();
+  await withPgClient(async (pg) => {
+    await pg.query(
+      `insert into api_websocket_tickets (ticket_hash, owner_pid, scope, expires_at)
+       values ($1, $2, $3, $4)`,
+      [ticketHash, owner, normalizedScope, expiresAt.toISOString()]
+    );
+    await pg.query('delete from api_websocket_tickets where expires_at < now() - interval \'10 minutes\' or consumed_at < now() - interval \'10 minutes\'');
+  });
+  return { ticket, expiresAt: expiresAt.toISOString(), scope: normalizedScope };
+}
+
+export async function consumeApiWebSocketTicket(ticket, requiredScope) {
+  const rawTicket = String(ticket || '').trim();
+  const scope = String(requiredScope || '').trim().toLowerCase();
+  if (!rawTicket || !['desktop', 'warudo'].includes(scope)) return null;
+  await ensureApiWebSocketTicketsTable();
+  return withPgClient(async (pg) => {
+    const consumed = await pg.query(
+      `update api_websocket_tickets
+          set consumed_at = now()
+        where ticket_hash = $1
+          and scope = $2
+          and consumed_at is null
+          and expires_at > now()
+      returning owner_pid`,
+      [secretHash(rawTicket), scope]
+    );
+    return consumed.rows?.[0]?.owner_pid ? String(consumed.rows[0].owner_pid) : null;
+  });
 }
 
 export async function touchApiKeyLastUsed(key) {
@@ -647,13 +814,17 @@ export async function revokeApiKey(ownerPid, key) {
   return true;
 }
 
-export async function getActiveApiKeyForOwner(ownerPid) {
+export async function getActiveApiKeyForOwner(ownerPid, options = {}) {
   await ensureApiKeysTable();
   let row = null;
+  const requiredScopes = options.scopes ? normalizeApiKeyScopes(options.scopes) : [];
   await withPgClient(async (pg) => {
     const r = await pg.query(
-      `select api_key from api_keys where owner_pid = $1 and revoked = false order by created_at desc limit 1`,
-      [String(ownerPid)]
+      `select api_key from api_keys
+        where owner_pid = $1 and revoked = false and expires_at > now()
+          and ($2::text[] is null or scopes @> $2::text[])
+        order by created_at desc limit 1`,
+      [String(ownerPid), requiredScopes.length ? requiredScopes : null]
     );
     row = r?.rows?.[0] || null;
   });
@@ -705,26 +876,30 @@ function isUndefinedDbFunctionError(error, functionName) {
   return error?.code === '42883' && (!functionName || message.includes(functionName));
 }
 
-export async function ensureChannelPointsTable(streamerUid) {
+async function ensureChannelPointsTableWithClient(pg, streamerUid) {
   const suffix = sanitizeTableNameSuffix(streamerUid);
   const table = `channelpoint_${suffix}`;
-  await withPgClient(async (pg) => {
-    const sql = `
-      create table if not exists ${table} (
-        user_id text primary key,
-        username text,
-        points integer default 0
-      );
-    `;
-    await pg.query(sql);
-  });
+  const tableSql = quoteIdent(table);
+  const constraintName = `${table.slice(0, 40)}_points_nonnegative_ck`;
+  await pg.query(`
+    create table if not exists ${tableSql} (
+      user_id text primary key,
+      username text,
+      points integer not null default 0,
+      constraint ${quoteIdent(constraintName)} check (points >= 0)
+    )
+  `);
   return table;
+}
+
+export async function ensureChannelPointsTable(streamerUid) {
+  return withPgClient((pg) => ensureChannelPointsTableWithClient(pg, streamerUid));
 }
 
 export async function listChannelPoints(streamerUid) {
   return withPgClient(async (pg) => {
     const channelIdentity = await resolvePointChannelIdentity(pg, streamerUid);
-    const tables = await listPointTablesForChannelAliases(channelIdentity.channelAliases);
+    const tables = await listPointTablesForChannelAliases(channelIdentity.channelAliases, pg);
     const users = new Map();
     const rawRows = [];
 
@@ -814,7 +989,7 @@ export async function listChannelPointsPage(streamerUid, options = {}) {
   const limit = Math.max(1, Math.min(5000, Number(options.limit || 1000) || 1000));
   return withPgClient(async (pg) => {
     const channelIdentity = await resolvePointChannelIdentity(pg, streamerUid);
-    const tables = await listPointTablesForChannelAliases(channelIdentity.channelAliases);
+    const tables = await listPointTablesForChannelAliases(channelIdentity.channelAliases, pg);
     const platformAccounts = await pg.query(`select to_regclass('public.platform_accounts') as table_name`);
     const cte = buildChannelPointPageCte(tables, !!platformAccounts.rows?.[0]?.table_name);
     const totals = await pg.query(`
@@ -1106,10 +1281,12 @@ async function resolvePointUserIdentities(pg, userIds) {
   return result;
 }
 
-async function listPointTablesForChannelAliases(channelAliases) {
+async function listPointTablesForChannelAliases(channelAliases, pg = null) {
   const tables = [];
   for (const channelUid of uniqueNonEmpty(channelAliases)) {
-    tables.push(await ensureChannelPointsTable(channelUid));
+    tables.push(pg
+      ? await ensureChannelPointsTableWithClient(pg, channelUid)
+      : await ensureChannelPointsTable(channelUid));
   }
   return uniqueNonEmpty(tables);
 }
@@ -1118,7 +1295,7 @@ async function sumPointsForIdentity(pg, channelAliases, identityKeys) {
   const keys = uniqueNonEmpty(identityKeys);
   if (!keys.length) return 0;
   let total = 0;
-  const tables = await listPointTablesForChannelAliases(channelAliases);
+  const tables = await listPointTablesForChannelAliases(channelAliases, pg);
   for (const table of tables) {
     const { rows } = await pg.query(`select coalesce(sum(points), 0) as points from ${table} where user_id = any($1::text[])`, [keys]);
     total += Number(rows?.[0]?.points || 0);
@@ -1132,7 +1309,7 @@ async function getPointBalanceSummaryForIdentity(pg, channelAliases, identityKey
   let total = 0;
   let username = null;
   let found = false;
-  const tables = await listPointTablesForChannelAliases(channelAliases);
+  const tables = await listPointTablesForChannelAliases(channelAliases, pg);
   for (const table of tables) {
     const { rows } = await pg.query(`select username, points from ${table} where user_id = any($1::text[])`, [keys]);
     for (const row of rows || []) {
@@ -1147,14 +1324,14 @@ async function getPointBalanceSummaryForIdentity(pg, channelAliases, identityKey
 async function deletePointRowsForIdentity(pg, channelAliases, identityKeys) {
   const keys = uniqueNonEmpty(identityKeys);
   if (!keys.length) return;
-  const tables = await listPointTablesForChannelAliases(channelAliases);
+  const tables = await listPointTablesForChannelAliases(channelAliases, pg);
   for (const table of tables) {
     await pg.query(`delete from ${table} where user_id = any($1::text[])`, [keys]);
   }
 }
 
 async function upsertCanonicalPointDelta(pg, canonicalChannelUid, canonicalUserId, username, delta) {
-  const table = await ensureChannelPointsTable(canonicalChannelUid);
+  const table = await ensureChannelPointsTableWithClient(pg, canonicalChannelUid);
   await pg.query(
     `insert into ${table} (user_id, username, points) values ($1, $2, $3)
      on conflict (user_id) do update set
@@ -1166,7 +1343,7 @@ async function upsertCanonicalPointDelta(pg, canonicalChannelUid, canonicalUserI
 
 async function setCanonicalPointBalance(pg, channelIdentity, userIdentity, username, points) {
   await deletePointRowsForIdentity(pg, channelIdentity.channelAliases, userIdentity.identityKeys);
-  const table = await ensureChannelPointsTable(channelIdentity.canonicalChannelUid);
+  const table = await ensureChannelPointsTableWithClient(pg, channelIdentity.canonicalChannelUid);
   await pg.query(
     `insert into ${table} (user_id, username, points) values ($1, $2, $3)
      on conflict (user_id) do update set username = excluded.username, points = excluded.points`,
@@ -1189,6 +1366,205 @@ export async function incrChannelPoints(streamerUid, userId, username, delta = 1
     const userIdentity = await resolvePointUserIdentity(pg, userId);
     if (!channelIdentity.canonicalChannelUid || !userIdentity.canonicalUserId) return;
     await upsertCanonicalPointDelta(pg, channelIdentity.canonicalChannelUid, userIdentity.canonicalUserId, username, delta);
+  });
+}
+
+function normalizePointDeductionAmount(amount) {
+  const normalized = Math.floor(Number(amount));
+  if (!Number.isSafeInteger(normalized) || normalized <= 0) {
+    const error = new Error('point deduction amount must be a positive safe integer');
+    error.code = 'invalid_point_deduction_amount';
+    throw error;
+  }
+  return normalized;
+}
+
+function normalizePointDeductionResult(row, fallback = {}) {
+  const value = row || {};
+  const before = Number(value.balance_before ?? value.balanceBefore ?? value.before ?? 0);
+  const after = Number(value.balance_after ?? value.balanceAfter ?? value.after ?? before);
+  return {
+    deducted: value.deducted === true,
+    sufficient: value.sufficient === true || value.deducted === true,
+    amount: Number(value.amount ?? fallback.amount ?? 0),
+    balanceBefore: before,
+    balanceAfter: after,
+    streamerUid: String(value.canonical_channel_uid ?? value.canonicalChannelUid ?? fallback.streamerUid ?? ''),
+    userId: String(value.canonical_user_id ?? value.canonicalUserId ?? fallback.userId ?? ''),
+  };
+}
+
+export async function checkDatabaseReady() {
+  const startedAt = Date.now();
+  try {
+    if (getDbUrl()) {
+      await withPgClient((pg) => pg.query('select 1 as ok'));
+    } else {
+      ensure();
+      const { error } = await supabase.from('bot_settings').select('sid').limit(1);
+      if (error) throw error;
+    }
+    return { ok: true, latencyMs: Date.now() - startedAt };
+  } catch (error) {
+    return { ok: false, latencyMs: Date.now() - startedAt, error: error?.message || String(error) };
+  }
+}
+
+export async function closeDatabaseConnections() {
+  const pool = pgPool;
+  pgPool = null;
+  pgPoolUrl = null;
+  if (pool) await pool.end();
+}
+
+let runtimeLeasesReady = false;
+
+async function ensureRuntimeLeasesWithClient(pg) {
+  if (runtimeLeasesReady) return;
+  await pg.query(`
+    create table if not exists runtime_leases (
+      resource_key text primary key,
+      owner_id text not null,
+      fencing_token bigint not null default 1,
+      expires_at timestamptz not null,
+      updated_at timestamptz not null default now()
+    );
+    create index if not exists idx_runtime_leases_expiry on runtime_leases(expires_at);
+  `);
+  runtimeLeasesReady = true;
+}
+
+export async function claimRuntimeLease(resourceKey, ownerId, ttlMs = 30_000) {
+  const key = String(resourceKey || '').trim();
+  const owner = String(ownerId || '').trim();
+  const ttl = Math.max(5_000, Math.min(5 * 60_000, Math.floor(Number(ttlMs || 30_000))));
+  if (!key || !owner) throw new Error('resourceKey and ownerId are required');
+  if (!getDbUrl()) return { acquired: true, resourceKey: key, ownerId: owner, fencingToken: 1, fallback: true };
+  return withPgClient(async (pg) => {
+    await ensureRuntimeLeasesWithClient(pg);
+    const result = await pg.query(
+      `insert into runtime_leases (resource_key, owner_id, fencing_token, expires_at, updated_at)
+       values ($1, $2, 1, now() + ($3::bigint * interval '1 millisecond'), now())
+       on conflict (resource_key) do update
+         set owner_id = excluded.owner_id,
+             fencing_token = case when runtime_leases.owner_id = excluded.owner_id
+                                  then runtime_leases.fencing_token
+                                  else runtime_leases.fencing_token + 1 end,
+             expires_at = excluded.expires_at,
+             updated_at = now()
+       where runtime_leases.owner_id = excluded.owner_id or runtime_leases.expires_at <= now()
+       returning resource_key, owner_id, fencing_token, expires_at`,
+      [key, owner, ttl]
+    );
+    const row = result.rows?.[0];
+    if (!row) return { acquired: false, resourceKey: key, ownerId: owner };
+    return {
+      acquired: true,
+      resourceKey: String(row.resource_key),
+      ownerId: String(row.owner_id),
+      fencingToken: Number(row.fencing_token),
+      expiresAt: row.expires_at,
+    };
+  });
+}
+
+export async function releaseRuntimeLease(resourceKey, ownerId) {
+  const key = String(resourceKey || '').trim();
+  const owner = String(ownerId || '').trim();
+  if (!key || !owner || !getDbUrl()) return false;
+  return withPgClient(async (pg) => {
+    await ensureRuntimeLeasesWithClient(pg);
+    const result = await pg.query('delete from runtime_leases where resource_key = $1 and owner_id = $2', [key, owner]);
+    return Number(result.rowCount || 0) > 0;
+  });
+}
+
+async function deductChannelPointsIfEnoughWithClient(pg, streamerUid, userId, username, amount) {
+  const normalizedAmount = normalizePointDeductionAmount(amount);
+  const channelIdentity = await resolvePointChannelIdentity(pg, streamerUid);
+  const userIdentity = await resolvePointUserIdentity(pg, userId);
+  if (!channelIdentity.canonicalChannelUid || !userIdentity.canonicalUserId) {
+    const error = new Error('streamerUid and userId must resolve to valid point identities');
+    error.code = 'invalid_point_identity';
+    throw error;
+  }
+
+  const lockKey = `${channelIdentity.canonicalChannelUid}:${userIdentity.canonicalUserId}`;
+  await pg.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [lockKey]);
+
+  const tables = (await listPointTablesForChannelAliases(channelIdentity.channelAliases, pg)).sort();
+  let balanceBefore = 0;
+  let resolvedUsername = username ? String(username) : null;
+  for (const table of tables) {
+    const result = await pg.query(
+      `select username, points from ${quoteIdent(table)} where user_id = any($1::text[]) for update`,
+      [userIdentity.identityKeys]
+    );
+    for (const row of result.rows || []) {
+      balanceBefore += Number(row.points || 0);
+      if (!resolvedUsername && row.username) resolvedUsername = String(row.username);
+    }
+  }
+
+  if (balanceBefore < normalizedAmount) {
+    return normalizePointDeductionResult({
+      deducted: false,
+      sufficient: false,
+      amount: normalizedAmount,
+      balance_before: balanceBefore,
+      balance_after: balanceBefore,
+      canonical_channel_uid: channelIdentity.canonicalChannelUid,
+      canonical_user_id: userIdentity.canonicalUserId,
+    });
+  }
+
+  await deletePointRowsForIdentity(pg, channelIdentity.channelAliases, userIdentity.identityKeys);
+  const balanceAfter = balanceBefore - normalizedAmount;
+  const canonicalTable = await ensureChannelPointsTableWithClient(pg, channelIdentity.canonicalChannelUid);
+  await pg.query(
+    `insert into ${quoteIdent(canonicalTable)} (user_id, username, points)
+     values ($1, $2, $3)
+     on conflict (user_id) do update set username = excluded.username, points = excluded.points`,
+    [String(userIdentity.canonicalUserId), resolvedUsername, balanceAfter]
+  );
+
+  return normalizePointDeductionResult({
+    deducted: true,
+    sufficient: true,
+    amount: normalizedAmount,
+    balance_before: balanceBefore,
+    balance_after: balanceAfter,
+    canonical_channel_uid: channelIdentity.canonicalChannelUid,
+    canonical_user_id: userIdentity.canonicalUserId,
+  });
+}
+
+export async function deductChannelPointsIfEnough(streamerUid, userId, username, amount) {
+  const normalizedAmount = normalizePointDeductionAmount(amount);
+  if (!getDbUrl()) {
+    ensure();
+    if (typeof supabase.rpc !== 'function') throw new Error('Atomic point deduction RPC is unavailable');
+    const { data, error } = await supabase.rpc('arubot_deduct_channel_points_if_enough', {
+      p_streamer_uid: String(streamerUid || ''),
+      p_user_id: String(userId || ''),
+      p_username: username ? String(username) : null,
+      p_amount: normalizedAmount,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    return normalizePointDeductionResult(row, { streamerUid, userId, amount: normalizedAmount });
+  }
+
+  return withPgClient(async (pg) => {
+    await pg.query('begin');
+    try {
+      const result = await deductChannelPointsIfEnoughWithClient(pg, streamerUid, userId, username, normalizedAmount);
+      await pg.query('commit');
+      return result;
+    } catch (error) {
+      try { await pg.query('rollback'); } catch {}
+      throw error;
+    }
   });
 }
 
@@ -1226,7 +1602,7 @@ export async function deleteChannelPoints(streamerUid, userId) {
 export async function clearAllChannelPoints(streamerUid) {
   await withPgClient(async (pg) => {
     const channelIdentity = await resolvePointChannelIdentity(pg, streamerUid);
-    const tables = await listPointTablesForChannelAliases(channelIdentity.channelAliases);
+    const tables = await listPointTablesForChannelAliases(channelIdentity.channelAliases, pg);
     for (const table of tables) {
       await pg.query(`delete from ${table}`);
     }
@@ -1240,7 +1616,7 @@ export async function bulkUpsertChannelPoints(streamerUid, rows) {
   await withPgClient(async (pg) => {
     const channelIdentity = await resolvePointChannelIdentity(pg, streamerUid);
     if (!channelIdentity.canonicalChannelUid) return;
-    const table = await ensureChannelPointsTable(channelIdentity.canonicalChannelUid);
+    const table = await ensureChannelPointsTableWithClient(pg, channelIdentity.canonicalChannelUid);
     const normalizedRowsByUser = new Map();
     const userIdentities = await resolvePointUserIdentities(pg, rows.map((row) => row?.user_id));
 
@@ -1295,6 +1671,19 @@ export async function upsertSession(sid, userId, days = 30) {
   if (error) throw error;
 }
 
+export async function revokeSession(sid) {
+  ensure();
+  const sessionId = String(sid || '').trim();
+  if (!sessionId) return false;
+  const now = new Date().toISOString();
+  const { error } = await supabase
+    .from('sessions')
+    .update({ revoked: true, expires_at: now, last_seen: now })
+    .eq('sid', sessionId);
+  if (error) throw error;
+  return true;
+}
+
 export async function getSessionUserId(sid) {
   ensure();
   if (!sid) return null;
@@ -1332,7 +1721,7 @@ export async function initDb() {
   if (isPostgresProvider()) {
     const dbUrl = getDbUrl();
     if (!dbUrl) {
-      console.warn('[Postgres] POSTGRES_URL missing. Database features will be disabled.');
+      console.warn('[Postgres] POSTGRES_RUNTIME_URL/POSTGRES_URL missing. Database features will be disabled.');
       return;
     }
     supabase = createPostgresProviderClient();
@@ -2861,7 +3250,7 @@ export async function cancelPredictionForSid(sid, predictionId) {
     const row = prediction.rows?.[0] || null;
     if (!row) return null;
     if (row.status === 'settled' || row.status === 'cancelled') return fetchPredictionWithBets(pg, predictionId);
-    const table = await ensureChannelPointsTable(row.channel_uid);
+    const table = await ensureChannelPointsTableWithClient(pg, row.channel_uid);
     const bets = await pg.query(`select * from prediction_bets where prediction_id = $1 and refunded = false`, [row.id]);
     const eventLogs = [];
     for (const bet of bets.rows || []) {
@@ -2907,7 +3296,7 @@ export async function settlePredictionForSid(sid, predictionId, winningOptionId)
     const winning = options.find((option) => option.id === String(winningOptionId));
     if (!winning) throw new Error('invalid winning option');
 
-    const table = await ensureChannelPointsTable(row.channel_uid);
+    const table = await ensureChannelPointsTableWithClient(pg, row.channel_uid);
     const bets = await pg.query(`select * from prediction_bets where prediction_id = $1 order by created_at asc`, [row.id]);
     const allBets = bets.rows || [];
     const eventLogs = [];
@@ -6456,10 +6845,468 @@ export async function upsertBotRule(sid, rule) {
   if (error) throw error;
 }
 
+function normalizeCooldownClaimResult(row, fallback = {}) {
+  const value = row || {};
+  const claimedAt = Number(value.claimed_at ?? value.claimedAt ?? fallback.claimedAt ?? Date.now());
+  const lastUsed = Number(value.last_used ?? value.lastUsed ?? 0);
+  const cooldownMs = Math.max(0, Number(value.cooldown_ms ?? value.cooldownMs ?? fallback.cooldownMs ?? 0));
+  return {
+    found: value.found !== false && !!(value.rule_id ?? value.ruleId ?? fallback.ruleId),
+    claimed: value.claimed === true,
+    sid: String(value.sid ?? fallback.sid ?? ''),
+    ruleId: String(value.rule_id ?? value.ruleId ?? fallback.ruleId ?? ''),
+    claimedAt,
+    lastUsed,
+    cooldownMs,
+    retryAfterMs: value.claimed === true ? 0 : Math.max(0, cooldownMs - (claimedAt - lastUsed)),
+  };
+}
+
+export async function claimBotRuleCooldown(sid, ruleId, options = {}) {
+  const normalizedSid = String(sid || '').trim();
+  const normalizedRuleId = String(ruleId || '').trim();
+  if (!normalizedSid || !normalizedRuleId) {
+    const error = new Error('sid and ruleId are required');
+    error.code = 'invalid_bot_rule_cooldown_claim';
+    throw error;
+  }
+  const nowMs = options.nowMs == null ? null : Math.floor(Number(options.nowMs));
+  if (nowMs != null && !Number.isSafeInteger(nowMs)) throw new Error('nowMs must be a safe integer');
+  const cooldownMs = options.cooldownMs == null ? null : Math.max(0, Math.floor(Number(options.cooldownMs)));
+  if (cooldownMs != null && !Number.isSafeInteger(cooldownMs)) throw new Error('cooldownMs must be a safe integer');
+
+  if (!getDbUrl()) {
+    ensure();
+    if (typeof supabase.rpc !== 'function') throw new Error('Bot rule cooldown claim RPC is unavailable');
+    const { data, error } = await supabase.rpc('arubot_claim_bot_rule_cooldown', {
+      p_sid: normalizedSid,
+      p_rule_id: normalizedRuleId,
+      p_now_ms: nowMs,
+      p_cooldown_ms: cooldownMs,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    return normalizeCooldownClaimResult(row, { sid: normalizedSid, ruleId: normalizedRuleId, claimedAt: nowMs, cooldownMs });
+  }
+
+  return withPgClient(async (pg) => {
+    const claimed = await pg.query(
+      `with input as (
+         select coalesce($3::bigint, floor(extract(epoch from clock_timestamp()) * 1000)::bigint) as claimed_at
+       )
+       update bot_rules as rule
+          set last_used = input.claimed_at
+         from input
+        where rule.sid = $1
+          and rule.id = $2
+          and input.claimed_at - coalesce(rule.last_used, 0) >= greatest(0, coalesce($4::bigint, rule.cooldown::bigint, 0))
+       returning rule.sid, rule.id as rule_id, true as found, true as claimed,
+                 input.claimed_at, rule.last_used, greatest(0, coalesce($4::bigint, rule.cooldown::bigint, 0)) as cooldown_ms`,
+      [normalizedSid, normalizedRuleId, nowMs, cooldownMs]
+    );
+    if (claimed.rows?.[0]) return normalizeCooldownClaimResult(claimed.rows[0]);
+
+    const current = await pg.query(
+      `select sid, id as rule_id, true as found, false as claimed,
+              coalesce($3::bigint, floor(extract(epoch from clock_timestamp()) * 1000)::bigint) as claimed_at,
+              coalesce(last_used, 0)::bigint as last_used,
+              greatest(0, coalesce($4::bigint, cooldown::bigint, 0)) as cooldown_ms
+         from bot_rules
+        where sid = $1 and id = $2
+        limit 1`,
+      [normalizedSid, normalizedRuleId, nowMs, cooldownMs]
+    );
+    if (current.rows?.[0]) return normalizeCooldownClaimResult(current.rows[0]);
+    return normalizeCooldownClaimResult({ found: false, claimed: false }, {
+      sid: normalizedSid,
+      ruleId: normalizedRuleId,
+      claimedAt: nowMs ?? Date.now(),
+      cooldownMs: cooldownMs ?? 0,
+    });
+  });
+}
+
 export async function deleteBotRule(sid, id) {
   ensure();
   const { error } = await supabase.from('bot_rules').delete().eq('sid', sid).eq('id', id);
   if (error) throw error;
+}
+
+let durableRuntimeJobsReady = false;
+
+async function ensureDurableRuntimeJobsWithClient(pg) {
+  if (durableRuntimeJobsReady) return;
+  await pg.query(`
+    create table if not exists durable_runtime_jobs (
+      id text primary key,
+      sid text not null,
+      job_type text not null,
+      idempotency_key text not null,
+      status text not null default 'queued',
+      channel_uid text,
+      user_id text,
+      username text,
+      points_cost bigint not null default 0,
+      payload jsonb not null default '{}'::jsonb,
+      result jsonb,
+      attempt_count integer not null default 0,
+      max_attempts integer not null default 5,
+      available_at timestamptz not null default now(),
+      locked_by text,
+      locked_at timestamptz,
+      last_error text,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      completed_at timestamptz,
+      constraint durable_runtime_jobs_status_ck check (status in ('queued', 'processing', 'completed', 'failed', 'cancelled')),
+      constraint durable_runtime_jobs_points_cost_ck check (points_cost >= 0),
+      constraint durable_runtime_jobs_attempts_ck check (attempt_count >= 0 and max_attempts > 0),
+      constraint durable_runtime_jobs_job_type_ck check (job_type ~ '^[a-z0-9][a-z0-9._:-]{0,63}$'),
+      constraint durable_runtime_jobs_idempotency_uniq unique (sid, job_type, idempotency_key)
+    );
+    create index if not exists idx_durable_runtime_jobs_claim
+      on durable_runtime_jobs (status, available_at, created_at)
+      where status in ('queued', 'processing');
+    create index if not exists idx_durable_runtime_jobs_sid_created
+      on durable_runtime_jobs (sid, created_at desc);
+  `);
+  durableRuntimeJobsReady = true;
+}
+
+function normalizeDurableRuntimeJobInput(input = {}) {
+  const sid = String(input.sid || '').trim();
+  const jobType = String(input.jobType || input.job_type || '').trim().toLowerCase();
+  const idempotencyKey = String(input.idempotencyKey || input.idempotency_key || '').trim();
+  if (!sid || !/^[a-z0-9][a-z0-9._:-]{0,63}$/.test(jobType) || !idempotencyKey) {
+    const error = new Error('sid, a valid jobType, and idempotencyKey are required');
+    error.code = 'invalid_durable_runtime_job';
+    throw error;
+  }
+  const pointsCost = Math.floor(Number(input.pointsCost ?? input.points_cost ?? 0));
+  const maxAttempts = Math.floor(Number(input.maxAttempts ?? input.max_attempts ?? 5));
+  if (!Number.isSafeInteger(pointsCost) || pointsCost < 0) throw new Error('pointsCost must be a non-negative safe integer');
+  if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 100) throw new Error('maxAttempts must be between 1 and 100');
+  const availableAtValue = input.availableAt ?? input.available_at ?? new Date();
+  const availableAt = new Date(availableAtValue);
+  if (!Number.isFinite(availableAt.getTime())) throw new Error('availableAt must be a valid date');
+  const payload = input.payload && typeof input.payload === 'object' && !Array.isArray(input.payload) ? input.payload : {};
+  return {
+    id: String(input.id || crypto.randomUUID()),
+    sid,
+    jobType,
+    idempotencyKey: idempotencyKey.slice(0, 256),
+    channelUid: input.channelUid ?? input.channel_uid ?? null,
+    userId: input.userId ?? input.user_id ?? null,
+    username: input.username ?? null,
+    pointsCost,
+    payload,
+    maxAttempts,
+    availableAt: availableAt.toISOString(),
+  };
+}
+
+function durableRuntimeJobRow(input) {
+  const job = normalizeDurableRuntimeJobInput(input);
+  return {
+    id: job.id,
+    sid: job.sid,
+    job_type: job.jobType,
+    idempotency_key: job.idempotencyKey,
+    status: 'queued',
+    channel_uid: job.channelUid ? String(job.channelUid) : null,
+    user_id: job.userId ? String(job.userId) : null,
+    username: job.username ? String(job.username) : null,
+    points_cost: job.pointsCost,
+    payload: job.payload,
+    max_attempts: job.maxAttempts,
+    available_at: job.availableAt,
+  };
+}
+
+function normalizeDurableRuntimeJob(row) {
+  if (!row) return null;
+  return {
+    id: String(row.id),
+    sid: String(row.sid),
+    jobType: String(row.job_type ?? row.jobType),
+    idempotencyKey: String(row.idempotency_key ?? row.idempotencyKey),
+    status: String(row.status),
+    channelUid: row.channel_uid ?? row.channelUid ?? null,
+    userId: row.user_id ?? row.userId ?? null,
+    username: row.username ?? null,
+    pointsCost: Number(row.points_cost ?? row.pointsCost ?? 0),
+    payload: row.payload && typeof row.payload === 'object' ? row.payload : {},
+    result: row.result && typeof row.result === 'object' ? row.result : null,
+    attemptCount: Number(row.attempt_count ?? row.attemptCount ?? 0),
+    maxAttempts: Number(row.max_attempts ?? row.maxAttempts ?? 0),
+    availableAt: row.available_at ?? row.availableAt ?? null,
+    lockedBy: row.locked_by ?? row.lockedBy ?? null,
+    lockedAt: row.locked_at ?? row.lockedAt ?? null,
+    lastError: row.last_error ?? row.lastError ?? null,
+    createdAt: row.created_at ?? row.createdAt ?? null,
+    updatedAt: row.updated_at ?? row.updatedAt ?? null,
+    completedAt: row.completed_at ?? row.completedAt ?? null,
+  };
+}
+
+async function insertDurableRuntimeJobWithClient(pg, row) {
+  const inserted = await pg.query(
+    `insert into durable_runtime_jobs
+      (id, sid, job_type, idempotency_key, status, channel_uid, user_id, username,
+       points_cost, payload, max_attempts, available_at)
+     values ($1, $2, $3, $4, 'queued', $5, $6, $7, $8, $9::jsonb, $10, $11)
+     on conflict (sid, job_type, idempotency_key) do nothing
+     returning *`,
+    [row.id, row.sid, row.job_type, row.idempotency_key, row.channel_uid, row.user_id,
+      row.username, row.points_cost, JSON.stringify(row.payload || {}), row.max_attempts, row.available_at]
+  );
+  if (inserted.rows?.[0]) return { created: true, job: normalizeDurableRuntimeJob(inserted.rows[0]) };
+  const existing = await pg.query(
+    `select * from durable_runtime_jobs where sid = $1 and job_type = $2 and idempotency_key = $3 limit 1`,
+    [row.sid, row.job_type, row.idempotency_key]
+  );
+  return { created: false, job: normalizeDurableRuntimeJob(existing.rows?.[0]) };
+}
+
+export async function enqueueDurableRuntimeJob(input) {
+  const row = durableRuntimeJobRow(input);
+  if (getDbUrl()) {
+    return withPgClient(async (pg) => {
+      await ensureDurableRuntimeJobsWithClient(pg);
+      return insertDurableRuntimeJobWithClient(pg, row);
+    });
+  }
+
+  ensure();
+  const { data, error } = await supabase.from('durable_runtime_jobs').insert(row).select('*').maybeSingle();
+  if (!error) return { created: true, job: normalizeDurableRuntimeJob(data) };
+  if (error.code !== '23505' && !String(error.message || '').toLowerCase().includes('duplicate')) throw error;
+  const existing = await supabase.from('durable_runtime_jobs')
+    .select('*')
+    .eq('sid', row.sid)
+    .eq('job_type', row.job_type)
+    .eq('idempotency_key', row.idempotency_key)
+    .maybeSingle();
+  if (existing.error) throw existing.error;
+  return { created: false, job: normalizeDurableRuntimeJob(existing.data) };
+}
+
+export async function enqueuePaidDurableRuntimeJob(input) {
+  const row = durableRuntimeJobRow(input);
+  if (row.points_cost > 0 && (!row.channel_uid || !row.user_id)) {
+    const error = new Error('channelUid and userId are required for a paid durable job');
+    error.code = 'invalid_paid_durable_runtime_job';
+    throw error;
+  }
+
+  if (!getDbUrl()) {
+    ensure();
+    if (typeof supabase.rpc !== 'function') throw new Error('Paid durable job RPC is unavailable');
+    const { data, error } = await supabase.rpc('arubot_enqueue_paid_durable_runtime_job', {
+      p_id: row.id,
+      p_sid: row.sid,
+      p_job_type: row.job_type,
+      p_idempotency_key: row.idempotency_key,
+      p_channel_uid: row.channel_uid,
+      p_user_id: row.user_id,
+      p_username: row.username,
+      p_points_cost: row.points_cost,
+      p_payload: row.payload,
+      p_max_attempts: row.max_attempts,
+      p_available_at: row.available_at,
+    });
+    if (error) throw error;
+    const value = Array.isArray(data) ? data[0] : data;
+    return {
+      created: value?.created === true,
+      job: normalizeDurableRuntimeJob(value?.job ?? value),
+      deduction: value?.deducted == null ? null : normalizePointDeductionResult(value, {
+        streamerUid: row.channel_uid,
+        userId: row.user_id,
+        amount: row.points_cost,
+      }),
+    };
+  }
+
+  return withPgClient(async (pg) => {
+    await ensureDurableRuntimeJobsWithClient(pg);
+    await pg.query('begin');
+    try {
+      await pg.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+        `durable-job:${row.sid}:${row.job_type}:${row.idempotency_key}`,
+      ]);
+      const existing = await pg.query(
+        `select * from durable_runtime_jobs where sid = $1 and job_type = $2 and idempotency_key = $3 limit 1`,
+        [row.sid, row.job_type, row.idempotency_key]
+      );
+      if (existing.rows?.[0]) {
+        await pg.query('commit');
+        return { created: false, job: normalizeDurableRuntimeJob(existing.rows[0]), deduction: null };
+      }
+
+      let deduction = null;
+      if (row.points_cost > 0) {
+        deduction = await deductChannelPointsIfEnoughWithClient(
+          pg,
+          row.channel_uid,
+          row.user_id,
+          row.username,
+          row.points_cost
+        );
+        if (!deduction.deducted) {
+          await pg.query('rollback');
+          return { created: false, job: null, deduction };
+        }
+      }
+
+      const inserted = await insertDurableRuntimeJobWithClient(pg, row);
+      await pg.query('commit');
+      return { ...inserted, deduction };
+    } catch (error) {
+      try { await pg.query('rollback'); } catch {}
+      throw error;
+    }
+  });
+}
+
+export async function claimDurableRuntimeJobs(options = {}) {
+  const workerId = String(options.workerId || '').trim();
+  if (!workerId) throw new Error('workerId is required');
+  const limit = Math.max(1, Math.min(100, Math.floor(Number(options.limit || 10))));
+  const leaseMs = Math.max(1000, Math.min(60 * 60 * 1000, Math.floor(Number(options.leaseMs || 60_000))));
+  const jobTypes = uniqueNonEmpty(options.jobTypes || []).map((value) => value.toLowerCase()).slice(0, 32);
+
+  if (!getDbUrl()) {
+    ensure();
+    if (typeof supabase.rpc !== 'function') throw new Error('Durable job claim RPC is unavailable');
+    const { data, error } = await supabase.rpc('arubot_claim_durable_runtime_jobs', {
+      p_worker_id: workerId,
+      p_limit: limit,
+      p_lease_ms: leaseMs,
+      p_job_types: jobTypes.length ? jobTypes : null,
+    });
+    if (error) throw error;
+    return (Array.isArray(data) ? data : []).map(normalizeDurableRuntimeJob);
+  }
+
+  return withPgClient(async (pg) => {
+    await ensureDurableRuntimeJobsWithClient(pg);
+    await pg.query(
+      `update durable_runtime_jobs
+          set status = 'failed', last_error = coalesce(last_error, 'max_attempts_exhausted'),
+              completed_at = coalesce(completed_at, now()), updated_at = now(), locked_by = null, locked_at = null
+        where attempt_count >= max_attempts
+          and (
+            status = 'queued'
+            or (status = 'processing' and locked_at < now() - ($1::bigint * interval '1 millisecond'))
+          )`,
+      [leaseMs]
+    );
+    const result = await pg.query(
+      `with candidates as (
+         select id
+           from durable_runtime_jobs
+          where attempt_count < max_attempts
+            and ($4::text[] is null or job_type = any($4::text[]))
+            and (
+              (status = 'queued' and available_at <= now())
+              or (status = 'processing' and locked_at < now() - ($3::bigint * interval '1 millisecond'))
+            )
+          order by available_at asc, created_at asc
+          for update skip locked
+          limit $2
+       )
+       update durable_runtime_jobs as job
+          set status = 'processing', locked_by = $1, locked_at = now(),
+              attempt_count = job.attempt_count + 1, updated_at = now()
+         from candidates
+        where job.id = candidates.id
+       returning job.*`,
+      [workerId, limit, leaseMs, jobTypes.length ? jobTypes : null]
+    );
+    return (result.rows || []).map(normalizeDurableRuntimeJob);
+  });
+}
+
+export async function completeDurableRuntimeJob(jobId, workerId, result = {}) {
+  const id = String(jobId || '').trim();
+  const owner = String(workerId || '').trim();
+  if (!id || !owner) throw new Error('jobId and workerId are required');
+  const payload = result && typeof result === 'object' && !Array.isArray(result) ? result : {};
+  if (getDbUrl()) {
+    return withPgClient(async (pg) => {
+      await ensureDurableRuntimeJobsWithClient(pg);
+      const updated = await pg.query(
+        `update durable_runtime_jobs
+            set status = 'completed', result = $3::jsonb, completed_at = now(), updated_at = now(),
+                locked_by = null, locked_at = null, last_error = null
+          where id = $1 and status = 'processing' and locked_by = $2
+        returning *`,
+        [id, owner, JSON.stringify(payload)]
+      );
+      return normalizeDurableRuntimeJob(updated.rows?.[0]);
+    });
+  }
+  ensure();
+  const updated = await supabase.from('durable_runtime_jobs')
+    .update({ status: 'completed', result: payload, completed_at: new Date().toISOString(), updated_at: new Date().toISOString(), locked_by: null, locked_at: null, last_error: null })
+    .eq('id', id).eq('status', 'processing').eq('locked_by', owner).select('*').maybeSingle();
+  if (updated.error) throw updated.error;
+  return normalizeDurableRuntimeJob(updated.data);
+}
+
+export async function failDurableRuntimeJob(jobId, workerId, errorMessage, options = {}) {
+  const id = String(jobId || '').trim();
+  const owner = String(workerId || '').trim();
+  if (!id || !owner) throw new Error('jobId and workerId are required');
+  const message = String(errorMessage || 'durable_runtime_job_failed').slice(0, 2000);
+  const retryAt = new Date(options.retryAt || Date.now() + Math.max(1000, Number(options.retryDelayMs || 5000)));
+  if (!Number.isFinite(retryAt.getTime())) throw new Error('retryAt must be a valid date');
+  const terminal = options.terminal === true;
+
+  if (getDbUrl()) {
+    return withPgClient(async (pg) => {
+      await ensureDurableRuntimeJobsWithClient(pg);
+      const updated = await pg.query(
+        `update durable_runtime_jobs
+            set status = case when $4::boolean or attempt_count >= max_attempts then 'failed' else 'queued' end,
+                available_at = case when $4::boolean or attempt_count >= max_attempts then available_at else $3::timestamptz end,
+                completed_at = case when $4::boolean or attempt_count >= max_attempts then coalesce(completed_at, now()) else null end,
+                last_error = $5, updated_at = now(), locked_by = null, locked_at = null
+          where id = $1 and status = 'processing' and locked_by = $2
+        returning *`,
+        [id, owner, retryAt.toISOString(), terminal, message]
+      );
+      return normalizeDurableRuntimeJob(updated.rows?.[0]);
+    });
+  }
+  ensure();
+  if (typeof supabase.rpc !== 'function') throw new Error('Durable job failure RPC is unavailable');
+  const response = await supabase.rpc('arubot_fail_durable_runtime_job', {
+    p_job_id: id,
+    p_worker_id: owner,
+    p_error: message,
+    p_retry_at: retryAt.toISOString(),
+    p_terminal: terminal,
+  });
+  if (response.error) throw response.error;
+  return normalizeDurableRuntimeJob(Array.isArray(response.data) ? response.data[0] : response.data);
+}
+
+export async function getDurableRuntimeJob(jobId) {
+  const id = String(jobId || '').trim();
+  if (!id) return null;
+  if (getDbUrl()) {
+    return withPgClient(async (pg) => {
+      await ensureDurableRuntimeJobsWithClient(pg);
+      const result = await pg.query('select * from durable_runtime_jobs where id = $1 limit 1', [id]);
+      return normalizeDurableRuntimeJob(result.rows?.[0]);
+    });
+  }
+  ensure();
+  const response = await supabase.from('durable_runtime_jobs').select('*').eq('id', id).maybeSingle();
+  if (response.error) throw response.error;
+  return normalizeDurableRuntimeJob(response.data);
 }
 
 // Migrate data from cookie-based sid partition to user-id based partition

@@ -57,6 +57,7 @@ async function main() {
     `http://localhost:${process.env.SERVER_PORT || process.env.PORT || 3001}`
   );
   const expectedProvider = String(parseArg('expect-provider') || process.env.ARUBOT_DB_PROVIDER || '').trim().toLowerCase();
+  const expectedRelease = String(parseArg('expect-release') || process.env.API_SMOKE_EXPECT_RELEASE || '').trim();
   const timeoutMs = Math.max(1000, Number(parseArg('timeout-ms') || process.env.API_SMOKE_TIMEOUT_MS || 5000));
 
   const checks = [];
@@ -79,10 +80,15 @@ async function main() {
     }
   }
 
+  if (expectedRelease && checks[2].body?.releaseSha !== expectedRelease) {
+    throw new Error(`Expected releaseSha=${expectedRelease}, got ${checks[2].body?.releaseSha || 'missing'}`);
+  }
+
   const result = {
     ok: true,
     baseUrl,
     expectedProvider: expectedProvider || null,
+    expectedRelease: expectedRelease || null,
     checkedAt: new Date().toISOString(),
     checks: checks.map((check) => ({
       path: check.path,

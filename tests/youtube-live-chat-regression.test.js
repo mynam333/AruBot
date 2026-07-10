@@ -77,7 +77,7 @@ describe('YouTube live chat integration regression', () => {
     expect(serverIndex).toContain("const preferredUserId = await getCurrentSessionUserId(req)");
     expect(serverIndex).toContain("const { userId } = await upsertPlatformIdentity('youtube', profile, preferredUserId)");
     expect(serverIndex).toContain("await upsertPlatformTokens('youtube', userId, profile.platformUserId, tokens)");
-    expect(serverIndex).toContain('await upsertSession(sidToken, userId, 30)');
+    expect(serverIndex).toContain('await rotateAuthenticatedSession(req, res, userId)');
     expect(serverIndex).toContain('upsertYoutubeStreamerChannelFromOAuthProfile(req, userId, profile)');
     expect(serverIndex).toContain("reason: oauthMode === 'viewer' ? null : 'youtube_streamer_registered'");
     expect(serverIndex).toContain("const allowedPaths = ['/viewer/', '/c/', '/connection']");
@@ -116,7 +116,7 @@ describe('YouTube live chat integration regression', () => {
     expect(serverIndex).toContain("'https://www.googleapis.com/auth/youtube.readonly'");
     expect(serverIndex).toContain("'https://www.googleapis.com/auth/youtube.force-ssl'");
     expect(serverIndex).toContain('process.env.YOUTUBE_CHANNEL_READ_AUTH_SCOPE');
-    expect(serverIndex).toContain('YOUTUBE_STREAMER_AUTH_SCOPE ||\n  YOUTUBE_CHANNEL_READ_AUTH_SCOPE');
+    expect(serverIndex).toMatch(/process\.env\.YOUTUBE_STREAMER_AUTH_SCOPE\s*\|\|\s*YOUTUBE_CHANNEL_READ_AUTH_SCOPE/);
     expect(serverIndex).toContain("requestedMode === 'viewer'");
     expect(serverIndex).toContain("mode === 'viewer'");
     expect(serverIndex).toContain('authUrl.searchParams.set(\'scope\', scope)');
@@ -155,12 +155,11 @@ describe('YouTube live chat integration regression', () => {
 
   test('admin surfaces list YouTube consistently', () => {
     expect(dashboardPage).toContain("id: 'youtube'");
-    expect(dashboardPage).toContain("connectionPath: '/connection?platform=youtube'");
     expect(dashboardPage).toContain("apiUrl(`/api/auth/youtube/login?returnTo=${encodeURIComponent('/connection?platform=youtube')}`)");
-    expect(dashboardPage).toContain('YouTube로 로그인');
-    expect(dashboardPage).toContain('YouTube 다시 연결');
+    expect(dashboardPage).toContain("const href = provider.id === 'youtube' ? youtubeLoginHref : apiUrl(provider.loginPath)");
+    expect(dashboardPage).toContain("{provider.label}{connected ? ' 다시 연결' : '로 로그인'}");
     expect(dashboardPage).not.toContain("loginPath: '/api/auth/youtube/login'");
-    expect(dashboardPage).toContain("if (value === 'youtube') return 'YouTube'");
+    expect(dashboardPage).toContain("provider?.toLowerCase() === 'youtube'");
     expect(variablesPage).toContain("if (provider === 'youtube') return 'YouTube'");
     expect(serverIndex).toContain("const BOT_VARIABLE_PROVIDERS = ['chzzk', 'cime', 'youtube']");
     expect(navigation).toContain("endpoint: '/api/platforms/status'");

@@ -4,6 +4,7 @@ const path = require('path');
 describe('API key security regressions', () => {
   const serverIndex = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
   const supabase = fs.readFileSync(path.join(__dirname, '..', 'server', 'supabase.js'), 'utf8');
+  const wsTicketMigration = fs.readFileSync(path.join(__dirname, '..', 'server', 'migrations', '015_api_websocket_tickets.sql'), 'utf8');
 
   test('/apikey return_to only redirects to the request origin', () => {
     const helperStart = serverIndex.indexOf('function getSameOriginReturnUrl');
@@ -29,7 +30,10 @@ describe('API key security regressions', () => {
     const lookupStart = supabase.indexOf('export async function getOwnerPidForApiKey');
     const lookupEnd = supabase.indexOf('export async function touchApiKeyLastUsed', lookupStart);
     const lookupBody = supabase.slice(lookupStart, lookupEnd);
-    expect(lookupBody).toContain('where api_key_hash = $1 or api_key = $2');
+    expect(lookupBody).toContain('where (api_key_hash = $1 or api_key = $2)');
+    expect(lookupBody).toContain('and revoked = false');
+    expect(lookupBody).toContain('and expires_at > now()');
+    expect(lookupBody).toContain('requiredScope');
     expect(lookupBody).toContain('secretHash(key)');
   });
 
@@ -46,5 +50,18 @@ describe('API key security regressions', () => {
     const platformBody = supabase.slice(platformStart, platformEnd);
     expect(platformBody).toContain('protectSecret(accessToken)');
     expect(platformBody).toContain('revealSecret(row.access_token)');
+  });
+
+  test('desktop and Warudo sockets accept short-lived single-use tickets', () => {
+    expect(wsTicketMigration).toContain('create table if not exists public.api_websocket_tickets');
+    expect(wsTicketMigration).toContain("scope text not null check (scope in ('desktop', 'warudo'))");
+    expect(supabase).toContain('export async function issueApiWebSocketTicket');
+    expect(supabase).toContain('export async function consumeApiWebSocketTicket');
+    expect(supabase).toContain('and consumed_at is null');
+    expect(supabase).toContain('and expires_at > now()');
+    expect(serverIndex).toContain("app.post('/api/apikey/ws-ticket'");
+    expect(serverIndex).toContain("await authenticateApiWebSocket(req, url, 'desktop')");
+    expect(serverIndex).toContain("await authenticateApiWebSocket(req, url, 'warudo')");
+    expect(serverIndex).toContain('ARUBOT_ALLOW_LEGACY_WS_QUERY_API_KEY');
   });
 });

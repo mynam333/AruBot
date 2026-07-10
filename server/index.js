@@ -9,7 +9,7 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
-import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, getSessionUserId, listChannelPoints, listChannelPointsPage, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, getChannelPoints, getChannelPointBalanceSummary, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, findSidByChannelViewerTokenSupabase, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, findAppUserIdByChannelUid, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, deletePlatformTokens, deletePlatformAccount, getAppUserAdminStatus, getYoutubeBotProfile, upsertYoutubeBotProfile, updateYoutubeBotProfileTokens, markYoutubeBotProfileStatus, deleteYoutubeBotProfile, getYoutubeStreamerChannel, upsertYoutubeStreamerChannel, markYoutubeStreamerChannelModeratorRegistered, deleteYoutubeStreamerChannel, listYoutubeStreamerChannelsByYoutubeChannelId, updateYoutubeStreamerChannelLive, updateYoutubeStreamerChannelWebsub, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps, recordBotEventLog, listBotEventLogs, getBotEventLog, insertDrawingDonationItem, listDrawingDonationItems, getDrawingDonationItem, getCurrentDrawingDonationItem, updateDrawingDonationItemStatus, deleteDrawingDonationItem, reorderDrawingDonationItems, uploadDrawingDonationObject, deleteAccountData, cleanupPrivacyRetentionData, validateSecretEncryptionConfig, getPgPoolStatus } from './supabase.js';
+import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, revokeSession, getSessionUserId, listChannelPoints, listChannelPointsPage, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, deductChannelPointsIfEnough, getChannelPoints, getChannelPointBalanceSummary, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, issueApiWebSocketTicket, consumeApiWebSocketTicket, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, findSidByChannelViewerTokenSupabase, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, findAppUserIdByChannelUid, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, deletePlatformTokens, deletePlatformAccount, getAppUserAdminStatus, getYoutubeBotProfile, upsertYoutubeBotProfile, updateYoutubeBotProfileTokens, markYoutubeBotProfileStatus, deleteYoutubeBotProfile, getYoutubeStreamerChannel, upsertYoutubeStreamerChannel, markYoutubeStreamerChannelModeratorRegistered, deleteYoutubeStreamerChannel, listYoutubeStreamerChannelsByYoutubeChannelId, updateYoutubeStreamerChannelLive, updateYoutubeStreamerChannelWebsub, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, claimBotRuleCooldown, enqueueDurableRuntimeJob, enqueuePaidDurableRuntimeJob, claimDurableRuntimeJobs, completeDurableRuntimeJob, failDurableRuntimeJob, claimRuntimeLease, releaseRuntimeLease, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps, recordBotEventLog, listBotEventLogs, getBotEventLog, insertDrawingDonationItem, listDrawingDonationItems, getDrawingDonationItem, getCurrentDrawingDonationItem, updateDrawingDonationItemStatus, deleteDrawingDonationItem, reorderDrawingDonationItems, uploadDrawingDonationObject, deleteDrawingDonationObjectKeys, deleteAccountData, cleanupPrivacyRetentionData, validateSecretEncryptionConfig, getPgPoolStatus, checkDatabaseReady, closeDatabaseConnections } from './supabase.js';
 import { createPlatformProfileService } from './platform-profiles.js';
 import { WebSocketServer, WebSocket } from 'ws';
 import youtubeChatPackage from 'youtube-chat';
@@ -35,6 +35,12 @@ const PORT = process.env.PORT || process.env.SERVER_PORT || 3001;
 const SERVER_HOST = String(process.env.SERVER_HOST || process.env.ARUBOT_SERVER_HOST || (process.env.NODE_ENV === 'production' ? '127.0.0.1' : '')).trim();
 const OCI_METADATA_IPV4 = '169.254.169.254';
 const INSTANCE_ID = 'inst_' + Math.random().toString(16).slice(2) + '_' + Date.now().toString(36);
+const runtimeReadinessState = {
+  initialBootstrapCompleted: false,
+  lastMonitorAt: null,
+  lastMonitorError: null,
+  shuttingDown: false,
+};
 const PROCESS_ROLE = process.env.ARUBOT_PROCESS_ROLE || 'api-runtime';
 const youtubeBotOAuthPendingStore = new Map(); // ownerUserId -> { tokens, channels, createdAt }
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'https://arubot.yuaru.com';
@@ -45,7 +51,7 @@ const DB_PROVIDER = String(process.env.ARUBOT_DB_PROVIDER || 'supabase').trim().
 const USE_POSTGRES_PROVIDER = DB_PROVIDER === 'postgres';
 const ALLOW_SUPABASE_ENV_WITH_POSTGRES = String(process.env.ARUBOT_ALLOW_SUPABASE_ENV_WITH_POSTGRES || '').trim().toLowerCase() === 'true';
 function hasDirectDatabaseUrl() {
-  return USE_POSTGRES_PROVIDER ? !!process.env.POSTGRES_URL : !!process.env.SUPABASE_DB_URL;
+  return USE_POSTGRES_PROVIDER ? !!(process.env.POSTGRES_RUNTIME_URL || process.env.POSTGRES_URL) : !!process.env.SUPABASE_DB_URL;
 }
 function shouldRefreshPostgRESTSchema() {
   return !USE_POSTGRES_PROVIDER && !!process.env.SUPABASE_URL && !!process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -65,7 +71,17 @@ function validateDatabaseProviderConfig() {
     throw new Error(`ARUBOT_DB_PROVIDER=postgres must not run with Supabase environment variables: ${forbiddenSupabaseEnv.join(', ')}. Remove them from the backend runtime, or set ARUBOT_ALLOW_SUPABASE_ENV_WITH_POSTGRES=true only for a one-off migration command.`);
   }
 }
-const ALLOWED_ORIGINS = [
+function normalizeOrigin(value) {
+  const text = String(value || '').trim();
+  if (!text) return null;
+  try {
+    return new URL(text).origin;
+  } catch {
+    return null;
+  }
+}
+
+const ALLOWED_ORIGINS = new Set([
   FRONTEND_ORIGIN,
   BACKEND_ORIGIN,
   process.env.PUBLIC_ORIGIN,
@@ -77,25 +93,30 @@ const ALLOWED_ORIGINS = [
   'http://127.0.0.1:5173',
   `http://localhost:${PORT}`,
   `http://127.0.0.1:${PORT}`,
-].filter(Boolean);
+].map(normalizeOrigin).filter(Boolean));
 
 function isTrustedOrigin(origin) {
   if (!origin) return true;
+  const normalized = normalizeOrigin(origin);
+  return !!normalized && ALLOWED_ORIGINS.has(normalized);
+}
+
+const BROWSER_SESSION_WEBSOCKET_PATHS = new Set([
+  '/api/video-donation/admin/ws',
+  '/api/drawing-donation/admin/ws',
+]);
+
+function isTrustedWebSocketUpgradeOrigin(pathname, origin) {
+  if (!BROWSER_SESSION_WEBSOCKET_PATHS.has(String(pathname || ''))) return true;
+  const text = String(origin || '').trim();
+  return !!text && isTrustedOrigin(text);
+}
+
+function rejectWebSocketUpgrade(socket) {
   try {
-    const u = new URL(origin);
-    const o = u.origin;
-    if (ALLOWED_ORIGINS.includes(o)) return true;
-    if (
-      ['localhost', '127.0.0.1', '::1'].includes(u.hostname) &&
-      Number(u.port) >= 3000 &&
-      Number(u.port) < 3100
-    ) {
-      return true;
-    }
-    return u.protocol === 'https:' && (u.hostname.endsWith('.yuaru.kr') || u.hostname.endsWith('.yuaru.com'));
-  } catch {
-    return false;
-  }
+    socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+  } catch { }
+  try { socket.destroy(); } catch { }
 }
 
 const corsOptions = {
@@ -277,7 +298,13 @@ app.use((req, res, next) => {
 app.use(cors(corsOptions));
 // Explicit preflight support for all routes
 app.options('*', cors(corsOptions));
-app.use(process.env.YOUTUBE_WEBSUB_CALLBACK_PATH || '/api/youtube/websub/callback', express.text({ type: ['application/atom+xml', 'application/xml', 'text/xml', '*/*'], limit: '1mb' }));
+app.use(process.env.YOUTUBE_WEBSUB_CALLBACK_PATH || '/api/youtube/websub/callback', express.text({
+  type: ['application/atom+xml', 'application/xml', 'text/xml', '*/*'],
+  limit: '1mb',
+  verify: (req, _res, buffer) => {
+    req.youtubeWebsubRawBody = Buffer.from(buffer);
+  }
+}));
 app.use(express.json({ limit: '5mb' }));
 app.use(cookieParser());
 app.use(rejectUntrustedBrowserOrigin);
@@ -295,9 +322,101 @@ const youtubeSessionCreatePromises = new Map(); // ownerUserId -> Promise(entry)
 const youtubeSendQueues = new Map(); // ownerUserId -> Promise
 const cimeSessionStore = new Map(); // ownerUserId -> entry
 const cimeSessionCreatePromises = new Map(); // ownerUserId -> Promise(entry)
+const cimeReconnectAttempts = new Map(); // ownerUserId -> consecutive reconnect failures
+const providerRuntimeLeases = new Map(); // resourceKey -> local lease metadata
+const PROVIDER_RUNTIME_LEASE_TTL_MS = Math.max(15_000, Math.min(5 * 60_000, Number(process.env.PROVIDER_RUNTIME_LEASE_TTL_MS || 45_000)));
+const PROVIDER_RUNTIME_LEASE_RENEW_MS = Math.max(5_000, Math.min(PROVIDER_RUNTIME_LEASE_TTL_MS - 5_000, Number(process.env.PROVIDER_RUNTIME_LEASE_RENEW_MS || 15_000)));
 const disconnectedProviderRuntimeGuards = new Map(); // `${ownerUserId}:${provider}` -> { at, platformUserId, reason }
 const runtimeConfigurationRevisions = new Map(); // sid -> monotonically increasing config revision
 const CACHE_TTL = 5 * 60 * 1000;
+
+function providerRuntimeLeaseResourceKey(provider, ownerUserId, channelId = null) {
+  const normalizedProvider = String(provider || '').trim().toLowerCase();
+  const owner = String(ownerUserId || '').replace(/^user:/, '').trim();
+  const channel = String(channelId || '').trim();
+  if (!normalizedProvider || !owner) throw new Error('provider and ownerUserId are required');
+  const resourceId = normalizedProvider === 'chzzk' && channel ? channel : owner;
+  return `provider-runtime:${normalizedProvider}:${resourceId}`;
+}
+
+async function ensureProviderRuntimeLease(provider, ownerUserId, { channelId = null } = {}) {
+  const normalizedProvider = String(provider || '').trim().toLowerCase();
+  const owner = String(ownerUserId || '').replace(/^user:/, '').trim();
+  const resourceKey = providerRuntimeLeaseResourceKey(normalizedProvider, owner, channelId);
+  const existing = providerRuntimeLeases.get(resourceKey);
+  const now = Date.now();
+  if (existing && Number(existing.expiresAtMs || 0) > now + PROVIDER_RUNTIME_LEASE_RENEW_MS) return existing;
+
+  const lease = await claimRuntimeLease(resourceKey, INSTANCE_ID, PROVIDER_RUNTIME_LEASE_TTL_MS);
+  if (!lease?.acquired) {
+    const error = new Error(`Provider runtime is owned by another instance: ${resourceKey}`);
+    error.code = 'provider_runtime_lease_not_acquired';
+    error.status = 409;
+    throw error;
+  }
+  const expiresAtMs = Number(new Date(lease.expiresAt || now + PROVIDER_RUNTIME_LEASE_TTL_MS).getTime()) || now + PROVIDER_RUNTIME_LEASE_TTL_MS;
+  const state = {
+    resourceKey,
+    provider: normalizedProvider,
+    ownerUserId: owner,
+    channelId: String(channelId || '').trim() || null,
+    fencingToken: Number(lease.fencingToken || 1),
+    expiresAtMs,
+    fallback: lease.fallback === true,
+  };
+  providerRuntimeLeases.set(resourceKey, state);
+  return state;
+}
+
+async function releaseProviderRuntimeLeases(provider, ownerUserId, { channelId = null } = {}) {
+  const normalizedProvider = String(provider || '').trim().toLowerCase();
+  const owner = String(ownerUserId || '').replace(/^user:/, '').trim();
+  const channel = String(channelId || '').trim();
+  const matches = Array.from(providerRuntimeLeases.values()).filter((state) => (
+    state.provider === normalizedProvider
+    && (state.ownerUserId === owner || (channel && state.channelId === channel))
+  ));
+  for (const state of matches) providerRuntimeLeases.delete(state.resourceKey);
+  await Promise.allSettled(matches.map((state) => releaseRuntimeLease(state.resourceKey, INSTANCE_ID)));
+}
+
+function closeProviderRuntimeAfterLeaseLoss(state) {
+  if (!state) return;
+  if (state.provider === 'youtube') {
+    closeYoutubeSession(state.ownerUserId, 'runtime_lease_lost');
+  } else if (state.provider === 'cime') {
+    closeCimeSession(state.ownerUserId, 'runtime_lease_lost');
+  } else if (state.provider === 'chzzk') {
+    closeChzzkProviderRuntimeSession(state.ownerUserId, 'runtime_lease_lost');
+  }
+}
+
+async function renewProviderRuntimeLeases() {
+  if (runtimeReadinessState.shuttingDown) return;
+  for (const state of Array.from(providerRuntimeLeases.values())) {
+    try {
+      const renewed = await claimRuntimeLease(state.resourceKey, INSTANCE_ID, PROVIDER_RUNTIME_LEASE_TTL_MS);
+      if (!renewed?.acquired) {
+        providerRuntimeLeases.delete(state.resourceKey);
+        closeProviderRuntimeAfterLeaseLoss(state);
+        console.warn('[runtime-lease] Lease ownership lost; local provider session closed:', state.resourceKey);
+        continue;
+      }
+      state.fencingToken = Number(renewed.fencingToken || state.fencingToken || 1);
+      state.expiresAtMs = Number(new Date(renewed.expiresAt || Date.now() + PROVIDER_RUNTIME_LEASE_TTL_MS).getTime()) || Date.now() + PROVIDER_RUNTIME_LEASE_TTL_MS;
+      state.lastRenewError = null;
+    } catch (error) {
+      state.lastRenewError = error?.message || String(error);
+      if (Date.now() >= Number(state.expiresAtMs || 0)) {
+        providerRuntimeLeases.delete(state.resourceKey);
+        closeProviderRuntimeAfterLeaseLoss(state);
+        console.error('[runtime-lease] Renewal expired; local provider session closed:', state.resourceKey, state.lastRenewError);
+      } else {
+        console.warn('[runtime-lease] Renewal failed; retaining the lease until its current expiry:', state.resourceKey, state.lastRenewError);
+      }
+    }
+  }
+}
 
 const CONNECTION_CLEANUP_INTERVAL = 5 * 60 * 1000;
 
@@ -2098,27 +2217,42 @@ const rouletteLastEnqueue = new Map(); // sid -> { key, at }
 const rouletteBatchAcc = new Map();
 // Last batch meta per roulette token to augment WS payloads if needed
 const rouletteTokenLastBatch = new Map(); // token -> { batchId: string, batchCount: number }
+const DURABLE_RUNTIME_WORKER_ID = `${INSTANCE_ID}:runtime`;
+let durableRuntimeWorkerRunning = false;
+
+function reserveRouletteEnqueue(sid, item) {
+  try {
+    const batchId = String(item?.chatPost?.batchId || '');
+    const inst = item?.instant === true ? '1' : '0';
+    const key = `${String(item?.username || '')}|${String(item?.userId || '')}|${String(item?.name || '')}|${batchId}|${inst}`;
+    const last = rouletteLastEnqueue.get(sid);
+    const now = Date.now();
+    if (!batchId && last && last.key === key && (now - last.at) < 2000) {
+      return { accepted: false, position: (rouletteQueues.get(sid) || []).length || 0, key };
+    }
+    rouletteLastEnqueue.set(sid, { key, at: now });
+    return { accepted: true, position: (rouletteQueues.get(sid) || []).length + 1, key };
+  } catch {
+    return { accepted: true, position: (rouletteQueues.get(sid) || []).length + 1, key: null };
+  }
+}
+
+function sanitizeRouletteJobItem(item) {
+  const chatPost = item?.chatPost && typeof item.chatPost === 'object'
+    ? { ...item.chatPost, accessToken: undefined, sessionKey: undefined }
+    : null;
+  return JSON.parse(JSON.stringify({ ...item, chatPost }));
+}
 
 /**
  * Enqueue a roulette spin for a sid
  * item: { name, userId, username, chatPost?: { url, sessionKey, accessToken, resolvedUsername } }
  */
-function enqueueRouletteSpin(sid, item) {
-  // Prevent accidental double-enqueue within a small window (e.g., duplicate chat events)
-  try {
-    const batchId = String(item?.chatPost?.batchId || '');
-    const inst = item?.instant === true ? '1' : '0';
-    // Include batchId and instant in key so multi-spin enqueues are not collapsed
-    const k = `${String(item?.username || '')}|${String(item?.userId || '')}|${String(item?.name || '')}|${batchId}|${inst}`;
-    const last = rouletteLastEnqueue.get(sid);
-    const now = Date.now();
-    // For batch spins, skip dedup window entirely to allow rapid enqueue
-    if (!batchId && last && last.key === k && (now - last.at) < 2000) {
-      // skip enqueue
-      return (rouletteQueues.get(sid) || []).length || 0;
-    }
-    rouletteLastEnqueue.set(sid, { key: k, at: now });
-  } catch { }
+function enqueueRouletteSpinInMemory(sid, item) {
+  if (item?.runtimeJobId) {
+    const existing = (rouletteQueues.get(sid) || []).find((queued) => queued?.runtimeJobId === item.runtimeJobId);
+    if (existing) return (rouletteQueues.get(sid) || []).indexOf(existing) + 1;
+  }
   const q = rouletteQueues.get(sid) || [];
   q.push(item);
   const position = q.length;
@@ -2127,6 +2261,31 @@ function enqueueRouletteSpin(sid, item) {
     processRouletteQueue(sid).catch((e) => { console.warn('[Roulette Queue] Processor error', e?.message || e); });
   }
   return position;
+}
+
+async function enqueueRouletteSpin(sid, item) {
+  const reservation = reserveRouletteEnqueue(sid, item);
+  if (!reservation.accepted) return reservation.position;
+  const runtimeJobId = String(item?.runtimeJobId || crypto.randomUUID());
+  const persistedItem = { ...sanitizeRouletteJobItem(item), runtimeJobId };
+  try {
+    await enqueueDurableRuntimeJob({
+      id: runtimeJobId,
+      sid,
+      jobType: 'roulette-spin',
+      idempotencyKey: runtimeJobId,
+      userId: item?.userId || null,
+      username: item?.username || null,
+      payload: { item: persistedItem },
+      maxAttempts: 8,
+    });
+    await runDurableRuntimeWorker();
+    return (rouletteQueues.get(sid) || []).findIndex((queued) => queued?.runtimeJobId === runtimeJobId) + 1 || reservation.position;
+  } catch (error) {
+    const last = rouletteLastEnqueue.get(sid);
+    if (last?.key === reservation.key) rouletteLastEnqueue.delete(sid);
+    throw error;
+  }
 }
 
 function makeChzzkChatPost(sessionKey, accessToken, resolvedUsername, extra = {}) {
@@ -2227,6 +2386,7 @@ async function processRouletteQueue(sid) {
       const item = q.shift();
       if (!item) { rouletteQueues.set(sid, q); break; }
       rouletteQueues.set(sid, q);
+      let spinError = null;
       try {
         const started = await startRouletteSpin(
           sid,
@@ -2331,6 +2491,7 @@ async function processRouletteQueue(sid) {
         // small gap
         await new Promise(r => setTimeout(r, 200));
       } catch (e) {
+        spinError = e;
         // proceed to next item even on error
         console.error('[Roulette Queue] Spin error (continuing)', e?.message || e);
 
@@ -2359,6 +2520,10 @@ async function processRouletteQueue(sid) {
           console.error('[Roulette Queue] Failed to send error message:', e2);
         }
       }
+      await settleDurableRuntimeItem(item, {
+        status: spinError ? 'failed' : 'completed',
+        error: spinError ? String(spinError?.message || spinError) : null,
+      });
     }
   } finally {
     rouletteProcessing.delete(sid);
@@ -4118,7 +4283,11 @@ setInterval(() => {
   performanceMonitor.recordMemoryUsage();
 }, 5 * 60 * 1000);
 
+let macroDeliveryCycleRunning = false;
+
 setInterval(async () => {
+  if (macroDeliveryCycleRunning) return;
+  macroDeliveryCycleRunning = true;
   try {
     const now = Date.now();
     const activeSidsArray = Array.from(activeSids.keys());
@@ -4511,6 +4680,8 @@ setInterval(async () => {
     }
   } catch (error) {
     console.error('Macro runner error:', error.message);
+  } finally {
+    macroDeliveryCycleRunning = false;
   }
 }, 1000);
 
@@ -5028,7 +5199,7 @@ app.get('/api/roulette/viewer-url', async (req, res) => {
         : '';
     }
     if (!token) {
-      token = 'rlt_' + Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6);
+      token = rouletteRandomToken();
       const next = { ...settings, rouletteViewerToken: token };
       await setBotSettings(sid, next);
     } else if (settings.rouletteViewerToken !== token) {
@@ -5103,7 +5274,8 @@ app.post('/api/video-donation/delete', async (req, res) => {
     const idx = q.findIndex(it => String(it.id) === id);
     if (idx < 0) return res.status(404).json({ error: 'not_found' });
     const removingHead = idx === 0;
-    q.splice(idx, 1);
+    const [removedItem] = q.splice(idx, 1);
+    await settleDurableRuntimeItem(removedItem, { status: 'deleted', refunded: false });
     if (removingHead) {
       try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
       await broadcastPvdStart(sid);
@@ -5161,6 +5333,7 @@ app.post('/api/video-donation/delete-refund', async (req, res) => {
     }
     // Remove from queue
     q.splice(idx, 1);
+    await settleDurableRuntimeItem(item, { status: 'deleted', refunded: true });
     if (removingHead) {
       try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
       await broadcastPvdStart(sid);
@@ -5195,6 +5368,88 @@ function getVideoQueue(sid) {
   if (!q) { q = []; videoDonationQueues.set(sid, q); }
   return q;
 }
+
+async function settleDurableRuntimeItem(item, result = {}) {
+  const jobId = String(item?.runtimeJobId || '').trim();
+  if (!jobId) return false;
+  try {
+    return await completeDurableRuntimeJob(jobId, DURABLE_RUNTIME_WORKER_ID, result);
+  } catch (error) {
+    console.warn('[durable-runtime] Failed to settle item', jobId, error?.message || error);
+    return false;
+  }
+}
+
+async function dispatchDurableRuntimeJob(job) {
+  const item = job?.payload?.item;
+  if (!item || typeof item !== 'object') throw new Error('durable_runtime_item_missing');
+  const runtimeItem = { ...item, runtimeJobId: job.id };
+
+  if (job.jobType === 'video-donation') {
+    const queue = getVideoQueue(job.sid);
+    if (!queue.some((queued) => queued?.runtimeJobId === job.id)) {
+      const shouldStartPlayback = queue.length === 0;
+      queue.push(runtimeItem);
+      if (shouldStartPlayback) await broadcastPvdStart(job.sid);
+      else notifyPvdAdminSubscribers(job.sid, 'queued').catch(() => null);
+    }
+    return { complete: false };
+  }
+
+  if (job.jobType === 'roulette-spin') {
+    enqueueRouletteSpinInMemory(job.sid, runtimeItem);
+    return { complete: false };
+  }
+
+  if (job.jobType === 'drawing-donation') {
+    const existing = await getDrawingDonationItem(job.sid, runtimeItem.id, { includeStrokes: false }).catch(() => null);
+    if (!existing) await insertDrawingDonationItem(runtimeItem);
+    notifyDrawingSubscribers(job.sid, runtimeItem.status === 'approved' ? 'auto_approved' : 'queued').catch(() => null);
+    notifyDrawingAdminSubscribers(job.sid, 'submitted').catch(() => null);
+    return { complete: true, result: { itemId: runtimeItem.id, status: runtimeItem.status } };
+  }
+
+  const error = new Error(`unsupported durable runtime job type: ${job.jobType}`);
+  error.terminal = true;
+  throw error;
+}
+
+async function runDurableRuntimeWorker() {
+  if (durableRuntimeWorkerRunning) return false;
+  durableRuntimeWorkerRunning = true;
+  try {
+    const jobs = await claimDurableRuntimeJobs({
+      workerId: DURABLE_RUNTIME_WORKER_ID,
+      limit: 25,
+      leaseMs: 30_000,
+      jobTypes: ['video-donation', 'roulette-spin', 'drawing-donation'],
+    });
+    for (const job of jobs) {
+      try {
+        const outcome = await dispatchDurableRuntimeJob(job);
+        if (outcome?.complete) {
+          await completeDurableRuntimeJob(job.id, DURABLE_RUNTIME_WORKER_ID, outcome.result || {});
+        }
+      } catch (error) {
+        await failDurableRuntimeJob(job.id, DURABLE_RUNTIME_WORKER_ID, error?.message || error, {
+          terminal: error?.terminal === true,
+          retryDelayMs: Math.min(60_000, 1_000 * (2 ** Math.min(Number(job.attemptCount || 0), 6))),
+        }).catch((failError) => {
+          console.warn('[durable-runtime] Failed to record job failure', job.id, failError?.message || failError);
+        });
+      }
+    }
+    return true;
+  } catch (error) {
+    console.warn('[durable-runtime] Worker cycle failed', error?.message || error);
+    return false;
+  } finally {
+    durableRuntimeWorkerRunning = false;
+  }
+}
+
+setTimeout(() => { runDurableRuntimeWorker().catch(() => null); }, 500).unref?.();
+setInterval(() => { runDurableRuntimeWorker().catch(() => null); }, 5_000).unref?.();
 
 async function getPvdQueueSnapshot(sid, reason = 'sync') {
   const q = getVideoQueue(sid);
@@ -5311,6 +5566,12 @@ async function popCurrentVideoDonationItem(sid, options = {}) {
       console.warn('[pvd:refund] failed', e?.message || e);
     }
   }
+  if (popped) {
+    await settleDurableRuntimeItem(popped, {
+      status: String(options.cause || 'completed'),
+      refunded: options.refundOnError === true && String(options.cause || '').toLowerCase() === 'error',
+    });
+  }
   return { popped, queue: q };
 }
 
@@ -5415,10 +5676,12 @@ async function broadcastPvdControl(sid, message) {
 
 // Local random token generator for PVD viewer tokens
 function pvdRandomToken(len = 24) {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  let s = '';
-  for (let i = 0; i < len; i++) s += chars[Math.floor(Math.random() * chars.length)];
-  return s;
+  const size = Math.max(16, Math.ceil(Number(len || 24) * 0.75) + 2);
+  return crypto.randomBytes(size).toString('base64url').slice(0, Math.max(16, Number(len || 24)));
+}
+
+function rouletteRandomToken() {
+  return `rlt_${pvdRandomToken(24)}`;
 }
 
 function pvdDeterministicTokenFromUid(uid) {
@@ -5577,7 +5840,7 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-app.get(['/healthz', '/readyz'], (req, res) => {
+app.get('/healthz', (req, res) => {
   const memory = process.memoryUsage();
   res.json({
     ok: true,
@@ -5600,6 +5863,25 @@ app.get(['/healthz', '/readyz'], (req, res) => {
   });
 });
 
+app.get('/readyz', async (req, res) => {
+  const db = await checkDatabaseReady();
+  const ready = db.ok && runtimeReadinessState.initialBootstrapCompleted && !runtimeReadinessState.shuttingDown;
+  return res.status(ready ? 200 : 503).json({
+    ok: ready,
+    role: PROCESS_ROLE,
+    dbProvider: DB_PROVIDER,
+    releaseSha: RELEASE_SHA,
+    startedAt: SERVER_STARTED_AT,
+    readiness: {
+      initialBootstrapCompleted: runtimeReadinessState.initialBootstrapCompleted,
+      lastMonitorAt: runtimeReadinessState.lastMonitorAt,
+      lastMonitorError: runtimeReadinessState.lastMonitorError,
+      shuttingDown: runtimeReadinessState.shuttingDown,
+    },
+    db,
+  });
+});
+
 // Send a command to desktop clients via API key
 // POST /api/desktop/command
 // Authorization: Bearer <API_KEY>  OR  body.token / query.token
@@ -5611,7 +5893,7 @@ app.post('/api/desktop/command', rateLimiters.apiKeyCommand, async (req, res) =>
     if (!token) token = String(req.query?.token || req.body?.token || '');
     if (!token) return res.status(401).json({ error: 'token required' });
 
-    const pid = await getOwnerPidForApiKey(token);
+    const pid = await getOwnerPidForApiKey(token, { requiredScope: 'desktop' });
     if (!pid) return res.status(403).json({ error: 'invalid token' });
 
     const command = String(req.body?.command || '').trim();
@@ -5795,18 +6077,14 @@ app.post('/api/video-donation/request', rateLimiters.userWrite, async (req, res)
         }
       }
     } catch { }
-    // Check balance first
-    const currentPts = await getChannelPoints(uid, userId).catch(() => 0);
-    if (Number(currentPts || 0) < cost) {
-      return res.status(400).json({ error: 'insufficient_points', need: cost, have: Number(currentPts || 0) });
-    }
-    await incrChannelPoints(uid, userId, username, -cost);
-
-    // Enqueue
-    const q = getVideoQueue(sid);
-    const shouldStartPlayback = q.length === 0;
+    const requestId = String(req.get('idempotency-key') || req.body?.requestId || req.body?.request_id || '').trim();
+    const fallbackIdempotencyKey = crypto.createHash('sha256')
+      .update(`${sid}|${userId}|${media.provider}|${media.mediaId}|${start}|${play || ''}|${Math.floor(Date.now() / 2000)}`)
+      .digest('hex');
+    const runtimeJobId = crypto.randomUUID();
     const item = {
-      id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      id: runtimeJobId,
+      runtimeJobId,
       ts: Date.now(),
       mediaProvider: media.provider,
       mediaId: media.mediaId,
@@ -5826,7 +6104,27 @@ app.post('/api/video-donation/request', rateLimiters.userWrite, async (req, res)
       username: username || null,
       status: 'queued'
     };
-    q.push(item);
+    const durable = await enqueuePaidDurableRuntimeJob({
+      id: runtimeJobId,
+      sid,
+      jobType: 'video-donation',
+      idempotencyKey: requestId || fallbackIdempotencyKey,
+      channelUid: uid,
+      userId,
+      username,
+      pointsCost: cost,
+      payload: { item },
+      maxAttempts: 8,
+    });
+    if (durable.deduction && !durable.deduction.deducted) {
+      return res.status(400).json({
+        error: 'insufficient_points',
+        need: cost,
+        have: durable.deduction.balanceBefore,
+      });
+    }
+    const acceptedItem = durable.job?.payload?.item || item;
+    await runDurableRuntimeWorker();
     await recordBotEventLogSafe(sid, {
       category: 'video_donation',
       eventType: 'video_donation_request',
@@ -5835,35 +6133,30 @@ app.post('/api/video-donation/request', rateLimiters.userWrite, async (req, res)
       viewerUserId: userId,
       viewerName: username || null,
       pointDelta: -cost,
-      pointBefore: Number(currentPts || 0),
-      pointAfter: Number(currentPts || 0) - cost,
-      targetName: item.title || item.mediaId || item.mediaUrl || '영상 후원',
-      summary: `영상 후원 신청: ${item.title || item.mediaId || item.mediaUrl || '영상'} (${cost}P 사용)`,
+      pointBefore: durable.deduction?.balanceBefore ?? null,
+      pointAfter: durable.deduction?.balanceAfter ?? null,
+      targetName: acceptedItem.title || acceptedItem.mediaId || acceptedItem.mediaUrl || '영상 후원',
+      summary: `영상 후원 신청: ${acceptedItem.title || acceptedItem.mediaId || acceptedItem.mediaUrl || '영상'} (${cost}P 사용)`,
       metadata: {
-        mediaProvider: item.mediaProvider,
-        mediaId: item.mediaId,
-        mediaUrl: item.mediaUrl,
-        embedUrl: item.embedUrl,
-        thumbnailUrl: item.thumbnailUrl,
-        title: item.title,
-        durationSec: item.durationSec,
-        mediaDurationSec: item.mediaDurationSec,
-        awaitDurationSync: item.awaitDurationSync,
-        startSec: item.startSec,
-        requestedPlaySec: item.requestedPlaySec,
-        maxDurationSec: item.maxDurationSec,
+        mediaProvider: acceptedItem.mediaProvider,
+        mediaId: acceptedItem.mediaId,
+        mediaUrl: acceptedItem.mediaUrl,
+        embedUrl: acceptedItem.embedUrl,
+        thumbnailUrl: acceptedItem.thumbnailUrl,
+        title: acceptedItem.title,
+        durationSec: acceptedItem.durationSec,
+        mediaDurationSec: acceptedItem.mediaDurationSec,
+        awaitDurationSync: acceptedItem.awaitDurationSync,
+        startSec: acceptedItem.startSec,
+        requestedPlaySec: acceptedItem.requestedPlaySec,
+        maxDurationSec: acceptedItem.maxDurationSec,
         cost,
-        queueItemId: item.id,
-        replaySnapshot: item,
+        queueItemId: acceptedItem.id,
+        durableJobId: durable.job?.id || runtimeJobId,
+        replaySnapshot: acceptedItem,
       },
     });
-    // If this is the first item, broadcast start & schedule auto pop
-    if (shouldStartPlayback) {
-      await broadcastPvdStart(sid);
-    } else {
-      notifyPvdAdminSubscribers(sid, 'queued').catch(() => null);
-    }
-    return res.json({ ok: true, item });
+    return res.json({ ok: true, item: acceptedItem, deduplicated: durable.created === false });
   } catch (e) {
     console.error('[pvd:request] error', e?.message || e);
     return res.status(500).json({ error: 'Failed to enqueue request' });
@@ -6455,23 +6748,19 @@ app.post('/api/drawing-donation/submit', rateLimiters.userWrite, async (req, res
     const { strokes, pointCount, rawPointCount, jsonSize, ink } = normalizeDrawingStrokePayload(req.body || {}, resolved.drawing);
     const cost = calculateDrawingDonationCost(resolved.drawing, ink);
     if (Number(streamer.points || 0) < cost) return res.status(400).json({ error: 'insufficient_points', need: cost, have: Number(streamer.points || 0) });
-    const payment = applyDrawingPointCost(streamer, cost);
-    if (!payment.ok) return res.status(400).json({ error: 'insufficient_points', need: cost, have: Number(streamer.points || 0) });
 
     const replay = computeDrawingReplay(strokes, resolved.drawing.replayMaxSec);
-    for (const deduction of payment.deductions) {
-      await incrChannelPoints(streamer.channelUid, deduction.userId, deduction.username || null, -Number(deduction.amount || 0));
-    }
-
+    const runtimeJobId = crypto.randomUUID();
     const item = {
-      id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
+      id: runtimeJobId,
+      runtimeJobId,
       ownerSid: resolved.sid,
       channelUid: streamer.channelUid,
       viewerUserId: ownerUserId,
       viewerName: req.body?.viewerName ? String(req.body.viewerName) : null,
       status: resolved.drawing.approvalMode === 'auto' ? 'approved' : 'queued',
       cost,
-      pointDeductions: payment.deductions,
+      pointDeductions: [{ userId: ownerUserId, username: req.body?.viewerName ? String(req.body.viewerName) : null, amount: cost }],
       pointRefunded: false,
       canvas: resolved.drawing.canvas,
       strokes,
@@ -6488,28 +6777,50 @@ app.post('/api/drawing-donation/submit', rateLimiters.userWrite, async (req, res
       item.strokes = [];
       item.metrics = { ...item.metrics, storage: { strokeObjectKey, strokeStorage: 'supabase' } };
     }
-    let savedItem = item;
-    try {
-      savedItem = await insertDrawingDonationItem(item);
-    } catch (error) {
-      console.warn('[Drawing Donation] DB insert failed; using memory fallback:', error?.message || error);
-      getDrawingQueue(resolved.sid).push(item);
-    }
-    notifyDrawingSubscribers(resolved.sid, item.status === 'approved' ? 'auto_approved' : 'queued').catch(() => null);
-    notifyDrawingAdminSubscribers(resolved.sid, 'submitted').catch(() => null);
-    await recordBotEventLogSafe(resolved.sid, {
-      category: 'drawing_donation',
-      eventType: 'drawing_donation_request',
-      provider: 'viewer',
+    const requestId = String(req.get('idempotency-key') || req.body?.requestId || req.body?.request_id || '').trim();
+    const fallbackIdempotencyKey = crypto.createHash('sha256')
+      .update(`${resolved.sid}|${ownerUserId}|${channelUid}|${jsonSize}|${ink}|${Math.floor(Date.now() / 2000)}`)
+      .digest('hex');
+    const durable = await enqueuePaidDurableRuntimeJob({
+      id: runtimeJobId,
+      sid: resolved.sid,
+      jobType: 'drawing-donation',
+      idempotencyKey: requestId || fallbackIdempotencyKey,
       channelUid: streamer.channelUid,
-      viewerUserId: ownerUserId,
-      viewerName: item.viewerName,
-      pointDelta: -cost,
-      targetName: '그림 후원',
-      summary: `그림 후원 신청 (${cost}P 사용)`,
-      metadata: { drawingId: item.id, strokeCount: strokes.length, pointCount, ink },
+      userId: ownerUserId,
+      username: item.viewerName,
+      pointsCost: cost,
+      payload: { item },
+      maxAttempts: 8,
     });
-    return res.json({ ok: true, item: savedItem });
+    if (durable.deduction && !durable.deduction.deducted) {
+      if (item.strokeObjectKey) await deleteDrawingDonationObjectKeys([item.strokeObjectKey]).catch(() => null);
+      return res.status(400).json({
+        error: 'insufficient_points',
+        need: cost,
+        have: durable.deduction.balanceBefore,
+      });
+    }
+    await runDurableRuntimeWorker();
+    const acceptedItem = durable.job?.payload?.item || item;
+    const savedItem = await getDrawingDonationItem(resolved.sid, acceptedItem.id, { includeStrokes: true }).catch(() => null) || acceptedItem;
+    if (durable.created !== false) {
+      await recordBotEventLogSafe(resolved.sid, {
+        category: 'drawing_donation',
+        eventType: 'drawing_donation_request',
+        provider: 'viewer',
+        channelUid: streamer.channelUid,
+        viewerUserId: ownerUserId,
+        viewerName: acceptedItem.viewerName,
+        pointDelta: -cost,
+        pointBefore: durable.deduction?.balanceBefore ?? null,
+        pointAfter: durable.deduction?.balanceAfter ?? null,
+        targetName: '그림 후원',
+        summary: `그림 후원 신청 (${cost}P 사용)`,
+        metadata: { drawingId: acceptedItem.id, durableJobId: durable.job?.id || runtimeJobId, strokeCount: strokes.length, pointCount, ink },
+      });
+    }
+    return res.json({ ok: true, item: savedItem, deduplicated: durable.created === false });
   } catch (e) {
     const status = e?.status || 500;
     console.error('[Drawing Donation] submit failed:', e?.message || e);
@@ -6517,25 +6828,17 @@ app.post('/api/drawing-donation/submit', rateLimiters.userWrite, async (req, res
   }
 });
 
-// Public: resolve roulette viewer token from channel UID
-app.get('/api/roulette/resolve-token', async (req, res) => {
+// Public compatibility lookup. Token creation is restricted to the authenticated viewer-url endpoint.
+app.get('/api/roulette/resolve-token', rateLimiters.externalLookup, async (req, res) => {
   try {
     const uid = String(req.query.uid || '').trim();
     if (!uid) return res.status(400).json({ error: 'uid required' });
     const sid = `user:${uid}`;
     const settings = await getBotSettings(sid) || {};
-    let token = await getOrCreateViewerTokenSupabase(uid, 'roulette', sid, 'rlt').catch(() => null);
-    if (!token) {
-      token = typeof settings.rouletteViewerToken === 'string' && settings.rouletteViewerToken.trim()
-        ? String(settings.rouletteViewerToken).trim()
-        : '';
-    }
-    if (!token) {
-      token = 'rlt_' + Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6);
-      try { await setBotSettings(sid, { ...settings, rouletteViewerToken: token }); } catch { }
-    } else if (settings.rouletteViewerToken !== token) {
-      try { await setBotSettings(sid, { ...settings, rouletteViewerToken: token }); } catch { }
-    }
+    const token = typeof settings.rouletteViewerToken === 'string' && settings.rouletteViewerToken.trim()
+      ? String(settings.rouletteViewerToken).trim()
+      : '';
+    if (!token) return res.status(404).json({ error: 'roulette_token_not_configured' });
     try { rouletteTokenToSid.set(token, sid); } catch { }
     return res.json({ token, path: `/roulette/${encodeURIComponent(token)}` });
   } catch (e) {
@@ -8526,7 +8829,7 @@ async function startRouletteSpin(sid, rouletteName, userId, username, opts = {})
       : '';
   }
   if (!token) {
-    token = 'rlt_' + Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6);
+    token = rouletteRandomToken();
   }
   if (settings.rouletteViewerToken !== token) {
     try {
@@ -8767,6 +9070,10 @@ async function executeRouletteResultCommand(sid, commandText, userId, username, 
 
       if (!matched) continue;
 
+      if (!r.id) continue;
+      const cooldownClaim = await claimBotRuleCooldown(sid, r.id, { cooldownMs: Math.max(1000, Number(r.cooldown || 0)) }).catch(() => null);
+      if (!cooldownClaim?.claimed) continue;
+
       console.log(`[Roulette Command] Matched rule: ${r.name || 'unnamed'} with keyword: ${matchedKeyword}`, {
         ruleId: r.id,
         commandCost: Math.max(0, Number(r.pointsCost || 0)),
@@ -8822,7 +9129,7 @@ async function executeRouletteResultCommand(sid, commandText, userId, username, 
               };
 
               console.log(`[Roulette Command] Enqueueing nested roulette: ${name}`);
-              enqueueRouletteSpin(sid, { ...base, instant: false });
+              await enqueueRouletteSpin(sid, { ...base, instant: false });
 
             } catch (e) {
               console.error('[Roulette Command] Nested roulette execution failed:', e);
@@ -8921,14 +9228,6 @@ async function executeRouletteResultCommand(sid, commandText, userId, username, 
           console.log('[Roulette Command] Response sent:', finalMsg);
         } catch (e) {
           console.error('[Roulette Command] Response send failed:', e?.response?.data || e?.message || e);
-        }
-      }
-
-      if (ruleUsed || (responseToSend && String(responseToSend).length > 0)) {
-        try {
-          await upsertBotRule(sid, { ...r, lastUsed: now });
-        } catch (e) {
-          console.error('[Roulette Command] Rule update failed:', e);
         }
       }
 
@@ -10543,7 +10842,7 @@ async function getPartitionIdByApiKey(req) {
       key = auth.slice(7).trim();
     }
     if (!key) return null;
-    const pid = await getOwnerPidForApiKey(String(key));
+    const pid = await getOwnerPidForApiKey(String(key), { requiredScope: 'user-api' });
     if (pid) {
       try { await touchApiKeyLastUsed(String(key)); } catch { }
       return pid;
@@ -12711,6 +13010,34 @@ function setCookieSid(res, sid) {
   res.cookie('sid', sid, getCookieOptions({ maxAge: 30 * 24 * 60 * 60 * 1000 }));
 }
 
+async function rotateAuthenticatedSession(req, res, userId) {
+  const normalizedUserId = String(userId || '').replace(/^user:/, '').trim();
+  if (!normalizedUserId) throw new Error('Authenticated user id is required for session rotation');
+  if (req.authenticatedSessionSid && req.authenticatedSessionUserId === normalizedUserId) {
+    return req.authenticatedSessionSid;
+  }
+  const previousSid = getCookieSid(req);
+  const nextSid = `rt_${crypto.randomBytes(32).toString('hex')}`;
+  if (previousSid) await revokeSession(previousSid);
+  await upsertSession(nextSid, normalizedUserId, 30);
+  clearManagedCookie(res, 'sid');
+  setCookieSid(res, nextSid);
+  if (req.cookies && typeof req.cookies === 'object') req.cookies.sid = nextSid;
+  req.authenticatedSessionSid = nextSid;
+  req.authenticatedSessionUserId = normalizedUserId;
+  return nextSid;
+}
+
+async function rotateTemporaryOAuthSession(req, res) {
+  const previousSid = getCookieSid(req);
+  const nextSid = `rt_${crypto.randomBytes(32).toString('hex')}`;
+  if (previousSid) await revokeSession(previousSid);
+  clearManagedCookie(res, 'sid');
+  setCookieSid(res, nextSid);
+  if (req.cookies && typeof req.cookies === 'object') req.cookies.sid = nextSid;
+  return nextSid;
+}
+
 function setOAuthStateCookie(res, name, state) {
   res.cookie(name, state, getCookieOptions({ maxAge: 10 * 60 * 1000 }));
 }
@@ -12899,18 +13226,23 @@ app.post('/api/apikey/issue', async (req, res) => {
     console.log('[apikey:issue] userId:', userId ? 'present' : 'missing');
     if (!userId) return res.status(401).json({ error: 'Login required' });
     const pid = `user:${String(userId)}`;
+    const requestedScopes = Array.isArray(req.body?.scopes) ? req.body.scopes : req.body?.scope;
     const rotateStr = String((req.query.rotate ?? req.body?.rotate ?? '')).toLowerCase();
     const rotate = rotateStr === '1' || rotateStr === 'true' || rotateStr === 'yes' || rotateStr === 'on';
     if (!rotate) {
       try {
-        const existing = await getActiveApiKeyForOwner(pid);
+        const existing = await getActiveApiKeyForOwner(pid, { scopes: requestedScopes });
         if (existing) return res.json({ apiKey: existing, reused: true });
       } catch { }
     }
     if (rotate) {
       try { await revokeAllApiKeysForOwner(pid); } catch { }
     }
-    const key = await issueApiKey(pid);
+    const key = await issueApiKey(pid, {
+      scopes: requestedScopes,
+      ttlDays: req.body?.ttlDays,
+      deviceId: req.body?.deviceId,
+    });
     return res.json({ apiKey: key, reused: false, rotated: !!rotate });
   } catch (e) {
     console.error('[apikey:issue] error', e?.message || e);
@@ -13061,7 +13393,7 @@ async function getPartitionId(req, res) {
           }
 
           try { await migrateSidToUserPid(sidToken, uid); } catch { }
-          try { await upsertSession(sidToken, uid, 30); } catch { }
+          await rotateAuthenticatedSession(req, res, uid);
 
           const sid = `user:${uid}`;
 
@@ -14211,7 +14543,7 @@ async function resolveYoutubeChannelFromInput(input) {
 }
 
 function getYoutubeWebsubCallbackUrl(req) {
-  const origin = BACKEND_ORIGIN || `${req.protocol}://${req.get('host')}`;
+  const origin = BACKEND_ORIGIN || `${req?.protocol || 'https'}://${req?.get?.('host') || 'localhost'}`;
   return `${String(origin).replace(/\/$/, '')}${YOUTUBE_WEBSUB_CALLBACK_PATH}`;
 }
 
@@ -14230,6 +14562,8 @@ function getYoutubeWatchUrl(videoId) {
 
 async function subscribeYoutubeChannelWebsub(req, streamerChannel) {
   if (!streamerChannel?.youtubeChannelId) return { ok: false, status: 'unresolved_channel' };
+  const websubSecret = String(streamerChannel.websubSecret || '').trim();
+  if (!websubSecret) throw new Error('YouTube WebSub secret is required');
   const callback = getYoutubeWebsubCallbackUrl(req);
   const topic = `https://www.youtube.com/feeds/videos.xml?channel_id=${encodeURIComponent(streamerChannel.youtubeChannelId)}`;
   const leaseSeconds = 864000;
@@ -14241,6 +14575,7 @@ async function subscribeYoutubeChannelWebsub(req, streamerChannel) {
     'hub.lease_seconds': String(leaseSeconds)
   });
   if (YOUTUBE_WEBSUB_VERIFY_TOKEN) body.set('hub.verify_token', YOUTUBE_WEBSUB_VERIFY_TOKEN);
+  body.set('hub.secret', websubSecret);
   await axios.post(YOUTUBE_WEBSUB_HUB_URL, body.toString(), {
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     timeout: DEFAULT_TIMEOUT
@@ -14535,9 +14870,7 @@ app.get('/api/auth/youtube/callback', async (req, res) => {
     await upsertPlatformTokens('youtube', userId, profile.platformUserId, tokens);
     markProviderRuntimeConnected(userId, 'youtube');
 
-    const sidToken = getCookieSid(req) || ('rt_' + crypto.randomBytes(32).toString('hex'));
-    await upsertSession(sidToken, userId, 30);
-    if (!getCookieSid(req)) setCookieSid(res, sidToken);
+    await rotateAuthenticatedSession(req, res, userId);
     if (oauthMode !== 'viewer') {
       await upsertYoutubeStreamerChannelFromOAuthProfile(req, userId, profile);
       ensureYoutubeSession(userId).catch((err) => {
@@ -14560,9 +14893,10 @@ app.get('/api/auth/youtube/token', async (req, res) => {
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
-    const accessToken = await getValidYoutubeAccessToken(ownerUserId);
+    await getValidYoutubeAccessToken(ownerUserId);
     const tokens = await getPlatformTokens('youtube', ownerUserId);
-    return res.json({ accessToken, tokenType: tokens?.tokenType || 'Bearer', expiresAt: tokens?.expiresAt || null, scope: tokens?.scope || null });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ connected: true, tokenType: tokens?.tokenType || 'Bearer', expiresAt: tokens?.expiresAt || null, scope: tokens?.scope || null });
   } catch (e) {
     const msg = String(e?.message || e);
     const status = msg.includes('No YouTube tokens') ? 404 : 500;
@@ -14695,9 +15029,7 @@ app.get('/api/auth/cime/callback', async (req, res) => {
     });
     markProviderRuntimeConnected(userId, 'cime');
 
-    const sidToken = getCookieSid(req) || ('rt_' + crypto.randomBytes(32).toString('hex'));
-    await upsertSession(sidToken, userId, 30);
-    if (!getCookieSid(req)) setCookieSid(res, sidToken);
+    await rotateAuthenticatedSession(req, res, userId);
     ensureCimeSession(userId).catch((err) => {
       console.warn('[CIME] Failed to start event session after OAuth callback:', err?.response?.data || err?.message || err);
     });
@@ -14713,9 +15045,10 @@ app.get('/api/auth/cime/token', async (req, res) => {
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
-    const accessToken = await getValidCimeAccessToken(ownerUserId);
+    await getValidCimeAccessToken(ownerUserId);
     const tokens = await getPlatformTokens('cime', ownerUserId);
-    return res.json({ accessToken, tokenType: tokens?.tokenType || 'Bearer', expiresAt: tokens?.expiresAt || null, scope: tokens?.scope || null });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ connected: true, tokenType: tokens?.tokenType || 'Bearer', expiresAt: tokens?.expiresAt || null, scope: tokens?.scope || null });
   } catch (e) {
     const msg = String(e?.message || e);
     const status = msg.includes('No CIME tokens') ? 404 : 500;
@@ -15125,6 +15458,21 @@ function extractYoutubeWebsubEntries(xml) {
   return entries;
 }
 
+function getYoutubeWebsubSignatureHeader(req) {
+  return String(req.get('x-hub-signature-256') || req.get('x-hub-signature') || '').trim();
+}
+
+function verifyYoutubeWebsubSignature(rawBody, secret, signatureHeader) {
+  const secretText = String(secret || '').trim();
+  const match = String(signatureHeader || '').trim().match(/^(sha1|sha256)=([a-f0-9]+)$/i);
+  if (!secretText || !match) return false;
+  const algorithm = match[1].toLowerCase();
+  const received = match[2].toLowerCase();
+  const body = Buffer.isBuffer(rawBody) ? rawBody : Buffer.from(String(rawBody || ''), 'utf8');
+  const expected = crypto.createHmac(algorithm, secretText).update(body).digest('hex');
+  return constantTimeEqualText(received, expected);
+}
+
 function scheduleYoutubeWebsubLiveRetry(ownerUserId, videoId, attempt = 0) {
   const delay = YOUTUBE_WEBSUB_RETRY_DELAYS_MS[attempt];
   if (!Number.isFinite(delay)) return;
@@ -15175,14 +15523,32 @@ async function processYoutubeDetectedVideo(ownerUserId, videoId, nextAttempt = 0
 app.post(YOUTUBE_WEBSUB_CALLBACK_PATH, async (req, res) => {
   try {
     const entries = extractYoutubeWebsubEntries(req.body);
-    res.status(204).end();
+    const rawBody = Buffer.isBuffer(req.youtubeWebsubRawBody)
+      ? req.youtubeWebsubRawBody
+      : Buffer.from(String(req.body || ''), 'utf8');
+    const signatureHeader = getYoutubeWebsubSignatureHeader(req);
+    const deliveries = [];
+    let matchedSubscriptions = 0;
+    const deliveryKeys = new Set();
     for (const entry of entries) {
-      const streamerChannels = await listYoutubeStreamerChannelsByYoutubeChannelId(entry.channelId).catch(() => []);
+      const streamerChannels = await listYoutubeStreamerChannelsByYoutubeChannelId(entry.channelId);
       for (const streamerChannel of streamerChannels) {
-        processYoutubeDetectedVideo(streamerChannel.ownerUserId, entry.videoId).catch((e) => {
-          console.warn('[YouTube WebSub] detected video processing failed:', e?.message || e);
-        });
+        matchedSubscriptions += 1;
+        if (!verifyYoutubeWebsubSignature(rawBody, streamerChannel.websubSecret, signatureHeader)) continue;
+        const deliveryKey = `${streamerChannel.ownerUserId}:${entry.videoId}`;
+        if (deliveryKeys.has(deliveryKey)) continue;
+        deliveryKeys.add(deliveryKey);
+        deliveries.push({ streamerChannel, entry });
       }
+    }
+    if (matchedSubscriptions > 0 && deliveries.length === 0) {
+      return res.status(403).send('invalid websub signature');
+    }
+    res.status(204).end();
+    for (const { streamerChannel, entry } of deliveries) {
+      processYoutubeDetectedVideo(streamerChannel.ownerUserId, entry.videoId).catch((e) => {
+        console.warn('[YouTube WebSub] detected video processing failed:', e?.message || e);
+      });
     }
   } catch (e) {
     if (!res.headersSent) return res.status(500).send('websub processing failed');
@@ -15277,12 +15643,15 @@ function closeCimeSession(ownerUserId, reason = 'account_deleted') {
   if (!entry) return false;
   entry.closed = true;
   if (entry.pingTimer) clearInterval(entry.pingTimer);
+  if (entry.subscribeRetryTimer) clearTimeout(entry.subscribeRetryTimer);
   if (entry.reconnectTimer) clearTimeout(entry.reconnectTimer);
   entry.connected = false;
   entry.closeReason = reason;
   try { entry.ws?.close?.(1000, reason); } catch { }
   try { entry.ws?.terminate?.(); } catch { }
   cimeSessionStore.delete(ownerUserId);
+  cimeReconnectAttempts.delete(ownerUserId);
+  releaseProviderRuntimeLeases('cime', ownerUserId).catch(() => { });
   return true;
 }
 
@@ -15300,6 +15669,7 @@ function closeChzzkProviderRuntimeSession(ownerUserId, reason = 'platform_discon
   activeSids.delete(sid);
   liveSession.delete(sid);
   liveStatusCache.delete(sid);
+  releaseProviderRuntimeLeases('chzzk', owner, { channelId }).catch(() => { });
   return closed;
 }
 
@@ -15377,6 +15747,71 @@ function clearDeletedAccountRuntimeState(ownerUserId) {
   return { sid, soundFilesDeleted };
 }
 
+function isAlreadyRevokedOAuthError(error) {
+  const status = Number(error?.response?.status || 0);
+  return status === 400 || status === 401 || status === 404;
+}
+
+async function revokeExternalAccountGrants(ownerUserId) {
+  const owner = String(ownerUserId || '').replace(/^user:/, '').trim();
+  if (!owner) throw new Error('ownerUserId is required');
+  const attempts = [];
+  const registerAttempt = (provider, promise) => attempts.push(
+    Promise.resolve(promise).then(
+      () => ({ provider, ok: true }),
+      (error) => ({ provider, ok: isAlreadyRevokedOAuthError(error), error })
+    )
+  );
+
+  const chzzkTokens = await getTokens(`user:${owner}`);
+  if (chzzkTokens) {
+    for (const [token, tokenTypeHint] of [[chzzkTokens.accessToken, 'access_token'], [chzzkTokens.refreshToken, 'refresh_token']]) {
+      if (!token) continue;
+      registerAttempt('chzzk', revokeTokens({
+        clientId: CHZZK_CLIENT_ID,
+        clientSecret: CHZZK_CLIENT_SECRET,
+        token,
+        tokenTypeHint,
+        baseUrl: OPENAPI_BASE,
+      }));
+    }
+  }
+
+  const youtubeTokens = await getPlatformTokens('youtube', owner);
+  const youtubeToken = youtubeTokens?.refreshToken || youtubeTokens?.accessToken;
+  if (youtubeToken) {
+    registerAttempt('youtube', axios.post(
+      YOUTUBE_REVOKE_URL,
+      new URLSearchParams({ token: youtubeToken }).toString(),
+      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: DEFAULT_TIMEOUT }
+    ));
+  }
+
+  const cimeTokens = await getPlatformTokens('cime', owner);
+  if (cimeTokens) {
+    for (const [token, tokenTypeHint] of [[cimeTokens.accessToken, 'access_token'], [cimeTokens.refreshToken, 'refresh_token']]) {
+      if (!token) continue;
+      registerAttempt('cime', axios.post(`${CIME_OPENAPI_BASE}/auth/v1/token/revoke`, {
+        clientId: CIME_CLIENT_ID,
+        clientSecret: CIME_CLIENT_SECRET,
+        token,
+        tokenTypeHint,
+      }, { headers: { 'Content-Type': 'application/json' }, timeout: DEFAULT_TIMEOUT }));
+    }
+  }
+
+  const results = await Promise.all(attempts);
+  const failures = results.filter((result) => !result.ok);
+  if (failures.length > 0) {
+    const error = new Error(`External OAuth revoke failed: ${Array.from(new Set(failures.map((item) => item.provider))).join(', ')}`);
+    error.code = 'external_oauth_revoke_failed';
+    error.providers = Array.from(new Set(failures.map((item) => item.provider)));
+    error.cause = failures[0]?.error;
+    throw error;
+  }
+  return { attempted: results.length, providers: Array.from(new Set(results.map((item) => item.provider))) };
+}
+
 app.delete('/api/account', rateLimiters.userWrite, async (req, res) => {
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
@@ -15385,16 +15820,46 @@ app.delete('/api/account', rateLimiters.userWrite, async (req, res) => {
     if (confirmation !== 'delete-account') {
       return res.status(400).json({ error: 'Deletion confirmation required', requiredConfirm: 'delete-account' });
     }
+    const revoked = await revokeExternalAccountGrants(ownerUserId);
     const result = await deleteAccountData(ownerUserId, { reason: 'self_service_delete' });
     const runtime = clearDeletedAccountRuntimeState(ownerUserId);
     clearManagedCookie(res, 'oauth_state');
     clearManagedCookie(res, 'oauth_state_cime');
     clearManagedCookie(res, 'oauth_state_youtube');
     clearManagedCookie(res, 'sid');
-    return res.json({ ok: true, ...result, runtime });
+    return res.json({ ok: true, ...result, revoked, runtime });
   } catch (e) {
     console.error('[Privacy] Account delete failed:', e?.message || e);
+    if (e?.code === 'external_oauth_revoke_failed') {
+      return res.status(502).json({
+        error: 'External account authorization could not be revoked. No account data was deleted; please retry.',
+        code: e.code,
+        providers: e.providers || [],
+      });
+    }
     return res.status(500).json({ error: 'Failed to delete account data' });
+  }
+});
+
+app.post('/api/apikey/ws-ticket', rateLimiters.apiKeyCommand, async (req, res) => {
+  try {
+    const scope = String(req.body?.scope || '').trim().toLowerCase();
+    if (!['desktop', 'warudo'].includes(scope)) {
+      return res.status(400).json({ error: 'scope must be desktop or warudo' });
+    }
+    const authorization = String(req.headers?.authorization || '').trim();
+    const bearer = authorization.toLowerCase().startsWith('bearer ') ? authorization.slice(7).trim() : '';
+    const apiKey = bearer || String(req.headers?.['x-api-key'] || '').trim();
+    if (!apiKey) return res.status(401).json({ error: 'API key required' });
+    const ownerPid = await getOwnerPidForApiKey(apiKey, { requiredScope: scope });
+    if (!ownerPid) return res.status(403).json({ error: 'Invalid API key or scope' });
+    const issued = await issueApiWebSocketTicket(ownerPid, scope, 30_000);
+    await touchApiKeyLastUsed(apiKey).catch(() => null);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ ...issued, expiresInMs: 30_000 });
+  } catch (error) {
+    console.error('[apikey:ws-ticket] error', error?.message || error);
+    return res.status(500).json({ error: 'Failed to issue WebSocket ticket' });
   }
 });
 
@@ -18236,32 +18701,8 @@ app.get('/api/auth/chzzk/callback', async (req, res) => {
           markProviderRuntimeConnected(accountUserId, 'chzzk');
         } catch { }
         if (oldSid) { try { await migrateSidToUserPid(oldSid, accountUserId); } catch { } }
+        await rotateAuthenticatedSession(req, res, accountUserId);
         pid = `user:${accountUserId}`;
-        // Create session using existing cookie sid if present; else generate
-        const existing = getCookieSid(req);
-        const sidToken = existing && typeof existing === 'string' ? existing : ('rt_' + crypto.randomBytes(32).toString('hex'));
-        console.log('[auth:callback] Creating session:', { 
-          userId: accountUserId,
-          platformUserId,
-          existing: existing ? 'present' : 'missing',
-          sidToken: sidToken ? 'generated' : 'missing'
-        });
-        try { 
-          await upsertSession(sidToken, accountUserId, 30);
-          console.log('[auth:callback] Session created successfully');
-        } catch (e) { 
-          console.error('[auth:callback] Failed to create session:', e.message);
-        }
-        try { 
-          if (existing !== sidToken) {
-            setCookieSid(res, sidToken);
-            console.log('[auth:callback] Cookie set');
-          } else {
-            console.log('[auth:callback] Using existing cookie');
-          }
-        } catch (e) {
-          console.error('[auth:callback] Failed to set cookie:', e.message);
-        }
       }
     } catch { }
     if (!pid) {
@@ -18280,11 +18721,8 @@ app.get('/api/auth/chzzk/callback', async (req, res) => {
             const accountUserId = preferredUserId || platformUserId;
             markProviderRuntimeConnected(accountUserId, 'chzzk');
             if (oldSid) { try { await migrateSidToUserPid(oldSid, accountUserId); } catch { } }
+            await rotateAuthenticatedSession(req, res, accountUserId);
             pid = `user:${accountUserId}`;
-            const existing2 = getCookieSid(req);
-            const sidToken2 = existing2 && typeof existing2 === 'string' ? existing2 : ('rt_' + crypto.randomBytes(32).toString('hex'));
-            try { await upsertSession(sidToken2, accountUserId, 30); } catch { }
-            try { if (existing2 !== sidToken2) setCookieSid(res, sidToken2); } catch { }
             break;
           }
         } catch { }
@@ -18293,11 +18731,9 @@ app.get('/api/auth/chzzk/callback', async (req, res) => {
 
     // If still no pid, temporarily store under a temp session-based pid and log; will migrate later
     if (!pid) {
-      const tempExisting = getCookieSid(req);
-      const tempSidToken = tempExisting || ('rt_' + crypto.randomBytes(32).toString('hex'));
-      if (!tempExisting) { try { setCookieSid(res, tempSidToken); } catch { } }
+      const tempSidToken = await rotateTemporaryOAuthSession(req, res);
       pid = `sid:${tempSidToken}`;
-      console.warn('[Auth] Could not resolve userId at callback time; storing tokens under', pid, 'and will migrate once userId is resolvable.');
+      console.warn('[Auth] Could not resolve userId at callback time; storing tokens under a rotated temporary session.');
     }
 
     await upsertTokens(pid, {
@@ -18323,7 +18759,7 @@ app.get('/api/auth/chzzk/callback', async (req, res) => {
   }
 });
 
-// GET /api/auth/chzzk/token -> return current valid access token (auto-refresh if needed)
+// GET /api/auth/chzzk/token -> refresh server-side credentials and return non-secret status
 app.get('/api/auth/chzzk/token', async (req, res) => {
   try {
     let sid = await getPartitionId(req, res);
@@ -18344,8 +18780,7 @@ app.get('/api/auth/chzzk/token', async (req, res) => {
               const userId = String(content.channelId);
               try { await migrateSidToUserPid(sidToken, userId); } catch { }
               sid = `user:${userId}`;
-              // Reuse existing cookie sid; do NOT rotate
-              try { await upsertSession(sidToken, userId, 30); } catch { }
+              await rotateAuthenticatedSession(req, res, userId);
               // Ensure tokens are saved under user pid as well
               try {
                 await upsertTokens(sid, {
@@ -18397,13 +18832,14 @@ app.get('/api/auth/chzzk/token', async (req, res) => {
           });
           const content = meChk?.data?.content || meChk?.data || {};
           if (content?.channelId) {
-            await upsertSession(cookieSid, String(content.channelId), 30);
+            await rotateAuthenticatedSession(req, res, String(content.channelId));
           }
         }
       }
     } catch { }
 
-    return res.json({ accessToken: tokens.accessToken, tokenType: tokens.tokenType, expiresAt: tokens.expiresAt });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ connected: true, tokenType: tokens.tokenType, expiresAt: tokens.expiresAt });
   } catch (e) {
     console.error('Token fetch/refresh error', e?.response?.data || e.message);
     return res.status(500).json({ error: 'Failed to fetch/refresh token' });
@@ -19233,7 +19669,8 @@ app.post('/api/auth/chzzk/session/attach', async (req, res) => {
       const content = await callUsersMe();
       if (!content?.channelId) return res.status(502).json({ error: 'users/me returned no userId' });
       const uid = String(content.channelId);
-      await upsertSession(cookieSid, uid, 30);
+      await migrateSidToUserPid(cookieSid, uid);
+      await rotateAuthenticatedSession(req, res, uid);
       return res.json({ ok: true, userId: uid, note: 'attached' });
     } catch (e) {
       const status = e?.response?.status;
@@ -19269,7 +19706,8 @@ app.post('/api/auth/chzzk/session/attach', async (req, res) => {
             const content2 = await callUsersMe();
             if (!content2?.userId) return res.status(502).json({ error: 'users/me returned no userId after refresh' });
             const uid = String(content2.userId);
-            await upsertSession(cookieSid, uid, 30);
+            await migrateSidToUserPid(cookieSid, uid);
+            await rotateAuthenticatedSession(req, res, uid);
             return res.json({ ok: true, userId: uid, note: 'attached_after_refresh' });
           } catch (e2) {
             console.error('[SessionAttach] users/me after refresh failed', e2?.response?.data || e2.message);
@@ -19367,12 +19805,14 @@ const MAX_QUEUE = 1000;
 const sessionCreatePromises = new Map(); // sid -> Promise(entry)
 
 async function ensureSession(sid, channelId) {
-  assertProviderRuntimeConnected(ownerUserIdFromSid(sid), 'chzzk');
+  const ownerUserId = ownerUserIdFromSid(sid);
+  assertProviderRuntimeConnected(ownerUserId, 'chzzk');
   if (!channelId) {
     try {
-      channelId = await resolveChannelIdForOwnerUserId(ownerUserIdFromSid(sid), { provider: 'chzzk', allowFallback: false });
+      channelId = await resolveChannelIdForOwnerUserId(ownerUserId, { provider: 'chzzk', allowFallback: false });
     } catch { }
   }
+  await ensureProviderRuntimeLease('chzzk', ownerUserId, { channelId });
   let entry = sessionStore.get(sid);
   // If we already have a per-channel session, reuse it and map this sid to it
   const chKey = String(channelId || '');
@@ -19784,6 +20224,10 @@ async function ensureSession(sid, channelId) {
             });
             if (!matched) continue;
 
+            if (!r.id) continue;
+            const cooldownClaim = await claimBotRuleCooldown(sid, r.id, { cooldownMs: cooldown }).catch(() => null);
+            if (!cooldownClaim?.claimed) continue;
+
             // Choose a response
             const responses = Array.isArray(r.responses) ? r.responses.filter(Boolean) : [];
             let response = responses[Math.floor(Math.random() * responses.length)];
@@ -19828,20 +20272,21 @@ async function ensureSession(sid, channelId) {
                 const uids = await resolveChzzkChannelUidsForSid(sid, s);
                 if (uids.length) channelUid = uids[0];
                 if (channelUid) {
-                  const have = await getChannelPoints(channelUid, String(resolvedUserId)).catch(() => 0);
-                  if (Number(have || 0) < commandCost) {
+                  const deduction = await deductChannelPointsIfEnough(channelUid, String(resolvedUserId), String(resolvedUsername || ''), commandCost);
+                  if (!deduction.deducted) {
                     // Not enough points: override response and block execution
-                    response = `포인트가 부족합니다. (${commandCost} 필요, ${Number(have || 0)} 보유 중)`;
+                    response = `포인트가 부족합니다. (${commandCost} 필요, ${deduction.balanceBefore} 보유 중)`;
                     allowExecute = false;
                   } else {
-                    // Deduct cost now
-                    await incrChannelPoints(channelUid, String(resolvedUserId), String(resolvedUsername || ''), -commandCost);
                     commandPointDelta -= commandCost;
-                    commandPointBefore = Number(have || 0);
-                    commandPointAfter = Number(have || 0) - commandCost;
+                    commandPointBefore = deduction.balanceBefore;
+                    commandPointAfter = deduction.balanceAfter;
                   }
                 }
-              } catch { }
+              } catch {
+                response = '포인트 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.';
+                allowExecute = false;
+              }
             }
 
             // Substitute placeholders (live/channel/user)
@@ -19929,29 +20374,19 @@ async function ensureSession(sid, channelId) {
                         allowExecute = false;
                       } else {
                         const need = commandCost * count;
-                        let haveNum = 0;
                         try {
-                          const have = await getChannelPoints(channelUid, String(resolvedUserId));
-                          haveNum = Number(have || 0);
-                        } catch (e) {
-                          responseToSend = '포인트 확인에 실패했습니다. 잠시 후 다시 시도해 주세요.';
-                          allowExecute = false;
-                        }
-                        if (allowExecute) {
-                          if (haveNum < need) {
-                            responseToSend = `포인트가 부족합니다. (${need} 필요, ${haveNum} 보유 중)`;
+                          const deduction = await deductChannelPointsIfEnough(channelUid, String(resolvedUserId), String(resolvedUsername || ''), need);
+                          if (!deduction.deducted) {
+                            responseToSend = `포인트가 부족합니다. (${need} 필요, ${deduction.balanceBefore} 보유 중)`;
                             allowExecute = false;
                           } else {
-                            try {
-                              await incrChannelPoints(channelUid, String(resolvedUserId), String(resolvedUsername || ''), -need);
-                              commandPointDelta -= need;
-                              commandPointBefore = haveNum;
-                              commandPointAfter = haveNum - need;
-                            } catch (e) {
-                              responseToSend = '포인트 차감에 실패했습니다. 잠시 후 다시 시도해 주세요.';
-                              allowExecute = false;
-                            }
+                            commandPointDelta -= need;
+                            commandPointBefore = deduction.balanceBefore;
+                            commandPointAfter = deduction.balanceAfter;
                           }
+                        } catch (e) {
+                          responseToSend = '포인트 차감에 실패했습니다. 잠시 후 다시 시도해 주세요.';
+                          allowExecute = false;
                         }
                       }
                     } catch (e) {
@@ -19971,7 +20406,7 @@ async function ensureSession(sid, channelId) {
                         : '';
 
                       if (!token) {
-                        token = 'rlt_' + Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6);
+                        token = rouletteRandomToken();
                         try {
                           const next = { ...settings, rouletteViewerToken: token };
                           await setBotSettings(sid, next);
@@ -19997,7 +20432,7 @@ async function ensureSession(sid, channelId) {
                       console.log(`[Roulette] Enqueueing ${count} spins for roulette: ${name}, user: ${resolvedUsername}`);
 
                       // First spin: normal animation (instant=false)
-                      const queuePosition = enqueueRouletteSpin(sid, {
+                      const queuePosition = await enqueueRouletteSpin(sid, {
                         ...base,
                         instant: false,
                         eventContext: {
@@ -20012,7 +20447,7 @@ async function ensureSession(sid, channelId) {
 
                       // Remaining spins (if any): instant display on viewer
                       for (let i = 1; i < count; i++) {
-                        const pos = enqueueRouletteSpin(sid, { ...base, instant: true, eventContext: { source: 'chat-command', triggerName: matchedKeyword || '' } });
+                        const pos = await enqueueRouletteSpin(sid, { ...base, instant: true, eventContext: { source: 'chat-command', triggerName: matchedKeyword || '' } });
                         console.log(`[Roulette] Spin ${i + 1} enqueued at position: ${pos}`);
                       }
 
@@ -20125,10 +20560,6 @@ async function ensureSession(sid, channelId) {
                   params: { sessionKey: entry.sessionKey },
                   headers: { Authorization: `Bearer ${accessToken}` }
                 });
-              }
-              // Update lastUsed regardless of whether a message was sent if the rule was used
-              if (ruleUsed || (finalMsg && String(finalMsg).length > 0)) {
-                try { await upsertBotRule(sid, { ...r, lastUsed: now }); } catch { }
               }
               await recordCommandExecutionLog(sid, {
                 executed: allowExecute && (ruleUsed || (finalMsg && String(finalMsg).length > 0)),
@@ -20302,7 +20733,7 @@ async function ensureSession(sid, channelId) {
                       username: donorName,
                       chatPost: { sessionKey: entry.sessionKey, accessToken, resolvedUsername: donorName }
                     };
-                    enqueueRouletteSpin(sid, { ...base, instant: false, eventContext: { source: 'donation-rule', triggerName: r.name || null } });
+                    await enqueueRouletteSpin(sid, { ...base, instant: false, eventContext: { source: 'donation-rule', triggerName: r.name || null } });
                     donationFeatures.push('roulette');
                   }
                 } catch { }
@@ -21115,7 +21546,7 @@ async function processYoutubeDonationAutomation(entry, ev) {
           const rouletteName = m && m[1] ? String(m[1]).trim() : '';
           built = String(built || '').replace(rlReAll, '').trim();
           if (rouletteName) {
-            enqueueRouletteSpin(sid, {
+            await enqueueRouletteSpin(sid, {
               name: rouletteName,
               userId: donorId,
               username: donorName,
@@ -21280,6 +21711,10 @@ async function processYoutubeChatAutomation(entry, ev) {
       });
       if (!matched) continue;
 
+      if (!r.id) continue;
+      const cooldownClaim = await claimBotRuleCooldown(sid, r.id, { cooldownMs: cooldown }).catch(() => null);
+      if (!cooldownClaim?.claimed) continue;
+
       const responses = Array.isArray(r.responses) ? r.responses.filter(Boolean) : [];
       let response = responses[Math.floor(Math.random() * responses.length)] || '';
       let allowExecute = true;
@@ -21308,15 +21743,19 @@ async function processYoutubeChatAutomation(entry, ev) {
         } catch { }
       }
       if (!isRouletteRule && commandCost > 0 && entry.channelId && resolvedUserId) {
-        const have = await getChannelPoints(entry.channelId, resolvedUserId).catch(() => 0);
-        if (Number(have || 0) < commandCost) {
-          response = `포인트가 부족합니다. (${commandCost} 필요, ${Number(have || 0)} 보유 중)`;
+        try {
+          const deduction = await deductChannelPointsIfEnough(entry.channelId, resolvedUserId, resolvedUsername, commandCost);
+          if (!deduction.deducted) {
+            response = `포인트가 부족합니다. (${commandCost} 필요, ${deduction.balanceBefore} 보유 중)`;
+            allowExecute = false;
+          } else {
+            commandPointDelta -= commandCost;
+            commandPointBefore = deduction.balanceBefore;
+            commandPointAfter = deduction.balanceAfter;
+          }
+        } catch {
+          response = '포인트 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.';
           allowExecute = false;
-        } else {
-          await incrChannelPoints(entry.channelId, resolvedUserId, resolvedUsername, -commandCost).catch(() => { });
-          commandPointDelta -= commandCost;
-          commandPointBefore = Number(have || 0);
-          commandPointAfter = Number(have || 0) - commandCost;
         }
       }
 
@@ -21376,15 +21815,17 @@ async function processYoutubeChatAutomation(entry, ev) {
           if (name) {
             if (commandCost > 0 && entry.channelId && resolvedUserId) {
               const need = commandCost * count;
-              const have = await getChannelPoints(entry.channelId, resolvedUserId).catch(() => 0);
-              if (Number(have || 0) < need) {
-                cleaned = `포인트가 부족합니다. (${need} 필요, ${Number(have || 0)} 보유 중)`;
+              const deduction = await deductChannelPointsIfEnough(entry.channelId, resolvedUserId, resolvedUsername, need).catch(() => null);
+              if (!deduction) {
+                cleaned = '포인트 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.';
+                allowExecute = false;
+              } else if (!deduction.deducted) {
+                cleaned = `포인트가 부족합니다. (${need} 필요, ${deduction.balanceBefore} 보유 중)`;
                 allowExecute = false;
               } else {
-                await incrChannelPoints(entry.channelId, resolvedUserId, resolvedUsername, -need).catch(() => { });
                 commandPointDelta -= need;
-                commandPointBefore = Number(have || 0);
-                commandPointAfter = Number(have || 0) - need;
+                commandPointBefore = deduction.balanceBefore;
+                commandPointAfter = deduction.balanceAfter;
               }
             }
           }
@@ -21397,7 +21838,7 @@ async function processYoutubeChatAutomation(entry, ev) {
                 ? makeYoutubeChatPost(ownerUserId, entry.liveChatId, resolvedUsername, { suppressResultChat: true, batchId: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, batchCount: count })
                 : makeYoutubeChatPost(ownerUserId, entry.liveChatId, resolvedUsername)
             };
-            enqueueRouletteSpin(sid, {
+            await enqueueRouletteSpin(sid, {
               ...base,
               instant: false,
               eventContext: {
@@ -21408,7 +21849,7 @@ async function processYoutubeChatAutomation(entry, ev) {
                 pointAfter: commandPointAfter,
               },
             });
-            for (let i = 1; i < count; i++) enqueueRouletteSpin(sid, { ...base, instant: true, eventContext: { source: 'youtube-chat-command', triggerName: matchedKeyword || '' } });
+            for (let i = 1; i < count; i++) await enqueueRouletteSpin(sid, { ...base, instant: true, eventContext: { source: 'youtube-chat-command', triggerName: matchedKeyword || '' } });
             cleaned = '';
             commandFeatures.push('roulette');
           }
@@ -21445,7 +21886,6 @@ async function processYoutubeChatAutomation(entry, ev) {
           console.error('[YouTube] Auto-reply send error', e?.response?.data || e.message);
         });
       }
-      try { await upsertBotRule(sid, { ...r, lastUsed: now }); } catch { }
       await recordCommandExecutionLog(sid, {
         executed: allowExecute,
         provider: 'youtube',
@@ -21544,6 +21984,7 @@ function closeYoutubeSession(ownerUserId, reason = 'closed') {
   try { entry.abortController?.abort(); } catch { }
   try { entry.stream?.destroy?.(); } catch { }
   youtubeSessionStore.delete(ownerUserId);
+  releaseProviderRuntimeLeases('youtube', ownerUserId).catch(() => { });
   return true;
 }
 
@@ -21597,6 +22038,7 @@ async function openYoutubeChatStream(entry) {
 async function ensureYoutubeSession(ownerUserId) {
   if (!ownerUserId) throw new Error('ownerUserId is required');
   assertProviderRuntimeConnected(ownerUserId, 'youtube');
+  await ensureProviderRuntimeLease('youtube', ownerUserId);
   const existing = youtubeSessionStore.get(ownerUserId);
   if (existing && !existing.closed && (existing.connected || existing.stream || existing.chatClient)) return existing;
   if (youtubeSessionCreatePromises.has(ownerUserId)) return youtubeSessionCreatePromises.get(ownerUserId);
@@ -21965,14 +22407,10 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
   if (!channelUid) return cleaned || '채널 ID를 확인할 수 없습니다.';
   const blocked = findBlockedBotUser(settings, userId, providerFromLogContext(context), [context.user?.platformUserId, context.user?.rawUserId]);
   if (blocked) return cleaned || '이 방송에서는 봇 기능을 사용할 수 없습니다.';
-  const have = await getChannelPoints(channelUid, String(userId)).catch(() => 0);
-  if (Number(have || 0) < cost) return `포인트가 부족합니다. 필요: ${cost}, 보유: ${Number(have || 0)}`;
-
-  await incrChannelPoints(channelUid, String(userId), String(username || ''), -cost);
-  const q = getVideoQueue(sid);
-  const shouldStartPlayback = q.length === 0;
+  const runtimeJobId = crypto.randomUUID();
   const queueItem = {
-    id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    id: runtimeJobId,
+    runtimeJobId,
     ts: Date.now(),
     mediaProvider: media.provider,
     mediaId: media.mediaId,
@@ -21992,7 +22430,26 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
     username: String(username || ''),
     status: 'queued'
   };
-  q.push(queueItem);
+  const idempotencyKey = String(context.eventId || context.messageId || '').trim() || crypto.createHash('sha256')
+    .update(`${sid}|${userId}|${media.provider}|${media.mediaId}|${start}|${play || ''}|${context.source || ''}|${Math.floor(Date.now() / 2000)}`)
+    .digest('hex');
+  const durable = await enqueuePaidDurableRuntimeJob({
+    id: runtimeJobId,
+    sid,
+    jobType: 'video-donation',
+    idempotencyKey,
+    channelUid,
+    userId: String(userId),
+    username: String(username || ''),
+    pointsCost: cost,
+    payload: { item: queueItem },
+    maxAttempts: 8,
+  });
+  if (durable.deduction && !durable.deduction.deducted) {
+    return `포인트가 부족합니다. 필요: ${cost}, 보유: ${durable.deduction.balanceBefore}`;
+  }
+  const acceptedItem = durable.job?.payload?.item || queueItem;
+  await runDurableRuntimeWorker();
   await recordBotEventLogSafe(sid, {
     category: 'video_donation',
     eventType: 'video_donation_request',
@@ -22001,8 +22458,8 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
     viewerUserId: String(userId),
     viewerName: String(username || ''),
     pointDelta: -cost,
-    pointBefore: Number(have || 0),
-    pointAfter: Number(have || 0) - cost,
+    pointBefore: durable.deduction?.balanceBefore ?? null,
+    pointAfter: durable.deduction?.balanceAfter ?? null,
     triggerName: context.command?.keyword || context.triggerName || null,
     targetName: media.title || media.mediaId || media.mediaUrl || '영상 후원',
     summary: `영상 후원 신청: ${media.title || media.mediaId || media.mediaUrl || '영상'} (${cost}P 사용)`,
@@ -22020,17 +22477,13 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
       requestedPlaySec: play,
       maxDurationSec: maxDur,
       cost,
-      queueItemId: queueItem.id,
+      queueItemId: acceptedItem.id,
+      durableJobId: durable.job?.id || runtimeJobId,
       source: context.source || null,
       command: context.command || null,
-      replaySnapshot: queueItem,
+      replaySnapshot: acceptedItem,
     },
   });
-  if (shouldStartPlayback) {
-    await broadcastPvdStart(sid);
-  } else {
-    notifyPvdAdminSubscribers(sid, 'queued').catch(() => null);
-  }
   const title = media.title ? (media.title.length > 20 ? media.title.slice(0, 20) + '...' : media.title) : null;
   const baseMsg = title ? `요청을 접수했습니다. ${title}` : '요청을 접수했습니다.';
   return cleaned ? `${cleaned} ${baseMsg}`.trim() : baseMsg;
@@ -22173,6 +22626,10 @@ async function processCimeChatAutomation(entry, ev) {
       });
       if (!matched) continue;
 
+      if (!r.id) continue;
+      const cooldownClaim = await claimBotRuleCooldown(sid, r.id, { cooldownMs: cooldown }).catch(() => null);
+      if (!cooldownClaim?.claimed) continue;
+
       const responses = Array.isArray(r.responses) ? r.responses.filter(Boolean) : [];
       let response = responses[Math.floor(Math.random() * responses.length)] || '';
       let allowExecute = true;
@@ -22201,15 +22658,19 @@ async function processCimeChatAutomation(entry, ev) {
         } catch { }
       }
       if (!isRouletteRule && commandCost > 0 && pointChannelUid && resolvedUserId) {
-        const have = await getChannelPoints(pointChannelUid, resolvedUserId).catch(() => 0);
-        if (Number(have || 0) < commandCost) {
-          response = `포인트가 부족합니다. (${commandCost} 필요, ${Number(have || 0)} 보유 중)`;
+        try {
+          const deduction = await deductChannelPointsIfEnough(pointChannelUid, resolvedUserId, resolvedUsername, commandCost);
+          if (!deduction.deducted) {
+            response = `포인트가 부족합니다. (${commandCost} 필요, ${deduction.balanceBefore} 보유 중)`;
+            allowExecute = false;
+          } else {
+            commandPointDelta -= commandCost;
+            commandPointBefore = deduction.balanceBefore;
+            commandPointAfter = deduction.balanceAfter;
+          }
+        } catch {
+          response = '포인트 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.';
           allowExecute = false;
-        } else {
-          await incrChannelPoints(pointChannelUid, resolvedUserId, resolvedUsername, -commandCost).catch(() => { });
-          commandPointDelta -= commandCost;
-          commandPointBefore = Number(have || 0);
-          commandPointAfter = Number(have || 0) - commandCost;
         }
       }
 
@@ -22269,15 +22730,17 @@ async function processCimeChatAutomation(entry, ev) {
           if (name) {
             if (commandCost > 0 && pointChannelUid && resolvedUserId) {
               const need = commandCost * count;
-              const have = await getChannelPoints(pointChannelUid, resolvedUserId).catch(() => 0);
-              if (Number(have || 0) < need) {
-                cleaned = `포인트가 부족합니다. (${need} 필요, ${Number(have || 0)} 보유 중)`;
+              const deduction = await deductChannelPointsIfEnough(pointChannelUid, resolvedUserId, resolvedUsername, need).catch(() => null);
+              if (!deduction) {
+                cleaned = '포인트 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.';
+                allowExecute = false;
+              } else if (!deduction.deducted) {
+                cleaned = `포인트가 부족합니다. (${need} 필요, ${deduction.balanceBefore} 보유 중)`;
                 allowExecute = false;
               } else {
-                await incrChannelPoints(pointChannelUid, resolvedUserId, resolvedUsername, -need).catch(() => { });
                 commandPointDelta -= need;
-                commandPointBefore = Number(have || 0);
-                commandPointAfter = Number(have || 0) - need;
+                commandPointBefore = deduction.balanceBefore;
+                commandPointAfter = deduction.balanceAfter;
               }
             }
           }
@@ -22290,7 +22753,7 @@ async function processCimeChatAutomation(entry, ev) {
                 ? makeCimeChatPost(ownerUserId, resolvedUsername, { suppressResultChat: true, batchId: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, batchCount: count })
                 : makeCimeChatPost(ownerUserId, resolvedUsername)
             };
-            enqueueRouletteSpin(sid, {
+            await enqueueRouletteSpin(sid, {
               ...base,
               instant: false,
               eventContext: {
@@ -22301,7 +22764,7 @@ async function processCimeChatAutomation(entry, ev) {
                 pointAfter: commandPointAfter,
               },
             });
-            for (let i = 1; i < count; i++) enqueueRouletteSpin(sid, { ...base, instant: true, eventContext: { source: 'cime-chat-command', triggerName: matchedKeyword || '' } });
+            for (let i = 1; i < count; i++) await enqueueRouletteSpin(sid, { ...base, instant: true, eventContext: { source: 'cime-chat-command', triggerName: matchedKeyword || '' } });
             cleaned = '';
             commandFeatures.push('roulette');
           }
@@ -22336,7 +22799,6 @@ async function processCimeChatAutomation(entry, ev) {
           console.error('[CIME] Auto-reply send error', e?.response?.data || e.message);
         });
       }
-      try { await upsertBotRule(sid, { ...r, lastUsed: now }); } catch { }
       await recordCommandExecutionLog(sid, {
         executed: allowExecute,
         provider: 'cime',
@@ -22420,7 +22882,7 @@ async function processCimeDonationAutomation(entry, ev) {
           const rouletteName = m && m[1] ? String(m[1]).trim() : '';
           built = String(built || '').replace(rlReAll, '').trim();
           if (rouletteName) {
-            enqueueRouletteSpin(sid, {
+            await enqueueRouletteSpin(sid, {
               name: rouletteName,
               userId: donorId,
               username: donorName,
@@ -22479,11 +22941,37 @@ async function ensureCimeSubscribed(entry) {
   await subscribeCimeEvent('donation', entry.sessionKey, accessToken);
   await subscribeCimeEvent('subscription', entry.sessionKey, accessToken);
   entry.subscribed.add('ALL');
+  entry.subscribedAt = Date.now();
+  entry.subscribeAttempts = 0;
+  entry.lastError = null;
+  if (entry.subscribeRetryTimer) clearTimeout(entry.subscribeRetryTimer);
+  entry.subscribeRetryTimer = null;
+}
+
+function scheduleCimeSubscribeRetry(entry) {
+  if (!entry || entry.closed || !entry.connected || entry.subscribeRetryTimer) return;
+  const attempt = Math.max(0, Number(entry.subscribeAttempts || 0));
+  entry.subscribeAttempts = attempt + 1;
+  const baseDelay = Math.min(60_000, 1_000 * (2 ** Math.min(attempt, 6)));
+  const delay = Math.round(baseDelay * (0.8 + Math.random() * 0.4));
+  entry.subscribeRetryTimer = setTimeout(async () => {
+    entry.subscribeRetryTimer = null;
+    if (entry.closed || !entry.connected) return;
+    try {
+      await ensureCimeSubscribed(entry);
+    } catch (error) {
+      entry.lastError = error?.response?.data || error?.message || 'cime_subscribe_failed';
+      console.warn('[CIME] subscribe retry failed', entry.ownerUserId, entry.lastError);
+      scheduleCimeSubscribeRetry(entry);
+    }
+  }, delay);
+  entry.subscribeRetryTimer.unref?.();
 }
 
 async function ensureCimeSession(ownerUserId) {
   if (!ownerUserId) throw new Error('ownerUserId is required');
   assertProviderRuntimeConnected(ownerUserId, 'cime');
+  await ensureProviderRuntimeLease('cime', ownerUserId);
   const existing = cimeSessionStore.get(ownerUserId);
   if (existing && !existing.closed && existing.connected && existing.ws && existing.ws.readyState === WebSocket.OPEN) {
     await ensureCimeSubscribed(existing);
@@ -22517,6 +23005,11 @@ async function ensureCimeSession(ownerUserId) {
       processedIds: new Set(),
       sentReplies: new Set(),
       pingTimer: null,
+      subscribeRetryTimer: null,
+      subscribeAttempts: 0,
+      subscribedAt: null,
+      lastEventAt: null,
+      lastError: null,
       reconnectTimer: null,
       closed: false
     };
@@ -22528,8 +23021,15 @@ async function ensureCimeSession(ownerUserId) {
 
     ws.on('open', async () => {
       entry.connected = true;
+      cimeReconnectAttempts.delete(ownerUserId);
       activeSids.set(entry.primarySid, Date.now());
-      try { await ensureCimeSubscribed(entry); } catch (e) { console.error('[CIME] subscribe error', e?.response?.data || e.message); }
+      try {
+        await ensureCimeSubscribed(entry);
+      } catch (e) {
+        entry.lastError = e?.response?.data || e?.message || 'cime_subscribe_failed';
+        console.error('[CIME] subscribe error', entry.lastError);
+        scheduleCimeSubscribeRetry(entry);
+      }
       entry.pingTimer = setInterval(() => {
         try {
           if (entry.ws?.readyState === WebSocket.OPEN) entry.ws.send(JSON.stringify({ type: 'PING' }));
@@ -22538,6 +23038,7 @@ async function ensureCimeSession(ownerUserId) {
     });
 
     ws.on('message', (buf) => {
+      entry.lastEventAt = Date.now();
       const parsed = parseCimeEvent(buf.toString('utf8'));
       if (!parsed) return;
       const { eventName, ev } = parsed;
@@ -22562,11 +23063,20 @@ async function ensureCimeSession(ownerUserId) {
       entry.connected = false;
       if (entry.pingTimer) clearInterval(entry.pingTimer);
       entry.pingTimer = null;
+      if (entry.subscribeRetryTimer) clearTimeout(entry.subscribeRetryTimer);
+      entry.subscribeRetryTimer = null;
       if (entry.closed) return;
+      const reconnectAttempt = Number(cimeReconnectAttempts.get(ownerUserId) || 0) + 1;
+      cimeReconnectAttempts.set(ownerUserId, reconnectAttempt);
+      const reconnectBaseDelay = Math.min(60_000, 1_500 * (2 ** Math.min(reconnectAttempt - 1, 6)));
+      const reconnectDelay = Math.round(reconnectBaseDelay * (0.8 + Math.random() * 0.4));
       entry.reconnectTimer = setTimeout(() => {
         cimeSessionStore.delete(ownerUserId);
-        ensureCimeSession(ownerUserId).catch(() => { });
-      }, 3000);
+        ensureCimeSession(ownerUserId).catch((error) => {
+          entry.lastError = error?.response?.data || error?.message || 'cime_reconnect_failed';
+        });
+      }, reconnectDelay);
+      entry.reconnectTimer.unref?.();
     });
 
     ws.on('error', (err) => {
@@ -22606,7 +23116,9 @@ app.post('/api/chzzk/reset', async (req, res) => {
 // Full logout: revoke tokens, clear DB, reset session, and clear sid cookie
 app.post('/api/auth/chzzk/logout', async (req, res) => {
   try {
+    const cookieSid = getCookieSid(req);
     const sid = await getPartitionId(req, res);
+    if (cookieSid) await revokeSession(cookieSid);
     const tokens = sid ? (await getTokens(sid)) : null;
     if (tokens) {
       try {
@@ -22663,12 +23175,10 @@ app.get('/api/chzzk/me', async (req, res) => {
             });
             const content = me?.data?.content || me?.data || {};
             if (content?.channelId) {
-              const userId = String(content.channelId);
-              try { await migrateSidToUserPid(sidToken, userId); } catch { }
-              sid = `user:${userId}`;
-              // Use existing cookie sid; do NOT rotate
-              try { await upsertSession(sidToken, userId, 30); } catch { }
-              // Cookie already has sidToken; no need to overwrite
+                  const userId = String(content.channelId);
+                  try { await migrateSidToUserPid(sidToken, userId); } catch { }
+                  sid = `user:${userId}`;
+                  await rotateAuthenticatedSession(req, res, userId);
             }
             else {
               console.warn('[CHZZK /me] users/me returned no userId; cookieSid=', sidToken);
@@ -22709,12 +23219,10 @@ app.get('/api/chzzk/events', async (req, res) => {
             });
             const content = meTry?.data?.content || meTry?.data || {};
             if (content?.channelId) {
-              const userId = String(content.channelId);
-              try { await migrateSidToUserPid(sidToken, userId); } catch { }
-              sid = `user:${userId}`;
-              const newSidToken = 'rt_' + crypto.randomBytes(32).toString('hex');
-              try { await upsertSession(newSidToken, userId, 30); } catch { }
-              try { setCookieSid(res, newSidToken); } catch { }
+                  const userId = String(content.channelId);
+                  try { await migrateSidToUserPid(sidToken, userId); } catch { }
+                  sid = `user:${userId}`;
+                  await rotateAuthenticatedSession(req, res, userId);
             }
             else {
               console.warn('[CHZZK /events] users/me returned no userId; cookieSid=', sidToken);
@@ -22933,13 +23441,7 @@ app.post('/api/cime/reset', async (req, res) => {
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
-    const entry = cimeSessionStore.get(ownerUserId);
-    if (entry) {
-      if (entry.pingTimer) clearInterval(entry.pingTimer);
-      if (entry.reconnectTimer) clearTimeout(entry.reconnectTimer);
-      try { entry.ws?.close(); } catch { }
-      cimeSessionStore.delete(ownerUserId);
-    }
+    closeCimeSession(ownerUserId, 'manual_reset');
     await ensureCimeSession(ownerUserId);
     return res.json({ ok: true });
   } catch (e) {
@@ -22955,14 +23457,28 @@ const server = SERVER_HOST
       console.log(`[server] listening on http://localhost:${PORT}`);
     });
 
+const REGISTERED_RUNTIME_MONITOR_CONCURRENCY = Math.max(1, Math.min(12, Number(process.env.REGISTERED_RUNTIME_MONITOR_CONCURRENCY || 4)));
+
+async function forEachWithConcurrency(items, concurrency, worker) {
+  const values = Array.isArray(items) ? items : [];
+  let cursor = 0;
+  const workerCount = Math.min(values.length, Math.max(1, Number(concurrency) || 1));
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (cursor < values.length) {
+      const index = cursor;
+      cursor += 1;
+      await worker(values[index], index);
+    }
+  }));
+}
+
 // Bootstrap: ensure sessions for all sids that have tokens on startup
 async function bootstrapEnsureSessions() {
   try {
     const sids = await listAllSidsWithTokens();
     if (!Array.isArray(sids) || sids.length === 0) return;
     console.log(`[bootstrap] Checking CHZZK live status for ${sids.length} sid(s)`);
-    // Process sequentially with small delay to avoid burst
-    for (const sid of sids) {
+    await forEachWithConcurrency(sids, REGISTERED_RUNTIME_MONITOR_CONCURRENCY, async (sid) => {
       try {
         activeSids.set(sid, Date.now());
         const settings = await getBotSettings(sid).catch(() => ({})) || {};
@@ -22974,7 +23490,7 @@ async function bootstrapEnsureSessions() {
         console.warn('[bootstrap] CHZZK live status check skipped:', sid, e?.response?.data || e?.message || e);
       }
       await sleep(100);
-    }
+    });
   } catch (e) {
     console.warn('[bootstrap] CHZZK live status bootstrap failed:', e?.message || e);
   }
@@ -22985,9 +23501,9 @@ async function bootstrapEnsureCimeSessions() {
     const users = await listPlatformTokenUsers('cime');
     if (!Array.isArray(users) || users.length === 0) return;
     console.log(`[bootstrap] Checking CIME live status for ${users.length} account(s)`);
-    for (const user of users) {
+    await forEachWithConcurrency(users, REGISTERED_RUNTIME_MONITOR_CONCURRENCY, async (user) => {
       const ownerUserId = String(user?.userId || '').trim();
-      if (!ownerUserId) continue;
+      if (!ownerUserId) return;
       const sid = `user:${ownerUserId}`;
       const channelId = String(user?.platformUserId || '').trim() || null;
       try {
@@ -22997,7 +23513,7 @@ async function bootstrapEnsureCimeSessions() {
         console.warn('[bootstrap] CIME live status/session skipped:', ownerUserId, e?.response?.data || e?.message || e);
       }
       await sleep(150);
-    }
+    });
   } catch (e) {
     console.warn('[bootstrap] CIME session bootstrap failed:', e?.message || e);
   }
@@ -23008,21 +23524,42 @@ async function bootstrapEnsureYoutubeSessions() {
     const users = await listPlatformTokenUsers('youtube');
     if (!Array.isArray(users) || users.length === 0) return;
     console.log(`[bootstrap] Checking YouTube live status for ${users.length} account(s)`);
-    for (const user of users) {
+    await forEachWithConcurrency(users, REGISTERED_RUNTIME_MONITOR_CONCURRENCY, async (user) => {
       const ownerUserId = String(user?.userId || '').trim();
-      if (!ownerUserId) continue;
+      if (!ownerUserId) return;
       const sid = `user:${ownerUserId}`;
       try {
         await refreshYoutubeLiveStatus(ownerUserId, sid, { force: true, allowSearch: true });
         await ensureYoutubeSession(ownerUserId);
+        const streamerChannel = await getYoutubeStreamerChannel(ownerUserId).catch(() => null);
+        if (streamerChannel?.youtubeChannelId && streamerChannel?.websubSecret) {
+          await subscribeYoutubeChannelWebsub(null, streamerChannel);
+        }
       } catch (e) {
         console.warn('[bootstrap] YouTube live status/session skipped:', ownerUserId, e?.response?.data || e?.message || e);
       }
       await sleep(150);
-    }
+    });
   } catch (e) {
     console.warn('[bootstrap] YouTube session bootstrap failed:', e?.message || e);
   }
+}
+
+async function renewExpiringYoutubeWebsubSubscriptions() {
+  const users = await listPlatformTokenUsers('youtube').catch(() => []);
+  if (!Array.isArray(users) || !users.length) return 0;
+  let renewed = 0;
+  await forEachWithConcurrency(users, Math.min(REGISTERED_RUNTIME_MONITOR_CONCURRENCY, 3), async (user) => {
+    const ownerUserId = String(user?.userId || '').trim();
+    if (!ownerUserId) return;
+    const channel = await getYoutubeStreamerChannel(ownerUserId).catch(() => null);
+    if (!channel?.youtubeChannelId || !channel?.websubSecret) return;
+    const expiresAt = new Date(channel.websubLeaseExpiresAt || 0).getTime();
+    if (Number.isFinite(expiresAt) && expiresAt > Date.now() + 48 * 60 * 60 * 1000) return;
+    await subscribeYoutubeChannelWebsub(null, channel);
+    renewed += 1;
+  });
+  return renewed;
 }
 
 async function bootstrapRegisteredChannelLiveStatuses(reason = 'startup') {
@@ -23049,16 +23586,26 @@ async function runRegisteredRuntimeMonitor(reason = 'scheduled') {
       // Only CHZZK needs a short-interval registered-channel live poll.
       await bootstrapEnsureSessions();
     }
+    runtimeReadinessState.lastMonitorAt = new Date().toISOString();
+    runtimeReadinessState.lastMonitorError = null;
     return true;
+  } catch (error) {
+    runtimeReadinessState.lastMonitorError = error?.message || String(error);
+    throw error;
   } finally {
     registeredRuntimeMonitorRunning = false;
   }
 }
 
 setTimeout(() => {
-  runRegisteredRuntimeMonitor('startup').catch((e) => {
-    console.warn('[bootstrap] Sequential live status check failed:', e?.message || e);
-  });
+  runRegisteredRuntimeMonitor('startup')
+    .then(() => {
+      runtimeReadinessState.initialBootstrapCompleted = true;
+    })
+    .catch((e) => {
+      runtimeReadinessState.lastMonitorError = e?.message || String(e);
+      console.warn('[bootstrap] Sequential live status check failed:', e?.message || e);
+    });
 }, 0);
 
 setInterval(() => {
@@ -23067,51 +23614,101 @@ setInterval(() => {
   });
 }, REGISTERED_RUNTIME_MONITOR_INTERVAL_MS).unref?.();
 
+setInterval(() => {
+  renewExpiringYoutubeWebsubSubscriptions().catch((error) => {
+    console.warn('[YouTube WebSub] Renewal cycle failed:', error?.message || error);
+  });
+}, 6 * 60 * 60 * 1000).unref?.();
+
+setInterval(() => {
+  renewProviderRuntimeLeases().catch((error) => {
+    console.warn('[runtime-lease] Renewal cycle failed:', error?.message || error);
+  });
+}, PROVIDER_RUNTIME_LEASE_RENEW_MS).unref?.();
+
 // =============================
 //
 // =============================
 
 /**
  */
+let gracefulShutdownPromise = null;
+
+function closeHttpServer() {
+  return new Promise((resolve) => {
+    try {
+      server.close(() => resolve());
+      server.closeIdleConnections?.();
+    } catch {
+      resolve();
+    }
+  });
+}
+
+function closeWebSocketServer(webSocketServer) {
+  return new Promise((resolve) => {
+    if (!webSocketServer) return resolve();
+    for (const socket of webSocketServer.clients || []) {
+      try { socket.close(1001, 'server_shutdown'); } catch { }
+      try { socket.terminate(); } catch { }
+    }
+    try { webSocketServer.close(() => resolve()); } catch { resolve(); }
+  });
+}
+
 async function gracefulShutdown(signal) {
-  console.log(`[Server] Received ${signal}, starting graceful shutdown...`);
+  if (gracefulShutdownPromise) return gracefulShutdownPromise;
+  gracefulShutdownPromise = (async () => {
+    runtimeReadinessState.shuttingDown = true;
+    console.log(`[Server] Received ${signal}, starting graceful shutdown...`);
+    const forceTimer = setTimeout(() => {
+      console.error('[Server] Graceful shutdown timed out');
+      process.exit(1);
+    }, 15_000);
+    forceTimer.unref?.();
 
-  try {
-    server.close(() => {
-      console.log('[Server] HTTP server closed');
-    });
+    try {
+      for (const ownerUserId of Array.from(youtubeSessionStore.keys())) closeYoutubeSession(ownerUserId, 'shutdown');
+      for (const ownerUserId of Array.from(cimeSessionStore.keys())) closeCimeSession(ownerUserId, 'shutdown');
+      for (const entry of sessionStore.values()) {
+        try { entry?.socket?.disconnect?.(); } catch { }
+        try { entry?.socket?.close?.(); } catch { }
+      }
 
-    console.log('[Server] Closing WebSocket connections...');
-    connectionPool.shutdown();
-    for (const ownerUserId of Array.from(youtubeSessionStore.keys())) {
-      closeYoutubeSession(ownerUserId, 'shutdown');
+      connectionPool.shutdown();
+      resourceManager.shutdown();
+      channelCache.clear();
+      sessionContextCache.clear();
+      for (const timer of videoDonationTimers.values()) clearTimeout(timer);
+      videoDonationTimers.clear();
+
+      const socketServers = [
+        wssPvd, wssPvdAdmin, wssDrawingOverlay, wssDrawingAdmin, wssPrediction,
+        wssAutomationLocalAgent, wssFx, wssRoulette, wss, wssDesktop,
+      ];
+      await Promise.allSettled(socketServers.map(closeWebSocketServer));
+
+      for (const subscriber of redisSubscribers.values()) {
+        try { await subscriber?.quit?.(); } catch { }
+      }
+      redisSubscribers.clear();
+      try { await redisPublisher?.quit?.(); } catch { }
+      const leasesToRelease = Array.from(providerRuntimeLeases.values());
+      providerRuntimeLeases.clear();
+      await Promise.allSettled(leasesToRelease.map((state) => releaseRuntimeLease(state.resourceKey, INSTANCE_ID)));
+      await closeHttpServer();
+      await closeDatabaseConnections();
+
+      clearTimeout(forceTimer);
+      console.log('[Server] Graceful shutdown completed');
+      process.exit(0);
+    } catch (error) {
+      clearTimeout(forceTimer);
+      console.error('[Server] Error during graceful shutdown:', error);
+      process.exit(1);
     }
-
-    //
-    console.log('[Server] Shutting down resource manager...');
-    resourceManager.shutdown();
-
-    console.log('[Server] Clearing caches...');
-    channelCache.clear();
-    sessionContextCache.clear();
-
-    console.log('[Server] Clearing timers...');
-    for (const timer of videoDonationTimers.values()) {
-      clearTimeout(timer);
-    }
-    videoDonationTimers.clear();
-
-    console.log('[Server] Cleaning up database connections...');
-
-    await new Promise(resolve => setTimeout(resolve, 1000));
-
-    console.log('[Server] Graceful shutdown completed');
-    process.exit(0);
-
-  } catch (error) {
-    console.error('[Server] Error during graceful shutdown:', error);
-    setTimeout(() => process.exit(1), 500);
-  }
+  })();
+  return gracefulShutdownPromise;
 }
 
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
@@ -23664,6 +24261,31 @@ const predictionChannelSockets = new Map(); // channelUid -> Set<WebSocket>
 const fxSidSockets = new Map(); // sid -> Set<WebSocket>
 const predictionAutoLockTimers = new Map(); // predictionId -> timeout
 
+function enableWebSocketHeartbeat(webSocketServer, intervalMs = 30_000) {
+  if (!webSocketServer || webSocketServer.__arubotHeartbeatEnabled) return;
+  webSocketServer.__arubotHeartbeatEnabled = true;
+  webSocketServer.on('connection', (socket) => {
+    socket.__arubotAlive = true;
+    socket.on('pong', () => {
+      socket.__arubotAlive = true;
+    });
+  });
+  const timer = setInterval(() => {
+    for (const socket of webSocketServer.clients || []) {
+      if (socket.__arubotAlive === false) {
+        try { socket.terminate(); } catch { }
+        continue;
+      }
+      socket.__arubotAlive = false;
+      try { socket.ping(); } catch {
+        try { socket.terminate(); } catch { }
+      }
+    }
+  }, intervalMs);
+  timer.unref?.();
+  webSocketServer.on('close', () => clearInterval(timer));
+}
+
 function registerPvdRoutes() {
   // --- WebSocket for PVD viewer sync ---
   // Path: /api/pvd/ws?token=<viewer_token>
@@ -23674,6 +24296,7 @@ function registerPvdRoutes() {
     maxPayload: 1024 * 1024,
     perMessageDeflate: false,
   });
+  enableWebSocketHeartbeat(wssPvd);
   wssPvd.on('connection', async (ws, req) => {
     let channelId = null;
     let token = null;
@@ -23810,6 +24433,7 @@ function registerPvdAdminRoutes() {
     maxPayload: 32 * 1024,
     perMessageDeflate: false,
   });
+  enableWebSocketHeartbeat(wssPvdAdmin);
 
   wssPvdAdmin.on('connection', async (ws, req) => {
     let sid = null;
@@ -23869,6 +24493,7 @@ function registerDrawingDonationWsRoutes() {
     maxPayload: 64 * 1024,
     perMessageDeflate: false,
   });
+  enableWebSocketHeartbeat(wssDrawingOverlay);
 
   wssDrawingOverlay.on('connection', async (ws, req) => {
     let sid = null;
@@ -23926,6 +24551,7 @@ function registerDrawingDonationWsRoutes() {
     maxPayload: 32 * 1024,
     perMessageDeflate: false,
   });
+  enableWebSocketHeartbeat(wssDrawingAdmin);
 
   wssDrawingAdmin.on('connection', async (ws, req) => {
     let sid = null;
@@ -24080,6 +24706,7 @@ function registerPredictionRoutes() {
     maxPayload: 64 * 1024,
     perMessageDeflate: false,
   });
+  enableWebSocketHeartbeat(wssPrediction);
 
   wssPrediction.on('connection', async (ws, req) => {
     let channelUid = '';
@@ -24143,6 +24770,7 @@ try { registerPredictionRoutes(); } catch (e) { console.error('[prediction ws] f
 function registerRouletteRoutes() {
   console.log('[roulette ws] initializing WebSocketServer on /api/roulette/ws');
   wssRoulette = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024, perMessageDeflate: false });
+  enableWebSocketHeartbeat(wssRoulette);
   wssRoulette.on('connection', async (ws, req) => {
     let channelId = null;
     let token = null;
@@ -24301,6 +24929,7 @@ function registerFxRoutes() {
     maxPayload: 128 * 1024,
     perMessageDeflate: false,
   });
+  enableWebSocketHeartbeat(wssFx);
   wssFx.on('connection', async (ws, req) => {
     let sid = null;
     try {
@@ -24368,6 +24997,7 @@ function registerAutomationLocalAgentRoutes() {
     maxPayload: 64 * 1024,
     perMessageDeflate: false,
   });
+  enableWebSocketHeartbeat(wssAutomationLocalAgent);
   wssAutomationLocalAgent.on('connection', async (ws, req) => {
     let agent = null;
     let unregister = () => {};
@@ -24424,7 +25054,8 @@ function registerAutomationLocalAgentRoutes() {
 try { registerAutomationLocalAgentRoutes(); } catch (e) { console.error('[automation local ws] failed to register routes', e?.message || e); }
 
 // --- WebSocket for WARUDO direct push ---
-// Path: /api/warudo/ws?token=<API_KEY>
+// Preferred: POST /api/apikey/ws-ticket then /api/warudo/ws?ticket=<ONE_TIME_TICKET>
+// Legacy compatibility: /api/warudo/ws?token=<API_KEY>
 const wss = new WebSocketServer({
   noServer: true,
   maxPayload: 1024 * 1024,
@@ -24437,20 +25068,54 @@ const wss = new WebSocketServer({
     zlibInflateOptions: { windowBits: 15 }
   }
 });
+enableWebSocketHeartbeat(wss);
 
 // --- WebSocket for Electron Desktop Client ---
-// Path: /api/desktop/ws?token=<API_KEY>
+// Preferred: POST /api/apikey/ws-ticket then /api/desktop/ws?ticket=<ONE_TIME_TICKET>
+// Legacy compatibility: /api/desktop/ws?token=<API_KEY>
 const wssDesktop = new WebSocketServer({
   noServer: true,
   maxPayload: 1024 * 1024,
   perMessageDeflate: false,
 });
+enableWebSocketHeartbeat(wssDesktop);
+
+const ALLOW_LEGACY_WS_QUERY_API_KEY = String(process.env.ARUBOT_ALLOW_LEGACY_WS_QUERY_API_KEY || 'true').trim().toLowerCase() !== 'false';
+let legacyWsQueryApiKeyWarningEmitted = false;
+
+function apiKeyFromWebSocketHeaders(req) {
+  const authorization = String(req.headers?.authorization || '').trim();
+  if (authorization.toLowerCase().startsWith('bearer ')) return authorization.slice(7).trim();
+  return String(req.headers?.['x-api-key'] || '').trim();
+}
+
+async function authenticateApiWebSocket(req, url, requiredScope) {
+  const ticket = String(url.searchParams.get('ticket') || '').trim();
+  if (ticket) {
+    const ownerPid = await consumeApiWebSocketTicket(ticket, requiredScope);
+    return ownerPid ? { ownerPid, apiKey: null, method: 'ticket' } : null;
+  }
+
+  let apiKey = apiKeyFromWebSocketHeaders(req);
+  let method = apiKey ? 'header' : null;
+  if (!apiKey && ALLOW_LEGACY_WS_QUERY_API_KEY) {
+    apiKey = String(url.searchParams.get('token') || '').trim();
+    method = apiKey ? 'legacy-query' : null;
+    if (apiKey && !legacyWsQueryApiKeyWarningEmitted) {
+      legacyWsQueryApiKeyWarningEmitted = true;
+      console.warn('[WebSocket auth] Legacy query-string API keys are enabled. Migrate clients to /api/apikey/ws-ticket and set ARUBOT_ALLOW_LEGACY_WS_QUERY_API_KEY=false.');
+    }
+  }
+  if (!apiKey) return null;
+  const ownerPid = await getOwnerPidForApiKey(apiKey, { requiredScope });
+  return ownerPid ? { ownerPid, apiKey, method } : null;
+}
 
 wssDesktop.on('connection', async (ws, req) => {
   try {
     const url = new URL(req.url, `http://localhost:${PORT}`);
-    const token = String(url.searchParams.get('token') || '');
-    const pid = await getOwnerPidForApiKey(token);
+    const authenticated = await authenticateApiWebSocket(req, url, 'desktop');
+    const pid = authenticated?.ownerPid || null;
     if (!pid) {
       try { ws.close(1008, 'Invalid token'); } catch { }
       return;
@@ -24460,7 +25125,9 @@ wssDesktop.on('connection', async (ws, req) => {
     if (!set) { set = new Set(); desktopPidSockets.set(pid, set); }
     set.add(ws);
     // Touch API key last used
-    try { await touchApiKeyLastUsed(token); } catch { }
+    if (authenticated?.apiKey) {
+      try { await touchApiKeyLastUsed(authenticated.apiKey); } catch { }
+    }
 
     // Keepalive ping
     const ka = setInterval(() => { try { ws.ping(); } catch { } }, 30000);
@@ -24505,6 +25172,10 @@ try {
   server.on('upgrade', (req, socket, head) => {
     try {
       const u = new URL(req.url, `http://localhost:${PORT}`);
+      if (!isTrustedWebSocketUpgradeOrigin(u.pathname, req.headers.origin)) {
+        rejectWebSocketUpgrade(socket);
+        return;
+      }
       const ext = req.headers['sec-websocket-extensions'] || '';
       const proto = req.headers['sec-websocket-protocol'] || '';
       const upg = req.headers['upgrade'] || '';
@@ -24558,8 +25229,8 @@ try {
 wss.on('connection', async (ws, req) => {
   try {
     const url = new URL(req.url, `http://localhost:${PORT}`);
-    const token = String(url.searchParams.get('token') || '');
-    const pid = await getOwnerPidForApiKey(token);
+    const authenticated = await authenticateApiWebSocket(req, url, 'warudo');
+    const pid = authenticated?.ownerPid || null;
     if (!pid) {
       try { ws.close(1008, 'Invalid token'); } catch { }
       return;
@@ -24569,7 +25240,9 @@ wss.on('connection', async (ws, req) => {
     if (!set) { set = new Set(); pidSockets.set(pid, set); }
     set.add(ws);
     // Heartbeat (optional): mark used on connect
-    try { await touchApiKeyLastUsed(token); } catch { }
+    if (authenticated?.apiKey) {
+      try { await touchApiKeyLastUsed(authenticated.apiKey); } catch { }
+    }
 
     // If Redis is enabled, subscribe to pid channel for cross-instance events
     if (redisEnabled && redisPkg && !redisSubscribers.has(pid)) {

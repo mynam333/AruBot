@@ -16,7 +16,7 @@ import {
   Wand2,
 } from 'lucide-react';
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useState, useTransition } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button, LinkButton } from '@/components/ui/button';
@@ -59,6 +59,8 @@ type DashboardData = {
   stats: Record<string, unknown> | null;
   queue: unknown;
 };
+
+type DashboardDetailKey = 'settings' | 'stats' | 'queue';
 
 type SetupTemplateResult = {
   applied?: Array<{ type?: string; name?: string }>;
@@ -167,42 +169,76 @@ function QuickStartPanel() {
 export function DashboardPage() {
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [pendingDetails, setPendingDetails] = useState<Set<DashboardDetailKey>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
+  const hasLoadedRef = useRef(false);
 
   const loadDashboard = useCallback(async (signal?: AbortSignal) => {
-    setLoading(true);
+    setRefreshing(true);
+    if (!hasLoadedRef.current) setLoading(true);
+    setPendingDetails(new Set());
     setError(null);
-    const [platformsResult, youtubeResult] = await Promise.all([
-      readJsonResult<{ platforms?: PlatformAccount[] }>('/api/account/platforms', { signal }),
-      readJsonResult<YoutubeStreamerStatus>('/api/youtube/streamer-channel', { signal }),
-    ]);
-    if (!platformsResult.ok && !youtubeResult.ok) {
-      setError('message' in platformsResult ? platformsResult.message : 'message' in youtubeResult ? youtubeResult.message : '운영 정보를 불러오지 못했습니다.');
-      setLoading(false);
-      return;
-    }
+    try {
+      const [platformsResult, youtubeResult] = await Promise.all([
+        readJsonResult<{ platforms?: PlatformAccount[] }>('/api/account/platforms', { signal }),
+        readJsonResult<YoutubeStreamerStatus>('/api/youtube/streamer-channel', { signal }),
+      ]);
+      if (signal?.aborted) return;
+      if (!platformsResult.ok && !youtubeResult.ok) {
+        setError('message' in platformsResult ? platformsResult.message : 'message' in youtubeResult ? youtubeResult.message : '운영 정보를 불러오지 못했습니다.');
+        return;
+      }
 
-    const platforms = platformsResult.ok && Array.isArray(platformsResult.data.platforms) ? platformsResult.data.platforms : [];
-    const youtube = youtubeResult.ok ? youtubeResult.data : null;
-    if (!platforms.length && youtube?.configured !== true) {
-      setDashboardData({ platforms, youtubeStreamerStatus: youtube, settings: null, stats: null, queue: [] });
+      const platforms = platformsResult.ok && Array.isArray(platformsResult.data.platforms) ? platformsResult.data.platforms : [];
+      const youtube = youtubeResult.ok ? youtubeResult.data : null;
+      const hasConnectedChannel = platforms.length > 0 || youtube?.configured === true;
+      setDashboardData((current) => ({
+        platforms,
+        youtubeStreamerStatus: youtube,
+        settings: hasConnectedChannel ? current?.settings ?? null : null,
+        stats: hasConnectedChannel ? current?.stats ?? null : null,
+        queue: hasConnectedChannel ? current?.queue ?? [] : [],
+      }));
       setLoading(false);
-      return;
-    }
+      hasLoadedRef.current = true;
 
-    const [settingsResult, statsResult, queueResult] = await Promise.all([
-      readJsonResult<Record<string, unknown>>('/api/bot/settings', { signal }),
-      readJsonResult<Record<string, unknown>>('/api/bot/stats', { signal }),
-      readJsonResult<unknown>('/api/video-donation/queue', { signal }),
-    ]);
-    setDashboardData({
-      platforms,
-      youtubeStreamerStatus: youtube,
-      settings: settingsResult.ok ? settingsResult.data : null,
-      stats: statsResult.ok ? statsResult.data : null,
-      queue: queueResult.ok ? queueResult.data : [],
-    });
-    setLoading(false);
+      if (!hasConnectedChannel) return;
+
+      const detailRequests: Array<{
+        key: DashboardDetailKey;
+        request: Promise<ReturnType<typeof readJsonResult<unknown>> extends Promise<infer T> ? T : never>;
+        fallback: unknown;
+      }> = [
+        { key: 'settings', request: readJsonResult<Record<string, unknown>>('/api/bot/settings', { signal }), fallback: null },
+        { key: 'stats', request: readJsonResult<Record<string, unknown>>('/api/bot/stats', { signal }), fallback: null },
+        { key: 'queue', request: readJsonResult<unknown>('/api/video-donation/queue', { signal }), fallback: [] },
+      ];
+      setPendingDetails(new Set(detailRequests.map(({ key }) => key)));
+      await Promise.all(detailRequests.map(async ({ key, request, fallback }) => {
+        try {
+          const result = await request;
+          if (signal?.aborted) return;
+          setDashboardData((current) => current ? { ...current, [key]: result.ok ? result.data : fallback } : current);
+        } finally {
+          if (!signal?.aborted) {
+            setPendingDetails((current) => {
+              const next = new Set(current);
+              next.delete(key);
+              return next;
+            });
+          }
+        }
+      }));
+    } catch (loadError) {
+      if (loadError instanceof DOMException && loadError.name === 'AbortError') return;
+      setError(loadError instanceof Error ? loadError.message : '운영 정보를 불러오지 못했습니다.');
+    } finally {
+      if (!signal?.aborted) {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    }
   }, []);
 
   useEffect(() => {
@@ -227,6 +263,9 @@ export function DashboardPage() {
   }, [accounts, youtubeConfigured, youtubeStatus]);
   const visibleAccounts = useMemo(() => youtubeAccount ? [...accounts, youtubeAccount] : accounts, [accounts, youtubeAccount]);
   const queueCount = pickRows(dashboardData?.queue).length;
+  const settingsLoading = pendingDetails.has('settings');
+  const statsLoading = pendingDetails.has('stats');
+  const queueLoading = pendingDetails.has('queue');
   const botEnabled = dashboardData?.settings && 'botEnabled' in dashboardData.settings ? dashboardData.settings.botEnabled !== false : null;
   const commandCount = typeof dashboardData?.stats?.commands === 'number' ? dashboardData.stats.commands : null;
   const connectedProviders = new Set(accounts.map((account) => account.provider?.toLowerCase()).filter(Boolean));
@@ -235,9 +274,9 @@ export function DashboardPage() {
 
   const metrics = [
     { label: '연결 채널', value: loading ? '—' : `${visibleAccounts.length}개`, detail: visibleAccounts.length ? '연결 정상' : '연결 필요', icon: Cable, status: visibleAccounts.length ? 'success' : 'warning' },
-    { label: '봇 상태', value: loading ? '—' : botEnabled == null ? '확인 불가' : botEnabled ? '사용 중' : '중지', detail: botEnabled ? '응답 가능' : botEnabled === false ? '설정에서 켜기' : '채널 연결 후 확인', icon: Radio, status: botEnabled ? 'success' : botEnabled === false ? 'danger' : 'neutral' },
-    { label: '영상 대기열', value: loading ? '—' : `${queueCount}개`, detail: queueCount ? '재생 대기 중' : '대기 없음', icon: PlaySquare, status: queueCount ? 'info' : 'neutral' },
-    { label: '명령 응답', value: loading ? '—' : commandCount == null ? '확인 불가' : `${commandCount}회`, detail: commandCount ? '누적 처리' : '기록 없음', icon: Activity, status: commandCount ? 'success' : 'neutral' },
+    { label: '봇 상태', value: loading || settingsLoading ? '—' : botEnabled == null ? '확인 불가' : botEnabled ? '사용 중' : '중지', detail: settingsLoading ? '설정 확인 중' : botEnabled ? '응답 가능' : botEnabled === false ? '설정에서 켜기' : '채널 연결 후 확인', icon: Radio, status: botEnabled ? 'success' : botEnabled === false ? 'danger' : 'neutral' },
+    { label: '영상 대기열', value: loading || queueLoading ? '—' : `${queueCount}개`, detail: queueLoading ? '대기열 확인 중' : queueCount ? '재생 대기 중' : '대기 없음', icon: PlaySquare, status: queueCount ? 'info' : 'neutral' },
+    { label: '명령 응답', value: loading || statsLoading ? '—' : commandCount == null ? '확인 불가' : `${commandCount}회`, detail: statsLoading ? '통계 확인 중' : commandCount ? '누적 처리' : '기록 없음', icon: Activity, status: commandCount ? 'success' : 'neutral' },
   ] as const;
 
   return (
@@ -246,7 +285,7 @@ export function DashboardPage() {
         eyebrow="Overview"
         title="방송 운영 현황"
         description="연결 상태와 진행 중인 참여 기능을 확인하고, 필요한 작업으로 바로 이동합니다."
-        actions={<Button type="button" variant="outline" size="sm" onClick={() => void loadDashboard()} disabled={loading}><RefreshCw className={loading ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />새로고침</Button>}
+        actions={<Button type="button" variant="outline" size="sm" onClick={() => void loadDashboard()} disabled={refreshing}><RefreshCw className={refreshing ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />새로고침</Button>}
       />
 
       {error ? <ErrorState description={error} onRetry={() => void loadDashboard()} /> : null}

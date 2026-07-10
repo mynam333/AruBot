@@ -40,8 +40,15 @@ export function validateDatabaseUrlForProvider(provider, dbUrl) {
 
 export function resolveDatabaseUrl(target = 'current') {
   const normalized = String(target || 'current').trim().toLowerCase();
+  if (normalized === 'migration') {
+    const provider = getDbProvider();
+    if (provider === 'postgres') {
+      return validateDatabaseUrlForProvider(provider, process.env.POSTGRES_MIGRATION_URL || process.env.POSTGRES_URL || '');
+    }
+    return validateDatabaseUrlForProvider(provider, process.env.SUPABASE_DB_MIGRATION_URL || process.env.SUPABASE_DB_URL || '');
+  }
   const provider = normalized === 'current' ? getDbProvider() : normalized;
-  if (provider === 'postgres') return validateDatabaseUrlForProvider(provider, process.env.POSTGRES_URL || '');
+  if (provider === 'postgres') return validateDatabaseUrlForProvider(provider, process.env.POSTGRES_RUNTIME_URL || process.env.POSTGRES_URL || '');
   if (provider === 'supabase') return validateDatabaseUrlForProvider(provider, process.env.SUPABASE_DB_URL || '');
   throw new Error(`Unknown database target: ${target}`);
 }
@@ -52,27 +59,59 @@ function providerSslEnv(provider) {
     : process.env.SUPABASE_DB_SSL;
 }
 
-export function shouldUseSsl(dbUrl, target = 'current') {
-  const provider = target === 'current' ? getDbProvider() : String(target || '').toLowerCase();
-  const explicit = String(providerSslEnv(provider) || '').trim().toLowerCase();
-  if (['false', '0', 'no', 'disable', 'disabled'].includes(explicit)) return false;
-  if (['true', '1', 'yes', 'require', 'required'].includes(explicit)) return { rejectUnauthorized: false };
+function isLocalDatabaseUrl(dbUrl) {
   try {
-    const parsed = new URL(dbUrl);
-    const sslMode = String(parsed.searchParams.get('sslmode') || '').toLowerCase();
-    if (sslMode === 'disable') return false;
-    if (['require', 'prefer', 'verify-ca', 'verify-full'].includes(sslMode)) return { rejectUnauthorized: false };
-    if (['localhost', '127.0.0.1', '::1', 'host.docker.internal'].includes(parsed.hostname.toLowerCase())) return false;
+    return ['localhost', '127.0.0.1', '::1', 'host.docker.internal'].includes(new URL(dbUrl).hostname.toLowerCase());
   } catch {
-    // Use the provider default below.
+    return false;
   }
-  return normalizeProvider(provider) === 'postgres' ? false : { rejectUnauthorized: false };
+}
+
+function readPgSslCa(provider) {
+  const prefix = normalizeProvider(provider) === 'postgres' ? 'POSTGRES' : 'SUPABASE_DB';
+  const inline = String(process.env[`${prefix}_SSL_CA`] || '').trim();
+  if (inline) return inline.replace(/\\n/g, '\n');
+  const filePath = String(process.env[`${prefix}_SSL_CA_FILE`] || '').trim();
+  if (!filePath) return undefined;
+  return fs.readFileSync(path.resolve(filePath), 'utf8');
+}
+
+export function shouldUseSsl(dbUrl, target = 'current') {
+  const normalizedTarget = String(target || 'current').trim().toLowerCase();
+  const provider = normalizedTarget === 'current' || normalizedTarget === 'migration'
+    ? getDbProvider()
+    : normalizedTarget;
+  const explicit = String(providerSslEnv(provider) || '').trim().toLowerCase();
+  const localDatabase = isLocalDatabaseUrl(dbUrl);
+  if (['false', '0', 'no', 'disable', 'disabled'].includes(explicit)) {
+    if (process.env.NODE_ENV === 'production' && !localDatabase) {
+      throw new Error('Remote PostgreSQL migration connections must use verified TLS in production');
+    }
+    return false;
+  }
+  const ca = readPgSslCa(provider);
+  if (['true', '1', 'yes', 'require', 'required', 'verify-ca', 'verify-full'].includes(explicit)) {
+    return { rejectUnauthorized: true, ...(ca ? { ca } : {}) };
+  }
+  let sslMode = '';
+  try { sslMode = String(new URL(dbUrl).searchParams.get('sslmode') || '').toLowerCase(); } catch {
+    if (process.env.NODE_ENV === 'production' && !localDatabase) throw new Error('Invalid remote PostgreSQL URL');
+  }
+  if (sslMode === 'disable') {
+    if (process.env.NODE_ENV === 'production' && !localDatabase) {
+      throw new Error('sslmode=disable is not allowed for remote PostgreSQL migrations in production');
+    }
+    return false;
+  }
+  if (['require', 'prefer', 'verify-ca', 'verify-full'].includes(sslMode)) return { rejectUnauthorized: true, ...(ca ? { ca } : {}) };
+  if (localDatabase) return false;
+  return { rejectUnauthorized: true, ...(ca ? { ca } : {}) };
 }
 
 export function createPgClient(target = 'current') {
   const dbUrl = resolveDatabaseUrl(target);
   if (!dbUrl) {
-    throw new Error(`Database URL is missing for target "${target}". Set POSTGRES_URL or SUPABASE_DB_URL.`);
+    throw new Error(`Database URL is missing for target "${target}". Set POSTGRES_RUNTIME_URL/POSTGRES_URL or SUPABASE_DB_URL.`);
   }
   const options = {
     connectionString: dbUrl,

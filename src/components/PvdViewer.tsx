@@ -8,6 +8,58 @@ type PlaybackTarget = {
   itemId?: string | null;
 };
 
+type VideoDonationItem = {
+  [key: string]: unknown;
+  id?: string | number;
+  mediaProvider?: string;
+  mediaId?: string | number;
+  videoId?: string | number;
+  embedUrl?: string;
+  mediaUrl?: string;
+  thumbnailUrl?: string;
+  title?: string;
+  startSec?: number;
+};
+
+type ExternalVideoDonationItem = VideoDonationItem & {
+  viewerSrc: string;
+  provider: string;
+  mediaKey: string;
+  targetAtSec: number;
+  paused: boolean;
+  isDirectVideo: boolean;
+  blockedReason: string | null;
+};
+
+type YouTubePlayer = {
+  destroy?: () => void;
+  getCurrentTime?: () => number;
+  loadModule?: (name: string) => void;
+  loadVideoById?: (options: { videoId: string; startSeconds: number }) => void;
+  mute?: () => void;
+  pauseVideo?: () => void;
+  playVideo?: () => void;
+  seekTo?: (seconds: number, allowSeekAhead: boolean) => void;
+  setVolume?: (volume: number) => void;
+  stopVideo?: () => void;
+  unloadModule?: (name: string) => void;
+  unMute?: () => void;
+};
+
+type YouTubeApi = {
+  Player: new (element: HTMLElement, options: Record<string, unknown>) => YouTubePlayer;
+  PlayerState: { ENDED: number; PAUSED: number; PLAYING: number };
+};
+
+type YouTubeWindow = Window & {
+  YT?: YouTubeApi;
+  onYouTubeIframeAPIReady?: () => void;
+};
+
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object';
+}
+
 const TIKTOK_DURATION_SYNC_WAIT_MS = 20 * 1000;
 const PVD_FORWARD_SYNC_THRESHOLD_SEC = 4;
 const PVD_BACKWARD_SYNC_THRESHOLD_SEC = 8;
@@ -22,7 +74,7 @@ function isDirectVideoUrl(value: unknown) {
   }
 }
 
-function getPlaybackAtSec(item: any, payload: any) {
+function getPlaybackAtSec(item: VideoDonationItem, payload: Record<string, unknown>) {
   const start = Math.max(0, Math.floor(Number(item?.startSec || 0) || 0));
   if (payload?.paused === true) return start;
 
@@ -44,23 +96,23 @@ function getPlaybackAtSec(item: any, payload: any) {
 export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}) {
   const [token, setToken] = useState<string>(viewerToken || '');
   const [volume, setVolume] = useState(100);
-  const [externalItem, setExternalItem] = useState<any | null>(null);
+  const [externalItem, setExternalItem] = useState<ExternalVideoDonationItem | null>(null);
   const [captionsEnabled, setCaptionsEnabled] = useState(false);
   const [youtubeActive, setYoutubeActive] = useState(false);
   const [volumeControlsVisible, setVolumeControlsVisible] = useState(false);
   const playerDivRef = useRef<HTMLDivElement | null>(null);
   const externalFrameRef = useRef<HTMLIFrameElement | null>(null);
   const externalVideoRef = useRef<HTMLVideoElement | null>(null);
-  const playerRef = useRef<any>(null);
+  const playerRef = useRef<YouTubePlayer | null>(null);
   const volumeRef = useRef(100);
   const externalProviderRef = useRef<string | null>(null);
   const externalMediaKeyRef = useRef<string | null>(null);
-  const pollTimerRef = useRef<any>(null);
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const currentVidRef = useRef<string | null>(null);
   const currentStartRef = useRef<number>(0);
-  const reconnectRef = useRef<{ attempts: number; timer: any; closed: boolean }>({ attempts: 0, timer: null, closed: false });
-  const volumeEmitTimerRef = useRef<any>(null);
-  const ytReadyPromiseRef = useRef<Promise<any> | null>(null);
+  const reconnectRef = useRef<{ attempts: number; timer: ReturnType<typeof setTimeout> | null; closed: boolean }>({ attempts: 0, timer: null, closed: false });
+  const volumeEmitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ytReadyPromiseRef = useRef<Promise<YouTubeApi> | null>(null);
   const ensureSeqRef = useRef<number>(0);
   const lastServerSyncRef = useRef<number>(0);
   const lastEmitRef = useRef<number>(0);
@@ -94,7 +146,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
   }, []);
 
   const getYouTubeApi = useCallback(() => {
-    const win = window as any;
+    const win = window as YouTubeWindow;
     if (win.YT && win.YT.Player) return Promise.resolve(win.YT);
     if (ytReadyPromiseRef.current) return ytReadyPromiseRef.current;
 
@@ -102,7 +154,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
       const previousReady = win.onYouTubeIframeAPIReady;
       win.onYouTubeIframeAPIReady = () => {
         try { previousReady && previousReady(); } catch {}
-        resolve(win.YT);
+        if (win.YT) resolve(win.YT);
       };
 
       if (!document.querySelector('script[src="https://www.youtube.com/iframe_api"]')) {
@@ -116,11 +168,11 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
     return ytReadyPromiseRef.current;
   }, []);
 
-  const getItemProvider = useCallback((item: any) => {
+  const getItemProvider = useCallback((item: VideoDonationItem) => {
     return String(item?.mediaProvider || 'youtube').toLowerCase();
   }, []);
 
-  const getMediaKey = useCallback((item: any) => {
+  const getMediaKey = useCallback((item: VideoDonationItem) => {
     const provider = getItemProvider(item);
     return `${provider}:${item?.mediaId || item?.videoId || item?.embedUrl || item?.mediaUrl || ''}`;
   }, [getItemProvider]);
@@ -133,7 +185,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
     } catch {}
   }, []);
 
-  const buildExternalSrc = useCallback((item: any, atSec: number, paused?: boolean) => {
+  const buildExternalSrc = useCallback((item: VideoDonationItem, atSec: number, paused?: boolean) => {
     const provider = getItemProvider(item);
     let src = String(item?.embedUrl || item?.mediaUrl || '');
     if (!src && provider === 'cime_clip' && item?.mediaId) src = `https://ci.me/clips/${encodeURIComponent(String(item.mediaId))}`;
@@ -217,14 +269,14 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
   const emitControl = useCallback((op: 'pause' | 'play' | 'seek' | 'volume' | 'duration', atSec?: number, nextVolume?: number, durationSec?: number) => {
     if (!token) return;
     const apiBase = getViewerApiBase();
-    const body = { token, op, atSec, volume: nextVolume, durationSec } as any;
+    const body = { token, op, atSec, volume: nextVolume, durationSec };
     fetch(`${apiBase}/api/video-donation/control-by-token`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
     }).catch(() => {});
   }, [getViewerApiBase, token]);
 
   const emitVolumeControl = useCallback((nextVolume: number) => {
-    try { clearTimeout(volumeEmitTimerRef.current); } catch {}
+    if (volumeEmitTimerRef.current) clearTimeout(volumeEmitTimerRef.current);
     volumeEmitTimerRef.current = setTimeout(() => {
       emitControl('volume', undefined, nextVolume);
     }, 180);
@@ -334,8 +386,8 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
       } catch {
         return;
       }
-      const data = event.data as any;
-      if (!data || typeof data !== 'object' || data['x-tiktok-player'] !== true) return;
+      const data = event.data as unknown;
+      if (!isUnknownRecord(data) || data['x-tiktok-player'] !== true) return;
       if (externalProviderRef.current !== 'tiktok') return;
 
       const type = String(data.type || '');
@@ -387,8 +439,8 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
 
       if (type === 'onCurrentTime') {
         const value = data.value;
-        const current = Number(typeof value === 'object' ? value?.currentTime : value);
-        const duration = Number(typeof value === 'object' ? value?.duration : 0);
+        const current = Number(isUnknownRecord(value) ? value.currentTime : value);
+        const duration = Number(isUnknownRecord(value) ? value.duration : 0);
         if (Number.isFinite(current)) lastTimeRef.current = current;
         if (Number.isFinite(duration) && duration > 0) {
           tiktokDurationRef.current = duration;
@@ -420,7 +472,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
 
       if (type === 'onPlayerError') {
         const value = data.value;
-        const errorCode = Number(typeof value === 'object' ? value?.errorCode : value);
+        const errorCode = Number(isUnknownRecord(value) ? value.errorCode : value);
         if (errorCode === 3002) {
           window.setTimeout(() => {
             postToExternalPlayer({ type: 'play' });
@@ -475,7 +527,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
       };
 
       const onError = () => report('error');
-      const onStateChange = (e: any) => {
+      const onStateChange = (e: { data?: number }) => {
         try {
           const t = playerRef.current && playerRef.current.getCurrentTime ? Number(playerRef.current.getCurrentTime()) : 0;
           lastTimeRef.current = t;
@@ -504,10 +556,10 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
       } else {
         try {
           suppressUntilRef.current = Date.now() + 1000;
-          playerRef.current.loadVideoById({ videoId, startSeconds: target });
+          playerRef.current.loadVideoById?.({ videoId, startSeconds: target });
           setTimeout(() => applyYouTubeCaptions(captionsEnabled), 200);
         } catch {
-          try { playerRef.current.destroy(); } catch {}
+          try { playerRef.current.destroy?.(); } catch {}
           playerRef.current = new YT.Player(playerDivRef.current, {
             width: '100%', height: '100%', videoId,
             playerVars,
@@ -528,7 +580,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
     }).catch(() => {});
   }, [applyPlaybackTarget, applyVolume, applyYouTubeCaptions, captionsEnabled, emitControl, getYouTubeApi, report]);
 
-  const ensureExternalPlayer = useCallback((item: any, opts?: PlaybackTarget) => {
+  const ensureExternalPlayer = useCallback((item: VideoDonationItem, opts?: PlaybackTarget) => {
     const provider = getItemProvider(item);
     const start = Math.max(0, Math.floor(Number(item?.startSec || 0) || 0));
     const target = Math.max(start, Math.floor(Number(opts?.atSec ?? start)));
@@ -673,7 +725,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
     };
 
     const stopPolling = () => {
-      try { clearInterval(pollTimerRef.current); } catch {}
+      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
       pollTimerRef.current = null;
     };
 
@@ -758,7 +810,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
 
     return () => {
       reconnectState.closed = true;
-      try { clearTimeout(reconnectState.timer); } catch {}
+      if (reconnectState.timer) clearTimeout(reconnectState.timer);
       reconnectState.timer = null;
       if (ws) { try { ws.close(); } catch {} }
       stopPolling();
@@ -775,7 +827,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
     }, 7500);
     return () => {
       try { clearInterval(id); } catch {}
-      try { clearTimeout(volumeEmitTimerRef.current); } catch {}
+      if (volumeEmitTimerRef.current) clearTimeout(volumeEmitTimerRef.current);
     };
   }, [resyncFromServer, token]);
 
@@ -783,7 +835,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
   useEffect(() => {
     const id = setInterval(() => {
       try {
-        const YT = (window as any).YT;
+        const YT = (window as YouTubeWindow).YT;
         if (!YT || !playerRef.current || !playerRef.current.getCurrentTime) return;
         const t = Number(playerRef.current.getCurrentTime());
         const diff = Math.abs(t - lastTimeRef.current);

@@ -1,4 +1,3 @@
-/* eslint-disable react-refresh/only-export-components */
 import type { Metadata } from 'next';
 import { ViewerPointsPage } from '@/features/viewer/viewer-points-page';
 

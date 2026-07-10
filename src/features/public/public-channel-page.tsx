@@ -23,15 +23,16 @@ const tabs = [
   { href: 'live', label: '라이브', icon: Radio },
 ] as const;
 
-function pickRows(data: unknown) {
-  if (Array.isArray(data)) return data;
+function pickRows(data: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(data)) return data.filter((row): row is Record<string, unknown> => Boolean(row) && typeof row === 'object');
   if (!data || typeof data !== 'object') return [];
   const object = data as Record<string, unknown>;
-  return (
+  const rows = (
     (['items', 'rules', 'rows', 'data', 'points', 'logs', 'definitions', 'defs']
       .map((key) => object[key])
       .find(Array.isArray) as unknown[] | undefined) || []
   );
+  return rows.filter((row): row is Record<string, unknown> => Boolean(row) && typeof row === 'object');
 }
 
 function isLive(data: unknown) {
@@ -72,8 +73,8 @@ function PublicCommands({ data }: { data: unknown }) {
       </CardHeader>
       <CardContent className="grid gap-3">
         {rows.length ? rows.map((row, index) => {
-          const keywords = Array.isArray(row.keywords) ? row.keywords.map(String).filter(Boolean) : [];
-          const responses = Array.isArray(row.responses) ? row.responses.map(String).filter(Boolean) : [];
+          const keywords: string[] = Array.isArray(row.keywords) ? row.keywords.map(String).filter(Boolean) : [];
+          const responses: string[] = Array.isArray(row.responses) ? row.responses.map(String).filter(Boolean) : [];
           return (
             <div key={String(row.id || keywords[0] || index)} className="rounded-[var(--radius-card)] border bg-background/70 p-[clamp(1rem,2vw,1.25rem)]">
               <div className="flex flex-wrap items-start justify-between gap-3">
