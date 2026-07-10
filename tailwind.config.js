@@ -42,10 +42,10 @@ export default {
         },
       },
       boxShadow: {
-        glow: '0 0 0 1px hsl(var(--ring) / 0.14), 0 18px 48px hsl(var(--primary) / 0.14)',
-        soft: '0 16px 42px hsl(var(--foreground) / 0.07)',
-        subtle: '0 8px 24px hsl(var(--foreground) / 0.06)',
-        lift: '0 14px 34px hsl(var(--foreground) / 0.12)',
+        glow: '0 0 0 1px hsl(var(--ring) / 0.2), 0 10px 28px hsl(var(--primary) / 0.1)',
+        soft: '0 10px 28px hsl(222 30% 6% / 0.08)',
+        subtle: '0 1px 2px hsl(222 30% 6% / 0.06)',
+        lift: '0 8px 22px hsl(222 30% 6% / 0.12)',
       },
       keyframes: {
         'fade-up': {

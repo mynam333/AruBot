@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { DataView } from '@/components/ui/data-view';
 import { Input } from '@/components/ui/input';
+import { ErrorState } from '@/components/ui/page';
 import { apiUrl } from '@/shared/api/http';
 import type { PublicChannelKind } from '@/shared/api/public';
 import { cn, compactDateTime, formatNumber } from '@/shared/lib/utils';
@@ -184,7 +185,7 @@ function PublicPointsRanking({ data }: { data: unknown }) {
               <p className="text-sm text-muted-foreground">등록 시청자</p>
               <div className="mt-2 text-2xl font-semibold">{formatNumber(totalUsers)}</div>
             </div>
-            <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-pastel-sky/75 text-sky-700 dark:text-sky-100">
+            <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-sky-500/10 text-sky-700 dark:text-sky-300">
               <Coins className="h-5 w-5" />
             </span>
           </CardContent>
@@ -195,7 +196,7 @@ function PublicPointsRanking({ data }: { data: unknown }) {
               <p className="text-sm text-muted-foreground">전체 자산량</p>
               <div className="mt-2 text-2xl font-semibold">{formatNumber(totalPoints)}P</div>
             </div>
-            <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-pastel-mint/75 text-teal-700 dark:text-teal-100">
+            <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-primary/10 text-primary">
               <Coins className="h-5 w-5" />
             </span>
           </CardContent>
@@ -206,7 +207,7 @@ function PublicPointsRanking({ data }: { data: unknown }) {
               <p className="text-sm text-muted-foreground">현재 1위</p>
               <div className="mt-2 truncate text-2xl font-semibold">{top ? pointName(top) : '준비 중'}</div>
             </div>
-            <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-pastel-lemon/75 text-amber-700 dark:text-amber-100">
+            <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-amber-500/10 text-amber-700 dark:text-amber-300">
               <Trophy className="h-5 w-5" />
             </span>
           </CardContent>
@@ -269,7 +270,7 @@ function PublicLiveStatus({ data }: { data: unknown }) {
       <CardContent className="grid gap-5 p-[clamp(1.25rem,3vw,1.75rem)] md:grid-cols-[auto_minmax(0,1fr)] md:items-center">
         <span className={cn(
           'grid aspect-square w-[clamp(4rem,9vw,5.5rem)] place-items-center rounded-[var(--radius-panel)]',
-          isLive ? 'bg-pastel-coral/80 text-rose-700 dark:text-rose-100' : 'bg-muted text-muted-foreground',
+          isLive ? 'bg-rose-500/10 text-rose-700 dark:text-rose-300' : 'bg-muted text-muted-foreground',
         )}>
           <Radio className={cn('h-8 w-8', isLive && 'animate-pulse')} />
         </span>
@@ -402,7 +403,7 @@ function PublicRouletteDashboard({
               <p className="text-sm text-muted-foreground">현재 열린 룰렛</p>
               <div className="mt-2 text-2xl font-semibold">{formatNumber(definitions.length)}개</div>
             </div>
-            <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-pastel-lemon/75 text-amber-700 dark:text-amber-100">
+            <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-amber-500/10 text-amber-700 dark:text-amber-300">
               <Sparkles className="h-5 w-5" />
             </span>
           </CardContent>
@@ -413,7 +414,7 @@ function PublicRouletteDashboard({
               <p className="text-sm text-muted-foreground">당첨 항목</p>
               <div className="mt-2 text-2xl font-semibold">{formatNumber(totalItems)}개</div>
             </div>
-            <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-pastel-mint/75 text-teal-700 dark:text-teal-100">
+            <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-primary/10 text-primary">
               <Trophy className="h-5 w-5" />
             </span>
           </CardContent>
@@ -425,7 +426,7 @@ function PublicRouletteDashboard({
               <div className="mt-2 truncate text-2xl font-semibold">{highestProbability ? formatPercent(highestProbability.percent) : '-'}</div>
               {highestProbability ? <p className="mt-1 truncate text-xs text-muted-foreground">{highestProbability.roulette} · {highestProbability.label}</p> : null}
             </div>
-            <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-pastel-sky/75 text-sky-700 dark:text-sky-100">
+            <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-sky-500/10 text-sky-700 dark:text-sky-300">
               <Coins className="h-5 w-5" />
             </span>
           </CardContent>
@@ -581,6 +582,7 @@ export function PublicRealtimeDataView({
 }) {
   const [data, setData] = useState(initialData);
   const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(initialData == null ? '방송 정보를 불러오지 못했습니다.' : null);
   const [lastUpdated, setLastUpdated] = useState(() => Date.now());
 
   const refresh = useCallback(async (showRefreshing = false) => {
@@ -590,11 +592,20 @@ export function PublicRealtimeDataView({
         credentials: 'include',
         cache: 'no-store',
       });
-      if (!response.ok) return;
+      if (!response.ok) {
+        setError(`방송 정보를 불러오지 못했습니다. (${response.status})`);
+        return;
+      }
       const payload = await response.json().catch(() => null);
-      if (!payload) return;
+      if (!payload) {
+        setError('서버 응답을 확인하지 못했습니다.');
+        return;
+      }
       setData(payload);
+      setError(null);
       setLastUpdated(Date.now());
+    } catch {
+      setError('서버에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요.');
     } finally {
       if (showRefreshing) setRefreshing(false);
     }
@@ -619,6 +630,7 @@ export function PublicRealtimeDataView({
 
   return (
     <div className="grid gap-4">
+      {error ? <ErrorState description={error} onRetry={() => void refresh(true)} /> : null}
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-control)] border bg-card/72 px-[clamp(0.9rem,2vw,1.1rem)] py-3 text-sm shadow-subtle">
         <div className="flex flex-wrap items-center gap-2">
           <Badge tone="mint">자동 갱신</Badge>

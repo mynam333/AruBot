@@ -60,7 +60,7 @@ export function ViewerLoginPage({ returnTo: rawReturnTo }: { returnTo?: string |
   return (
     <main className="min-h-screen px-[var(--page-gutter)] py-[clamp(1rem,2.6vw,1.75rem)]">
       <header className="mx-auto flex max-w-7xl items-center justify-between gap-3">
-        <Link href="/" className="inline-flex items-center gap-3 rounded-full bg-card/75 px-3 py-2 shadow-subtle backdrop-blur-xl transition hover:-translate-y-0.5">
+        <Link href="/" className="inline-flex items-center gap-3 rounded-lg border bg-card px-3 py-2 shadow-subtle transition-colors hover:bg-muted">
           <img src="/files/logo.png" alt="" className="aspect-square w-[clamp(2rem,4vw,2.5rem)] object-contain" />
           <span className="text-sm font-semibold">AruBot</span>
         </Link>
@@ -68,12 +68,12 @@ export function ViewerLoginPage({ returnTo: rawReturnTo }: { returnTo?: string |
       </header>
 
       <section className="mx-auto mt-[clamp(3rem,8vw,6rem)] grid max-w-6xl gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(22rem,0.42fr)] lg:items-center">
-        <div className="rounded-[var(--radius-panel)] border bg-[linear-gradient(135deg,hsl(var(--card)),hsl(var(--accent-mint)/0.36),hsl(var(--accent-sky)/0.24))] p-[clamp(1.5rem,4vw,3rem)] shadow-soft">
+        <div className="rounded-[var(--radius-panel)] border bg-card p-[clamp(1.5rem,4vw,3rem)] shadow-soft">
           <Badge tone="mint">
             <ImagePlus className="mr-1 h-3.5 w-3.5" />
             그림 후원 로그인
           </Badge>
-          <h1 className="mt-5 max-w-3xl break-keep text-[clamp(2.2rem,5.8vw,4.6rem)] font-semibold leading-tight">
+          <h1 className="mt-5 max-w-3xl break-keep text-[clamp(2rem,4.8vw,3.6rem)] font-bold leading-tight tracking-tight">
             로그인하고 방송 화면 위에 그림을 그려요.
           </h1>
           <p className="mt-5 max-w-2xl break-keep text-sm leading-7 text-muted-foreground md:text-base">

@@ -47,7 +47,6 @@ function normalizeOverlayPosition(value: string | null): OverlayPosition {
 
 export function PredictionOverlay({ channelUid }: { channelUid: string }) {
   const [prediction, setPrediction] = useState<Prediction | null>(null);
-  const [preview, setPreview] = useState(false);
   const [position, setPosition] = useState<OverlayPosition>('bottom-right');
   const [hiddenResultId, setHiddenResultId] = useState<string | null>(null);
   const playedResultRef = useRef('');
@@ -61,7 +60,6 @@ export function PredictionOverlay({ channelUid }: { channelUid: string }) {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    setPreview(params.get('preview') === '1');
     setPosition(normalizeOverlayPosition(params.get('position')));
   }, []);
 
@@ -154,7 +152,7 @@ export function PredictionOverlay({ channelUid }: { channelUid: string }) {
 
   const displayPrediction = prediction?.status === 'settled' && hiddenResultId === prediction.id ? null : prediction;
 
-  if (!displayPrediction && !preview) return null;
+  if (!displayPrediction) return null;
 
   return (
     <main className={`viewer-surface flex h-screen w-screen bg-transparent p-[clamp(0.65rem,1.7vw,1.15rem)] ${OVERLAY_POSITION_CLASSES[position]}`}>

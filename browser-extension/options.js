@@ -73,13 +73,13 @@ async function load() {
 
 document.querySelector('#save').addEventListener('click', async () => {
   const status = document.querySelector('#status');
-  status.textContent = 'Saving...';
+  status.textContent = '저장 중...';
   const response = await send({ type: 'save-settings', settings: collect() });
   if (response?.ok) {
     render(response.state.settings);
-    status.textContent = 'Saved.';
+    status.textContent = '설정을 저장했습니다.';
   } else {
-    status.textContent = response?.error || 'Save failed.';
+    status.textContent = response?.error || '설정을 저장하지 못했습니다.';
   }
 });
 

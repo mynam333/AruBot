@@ -20,22 +20,30 @@ import {
 } from 'lucide-react';
 
 export const adminNav = [
-  { href: '/dashboard', label: '홈', icon: Home },
-  { href: '/arubot-admin', label: 'AruBot 관리자', icon: ShieldCheck, adminOnly: true },
-  { href: '/connection', label: '플랫폼 연결', icon: Cable },
-  { href: '/commands', label: '채팅 명령어', icon: MessageSquare },
-  { href: '/macros', label: '자동 알림', icon: Timer },
-  { href: '/points', label: '시청자 포인트', icon: Coins },
-  { href: '/logs', label: '이벤트 로그', icon: ListChecks },
-  { href: '/predictions', label: '예측 베팅', icon: Vote },
-  { href: '/automations', label: '방송 자동화', icon: Orbit },
-  { href: '/actions', label: '실행 액션', icon: Workflow },
-  { href: '/video-donations/queue', label: '영상 후원', icon: PlaySquare },
-  { href: '/drawing-donations', label: '그림 후원', icon: ImagePlus },
-  { href: '/roulette', label: '룰렛', icon: Sparkles },
-  { href: '/donations/rules', label: '후원 반응', icon: Gift },
-  { href: '/viewer/me', label: '시청자 페이지', icon: UserRound },
+  { href: '/dashboard', label: '홈', icon: Home, group: 'overview' },
+  { href: '/connection', label: '플랫폼 연결', icon: Cable, group: 'overview' },
+  { href: '/commands', label: '채팅 명령어', icon: MessageSquare, group: 'participation' },
+  { href: '/macros', label: '자동 알림', icon: Timer, group: 'participation' },
+  { href: '/points', label: '시청자 포인트', icon: Coins, group: 'participation' },
+  { href: '/predictions', label: '예측 베팅', icon: Vote, group: 'participation' },
+  { href: '/roulette', label: '룰렛', icon: Sparkles, group: 'production' },
+  { href: '/video-donations/queue', label: '영상 후원', icon: PlaySquare, group: 'production' },
+  { href: '/drawing-donations', label: '그림 후원', icon: ImagePlus, group: 'production' },
+  { href: '/donations/rules', label: '후원 반응', icon: Gift, group: 'production' },
+  { href: '/automations', label: '방송 자동화', icon: Orbit, group: 'automation' },
+  { href: '/actions', label: '실행 액션', icon: Workflow, group: 'automation' },
+  { href: '/logs', label: '이벤트 로그', icon: ListChecks, group: 'system' },
+  { href: '/viewer/me', label: '시청자 페이지', icon: UserRound, group: 'system' },
+  { href: '/arubot-admin', label: 'AruBot 관리자', icon: ShieldCheck, adminOnly: true, group: 'system' },
 ];
+
+export const adminNavGroups = [
+  { id: 'overview', label: '개요' },
+  { id: 'participation', label: '참여 관리' },
+  { id: 'production', label: '방송 연출' },
+  { id: 'automation', label: '자동화' },
+  { id: 'system', label: '운영' },
+] as const;
 
 export const adminFeatureMap = {
   connection: {

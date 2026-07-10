@@ -161,9 +161,9 @@ export function ArubotAdminPage() {
 
   return (
     <>
-      <section className="rounded-[var(--radius-panel)] border bg-[linear-gradient(135deg,hsl(var(--card)),hsl(var(--accent-sky)/0.28)_55%,hsl(var(--accent-mint)/0.34))] p-[clamp(1.25rem,3vw,2rem)] shadow-soft">
+      <section className="border-b pb-5">
         <Badge tone="sky">AruBot 관리자</Badge>
-        <h1 className="mt-4 max-w-3xl break-keep text-3xl font-semibold leading-tight md:text-5xl">
+        <h1 className="mt-3 max-w-3xl break-keep text-2xl font-bold leading-tight tracking-tight md:text-3xl">
           서비스 전체 봇 운영을 한곳에서 관리합니다.
         </h1>
         <p className="mt-4 max-w-2xl text-sm leading-7 text-muted-foreground md:text-base">

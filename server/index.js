@@ -295,6 +295,7 @@ const youtubeSessionCreatePromises = new Map(); // ownerUserId -> Promise(entry)
 const youtubeSendQueues = new Map(); // ownerUserId -> Promise
 const cimeSessionStore = new Map(); // ownerUserId -> entry
 const cimeSessionCreatePromises = new Map(); // ownerUserId -> Promise(entry)
+const disconnectedProviderRuntimeGuards = new Map(); // `${ownerUserId}:${provider}` -> { at, platformUserId, reason }
 const CACHE_TTL = 5 * 60 * 1000;
 
 const CONNECTION_CLEANUP_INTERVAL = 5 * 60 * 1000;
@@ -9316,6 +9317,43 @@ function ownerUserIdFromSid(sid) {
   return text.startsWith('user:') ? text.slice(5) : text;
 }
 
+function normalizeRuntimeProvider(provider) {
+  return String(provider || '').trim().toLowerCase();
+}
+
+function providerRuntimeGuardKey(ownerUserId, provider) {
+  const owner = String(ownerUserId || '').replace(/^user:/, '').trim();
+  const normalizedProvider = normalizeRuntimeProvider(provider);
+  return owner && normalizedProvider ? `${owner}:${normalizedProvider}` : '';
+}
+
+function markProviderRuntimeConnected(ownerUserId, provider) {
+  const key = providerRuntimeGuardKey(ownerUserId, provider);
+  if (key) disconnectedProviderRuntimeGuards.delete(key);
+}
+
+function markProviderRuntimeDisconnected(ownerUserId, provider, platformUserId = null, reason = 'platform_disconnected') {
+  const key = providerRuntimeGuardKey(ownerUserId, provider);
+  if (!key) return false;
+  disconnectedProviderRuntimeGuards.set(key, {
+    at: Date.now(),
+    platformUserId: platformUserId ? String(platformUserId) : null,
+    reason
+  });
+  return true;
+}
+
+function assertProviderRuntimeConnected(ownerUserId, provider) {
+  const key = providerRuntimeGuardKey(ownerUserId, provider);
+  if (!key || !disconnectedProviderRuntimeGuards.has(key)) return;
+  const guard = disconnectedProviderRuntimeGuards.get(key) || {};
+  const error = new Error(`${normalizeRuntimeProvider(provider)}_channel_disconnected`);
+  error.code = 'CHANNEL_DISCONNECTED';
+  error.provider = normalizeRuntimeProvider(provider);
+  error.platformUserId = guard.platformUserId || null;
+  throw error;
+}
+
 function compactLogText(value, limit = 240) {
   const text = String(value || '').replace(/\s+/g, ' ').trim();
   return text.length > limit ? `${text.slice(0, Math.max(0, limit - 1))}…` : text;
@@ -13764,6 +13802,7 @@ function collectViewerPointIdentityKeys(ownerUserId, platforms = []) {
 }
 
 async function getValidCimeAccessToken(ownerUserId) {
+  assertProviderRuntimeConnected(ownerUserId, 'cime');
   let tokens = await getPlatformTokens('cime', ownerUserId);
   if (!tokens) throw new Error('No CIME tokens stored');
   const now = new Date();
@@ -13806,6 +13845,7 @@ async function exchangeYoutubeToken(params) {
 }
 
 async function getValidYoutubeAccessToken(ownerUserId) {
+  assertProviderRuntimeConnected(ownerUserId, 'youtube');
   let tokens = await getPlatformTokens('youtube', ownerUserId);
   if (!tokens) throw new Error('No YouTube tokens stored');
   const expiresAt = new Date(tokens.expiresAt);
@@ -14425,6 +14465,7 @@ app.get('/api/auth/youtube/callback', async (req, res) => {
     const preferredUserId = await getCurrentSessionUserId(req);
     const { userId } = await upsertPlatformIdentity('youtube', profile, preferredUserId);
     await upsertPlatformTokens('youtube', userId, profile.platformUserId, tokens);
+    markProviderRuntimeConnected(userId, 'youtube');
 
     const sidToken = getCookieSid(req) || ('rt_' + crypto.randomBytes(32).toString('hex'));
     await upsertSession(sidToken, userId, 30);
@@ -14468,7 +14509,8 @@ app.post('/api/auth/youtube/revoke', async (req, res) => {
     const requestedPlatformUserId = String(req.body?.platformUserId || req.body?.platform_user_id || '').trim();
     const tokens = await getPlatformTokens('youtube', ownerUserId);
     const platformUserId = requestedPlatformUserId || tokens?.platformUserId || null;
-    if (tokens && (!requestedPlatformUserId || String(tokens.platformUserId || '') === requestedPlatformUserId)) {
+    const tokenMatchesRequest = tokens && (!requestedPlatformUserId || String(tokens.platformUserId || '') === requestedPlatformUserId);
+    if (tokenMatchesRequest) {
       const token = tokens.refreshToken || tokens.accessToken;
       if (token) {
         try {
@@ -14478,12 +14520,12 @@ app.post('/api/auth/youtube/revoke', async (req, res) => {
           });
         } catch { }
       }
-      if (!requestedPlatformUserId) await deletePlatformTokens('youtube', ownerUserId);
+      await deletePlatformTokens('youtube', ownerUserId);
     }
-    closeYoutubeSession(ownerUserId, 'revoked');
     try { await deletePlatformAccount('youtube', ownerUserId, platformUserId); } catch { }
+    const runtime = disconnectProviderRuntimeState(ownerUserId, 'youtube', platformUserId, 'revoked');
     const platforms = await listPlatformAccounts(ownerUserId).catch(() => []);
-    return res.json({ ok: true, platforms });
+    return res.json({ ok: true, platforms, runtime });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to revoke YouTube tokens' });
   }
@@ -14583,6 +14625,7 @@ app.get('/api/auth/cime/callback', async (req, res) => {
       expiresAt: computeExpiresAt(expiresIn || 86400),
       scope
     });
+    markProviderRuntimeConnected(userId, 'cime');
 
     const sidToken = getCookieSid(req) || ('rt_' + crypto.randomBytes(32).toString('hex'));
     await upsertSession(sidToken, userId, 30);
@@ -14619,7 +14662,8 @@ app.post('/api/auth/cime/revoke', async (req, res) => {
     const requestedPlatformUserId = String(req.body?.platformUserId || req.body?.platform_user_id || '').trim();
     const tokens = await getPlatformTokens('cime', ownerUserId);
     const platformUserId = requestedPlatformUserId || tokens?.platformUserId || null;
-    if (tokens && (!requestedPlatformUserId || String(tokens.platformUserId || '') === requestedPlatformUserId)) {
+    const tokenMatchesRequest = tokens && (!requestedPlatformUserId || String(tokens.platformUserId || '') === requestedPlatformUserId);
+    if (tokenMatchesRequest) {
       for (const [token, tokenTypeHint] of [[tokens.accessToken, 'access_token'], [tokens.refreshToken, 'refresh_token']]) {
         if (!token) continue;
         try {
@@ -14631,11 +14675,12 @@ app.post('/api/auth/cime/revoke', async (req, res) => {
           }, { headers: { 'Content-Type': 'application/json' } });
         } catch { }
       }
-      if (!requestedPlatformUserId) await deletePlatformTokens('cime', ownerUserId);
+      await deletePlatformTokens('cime', ownerUserId);
     }
     try { await deletePlatformAccount('cime', ownerUserId, platformUserId); } catch { }
+    const runtime = disconnectProviderRuntimeState(ownerUserId, 'cime', platformUserId, 'revoked');
     const platforms = await listPlatformAccounts(ownerUserId).catch(() => []);
-    return res.json({ ok: true, platforms });
+    return res.json({ ok: true, platforms, runtime });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to revoke CIME tokens' });
   }
@@ -14901,6 +14946,7 @@ app.post('/api/youtube/streamer-channel', rateLimiters.userWrite, async (req, re
       websubStatus: resolved.youtubeChannelId ? 'pending' : 'unresolved_channel',
       lastError: resolved.youtubeChannelId ? null : 'channel_id_required_for_websub'
     });
+    markProviderRuntimeConnected(ownerUserId, 'youtube');
     let websub = { ok: false, status: 'unresolved_channel' };
     if (streamerChannel.youtubeChannelId) {
       try {
@@ -14958,6 +15004,7 @@ app.post('/api/youtube/streamer-channel/moderator-confirmed', rateLimiters.userW
     }
     const streamerChannel = await markYoutubeStreamerChannelModeratorRegistered(ownerUserId, true);
     if (!streamerChannel) return res.status(404).json({ error: 'YouTube streamer channel is not registered' });
+    markProviderRuntimeConnected(ownerUserId, 'youtube');
     closeYoutubeSession(ownerUserId, 'moderator_confirmed');
     ensureYoutubeSession(ownerUserId).catch((e) => {
       console.warn('[YouTube] Failed to start session after moderator confirmation:', e?.response?.data || e?.message || e);
@@ -14976,9 +15023,9 @@ app.delete('/api/youtube/streamer-channel', rateLimiters.userWrite, async (req, 
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
-    closeYoutubeSession(ownerUserId, 'streamer_channel_deleted');
     await deleteYoutubeStreamerChannel(ownerUserId);
-    return res.json({ ok: true });
+    const runtime = disconnectProviderRuntimeState(ownerUserId, 'youtube', null, 'streamer_channel_deleted');
+    return res.json({ ok: true, runtime });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to delete YouTube streamer channel' });
   }
@@ -15160,6 +15207,7 @@ function closeSocketSetForSid(map, sid, reason = 'account_deleted') {
 function closeCimeSession(ownerUserId, reason = 'account_deleted') {
   const entry = cimeSessionStore.get(ownerUserId);
   if (!entry) return false;
+  entry.closed = true;
   if (entry.pingTimer) clearInterval(entry.pingTimer);
   if (entry.reconnectTimer) clearTimeout(entry.reconnectTimer);
   entry.connected = false;
@@ -15168,6 +15216,40 @@ function closeCimeSession(ownerUserId, reason = 'account_deleted') {
   try { entry.ws?.terminate?.(); } catch { }
   cimeSessionStore.delete(ownerUserId);
   return true;
+}
+
+function closeChzzkProviderRuntimeSession(ownerUserId, reason = 'platform_disconnected') {
+  const owner = String(ownerUserId || '').replace(/^user:/, '').trim();
+  if (!owner) return false;
+  const sid = `user:${owner}`;
+  const entry = sessionStore.get(sid);
+  const channelId = String(entry?.channelId || '').trim() || null;
+  const closed = closeChzzkChatSessionForOfflineSid(sid, channelId, reason);
+  sessionCreatePromises.delete(sid);
+  for (const key of Array.from(liveChatEnsurePromises.keys())) {
+    if (String(key).startsWith(`${sid}:`)) liveChatEnsurePromises.delete(key);
+  }
+  activeSids.delete(sid);
+  liveSession.delete(sid);
+  liveStatusCache.delete(sid);
+  return closed;
+}
+
+function disconnectProviderRuntimeState(ownerUserId, provider, platformUserId = null, reason = 'platform_disconnected') {
+  const owner = String(ownerUserId || '').replace(/^user:/, '').trim();
+  const normalizedProvider = normalizeRuntimeProvider(provider);
+  if (!owner || !normalizedProvider) return { provider: normalizedProvider || null, disconnected: false };
+  markProviderRuntimeDisconnected(owner, normalizedProvider, platformUserId, reason);
+  let closed = false;
+  if (normalizedProvider === 'chzzk') {
+    closed = closeChzzkProviderRuntimeSession(owner, reason);
+  } else if (normalizedProvider === 'cime') {
+    closed = closeCimeSession(owner, reason);
+  } else if (normalizedProvider === 'youtube') {
+    closed = closeYoutubeSession(owner, reason);
+  }
+  liveStatusCache.delete(`user:${owner}`);
+  return { provider: normalizedProvider, disconnected: true, sessionClosed: closed };
 }
 
 function deleteAutomationSoundDirectory(ownerUserId) {
@@ -18063,6 +18145,7 @@ app.get('/api/auth/chzzk/callback', async (req, res) => {
           });
           const identity = await upsertPlatformIdentity('chzzk', profile, preferredUserId || platformUserId);
           accountUserId = identity?.userId || accountUserId;
+          markProviderRuntimeConnected(accountUserId, 'chzzk');
         } catch { }
         if (oldSid) { try { await migrateSidToUserPid(oldSid, accountUserId); } catch { } }
         pid = `user:${accountUserId}`;
@@ -18107,6 +18190,7 @@ app.get('/api/auth/chzzk/callback', async (req, res) => {
             const platformUserId = String(retryChannelId);
             loginChannelId = platformUserId;
             const accountUserId = preferredUserId || platformUserId;
+            markProviderRuntimeConnected(accountUserId, 'chzzk');
             if (oldSid) { try { await migrateSidToUserPid(oldSid, accountUserId); } catch { } }
             pid = `user:${accountUserId}`;
             const existing2 = getCookieSid(req);
@@ -18266,11 +18350,16 @@ app.post('/api/auth/chzzk/revoke', async (req, res) => {
       const chzzkAccount = requestedPlatformUserId
         ? accounts.find((account) => String(account.provider || '').toLowerCase() === 'chzzk' && String(account.platform_user_id || '') === requestedPlatformUserId)
         : accounts.find((account) => String(account.provider || '').toLowerCase() === 'chzzk');
+      if (sid && tokens && requestedPlatformUserId && chzzkAccount && String(chzzkAccount.platform_user_id || '') === requestedPlatformUserId) {
+        try { await updateTokens(sid, null); } catch { }
+      }
       try { await deletePlatformAccount('chzzk', ownerUserId, requestedPlatformUserId || chzzkAccount?.platform_user_id || null); } catch { }
+      const runtime = disconnectProviderRuntimeState(ownerUserId, 'chzzk', requestedPlatformUserId || chzzkAccount?.platform_user_id || null, 'revoked');
       const platforms = await listPlatformAccounts(ownerUserId).catch(() => []);
-      return res.json({ ok: true, platforms });
+      return res.json({ ok: true, platforms, runtime });
     }
 
+    if (sid) closeChzzkProviderRuntimeSession(ownerUserIdFromSid(sid), 'revoked');
     return res.json({ ok: true });
   } catch (e) {
     console.error('Revoke error', e?.response?.data || e.message);
@@ -19112,6 +19201,7 @@ app.post('/api/auth/chzzk/session/attach', async (req, res) => {
 
 // Helper to get a valid access token (refreshing if necessary)
 async function getValidAccessToken(sid) {
+  assertProviderRuntimeConnected(ownerUserIdFromSid(sid), 'chzzk');
   // Reuse logic in /api/auth/chzzk/token by calling the function flow inline
   let tokens = await getTokens(sid);
   if (!tokens) throw new Error('No tokens stored');
@@ -19189,6 +19279,7 @@ const MAX_QUEUE = 1000;
 const sessionCreatePromises = new Map(); // sid -> Promise(entry)
 
 async function ensureSession(sid, channelId) {
+  assertProviderRuntimeConnected(ownerUserIdFromSid(sid), 'chzzk');
   if (!channelId) {
     try {
       channelId = await resolveChannelIdForOwnerUserId(ownerUserIdFromSid(sid), { provider: 'chzzk', allowFallback: false });
@@ -21417,6 +21508,7 @@ async function openYoutubeChatStream(entry) {
 
 async function ensureYoutubeSession(ownerUserId) {
   if (!ownerUserId) throw new Error('ownerUserId is required');
+  assertProviderRuntimeConnected(ownerUserId, 'youtube');
   const existing = youtubeSessionStore.get(ownerUserId);
   if (existing && !existing.closed && (existing.connected || existing.stream || existing.chatClient)) return existing;
   if (youtubeSessionCreatePromises.has(ownerUserId)) return youtubeSessionCreatePromises.get(ownerUserId);
@@ -22303,8 +22395,9 @@ async function ensureCimeSubscribed(entry) {
 
 async function ensureCimeSession(ownerUserId) {
   if (!ownerUserId) throw new Error('ownerUserId is required');
+  assertProviderRuntimeConnected(ownerUserId, 'cime');
   const existing = cimeSessionStore.get(ownerUserId);
-  if (existing && existing.connected && existing.ws && existing.ws.readyState === WebSocket.OPEN) {
+  if (existing && !existing.closed && existing.connected && existing.ws && existing.ws.readyState === WebSocket.OPEN) {
     await ensureCimeSubscribed(existing);
     return existing;
   }
@@ -22336,7 +22429,8 @@ async function ensureCimeSession(ownerUserId) {
       processedIds: new Set(),
       sentReplies: new Set(),
       pingTimer: null,
-      reconnectTimer: null
+      reconnectTimer: null,
+      closed: false
     };
     cimeSessionStore.set(ownerUserId, entry);
     activeSids.set(entry.primarySid, Date.now());
@@ -22380,6 +22474,7 @@ async function ensureCimeSession(ownerUserId) {
       entry.connected = false;
       if (entry.pingTimer) clearInterval(entry.pingTimer);
       entry.pingTimer = null;
+      if (entry.closed) return;
       entry.reconnectTimer = setTimeout(() => {
         cimeSessionStore.delete(ownerUserId);
         ensureCimeSession(ownerUserId).catch(() => { });
@@ -22652,6 +22747,9 @@ app.get('/api/platforms/status', async (req, res) => {
     const refresh = String(req.query?.refresh || '').toLowerCase() === 'true';
 
     const chzzkAccount = byProvider.get('chzzk') || null;
+    if (!chzzkAccount && sessionStore.get(sid)?.connected) {
+      disconnectProviderRuntimeState(ownerUserId, 'chzzk', null, 'platform_status_disconnected');
+    }
     let chzzkState = liveStatusCache.get(sid);
     let chzzkLive = chzzkState?.provider === 'chzzk' ? !!chzzkState.live : null;
     if (refresh && chzzkAccount?.channel_id) {
@@ -22660,7 +22758,11 @@ app.get('/api/platforms/status', async (req, res) => {
     }
 
     const cimeAccount = byProvider.get('cime') || null;
-    const cimeEntry = cimeSessionStore.get(ownerUserId) || null;
+    let cimeEntry = cimeSessionStore.get(ownerUserId) || null;
+    if (!cimeAccount && cimeEntry?.connected) {
+      disconnectProviderRuntimeState(ownerUserId, 'cime', null, 'platform_status_disconnected');
+      cimeEntry = null;
+    }
     let cimeLive = null;
     if (cimeAccount) {
       cimeLive = refresh ? await refreshCimeLiveStatus(ownerUserId, sid, cimeAccount.channel_id || cimeAccount.platform_user_id).catch(() => false) : (liveStatusCache.get(sid)?.provider === 'cime' ? !!liveStatusCache.get(sid)?.live : null);
@@ -22669,7 +22771,11 @@ app.get('/api/platforms/status', async (req, res) => {
     const youtubeAccount = byProvider.get('youtube') || null;
     const youtubeBotProfile = await getYoutubeBotProfile(YOUTUBE_BOT_PROFILE_ID).catch(() => null);
     const youtubeStreamerChannel = await getYoutubeStreamerChannel(ownerUserId).catch(() => null);
-    const youtubeEntry = youtubeSessionStore.get(ownerUserId) || null;
+    let youtubeEntry = youtubeSessionStore.get(ownerUserId) || null;
+    if (!(youtubeBotProfile?.selectedChannelId && youtubeStreamerChannel?.youtubeChannelId) && youtubeEntry?.connected) {
+      disconnectProviderRuntimeState(ownerUserId, 'youtube', null, 'platform_status_disconnected');
+      youtubeEntry = null;
+    }
     const youtubeState = refresh && (youtubeAccount || youtubeStreamerChannel)
       ? await refreshYoutubeLiveStatus(ownerUserId, sid, { force: true }).catch(() => liveStatusCache.get(sid))
       : liveStatusCache.get(sid);

@@ -3,6 +3,7 @@ import { ChevronRight, Coins, ImagePlus, ListChecks, Radio, Sparkles } from 'luc
 import { Badge } from '@/components/ui/badge';
 import { LegalFooter } from '@/components/app-shell/legal-footer';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { ErrorState } from '@/components/ui/page';
 import { cn } from '@/shared/lib/utils';
 import { readPublicChannelData, readPublicChannelHub, type PublicChannelKind } from '@/shared/api/public';
 import { PublicRealtimeDataView } from './public-realtime-data-view';
@@ -46,6 +47,14 @@ function publicItemCount(data: unknown) {
     if (Number.isFinite(total) && total >= 0) return total;
   }
   return pickRows(data).length;
+}
+
+function channelLabel(data: unknown, channelUid: string) {
+  if (!data || typeof data !== 'object') return channelUid;
+  const object = data as Record<string, unknown>;
+  const channel = object.channel && typeof object.channel === 'object' ? object.channel as Record<string, unknown> : null;
+  const value = object.channelName || object.channel_name || object.title || channel?.name || channel?.title;
+  return typeof value === 'string' && value.trim() ? value.trim() : channelUid;
 }
 
 function PublicCommands({ data }: { data: unknown }) {
@@ -101,17 +110,19 @@ function PublicCommands({ data }: { data: unknown }) {
 
 function PublicShell({
   channelUid,
+  channelName,
   active,
   children,
 }: {
   channelUid: string;
+  channelName: string;
   active?: PublicChannelKind | 'hub';
   children: React.ReactNode;
 }) {
   return (
     <main className="min-h-screen px-4 py-6">
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-5">
-        <section className="rounded-[var(--radius-panel)] border bg-[linear-gradient(135deg,hsl(var(--card)),hsl(var(--accent-sky)/0.24))] p-[clamp(1.25rem,2.6vw,1.75rem)] shadow-subtle">
+        <section className="border-b pb-5">
           <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
             <div>
               <Link href={`/c/${channelUid}`} className="mb-4 inline-flex items-center gap-2 text-sm font-semibold">
@@ -126,7 +137,7 @@ function PublicShell({
                 </span>
                 AruBot
               </Link>
-              <h1 className="break-keep text-3xl font-semibold leading-tight md:text-4xl">이 방송에서 바로 참여해요</h1>
+              <h1 className="break-keep text-2xl font-bold leading-tight tracking-tight md:text-3xl">{channelName}</h1>
               <p className="mt-2 text-sm leading-6 text-muted-foreground">
                 명령어, 포인트, 룰렛, 라이브 정보를 모바일에서도 빠르게 열어볼 수 있어요.
               </p>
@@ -142,7 +153,7 @@ function PublicShell({
                     href={href}
                     className={cn(
                       'inline-flex items-center gap-2 rounded-[var(--radius-control)] border bg-background/75 px-[clamp(0.75rem,1.4vw,1rem)] py-[clamp(0.5rem,1vw,0.75rem)] transition hover:bg-muted',
-                      selected && 'border-primary/30 bg-pastel-mint/55 text-foreground',
+                      selected && 'border-primary/35 bg-primary/10 text-primary',
                     )}
                   >
                     <Icon className="h-4 w-4 text-primary" />
@@ -166,7 +177,7 @@ export async function PublicChannelPage({ channelUid, kind }: { channelUid: stri
   const data = await readPublicChannelData(channelUid, kind);
 
   return (
-    <PublicShell channelUid={channelUid} active={kind}>
+    <PublicShell channelUid={channelUid} channelName={channelLabel(data, channelUid)} active={kind}>
       <Card>
         <CardHeader>
           <div className="flex flex-wrap items-start justify-between gap-3">
@@ -185,7 +196,9 @@ export async function PublicChannelPage({ channelUid, kind }: { channelUid: stri
           </div>
         </CardHeader>
       </Card>
-      {kind === 'commands' ? (
+      {data == null ? (
+        <ErrorState description="채널 정보를 불러오지 못했습니다. 잠시 후 다시 열어 주세요." />
+      ) : kind === 'commands' ? (
         <PublicCommands data={data} />
       ) : (
         <PublicRealtimeDataView channelUid={channelUid} kind={kind} initialData={data} />
@@ -205,12 +218,13 @@ export async function PublicChannelHub({ channelUid }: { channelUid: string }) {
   ] as const;
 
   return (
-    <PublicShell channelUid={channelUid} active="hub">
+    <PublicShell channelUid={channelUid} channelName={channelLabel(data.live, channelUid)} active="hub">
+      {Object.values(data).every((value) => value == null) ? <ErrorState description="채널 참여 정보를 불러오지 못했습니다. 잠시 후 다시 열어 주세요." /> : null}
       <section className="grid gap-4 sm:grid-cols-2">
         {cards.map((card) => {
           const Icon = card.icon;
           return (
-            <Link key={card.href} href={card.direct ? card.href : `/c/${channelUid}/${card.href}`} className="group rounded-[var(--radius-card)] border bg-card/90 p-[clamp(1.25rem,2.2vw,1.5rem)] shadow-subtle transition hover:-translate-y-0.5 hover:bg-card hover:shadow-glow">
+            <Link key={card.href} href={card.direct ? card.href : `/c/${channelUid}/${card.href}`} className="group rounded-[var(--radius-card)] border bg-card p-[clamp(1.25rem,2.2vw,1.5rem)] shadow-subtle transition-colors hover:border-primary/35 hover:bg-muted/30">
               <div className="flex items-start justify-between gap-3">
                 <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-muted text-primary">
                   <Icon className="h-5 w-5" />

@@ -132,7 +132,7 @@ function MacroEditDialog({
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-foreground/24 backdrop-blur-[clamp(0.5rem,1.4vw,1rem)] data-[state=open]:animate-fade-in" />
         <Dialog.Content className="fixed left-1/2 top-1/2 z-50 grid max-h-[min(92svh,46rem)] w-[min(94vw,44rem)] -translate-x-1/2 -translate-y-1/2 grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-[var(--radius-panel)] border bg-card/96 shadow-lift outline-none backdrop-blur-2xl data-[state=open]:animate-modal-in">
-          <div className="relative overflow-hidden bg-[radial-gradient(circle_at_12%_0%,hsl(var(--accent-mint)/0.82),transparent_36%),linear-gradient(135deg,hsl(var(--card)),hsl(var(--accent-sky)/0.24),hsl(var(--accent-lemon)/0.18))] p-[clamp(1.25rem,3vw,2rem)]">
+          <div className="border-b bg-card p-[clamp(1.25rem,3vw,2rem)]">
             <div className="relative flex items-start justify-between gap-[clamp(1rem,2vw,1.5rem)]">
               <div className="min-w-0">
                 <Badge tone="mint">자동 알림 수정</Badge>

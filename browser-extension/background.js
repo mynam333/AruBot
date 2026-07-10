@@ -178,7 +178,7 @@ async function enqueuePause(service, durationSec, event = {}) {
     rawDurationSec: baseDuration,
     startAt,
     endAt,
-    title: event?.title || event?.vTitle || event?.videoDescription || null
+    title: event?.title || event?.vTitle || event?.videoTitle || event?.video_info?.title || event?.content?.video_info?.title || event?.videoDescription || null
   };
 
   state.endAt = endAt;
@@ -481,15 +481,33 @@ function isLikelyVideoDonation(payload) {
     text.includes('youtu.be');
 }
 
-function createWebSocketConnector({ service, url, protocols, onOpen, onMessage, onClose }) {
+function createWebSocketConnector({ service, url, protocols, onOpen, onMessage, onClose, heartbeatIntervalMs = 0, heartbeatMessage = null }) {
   const ws = protocols ? new WebSocket(url, protocols) : new WebSocket(url);
   let closedByUser = false;
+  let heartbeatTimer = null;
+  const clearHeartbeat = () => {
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  };
+  const sendHeartbeat = () => {
+    if (!heartbeatMessage || ws.readyState !== WebSocket.OPEN) return;
+    try {
+      const message = typeof heartbeatMessage === 'function' ? heartbeatMessage() : heartbeatMessage;
+      if (message == null) return;
+      ws.send(typeof message === 'string' ? message : JSON.stringify(message));
+    } catch {}
+  };
   ws.addEventListener('open', () => {
     setServiceState(service, { status: 'connected', message: 'Connected', connectedAt: Date.now(), reconnectAt: null });
     onOpen?.(ws);
+    if (heartbeatIntervalMs > 0 && heartbeatMessage) {
+      clearHeartbeat();
+      heartbeatTimer = setInterval(sendHeartbeat, heartbeatIntervalMs);
+    }
   });
   ws.addEventListener('message', (event) => {
     try {
+      if (handleCommonHeartbeatMessage(String(event.data), ws)) return;
       const result = onMessage?.(event, ws);
       if (result && typeof result.catch === 'function') result.catch(() => {});
     } catch {}
@@ -498,6 +516,7 @@ function createWebSocketConnector({ service, url, protocols, onOpen, onMessage, 
     setServiceState(service, { status: 'error', message: 'Socket error' });
   });
   ws.addEventListener('close', () => {
+    clearHeartbeat();
     if (!closedByUser && runtime.settings.monitoring) {
       onClose?.();
     }
@@ -505,22 +524,53 @@ function createWebSocketConnector({ service, url, protocols, onOpen, onMessage, 
   return {
     close() {
       closedByUser = true;
+      clearHeartbeat();
       try { ws.close(1000, 'stopped'); } catch {}
     }
   };
 }
 
+function handleCommonHeartbeatMessage(raw, ws) {
+  const text = String(raw || '').trim();
+  if (!text) return false;
+  if (text === 'PING') {
+    try { ws.send('PONG'); } catch {}
+    return true;
+  }
+  if (text === 'ping') {
+    try { ws.send('pong'); } catch {}
+    return true;
+  }
+  if (text === 'PONG' || text === 'pong') return true;
+  const payload = /^[{[]/.test(text) ? parseJsonMessage(text) : null;
+  const action = String(payload?.action || payload?.type || '').toUpperCase();
+  if (action === 'PING') {
+    try { ws.send(JSON.stringify(payload?.action ? { action: 'PONG' } : { type: 'PONG' })); } catch {}
+    return true;
+  }
+  return action === 'PONG';
+}
+
 async function createCimeConnector(overlayUrl, attempt) {
-  const html = await fetchText(overlayUrl);
-  const alertKey = matchFirst(html, /"alertKey":"([^"]+)"/) || matchFirst(overlayUrl, /\/video\/[^/]+\/([^/?#]+)/);
-  const socketUrl = matchFirst(html, /"socketUrl":"([^"]+)"/) || 'apigw.prod.ci.me';
+  let html = '';
+  let socketHost = 'apigw.prod.ci.me';
+  const alertKeyFromUrl = extractCimeVideoDonationAlertKey(overlayUrl);
+  try {
+    html = await fetchText(overlayUrl);
+    socketHost = normalizeCimeSocketHost(matchFirst(html, /"socketUrl":"([^"]+)"/) || socketHost);
+  } catch {
+    html = '';
+  }
+  const alertKey = alertKeyFromUrl || matchFirst(html, /"alertKey":"([^"]+)"/);
   if (!alertKey) throw new Error('CIME alert key not found');
 
-  const url = `wss://${socketUrl}/?type=ALERT_KEY&alertKey=${encodeURIComponent(alertKey)}&alertType=DONATION_VIDEO`;
+  const url = buildCimeDonationSocketUrl(socketHost, alertKey);
   return createWebSocketConnector({
     service: 'cime',
     url,
     onOpen: (ws) => ws.send(JSON.stringify({ type: 'DONATION_VIDEO' })),
+    heartbeatIntervalMs: 60 * 1000,
+    heartbeatMessage: { type: 'PING' },
     onMessage: async (event) => {
       const payload = parseJsonMessage(String(event.data));
       if (!payload) return;
@@ -534,15 +584,31 @@ async function createCimeConnector(overlayUrl, attempt) {
   });
 }
 
+function extractCimeVideoDonationAlertKey(value) {
+  const text = String(value || '').trim();
+  return matchFirst(text, /\/overlay\/video-donation\/video\/[^/?#]+\/([^/?#]+)/) ||
+    matchFirst(text, /\/video\/[^/?#]+\/([^/?#]+)/);
+}
+
+function normalizeCimeSocketHost(value) {
+  const text = String(value || '').trim() || 'apigw.prod.ci.me';
+  return text.replace(/^wss?:\/\//i, '').replace(/\/.*$/, '') || 'apigw.prod.ci.me';
+}
+
+function buildCimeDonationSocketUrl(socketHost, alertKey) {
+  const host = normalizeCimeSocketHost(socketHost);
+  return `wss://${host}/?type=ALERT_KEY&alertKey=${encodeURIComponent(alertKey)}&alertType=DONATION_VIDEO`;
+}
+
 async function createToonationConnector(overlayUrl, attempt) {
   const html = await fetchText(overlayUrl);
-  const payload = matchFirst(html, /"payload"\s*:\s*"([^"]+)"/) ||
-    matchFirst(html, /\\"payload\\"\s*:\s*\\"([^"\\]+)\\"/) ||
-    matchFirst(html, /\\u0022payload\\u0022\s*:\s*\\u0022([^\\]+?)\\u0022/);
+  const payload = extractToonationPayload(html);
   if (!payload) throw new Error('Toonation payload not found');
   return createWebSocketConnector({
     service: 'toonation',
-    url: `wss://toon.at:8071/${payload}`,
+    url: buildToonationSocketUrl(payload),
+    heartbeatIntervalMs: 30 * 1000,
+    heartbeatMessage: 'PING',
     onMessage: (event) => {
       const payload = parseJsonMessage(String(event.data));
       if (!payload || !isLikelyVideoDonation(payload)) return;
@@ -553,10 +619,22 @@ async function createToonationConnector(overlayUrl, attempt) {
   });
 }
 
+function extractToonationPayload(html) {
+  const text = String(html || '');
+  return matchFirst(text, /\\u0022payload\\u0022:\\u0022(.*?[^\\])\\u0022/) ||
+    matchFirst(text, /"payload"\s*:\s*"([^"]+)"/) ||
+    matchFirst(text, /\\"payload\\"\s*:\s*\\"([^"\\]+)\\"/) ||
+    matchFirst(text, /\\u0022payload\\u0022\s*:\s*\\u0022([^\\]+?)\\u0022/);
+}
+
+function buildToonationSocketUrl(payload) {
+  return `wss://ws.toon.at/${payload}`;
+}
+
 async function createChzzkConnector(overlayUrl, attempt) {
-  const sessionId = matchFirst(overlayUrl, /video@([^/?#]+)/) || matchFirst(overlayUrl, /\/video-donation\/([^/?#]+)/);
-  if (!sessionId) throw new Error('CHZZK video session id not found');
-  const response = await fetch(`https://api.chzzk.naver.com/manage/v1/alerts/${encodeURIComponent(sessionId)}/session-url`, {
+  const alertId = extractChzzkVideoDonationAlertId(overlayUrl);
+  if (!alertId) throw new Error('CHZZK video session id not found');
+  const response = await fetch(`https://api.chzzk.naver.com/manage/v1/alerts/${encodeChzzkAlertPathId(alertId)}/session-url`, {
     credentials: 'include',
     cache: 'no-store',
     headers: {
@@ -567,8 +645,7 @@ async function createChzzkConnector(overlayUrl, attempt) {
   const data = await response.json();
   const sessionUrl = data?.content?.sessionUrl;
   if (!sessionUrl) throw new Error('CHZZK session URL not found');
-  const parsed = new URL(sessionUrl);
-  const socketUrl = `wss://${parsed.host}/socket.io/?${parsed.searchParams.toString()}&EIO=4&transport=websocket`;
+  const socketUrl = buildChzzkDonationSocketUrl(sessionUrl);
 
   return createWebSocketConnector({
     service: 'chzzk',
@@ -577,6 +654,29 @@ async function createChzzkConnector(overlayUrl, attempt) {
     onMessage: (event, ws) => handleSocketIoMessage('chzzk', String(event.data), ws),
     onClose: () => scheduleReconnect('chzzk', overlayUrl, 'Socket closed', attempt)
   });
+}
+
+function encodeChzzkAlertPathId(alertId) {
+  return encodeURIComponent(String(alertId || '')).replace(/^video%40/i, 'video@');
+}
+
+function extractChzzkVideoDonationAlertId(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const prefixed = matchFirst(text, /(video@[A-Za-z0-9_-]+)/);
+  if (prefixed) return prefixed;
+  const pathValue = matchFirst(text, /\/video-donation\/([^/?#]+)/);
+  if (!pathValue) return '';
+  return pathValue.startsWith('video@') ? pathValue : `video@${pathValue}`;
+}
+
+function buildChzzkDonationSocketUrl(sessionUrl) {
+  const parsed = new URL(sessionUrl);
+  parsed.searchParams.delete('EIO');
+  parsed.searchParams.delete('transport');
+  parsed.searchParams.set('EIO', '3');
+  parsed.searchParams.set('transport', 'websocket');
+  return `wss://${parsed.host}/socket.io/?${parsed.searchParams.toString()}`;
 }
 
 function handleSocketIoMessage(service, packet, ws) {
@@ -592,8 +692,9 @@ function handleSocketIoMessage(service, packet, ws) {
     setServiceState(service, { status: 'connected', message: 'Connected', connectedAt: Date.now(), reconnectAt: null });
     return;
   }
-  if (packet.startsWith('42')) {
-    const payload = parseJsonMessage(packet.slice(2));
+  const eventPayloadText = extractSocketIoEventPayload(packet);
+  if (eventPayloadText) {
+    const payload = parseJsonMessage(eventPayloadText);
     if (!Array.isArray(payload)) return;
     const [eventName, raw] = payload;
     const body = typeof raw === 'string' ? parseJsonMessage(raw) : raw;
@@ -605,6 +706,17 @@ function handleSocketIoMessage(service, packet, ws) {
     const duration = normalizeDurationFromPayload(body);
     if (duration) enqueuePause(service, duration, body);
   }
+}
+
+function extractSocketIoEventPayload(packet) {
+  const text = String(packet || '').trim();
+  if (!text) return '';
+  if (text.startsWith('42')) {
+    const bracket = text.indexOf('[');
+    return bracket >= 0 ? text.slice(bracket) : '';
+  }
+  if (text.startsWith('[')) return text;
+  return '';
 }
 
 async function createAruBotConnector(overlayUrl, attempt) {

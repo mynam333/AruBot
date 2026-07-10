@@ -26,14 +26,13 @@ export function Tooltip({
           side={side}
           sideOffset={10}
           className={cn(
-            'relative z-50 max-w-[min(22rem,76vw)] overflow-hidden rounded-[var(--radius-control)] border bg-card/95 px-[clamp(0.75rem,1.4vw,1rem)] py-[clamp(0.625rem,1vw,0.8125rem)] text-xs font-semibold leading-5 text-foreground shadow-lift backdrop-blur-xl',
-            'before:absolute before:inset-x-0 before:top-0 before:h-[max(0.125rem,0.16vw)] before:bg-[linear-gradient(90deg,hsl(var(--accent-sky)),hsl(var(--accent-mint)),hsl(var(--accent-coral)))]',
+            'relative z-50 max-w-[min(22rem,76vw)] overflow-hidden rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-medium leading-5 text-slate-50 shadow-lift dark:border-border dark:bg-card',
             'data-[state=delayed-open]:animate-tooltip-in data-[side=bottom]:origin-top data-[side=left]:origin-right data-[side=right]:origin-left data-[side=top]:origin-bottom',
             className,
           )}
         >
           <span className="relative z-10 block">{content}</span>
-          <TooltipPrimitive.Arrow className="fill-card stroke-border stroke-[max(0.0625rem,0.08vw)]" />
+          <TooltipPrimitive.Arrow className="fill-slate-950 dark:fill-card" />
         </TooltipPrimitive.Content>
       </TooltipPrimitive.Portal>
     </TooltipPrimitive.Root>

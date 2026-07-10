@@ -1,6 +1,6 @@
 'use client';
 
-import { Coins, Loader2, RefreshCw, Save, Search, Settings, ShieldOff, SlidersHorizontal, Trash2, X } from 'lucide-react';
+import { Loader2, RefreshCw, Save, Search, Settings, ShieldOff, SlidersHorizontal, Trash2, X } from 'lucide-react';
 import { useCallback, useDeferredValue, useEffect, useState, useTransition } from 'react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
@@ -8,6 +8,7 @@ import { Button, LinkButton } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Pagination } from '@/components/ui/pagination';
+import { PageHeader } from '@/components/ui/page';
 import { apiUrl, readJson } from '@/shared/api/http';
 
 type PointRow = {
@@ -218,26 +219,15 @@ export function PointsPage() {
 
   return (
     <div className="grid gap-[clamp(1rem,2vw,1.5rem)]">
-      <section className="relative overflow-hidden rounded-[var(--radius-panel)] border bg-[linear-gradient(135deg,hsl(var(--card)),hsl(var(--accent-mint)/0.28),hsl(var(--accent-sky)/0.18))] p-[clamp(1.25rem,2.8vw,2rem)] shadow-subtle">
+      <section className="border-b pb-5">
         <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <div className="mb-4 flex flex-wrap items-center gap-2">
-              <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-primary/12 text-primary">
-                <Coins className="h-5 w-5" />
-              </span>
-              <Badge tone="mint">시청자 포인트</Badge>
-            </div>
-            <h1 className="break-keep text-3xl font-semibold leading-tight md:text-4xl">시청자 포인트를 바로 조정하세요.</h1>
-            <p className="mt-3 max-w-2xl text-sm leading-7 text-muted-foreground md:text-base">
-              채팅 참여로 쌓인 포인트를 확인하고, 시청자별 잔액을 직접 수정하거나 지급·차감할 수 있습니다.
-            </p>
-          </div>
+          <PageHeader className="border-0 pb-0" eyebrow="Audience economy" title="시청자 포인트" description="시청자별 잔액과 적립 정책을 확인하고 지급·차감 내역을 관리합니다." />
           <div className="grid min-w-0 grid-cols-[repeat(2,minmax(0,1fr))] gap-2 lg:basis-[34%]">
-            <div className="min-w-0 rounded-[var(--radius-card)] border bg-card/78 p-[clamp(0.75rem,1.5vw,1rem)] text-center">
+            <div className="min-w-0 rounded-[var(--radius-card)] border bg-card p-[clamp(0.75rem,1.5vw,1rem)] text-center shadow-subtle">
               <div className="truncate text-xl font-bold">{totalRows.toLocaleString('ko-KR')}</div>
               <div className="mt-1 text-xs text-muted-foreground">시청자</div>
             </div>
-            <div className="min-w-0 rounded-[var(--radius-card)] border bg-card/78 p-[clamp(0.75rem,1.5vw,1rem)] text-center">
+            <div className="min-w-0 rounded-[var(--radius-card)] border bg-card p-[clamp(0.75rem,1.5vw,1rem)] text-center shadow-subtle">
               <div className="truncate text-xl font-bold">{formatPoints(totalPoints)}</div>
               <div className="mt-1 text-xs text-muted-foreground">총 포인트</div>
             </div>

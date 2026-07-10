@@ -22,7 +22,7 @@ function render(state) {
   const remaining = Math.max(0, Math.ceil((state.pauseUntil - Date.now()) / 1000));
   document.querySelector('#monitoring').checked = Boolean(state.settings.monitoring);
   document.querySelector('#remaining').textContent = format(remaining);
-  document.querySelector('#summary').textContent = state.settings.monitoring ? 'Monitoring' : 'Monitoring paused';
+  document.querySelector('#summary').textContent = state.settings.monitoring ? '후원 감지 중' : '후원 감지 중지';
   document.querySelector('#meterFill').style.width = remaining > 0 ? '100%' : '0%';
 
   const root = document.querySelector('#services');
@@ -46,7 +46,7 @@ function render(state) {
 
     const message = document.createElement('span');
     message.className = 'message';
-    message.textContent = service.message || service.status || 'Idle';
+    message.textContent = localizeStatus(service.message || service.status || 'idle');
 
     const time = document.createElement('span');
     time.className = 'time';
@@ -57,6 +57,25 @@ function render(state) {
     row.append(meta, time);
     root.appendChild(row);
   }
+}
+
+function localizeStatus(value) {
+  const text = String(value || '');
+  const labels = {
+    idle: '대기 중',
+    connected: '연결됨',
+    connecting: '연결 중',
+    reconnecting: '재연결 중',
+    error: '오류',
+    disabled: '사용 안 함',
+    'Monitoring off': '후원 감지 중지',
+    'Overlay URL required': '오버레이 주소 필요',
+    Connected: '연결됨',
+    'Connected, waiting': '연결됨 · 후원 대기',
+  };
+  if (labels[text]) return labels[text];
+  if (text.startsWith('Connected:')) return `연결됨: ${text.slice('Connected:'.length).trim()}`;
+  return text;
 }
 
 function getSafeStatusClass(status) {

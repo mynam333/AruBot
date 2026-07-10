@@ -87,10 +87,10 @@ export function PredictionOverlayCard({ prediction }: { prediction: PredictionOv
     () => prediction?.options.find((option) => option.id === prediction.winningOptionId) || null,
     [prediction],
   );
-  const statusLabel = isSettled ? 'RESULT' : prediction?.status === 'locked' ? 'LOCKED' : 'LIVE';
+  const statusLabel = isSettled ? '결과' : prediction?.status === 'locked' ? '마감' : '진행 중';
 
   return (
-    <section className="w-[min(40rem,94vw)] shrink-0 overflow-hidden rounded-[clamp(0.8rem,1.45vw,1.12rem)] border-[max(0.0625rem,0.08vw)] border-white/14 bg-[linear-gradient(135deg,rgba(14,20,34,0.92),rgba(31,37,59,0.78))] p-[clamp(0.72rem,1.35vw,1rem)] text-white shadow-[0_1.1rem_3rem_rgba(0,0,0,0.34)] backdrop-blur-xl">
+    <section className="w-[min(40rem,94vw)] shrink-0 overflow-hidden rounded-xl border border-white/15 bg-slate-950/94 p-[clamp(0.72rem,1.35vw,1rem)] text-white shadow-[0_1.1rem_3rem_rgba(0,0,0,0.34)]">
       <div className="flex items-start justify-between gap-[clamp(0.55rem,1.2vw,0.85rem)]">
         <div className="min-w-0 flex-1">
           <ScrollingText className="w-full text-[clamp(1.55rem,3.35vw,2.65rem)] font-black leading-[1.02] tracking-normal">
@@ -100,13 +100,13 @@ export function PredictionOverlayCard({ prediction }: { prediction: PredictionOv
             {formatPoints(prediction?.totalPoints || 0)} · {prediction?.participantCount || 0}명 참여 · !투표 &lt;번호&gt; &lt;배팅 포인트&gt;
           </div>
         </div>
-        <div className={`shrink-0 rounded-full border-[max(0.0625rem,0.08vw)] p-[clamp(0.3rem,0.62vw,0.44rem)] text-center text-[clamp(0.78rem,1.12vw,0.92rem)] font-black tracking-[0.08em] ${isSettled ? 'border-amber-200/35 bg-amber-200/18 text-amber-50' : 'border-emerald-300/25 bg-emerald-300/14 text-emerald-100'}`}>
+        <div className={`shrink-0 rounded-md border p-[clamp(0.3rem,0.62vw,0.44rem)] text-center text-[clamp(0.78rem,1.12vw,0.92rem)] font-bold ${isSettled ? 'border-amber-200/35 bg-amber-200/18 text-amber-50' : 'border-emerald-300/25 bg-emerald-300/14 text-emerald-100'}`}>
           {statusLabel}
         </div>
       </div>
 
       {isSettled && winningOption ? (
-        <div className="mt-[clamp(0.5rem,1vw,0.75rem)] overflow-hidden rounded-[clamp(0.72rem,1.25vw,0.92rem)] border-[max(0.0625rem,0.08vw)] border-amber-200/35 bg-[linear-gradient(135deg,rgba(250,204,21,0.24),rgba(45,212,191,0.14),rgba(255,255,255,0.08))] p-[clamp(0.62rem,1.18vw,0.82rem)] shadow-[0_0.9rem_2rem_rgba(250,204,21,0.16)]">
+        <div className="mt-[clamp(0.5rem,1vw,0.75rem)] overflow-hidden rounded-lg border border-amber-200/35 bg-amber-300/15 p-[clamp(0.62rem,1.18vw,0.82rem)] shadow-[0_0.9rem_2rem_rgba(250,204,21,0.12)]">
           <div className="text-[clamp(0.8rem,1.15vw,0.94rem)] font-black uppercase tracking-[0.16em] text-amber-100/84">예측 결과</div>
           <ScrollingText className="mt-[clamp(0.16rem,0.4vw,0.28rem)] w-full text-[clamp(1.75rem,3.75vw,2.9rem)] font-black leading-[1.02] text-white">
             {winningOption.label} 승리
@@ -123,7 +123,7 @@ export function PredictionOverlayCard({ prediction }: { prediction: PredictionOv
             key={option.id}
             className={`grid gap-[clamp(0.26rem,0.52vw,0.38rem)] rounded-[clamp(0.62rem,1.05vw,0.82rem)] p-[clamp(0.48rem,0.92vw,0.68rem)] transition duration-500 ${
               isSettled && option.id === prediction?.winningOptionId
-                ? 'border-[max(0.0625rem,0.08vw)] border-amber-200/45 bg-[linear-gradient(135deg,rgba(250,204,21,0.22),rgba(34,211,238,0.12))] shadow-[0_0_2.4rem_rgba(250,204,21,0.24)]'
+                ? 'border border-amber-200/45 bg-amber-300/15 shadow-[0_0_2.4rem_rgba(250,204,21,0.18)]'
                 : isSettled
                   ? 'bg-white/[0.045] opacity-45'
                   : 'bg-white/8'
@@ -149,7 +149,7 @@ export function PredictionOverlayCard({ prediction }: { prediction: PredictionOv
             </div>
             <div className="h-[clamp(0.38rem,0.68vw,0.52rem)] overflow-hidden rounded-full bg-white/12">
               <div
-                className={`h-full rounded-full transition-all duration-700 ${isSettled && option.id === prediction?.winningOptionId ? 'bg-[linear-gradient(90deg,#fde68a,#8ee8d8,#ffffff)]' : 'bg-[linear-gradient(90deg,#8ee8d8,#ffc7b5,#d7c3ff)]'}`}
+                className={`h-full rounded-full transition-all duration-700 ${isSettled && option.id === prediction?.winningOptionId ? 'bg-amber-300' : 'bg-emerald-300'}`}
                 style={{ width: `${Math.max(0, Math.min(100, option.percentage))}%` }}
               />
             </div>

@@ -276,7 +276,7 @@ export function CommandsPage() {
         </CardContent>
       </Card>
 
-      <Card className="bg-[linear-gradient(135deg,hsl(var(--card)),hsl(var(--accent-lemon)/0.22),hsl(var(--accent-mint)/0.18))]">
+      <Card>
         <CardContent className="flex flex-col gap-4 p-[clamp(1rem,2vw,1.35rem)] lg:flex-row lg:items-center lg:justify-between">
           <div className="flex min-w-0 items-start gap-3">
             <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-background/70 text-primary shadow-subtle">

@@ -407,16 +407,13 @@ type RouletteViewerProps = {
   viewerToken?: string;
 };
 
-const WHEEL_SEGMENT_COUNT = 8;
-const WHEEL_SEGMENT_DEG = 360 / WHEEL_SEGMENT_COUNT;
-const WHEEL_FALLBACK_ITEMS = ['행운', '보너스', '성공', '한 번 더', '반짝', '선물', '스타', '당첨'];
-
 function normalizeWheelResultLabel(value: unknown) {
   return String(value || '').replace(/\s+/g, '').trim();
 }
 
-function wheelStopRotationForIndex(index: number) {
-  return -((index * WHEEL_SEGMENT_DEG) + (WHEEL_SEGMENT_DEG / 2));
+function wheelStopRotationForIndex(index: number, segmentCount: number) {
+  const segmentDeg = 360 / Math.max(1, segmentCount);
+  return -((index * segmentDeg) + (segmentDeg / 2));
 }
 
 function equivalentForwardRotation(currentRotation: number, targetModuloRotation: number, turns = 6) {
@@ -427,22 +424,16 @@ function equivalentForwardRotation(currentRotation: number, targetModuloRotation
 }
 
 function buildWheelItemsForResult(pool: string[], finalLabel: string, selectedIndex: number) {
-  const target = finalLabel.trim() || '룰렛';
+  const target = finalLabel.trim();
   const targetKey = normalizeWheelResultLabel(target);
-  const candidates = [
-    ...pool.map((item) => String(item || '').trim()).filter(Boolean),
-    ...WHEEL_FALLBACK_ITEMS,
-  ].filter((item) => normalizeWheelResultLabel(item) !== targetKey);
-  const items: string[] = [];
-  let cursor = 0;
-  for (let index = 0; index < WHEEL_SEGMENT_COUNT; index += 1) {
-    if (index === selectedIndex) {
-      items.push(target);
-      continue;
-    }
-    items.push(candidates[cursor % candidates.length] || WHEEL_FALLBACK_ITEMS[index] || '룰렛');
-    cursor += 1;
-  }
+  const cleaned = pool.map((item) => String(item || '').trim()).filter(Boolean);
+  const targetPoolIndex = cleaned.findIndex((item) => normalizeWheelResultLabel(item) === targetKey);
+  const candidates = cleaned.slice();
+  if (target && targetPoolIndex >= 0) candidates.splice(targetPoolIndex, 1);
+  const itemCount = Math.max(1, candidates.length + (target ? 1 : 0));
+  const safeIndex = Math.min(Math.max(0, selectedIndex), itemCount - 1);
+  const items = candidates.slice();
+  if (target) items.splice(safeIndex, 0, target);
   return items;
 }
 
@@ -459,7 +450,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
   const [rowH, setRowH] = React.useState(0);
   const rowsHalfRef = React.useRef(6);
   const rowsHalfSpinRef = React.useRef<number | null>(null);
-  const [wheelItemsState, setWheelItemsState] = React.useState<string[]>(WHEEL_FALLBACK_ITEMS);
+  const [wheelItemsState, setWheelItemsState] = React.useState<string[]>([]);
   const [wheelSelectedIndex, setWheelSelectedIndex] = React.useState(-1);
   const [wheelRotationDeg, setWheelRotationDeg] = React.useState(0);
   const [wheelSettled, setWheelSettled] = React.useState(false);
@@ -704,31 +695,6 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       return validationParam !== 'off';
     } catch { return true; }
   }, []);
-
-  React.useEffect(() => {
-    if (!previewMode) return;
-    const sampleItems = ['아루 코인', 'VIP 포인트', '한 번 더', '선물 상자', '대박', '축하 멘트', '보너스', '오늘의 주인공'];
-    const finalLabel = sampleItems[4];
-    const wheelPreviewIndex = 4;
-    const wheelPreviewRotation = wheelStopRotationForIndex(wheelPreviewIndex);
-    const centerIndex = 6;
-    poolRef.current = sampleItems;
-    finalIndexRef.current = centerIndex;
-    finalLabelRef.current = finalLabel;
-    scrollItemsRef.current = ['축하 멘트', '보너스', '아루 코인', '선물 상자', 'VIP 포인트', '한 번 더', finalLabel, '오늘의 주인공', '아루 코인'];
-    setScrollItems(scrollItemsRef.current);
-    setScrollIndex(centerIndex);
-    setOffsetRows(centerIndex);
-    setWheelItemsState(sampleItems.slice(0, WHEEL_SEGMENT_COUNT));
-    setWheelSelectedIndex(wheelPreviewIndex);
-    wheelRotationRef.current = wheelPreviewRotation;
-    setWheelRotationDeg(wheelPreviewRotation);
-    setWheelSettled(true);
-    setState({ name: '스페셜 룰렛', username: '테스트 시청자', label: finalLabel, value: finalLabel });
-    setBatchProgress({ id: 'preview', done: 2, total: 5 });
-    setError(null);
-    setActive(true);
-  }, [previewMode]);
 
   // Simple SFX using fixed server files
   const audioCtxRef = React.useRef<AudioContext | null>(null);
@@ -1181,8 +1147,8 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       setScrollItems([finalLabel]);
       setScrollIndex(0);
       const instantWheelIndex = 0;
-      const instantWheelRotation = wheelStopRotationForIndex(instantWheelIndex);
       const instantWheelItems = buildWheelItemsForResult(poolRef.current, finalLabel, instantWheelIndex);
+      const instantWheelRotation = wheelStopRotationForIndex(instantWheelIndex, instantWheelItems.length);
       setWheelItemsState(instantWheelItems);
       setWheelSelectedIndex(instantWheelIndex);
       wheelRotationRef.current = instantWheelRotation;
@@ -1218,11 +1184,13 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     // Build reel with random items and inject final at stop time to avoid blanks
     const baseItems = Array.isArray(itemsFromServer) && itemsFromServer.length > 0
       ? itemsFromServer.slice()
-      : ['🎉 축하', '행운!', '꽝?', '한 번 더', '✨ 반짝', '🔥 고', '⭐ 스타', '💫 번쩍', '🎲 룰렛'];
+      : [finalLabel];
     const cleaned = baseItems.map(s => String(s)).filter(s => s.length > 0);
-    const pool = cleaned.length ? cleaned : ['행운!', '룰렛', '고!'];
+    const pool = cleaned.length ? cleaned : [finalLabel].filter(Boolean);
     poolRef.current = pool.slice();
-    const wheelTargetIndex = Math.floor(Math.random() * WHEEL_SEGMENT_COUNT);
+    const finalAlreadyIncluded = pool.some((item) => normalizeWheelResultLabel(item) === normalizeWheelResultLabel(finalLabel));
+    const wheelItemCount = Math.max(1, pool.length + (finalAlreadyIncluded ? 0 : 1));
+    const wheelTargetIndex = Math.floor(Math.random() * wheelItemCount);
     const nextWheelItems = buildWheelItemsForResult(pool, finalLabel, wheelTargetIndex);
     setWheelItemsState(nextWheelItems);
     setWheelSelectedIndex(wheelTargetIndex);
@@ -1230,7 +1198,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     const wheelStartRotation = wheelRotationRef.current;
     const wheelFinalRotation = equivalentForwardRotation(
       wheelStartRotation,
-      wheelStopRotationForIndex(wheelTargetIndex),
+      wheelStopRotationForIndex(wheelTargetIndex, nextWheelItems.length),
       6 + Math.floor(Math.random() * 3)
     );
     const rand = () => pool[Math.floor(Math.random() * pool.length)];
@@ -1787,99 +1755,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
   };
 
   const t = ROULETTE_SKINS[(serverTheme || theme || 'studio') as Theme] || ROULETTE_SKINS.studio;
-  const skinChrome = React.useMemo(() => {
-    const id = t.id;
-    if (id === 'deco') {
-      return {
-        metal: 'linear-gradient(135deg, rgba(255,244,191,0.30), rgba(28,22,13,0.86) 22%, rgba(5,5,5,0.96) 52%, rgba(201,145,42,0.34) 78%, rgba(255,244,191,0.22))',
-        glass: 'linear-gradient(180deg, rgba(255,244,191,0.18), rgba(0,0,0,0.62) 34%, rgba(18,14,8,0.80) 78%, rgba(201,145,42,0.12)), repeating-linear-gradient(90deg, transparent 0 34px, rgba(255,244,191,0.08) 34px 36px)',
-        bevel: 'linear-gradient(90deg, transparent, rgba(255,244,191,0.88), rgba(201,145,42,0.72), rgba(255,244,191,0.52), transparent)',
-        shadow: '0 34px 94px rgba(5,5,5,0.48), 0 0 72px var(--roulette-shadow)',
-        labelBg: 'rgba(255,244,191,0.58)',
-      };
-    }
-    if (id === 'crystal') {
-      return {
-        metal: 'linear-gradient(135deg, rgba(248,254,255,0.34), rgba(125,211,252,0.24) 26%, rgba(7,20,38,0.82) 54%, rgba(196,181,253,0.26) 82%, rgba(248,254,255,0.20))',
-        glass: 'linear-gradient(180deg, rgba(248,254,255,0.22), rgba(15,23,42,0.46) 36%, rgba(6,30,52,0.70) 78%, rgba(248,254,255,0.14)), linear-gradient(120deg, transparent 0 36%, rgba(255,255,255,0.14) 38%, transparent 40% 64%, rgba(255,255,255,0.10) 66%, transparent 68%)',
-        bevel: 'linear-gradient(90deg, transparent, rgba(248,254,255,0.86), rgba(125,211,252,0.72), rgba(196,181,253,0.68), transparent)',
-        shadow: '0 32px 90px rgba(6,21,36,0.42), 0 0 78px var(--roulette-shadow)',
-        labelBg: 'rgba(248,254,255,0.62)',
-      };
-    }
-    if (id === 'ink') {
-      return {
-        metal: 'linear-gradient(135deg, rgba(247,247,242,0.20), rgba(31,41,51,0.48) 30%, rgba(2,3,4,0.96) 58%, rgba(193,18,31,0.16))',
-        glass: 'linear-gradient(180deg, rgba(247,247,242,0.14), rgba(0,0,0,0.54) 32%, rgba(10,11,12,0.78) 76%, rgba(193,18,31,0.08)), radial-gradient(circle at 22% 18%, rgba(255,255,255,0.12), transparent 28%)',
-        bevel: 'linear-gradient(90deg, transparent, rgba(247,247,242,0.76), rgba(193,18,31,0.54), rgba(247,247,242,0.42), transparent)',
-        shadow: '0 32px 90px rgba(0,0,0,0.50), 0 0 64px var(--roulette-shadow)',
-        labelBg: 'rgba(247,247,242,0.58)',
-      };
-    }
-    if (id === 'nova') {
-      return {
-        metal: 'linear-gradient(135deg, rgba(196,181,253,0.28), rgba(49,46,129,0.40) 30%, rgba(5,6,24,0.94) 58%, rgba(56,189,248,0.20))',
-        glass: 'radial-gradient(circle at 70% 22%, rgba(254,240,138,0.15), transparent 26%), linear-gradient(180deg, rgba(196,181,253,0.18), rgba(0,0,0,0.54) 34%, rgba(8,9,34,0.78) 78%, rgba(56,189,248,0.10))',
-        bevel: 'linear-gradient(90deg, transparent, rgba(196,181,253,0.76), rgba(56,189,248,0.72), rgba(254,240,138,0.54), transparent)',
-        shadow: '0 34px 96px rgba(8,9,34,0.52), 0 0 86px var(--roulette-shadow)',
-        labelBg: 'rgba(196,181,253,0.56)',
-      };
-    }
-    if (id === 'ceramic') {
-      return {
-        metal: 'linear-gradient(135deg, rgba(248,251,255,0.30), rgba(29,78,216,0.30) 31%, rgba(6,18,42,0.88) 56%, rgba(239,246,255,0.22))',
-        glass: 'linear-gradient(180deg, rgba(248,251,255,0.20), rgba(6,18,42,0.48) 34%, rgba(8,24,48,0.72) 78%, rgba(239,246,255,0.14)), repeating-linear-gradient(135deg, transparent 0 28px, rgba(239,246,255,0.07) 28px 30px)',
-        bevel: 'linear-gradient(90deg, transparent, rgba(248,251,255,0.86), rgba(96,165,250,0.70), rgba(239,246,255,0.72), transparent)',
-        shadow: '0 32px 90px rgba(8,24,48,0.42), 0 0 72px var(--roulette-shadow)',
-        labelBg: 'rgba(239,246,255,0.62)',
-      };
-    }
-    if (id === 'arcade') {
-      return {
-        metal: 'linear-gradient(135deg, rgba(103,232,249,0.24), rgba(240,171,252,0.28) 28%, rgba(4,5,18,0.94) 54%, rgba(190,242,100,0.24)), repeating-linear-gradient(90deg, transparent 0 18px, rgba(255,255,255,0.055) 18px 20px)',
-        glass: 'linear-gradient(180deg, rgba(103,232,249,0.16), rgba(0,0,0,0.56) 34%, rgba(8,7,24,0.76) 78%, rgba(190,242,100,0.10)), repeating-linear-gradient(0deg, rgba(255,255,255,0.055) 0 1px, transparent 1px 9px)',
-        bevel: 'linear-gradient(90deg, transparent, rgba(103,232,249,0.82), rgba(240,171,252,0.72), rgba(190,242,100,0.72), transparent)',
-        shadow: '0 32px 90px rgba(4,5,18,0.48), 0 0 78px var(--roulette-shadow)',
-        labelBg: 'rgba(103,232,249,0.56)',
-      };
-    }
-    if (id === 'velvet' || id === 'gold' || id === 'solar') {
-      return {
-        metal: 'linear-gradient(135deg, rgba(255,242,194,0.34), rgba(94,38,9,0.36) 32%, rgba(12,8,5,0.88) 52%, rgba(255,194,92,0.26))',
-        glass: 'linear-gradient(180deg, rgba(255,236,181,0.20), rgba(0,0,0,0.56) 34%, rgba(23,8,4,0.74) 78%, rgba(255,236,181,0.12))',
-        bevel: 'linear-gradient(90deg, transparent, rgba(255,236,181,0.82), rgba(255,255,255,0.62), transparent)',
-        shadow: '0 32px 90px rgba(25,9,4,0.46), 0 0 76px var(--roulette-shadow)',
-        labelBg: 'rgba(255,244,214,0.62)',
-      };
-    }
-    if (id === 'mono' || id === 'studio') {
-      return {
-        metal: 'linear-gradient(135deg, rgba(255,255,255,0.26), rgba(31,41,55,0.42) 32%, rgba(3,5,8,0.90) 55%, rgba(255,255,255,0.16))',
-        glass: 'linear-gradient(180deg, rgba(255,255,255,0.18), rgba(0,0,0,0.50) 32%, rgba(0,0,0,0.72) 76%, rgba(255,255,255,0.10))',
-        bevel: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.78), rgba(148,163,184,0.56), transparent)',
-        shadow: '0 32px 90px rgba(0,0,0,0.42), 0 0 64px var(--roulette-shadow)',
-        labelBg: 'rgba(255,255,255,0.58)',
-      };
-    }
-    if (id === 'sakura') {
-      return {
-        metal: 'linear-gradient(135deg, rgba(255,228,236,0.34), rgba(115,28,61,0.38) 35%, rgba(36,11,24,0.88) 56%, rgba(253,164,175,0.24))',
-        glass: 'linear-gradient(180deg, rgba(255,228,236,0.20), rgba(0,0,0,0.48) 34%, rgba(44,16,31,0.72) 78%, rgba(255,228,236,0.12))',
-        bevel: 'linear-gradient(90deg, transparent, rgba(255,228,236,0.80), rgba(253,164,175,0.62), transparent)',
-        shadow: '0 32px 90px rgba(44,16,31,0.40), 0 0 72px var(--roulette-shadow)',
-        labelBg: 'rgba(255,228,236,0.58)',
-      };
-    }
-    return {
-      metal: 'linear-gradient(135deg, rgba(255,255,255,0.18), rgba(34,211,238,0.20) 28%, rgba(7,10,22,0.88) 55%, rgba(190,242,100,0.18))',
-      glass: 'linear-gradient(180deg, rgba(255,255,255,0.15), rgba(0,0,0,0.46) 32%, rgba(4,12,24,0.72) 76%, rgba(255,255,255,0.10))',
-      bevel: 'linear-gradient(90deg, transparent, var(--roulette-accent-2), rgba(255,255,255,0.64), var(--roulette-accent), transparent)',
-      shadow: '0 32px 90px rgba(0,0,0,0.38), 0 0 76px var(--roulette-shadow)',
-      labelBg: 'rgba(255,255,255,0.56)',
-    };
-  }, [t.id]);
-  // Memoize overlay element so it does not remount during item updates
-  const overlayKind = (t.overlay || 'none') as OverlayKind;
+  const overlayKind: OverlayKind = t.overlay || 'none';
   const overlayEl = React.useMemo(() => <OverlaySvg kind={overlayKind} />, [overlayKind]);
 
   // Inject animation keyframes once to avoid re-creating <style> on every render (which can reset animations)
@@ -1978,33 +1854,55 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
 
 
   const wheelItems = React.useMemo(
-    () => Array.from({ length: WHEEL_SEGMENT_COUNT }).map((_, index) => String(wheelItemsState[index] || WHEEL_FALLBACK_ITEMS[index] || '룰렛')),
+    () => wheelItemsState.map((item) => String(item || '').trim()).filter(Boolean),
     [wheelItemsState]
   );
   const wheelLabelLines = React.useMemo(() => wheelItems.map(splitWheelLabel), [wheelItems]);
   const wheelSkinFamily = React.useMemo(() => getWheelSkinFamily(t.id), [t.id]);
 
+  const wheelCount = Math.max(1, wheelItems.length);
+  const progressPercent = batchProgress.id
+    ? Math.max(0, Math.min(100, (batchProgress.done / Math.max(1, batchProgress.total)) * 100))
+    : 0;
+
   const renderReelWindow = () => (
-    <div className="relative w-full max-w-[760px]">
-      <div className="absolute inset-[-10px] rounded-[8px]" style={{ background: 'linear-gradient(135deg, var(--roulette-accent-2), transparent 30%, transparent 70%, var(--roulette-accent))', filter: 'blur(16px)', opacity: 0.58 }} />
-      <div className="relative overflow-hidden rounded-[8px] border p-[clamp(8px,1.2vw,14px)]" style={{ borderColor: 'rgba(255,255,255,0.30)', background: skinChrome.metal, boxShadow: '0 24px 64px rgba(0,0,0,0.42), inset 0 0 0 1px rgba(255,255,255,0.10)' }}>
-        <div className="pointer-events-none absolute inset-x-[4%] top-0 h-px" style={{ background: skinChrome.bevel, boxShadow: '0 0 18px var(--roulette-shadow)' }} />
-        <div className="pointer-events-none absolute inset-x-[4%] bottom-0 h-px" style={{ background: skinChrome.bevel, boxShadow: '0 0 18px var(--roulette-shadow)' }} />
-        <div className="mb-2 flex items-center justify-between px-1 text-[11px] font-black tracking-[0.18em]" style={{ color: 'var(--roulette-muted)' }}>
-          <span>RESULT</span>
-          <span style={{ color: 'var(--roulette-accent-2)' }}>{active ? 'LIVE' : 'READY'}</span>
-        </div>
-        <div className="relative h-[clamp(180px,23vw,330px)] overflow-hidden rounded-[8px] border" style={{ borderColor: 'rgba(255,255,255,0.14)', background: skinChrome.glass }}>
-          <div className="pointer-events-none absolute inset-x-0 top-0 z-20 h-[34%]" style={{ background: 'linear-gradient(180deg, rgba(255,255,255,0.16), transparent)' }} />
-          <div className="pointer-events-none absolute inset-y-0 left-0 z-20 w-[18%]" style={{ background: 'linear-gradient(90deg, rgba(0,0,0,0.58), transparent)' }} />
-          <div className="pointer-events-none absolute inset-y-0 right-0 z-20 w-[18%]" style={{ background: 'linear-gradient(270deg, rgba(0,0,0,0.58), transparent)' }} />
-          <div className="pointer-events-none absolute inset-x-[10%] top-1/2 z-20 h-px -translate-y-1/2" style={{ background: 'linear-gradient(90deg, transparent, var(--roulette-accent-2), var(--roulette-accent), transparent)', boxShadow: '0 0 22px var(--roulette-shadow)' }} />
-          <div className="pointer-events-none absolute left-1/2 top-1/2 z-30 h-0 w-0 -translate-x-1/2 -translate-y-[calc(50%+clamp(58px,8vw,122px))] border-x-[14px] border-b-[20px] border-x-transparent" style={{ borderBottomColor: 'var(--roulette-accent-2)', filter: 'drop-shadow(0 0 14px var(--roulette-shadow))' }} />
-          <div className="pointer-events-none absolute left-1/2 top-1/2 z-30 h-0 w-0 -translate-x-1/2 translate-y-[clamp(58px,8vw,122px)] border-x-[14px] border-t-[20px] border-x-transparent" style={{ borderTopColor: 'var(--roulette-accent-2)', filter: 'drop-shadow(0 0 14px var(--roulette-shadow))' }} />
-          <div ref={reelRef} className="relative h-full w-full overflow-hidden">
-            <div ref={rowRef} className="invisible absolute left-0 top-1/2 w-full -translate-y-1/2">
-              <div className="px-4 text-center text-[clamp(62px,8.6vw,132px)] font-black leading-tight">8</div>
+    <section
+      aria-label="룰렛 릴 오버레이"
+      className={`roulette-stage relative w-[min(94vw,960px)] overflow-hidden rounded-2xl border transition-[opacity,transform] ${active ? 'scale-100 opacity-100' : 'pointer-events-none scale-[0.98] opacity-0'}`}
+      style={{
+        borderColor: 'var(--roulette-line)',
+        background: 'linear-gradient(135deg, var(--roulette-panel-strong), var(--roulette-panel))',
+        boxShadow: '0 24px 72px rgba(0,0,0,0.42), inset 0 1px 0 rgba(255,255,255,0.12)',
+        color: 'var(--roulette-text)',
+        transitionDuration: FADE_MS + 'ms',
+      }}
+    >
+      {active ? <div className="pointer-events-none absolute inset-0 overflow-hidden opacity-45">{overlayEl}</div> : null}
+      <div className="relative z-10 grid lg:grid-cols-[minmax(230px,0.66fr)_minmax(430px,1.34fr)]">
+        <header className="flex min-w-0 flex-col justify-between gap-6 border-b p-[clamp(20px,3.4vw,38px)] lg:border-b-0 lg:border-r" style={{ borderColor: 'var(--roulette-line)' }}>
+          <div className="min-w-0">
+            <div className="mb-3 flex items-center gap-2 text-[clamp(11px,1.1vw,13px)] font-bold tracking-[0.08em]" style={{ color: 'var(--roulette-accent-2)' }}>
+              <span className="h-2 w-2 rounded-full" style={{ background: 'currentColor', boxShadow: '0 0 12px currentColor' }} />
+              룰렛 실행
             </div>
+            <h1 className="truncate text-[clamp(24px,3.2vw,44px)] font-black leading-tight">{state.name || '룰렛'}</h1>
+            {state.username ? <p className="mt-3 truncate text-[clamp(15px,1.6vw,22px)] font-semibold" style={{ color: 'var(--roulette-muted)' }}>{state.username}님</p> : null}
+          </div>
+          {batchProgress.id ? (
+            <div className="grid gap-2.5">
+              <div className="flex items-center justify-between text-xs font-bold" style={{ color: 'var(--roulette-muted)' }}><span>진행</span><span style={{ color: 'var(--roulette-result)' }}>{batchProgress.done} / {batchProgress.total}</span></div>
+              <div className="h-1.5 overflow-hidden rounded-full bg-black/30"><div className="h-full rounded-full" style={{ width: `${progressPercent}%`, background: 'var(--roulette-accent-2)' }} /></div>
+            </div>
+          ) : null}
+        </header>
+
+        <div className="relative min-h-[clamp(260px,34vw,420px)] p-[clamp(18px,3vw,34px)]">
+          <div className="absolute inset-x-[12%] top-1/2 z-20 h-[clamp(88px,11vw,128px)] -translate-y-1/2 rounded-xl border" style={{ borderColor: 'var(--roulette-accent-2)', background: 'rgba(255,255,255,0.055)', boxShadow: '0 0 30px var(--roulette-shadow), inset 0 0 24px rgba(255,255,255,0.04)' }} />
+          <div className="pointer-events-none absolute inset-x-[10%] top-1/2 z-30 h-px -translate-y-1/2" style={{ background: 'var(--roulette-accent-2)', boxShadow: '0 0 16px var(--roulette-shadow)' }} />
+          <div ref={reelRef} className="relative h-full min-h-[clamp(224px,29vw,352px)] overflow-hidden rounded-xl border bg-black/20" style={{ borderColor: 'var(--roulette-line)' }}>
+            <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-[32%] bg-gradient-to-b from-black/70 to-transparent" />
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-[32%] bg-gradient-to-t from-black/70 to-transparent" />
+            <div ref={rowRef} className="invisible absolute left-0 top-1/2 w-full -translate-y-1/2"><div className="px-4 text-center text-[clamp(44px,7vw,86px)] font-black leading-tight">8</div></div>
             {(() => {
               const measured = rowRef.current?.getBoundingClientRect().height || 0;
               const rh = rowH > 0 ? rowH : (measured > 0 ? Math.round(measured) : 0);
@@ -2018,22 +1916,13 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
               const transformPx = Math.round((reelH / 2) - ((center - firstIndex + 0.5) * rh));
               return (
                 <div className="absolute left-0 right-0 top-0 flex flex-col items-stretch will-change-transform" style={{ transform: `translateY(${transformPx}px)` }}>
-                  {Array.from({ length: windowRows }).map((_, k) => {
-                    const idx = firstIndex + k;
-                    const label = labelFor(idx);
-                    const isCenter = idx === Math.round(center);
+                  {Array.from({ length: windowRows }).map((_, itemIndex) => {
+                    const index = firstIndex + itemIndex;
+                    const label = labelFor(index);
+                    const isCenter = index === Math.round(center);
                     return (
-                      <div key={idx} className="flex w-full items-center justify-center px-4" style={{ height: rh }}>
-                        <div
-                          className={`max-w-full truncate text-center text-[clamp(62px,8.6vw,132px)] font-black leading-tight transition-transform duration-150 ${isCenter ? 'roulette-result-lock' : ''}`}
-                          style={{
-                            color: isCenter ? 'var(--roulette-result)' : 'rgba(255,255,255,0.18)',
-                            textShadow: isCenter ? '0 0 26px var(--roulette-shadow), 0 0 10px var(--roulette-accent), 0 12px 28px rgba(0,0,0,0.62)' : 'none',
-                            transform: isCenter ? 'scale(1.02)' : 'scale(0.86)',
-                          }}
-                        >
-                          {label}
-                        </div>
+                      <div key={index} className="flex w-full items-center justify-center px-4" style={{ height: rh }}>
+                        <div className={`max-w-full truncate text-center text-[clamp(44px,7vw,86px)] font-black leading-tight ${isCenter ? 'roulette-result-lock' : ''}`} style={{ color: isCenter ? 'var(--roulette-result)' : 'rgba(255,255,255,0.24)', textShadow: isCenter ? '0 0 22px var(--roulette-shadow), 0 8px 24px rgba(0,0,0,0.5)' : 'none', transform: isCenter ? 'scale(1)' : 'scale(0.88)' }}>{label}</div>
                       </div>
                     );
                   })}
@@ -2043,264 +1932,40 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
           </div>
         </div>
       </div>
-    </div>
+    </section>
   );
 
-  const renderIdentity = (compact = false) => (
-    <div className={compact ? 'grid justify-items-center gap-3 text-center' : 'grid gap-[clamp(14px,2vw,24px)]'}>
-      <div className="grid h-[clamp(54px,5vw,78px)] w-[clamp(54px,5vw,78px)] place-items-center rounded-full border" style={{ borderColor: 'var(--roulette-line)', background: 'radial-gradient(circle, rgba(255,255,255,0.08), rgba(0,0,0,0.20))', boxShadow: '0 0 28px var(--roulette-shadow), inset 0 0 22px rgba(255,255,255,0.08)' }}>
-        <div className="h-[45%] w-[45%]" style={{ clipPath: 'polygon(50% 0, 61% 37%, 100% 50%, 61% 63%, 50% 100%, 39% 63%, 0 50%, 39% 37%)', background: 'var(--roulette-text)', filter: 'drop-shadow(0 0 14px var(--roulette-accent))' }} />
+  const renderWheel = () => (
+    <section
+      aria-label="룰렛 휠 오버레이"
+      className={`roulette-stage relative grid aspect-square w-[min(88vmin,700px)] place-items-center transition-[opacity,transform] ${active ? 'scale-100 opacity-100' : 'pointer-events-none scale-[0.98] opacity-0'}`}
+      style={{ color: 'var(--roulette-text)', filter: 'drop-shadow(0 26px 62px rgba(0,0,0,0.46))', transitionDuration: FADE_MS + 'ms' }}
+    >
+      <div className="absolute inset-[-1.5%] rounded-full" style={{ background: 'radial-gradient(circle, var(--roulette-shadow), transparent 66%)', filter: 'blur(16px)', opacity: 0.66 }} />
+      <div className="absolute inset-0 rounded-full border" style={{ borderColor: 'rgba(255,255,255,0.24)', background: 'linear-gradient(145deg, var(--roulette-panel-strong), #05070b)', boxShadow: 'inset 0 0 0 clamp(8px,1.3vmin,13px) rgba(255,255,255,0.05), inset 0 0 0 clamp(13px,2.2vmin,22px) rgba(0,0,0,0.32)' }} />
+      <WheelSkinOrnaments family={wheelSkinFamily} />
+      <div className="absolute inset-[8%] overflow-hidden rounded-full" style={{ transform: `rotate(${wheelRotationDeg}deg)`, boxShadow: '0 0 32px var(--roulette-shadow), inset 0 0 30px rgba(0,0,0,0.3)' }}>
+        <WheelSegmentsSvg family={wheelSkinFamily} palette={t.palette} segmentCount={wheelCount} />
+        <WheelSelectedSegment selectedIndex={wheelSelectedIndex} segmentCount={wheelCount} />
+        <WheelLabelsSvg labelLines={wheelLabelLines} selectedIndex={wheelSelectedIndex} />
       </div>
-      <h1 className="break-keep text-[clamp(30px,4.2vw,64px)] font-black leading-[1.02]" style={{ textShadow: '0 10px 34px rgba(0,0,0,0.38)' }}>
-        {state.name ? `${state.name}` : '룰렛'}
-      </h1>
-      <div className="flex max-w-[min(100%,410px)] items-center gap-3 rounded-[8px] border px-4 py-3" style={{ borderColor: 'var(--roulette-line)', background: 'rgba(255,255,255,0.055)', boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.12)' }}>
-        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full border" style={{ borderColor: 'var(--roulette-line)', color: 'var(--roulette-accent-2)', background: 'rgba(0,0,0,0.28)' }}>
-          <span className="h-4 w-4 rounded-full" style={{ background: 'currentColor', boxShadow: '0 14px 0 -5px currentColor' }} />
-        </span>
-        <p className="min-w-0 truncate text-[clamp(16px,1.6vw,26px)] font-extrabold leading-tight" style={{ color: 'var(--roulette-text)' }}>
-          {state.username ? `${state.username}님` : '시청자명'}
-        </p>
-      </div>
-      {batchProgress.id ? (
-        <div className="grid max-w-[min(100%,410px)] gap-2">
-          <div className="flex items-center justify-between text-[clamp(12px,1vw,14px)] font-black tracking-[0.14em]" style={{ color: 'var(--roulette-muted)' }}>
-            <span>PROGRESS</span>
-            <span style={{ color: 'var(--roulette-result)' }}>{batchProgress.done} / {batchProgress.total}</span>
-          </div>
-          <div className="h-2 overflow-hidden rounded-full border bg-black/36" style={{ borderColor: 'var(--roulette-line)' }}>
-            <div className="h-full rounded-full" style={{ width: `${Math.max(0, Math.min(100, (batchProgress.done / Math.max(1, batchProgress.total)) * 100))}%`, background: 'linear-gradient(90deg, var(--roulette-accent), var(--roulette-accent-2))', boxShadow: '0 0 18px var(--roulette-shadow)' }} />
-          </div>
+      <div className="absolute left-1/2 top-[1.5%] z-40 h-0 w-0 -translate-x-1/2 border-x-[clamp(12px,2vmin,18px)] border-t-[clamp(24px,3.6vmin,34px)] border-x-transparent" style={{ borderTopColor: 'var(--roulette-result)', filter: 'drop-shadow(0 0 12px var(--roulette-shadow))' }} />
+      <div className="absolute inset-[32%] z-30 grid place-items-center rounded-full border p-[clamp(12px,2vmin,22px)] text-center" style={{ borderColor: 'rgba(255,255,255,0.28)', background: 'radial-gradient(circle at 50% 24%, rgba(255,255,255,0.13), transparent 34%), rgba(5,7,11,0.97)', boxShadow: '0 0 34px var(--roulette-shadow), inset 0 1px 0 rgba(255,255,255,0.18)' }}>
+        <div className="grid max-w-full justify-items-center gap-[clamp(3px,0.8vmin,7px)]">
+          <div className="max-w-full truncate text-[clamp(11px,1.6vmin,16px)] font-bold" style={{ color: 'var(--roulette-muted)' }}>{state.name || '룰렛'}</div>
+          {state.username ? <div className="max-w-full truncate text-[clamp(10px,1.4vmin,14px)] font-semibold" style={{ color: 'var(--roulette-muted)' }}>{state.username}님</div> : null}
+          <div className={wheelSettled ? 'roulette-result-lock max-w-[90%] truncate text-[clamp(28px,5vmin,52px)] font-black leading-tight' : 'max-w-[90%] truncate text-[clamp(22px,3.8vmin,40px)] font-black leading-tight'} style={{ color: 'var(--roulette-result)', textShadow: '0 0 20px var(--roulette-shadow)' }}>{wheelSettled ? (state.label || state.value || '') : '회전 중'}</div>
+          {batchProgress.id ? <div className="text-[clamp(10px,1.3vmin,13px)] font-bold" style={{ color: 'var(--roulette-accent-2)' }}>진행 {batchProgress.done} / {batchProgress.total}</div> : null}
         </div>
-      ) : null}
-    </div>
+      </div>
+    </section>
   );
 
   return (
-    <div
-      className="min-h-screen w-screen overflow-hidden text-white"
-      style={{ backgroundAttachment: active ? 'fixed' as const : undefined, backgroundColor: 'transparent', ...t.css }}
-    >
-      {error ? (
-        <div className="fixed left-1/2 top-6 z-50 -translate-x-1/2 rounded-[8px] border border-red-300/30 bg-black/70 px-3 py-2 text-[13px] font-semibold text-red-100 shadow-lg backdrop-blur-md">
-          {error}
-        </div>
-      ) : null}
-
-      <div className="grid h-[100dvh] w-full place-items-center p-[clamp(10px,2.2vw,28px)]">
-        {layout === 'wheel' ? (
-          <section
-            aria-label="룰렛 휠 오버레이"
-            className={`roulette-stage relative grid aspect-square w-[min(94vmin,790px)] place-items-center overflow-visible rounded-full transition-all duration-300 ${active ? 'scale-100 opacity-100' : 'pointer-events-none scale-[0.985] opacity-0'}`}
-            style={{
-              filter: 'drop-shadow(0 28px 70px rgba(0,0,0,0.46))',
-              color: 'var(--roulette-text)',
-              transitionDuration: FADE_MS + 'ms',
-            }}
-          >
-            {active ? (
-              <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-full">
-                {overlayEl}
-              </div>
-            ) : null}
-            <div
-              className="absolute inset-[-2.5%] rounded-full opacity-80"
-              style={{
-                background: 'radial-gradient(circle, var(--roulette-shadow), transparent 62%)',
-                filter: 'blur(20px)',
-              }}
-            />
-            <div
-              className="absolute inset-0 rounded-full border"
-              style={{
-                borderColor: 'rgba(255,255,255,0.20)',
-                background: `${skinChrome.metal}, radial-gradient(circle at 50% 42%, rgba(255,255,255,0.08), transparent 36%), radial-gradient(circle, var(--roulette-panel-strong), rgba(0,0,0,0.86) 72%)`,
-                boxShadow: `${skinChrome.shadow}, inset 0 0 0 clamp(10px,1.7vmin,16px) rgba(255,255,255,0.035), inset 0 0 0 clamp(18px,3.2vmin,28px) rgba(0,0,0,0.36), inset 0 1px 0 rgba(255,255,255,0.18)`,
-              }}
-            />
-            <WheelSkinOrnaments family={wheelSkinFamily} />
-            {wheelSkinFamily === 'mono' ? Array.from({ length: 12 }).map((_, index) => (
-              <div
-                key={`rim-panel-${index}`}
-                className="absolute left-1/2 top-1/2 h-[clamp(10px,2.2vmin,18px)] w-[clamp(28px,6.4vmin,52px)] rounded-[4px] border"
-                style={{
-                  borderColor: 'rgba(255,255,255,0.16)',
-                  background: `linear-gradient(180deg, rgba(255,255,255,0.16), rgba(0,0,0,0.30)), ${skinChrome.metal}`,
-                  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.18), 0 0 14px rgba(0,0,0,0.38)',
-                  transform: `translate(-50%, -50%) rotate(${index * 30}deg) translateY(calc(-1 * min(44vmin, 362px)))`,
-                }}
-              />
-            )) : null}
-            <div
-              className="absolute inset-[3.2%] rounded-full"
-              style={{
-                background: 'repeating-conic-gradient(from -1deg, rgba(255,255,255,0.34) 0deg 0.9deg, transparent 0.9deg 5.625deg)',
-                opacity: 0.72,
-                maskImage: 'radial-gradient(circle, transparent 65%, black 66%, black 72%, transparent 73%)',
-                WebkitMaskImage: 'radial-gradient(circle, transparent 65%, black 66%, black 72%, transparent 73%)',
-              }}
-            />
-            <div
-              className="absolute inset-[5.8%] rounded-full"
-              style={{
-                background: 'conic-gradient(from 18deg, transparent, var(--roulette-accent-2), transparent 24%, transparent 50%, var(--roulette-accent), transparent 68%, transparent)',
-                opacity: 0.62,
-                filter: 'blur(1px)',
-                boxShadow: '0 0 42px var(--roulette-shadow)',
-                maskImage: 'radial-gradient(circle, transparent 58%, black 59%, black 66%, transparent 67%)',
-                WebkitMaskImage: 'radial-gradient(circle, transparent 58%, black 59%, black 66%, transparent 67%)',
-              }}
-            />
-            <div
-              className="absolute inset-[8.8%] rounded-full"
-              style={{
-                background: 'radial-gradient(circle at 42% 30%, rgba(255,255,255,0.12), transparent 24%), radial-gradient(circle, rgba(0,0,0,0.04), rgba(0,0,0,0.36) 72%, rgba(255,255,255,0.08))',
-                boxShadow: 'inset 0 0 0 clamp(3px,0.7vmin,7px) rgba(255,255,255,0.14), inset 0 0 56px rgba(0,0,0,0.42), 0 0 42px var(--roulette-shadow)',
-              }}
-            />
-            <div
-              className="absolute inset-[12.2%] rounded-full"
-              style={{
-                transform: `rotate(${wheelRotationDeg}deg)`,
-                background: 'radial-gradient(circle, transparent 46%, rgba(0,0,0,0.12) 47%, rgba(0,0,0,0.22) 72%, rgba(255,255,255,0.08) 73%, transparent 75%)',
-                maskImage: 'radial-gradient(circle, transparent 0 43%, black 44%)',
-                WebkitMaskImage: 'radial-gradient(circle, transparent 0 43%, black 44%)',
-              }}
-            >
-              <WheelSegmentsSvg family={wheelSkinFamily} palette={t.palette} />
-              <WheelSelectedSegment selectedIndex={wheelSelectedIndex} />
-              {Array.from({ length: 8 }).map((_, index) => (
-                <div
-                  key={`divider-${index}`}
-                  className="absolute left-1/2 top-1/2 h-[43%] w-[clamp(2px,0.34vmin,4px)] origin-top -translate-x-1/2"
-                  style={{
-                    transform: `rotate(${index * 45}deg)`,
-                    background: 'linear-gradient(180deg, rgba(255,255,255,0.85), var(--roulette-accent-2) 15%, rgba(0,0,0,0.18) 82%, transparent)',
-                    boxShadow: '0 0 12px var(--roulette-shadow)',
-                  }}
-                />
-              ))}
-              {Array.from({ length: 16 }).map((_, index) => (
-                <div
-                  key={`jewel-${index}`}
-                  className="absolute left-1/2 top-1/2 h-[clamp(7px,1.55vmin,13px)] w-[clamp(7px,1.55vmin,13px)] rounded-full border"
-                  style={{
-                    borderColor: 'rgba(255,255,255,0.56)',
-                    background: index % 2 === 0 ? 'var(--roulette-accent-2)' : 'var(--roulette-accent)',
-                    boxShadow: '0 0 14px var(--roulette-shadow), inset 0 1px 0 rgba(255,255,255,0.80)',
-                    transform: `translate(-50%, -50%) rotate(${index * 22.5}deg) translateY(calc(-1 * min(39vmin, 303px)))`,
-                  }}
-                />
-              ))}
-              <WheelLabelsSvg labelLines={wheelLabelLines} selectedIndex={wheelSelectedIndex} />
-            </div>
-            <div
-              className="absolute left-1/2 top-[-2.8%] z-40 grid h-[clamp(76px,13vmin,116px)] w-[clamp(58px,9.4vmin,88px)] -translate-x-1/2 place-items-center"
-              style={{ filter: 'drop-shadow(0 10px 18px rgba(0,0,0,0.48)) drop-shadow(0 0 22px var(--roulette-shadow))' }}
-            >
-              <div className="absolute inset-x-[28%] top-[8%] h-[24%] rounded-t-full" style={{ background: skinChrome.metal, border: '1px solid rgba(255,255,255,0.20)' }} />
-              <div
-                className="absolute inset-x-[6%] top-[19%] h-[69%]"
-                style={{
-                  clipPath: 'polygon(50% 0, 100% 24%, 58% 100%, 42% 100%, 0 24%)',
-                  background: 'linear-gradient(135deg, rgba(255,255,255,0.90), var(--roulette-accent-2) 30%, var(--roulette-accent) 62%, rgba(0,0,0,0.38))',
-                  boxShadow: 'inset 0 0 0 2px rgba(255,255,255,0.28), inset 0 0 24px rgba(0,0,0,0.38)',
-                }}
-              />
-              <div className="absolute top-[36%] h-[18%] w-[20%] rotate-45 bg-white/70 blur-[1px]" />
-            </div>
-            <div
-              className="absolute inset-[25.4%] z-20 rounded-full border"
-              style={{
-                borderColor: 'rgba(255,255,255,0.18)',
-                background: 'radial-gradient(circle, rgba(255,255,255,0.12), transparent 34%), radial-gradient(circle, rgba(24,18,24,0.98), rgba(3,3,7,1) 74%)',
-                boxShadow: 'inset 0 0 42px rgba(0,0,0,0.56), 0 0 0 clamp(2px,0.45vmin,4px) rgba(255,255,255,0.08)',
-              }}
-            />
-            <div
-              className="absolute inset-[27.6%] z-30 rounded-full"
-              style={{
-                background: 'repeating-conic-gradient(from 0deg, var(--roulette-accent-2) 0deg 1.1deg, rgba(255,255,255,0.10) 1.1deg 4.5deg, transparent 4.5deg 7.5deg)',
-                opacity: 0.68,
-                boxShadow: '0 0 30px var(--roulette-shadow)',
-                maskImage: 'radial-gradient(circle, transparent 62%, black 63%, black 72%, transparent 73%)',
-                WebkitMaskImage: 'radial-gradient(circle, transparent 62%, black 63%, black 72%, transparent 73%)',
-              }}
-            />
-            {Array.from({ length: 8 }).map((_, index) => (
-              <div
-                key={`hub-jewel-${index}`}
-                className="absolute left-1/2 top-1/2 z-30 h-[clamp(5px,1.15vmin,10px)] w-[clamp(5px,1.15vmin,10px)] rounded-full"
-                style={{
-                  background: 'var(--roulette-accent-2)',
-                  boxShadow: '0 0 12px var(--roulette-shadow), inset 0 1px 0 rgba(255,255,255,0.82)',
-                  transform: `translate(-50%, -50%) rotate(${index * 45}deg) translateY(calc(-1 * min(18.5vmin, 148px)))`,
-                }}
-              />
-            ))}
-            <div
-              className="absolute inset-[31%] z-30 grid place-items-center rounded-full border"
-              style={{
-                borderColor: 'rgba(255,255,255,0.28)',
-                background: 'linear-gradient(180deg, rgba(255,255,255,0.15), rgba(0,0,0,0.12)), radial-gradient(circle at 50% 18%, rgba(255,255,255,0.20), transparent 30%), radial-gradient(circle, rgba(38,28,38,0.98), #050508 76%)',
-                boxShadow: '0 0 52px var(--roulette-shadow), inset 0 1px 0 rgba(255,255,255,0.28), inset 0 -18px 42px rgba(0,0,0,0.36)',
-              }}
-            >
-              <div className="grid max-w-[76%] justify-items-center gap-[clamp(2px,0.9vmin,8px)] text-center">
-                <div className="max-w-full truncate text-[clamp(12px,1.75vmin,18px)] font-black leading-tight" style={{ color: 'var(--roulette-text)', textShadow: '0 8px 22px rgba(0,0,0,0.45)' }}>{state.name || '룰렛'}</div>
-                <div className="max-w-full truncate text-[clamp(9px,1.25vmin,13px)] font-extrabold" style={{ color: 'var(--roulette-muted)' }}>{state.username ? `${state.username}님` : '시청자명'}</div>
-                <div className="relative mt-[clamp(1px,0.4vmin,4px)] h-[clamp(22px,3.4vmin,38px)] w-[clamp(22px,3.4vmin,38px)]">
-                  <div className="absolute inset-0" style={{ clipPath: 'polygon(50% 0, 61% 37%, 100% 50%, 61% 63%, 50% 100%, 39% 63%, 0 50%, 39% 37%)', background: 'var(--roulette-result)', filter: 'drop-shadow(0 0 18px var(--roulette-shadow))' }} />
-                  <div className="absolute inset-[34%] rounded-full bg-white/75" />
-                </div>
-                <div className="text-[clamp(9px,1.12vmin,12px)] font-black tracking-[0.18em]" style={{ color: 'var(--roulette-muted)' }}>RESULT</div>
-                <div className={wheelSettled ? 'roulette-result-lock max-w-[210px] truncate text-[clamp(26px,4.6vmin,48px)] font-black leading-none' : 'max-w-[210px] truncate text-[clamp(20px,3.2vmin,34px)] font-black leading-none'} style={{ color: 'var(--roulette-result)', textShadow: '0 0 24px var(--roulette-shadow), 0 7px 20px rgba(0,0,0,0.48)' }}>
-                  {wheelSettled ? (state.label || state.value || '준비 완료') : '회전 중'}
-                </div>
-              </div>
-            </div>
-            {batchProgress.id ? (
-              <div
-                className="absolute bottom-[3.4%] left-1/2 z-30 min-w-[clamp(110px,19vmin,168px)] -translate-x-1/2 rounded-[8px] border px-[clamp(14px,2.6vmin,24px)] py-[clamp(6px,1.1vmin,10px)] text-center text-[clamp(19px,3.4vmin,32px)] font-black tracking-[0.08em]"
-                style={{
-                  borderColor: 'rgba(255,255,255,0.26)',
-                  background: `linear-gradient(180deg, rgba(255,255,255,0.12), rgba(0,0,0,0.18)), ${skinChrome.metal}`,
-                  color: 'var(--roulette-result)',
-                  boxShadow: '0 0 24px var(--roulette-shadow), inset 0 1px 0 rgba(255,255,255,0.22)',
-                }}
-              >
-                {batchProgress.done} / {batchProgress.total}
-              </div>
-            ) : null}
-          </section>
-        ) : (
-            <section
-              aria-label="룰렛 릴 오버레이"
-              className={`roulette-stage relative grid w-[min(96vw,1180px)] grid-cols-1 items-stretch gap-0 overflow-hidden rounded-[8px] border shadow-2xl transition-all duration-300 lg:grid-cols-[minmax(280px,0.72fr)_minmax(420px,1.28fr)] ${active ? 'scale-100 opacity-100' : 'pointer-events-none scale-[0.985] opacity-0'}`}
-              style={{
-                minHeight: 'clamp(420px, 34vw, 560px)',
-                borderColor: 'var(--roulette-line)',
-                background: `linear-gradient(100deg, rgba(255,255,255,0.10), transparent 11%, transparent 89%, rgba(255,255,255,0.08)), radial-gradient(circle at 66% 50%, var(--roulette-shadow), transparent 27%), ${skinChrome.metal}, linear-gradient(135deg, var(--roulette-panel-strong), var(--roulette-panel))`,
-                boxShadow: `${skinChrome.shadow}, inset 0 0 0 1px rgba(255,255,255,0.10), inset 0 1px 0 rgba(255,255,255,0.16)`,
-                color: 'var(--roulette-text)',
-                clipPath: 'polygon(0 10%, 3% 0, 100% 0, 100% 90%, 97% 100%, 0 100%)',
-                transitionDuration: FADE_MS + 'ms',
-              }}
-            >
-            {active ? overlayEl : null}
-            <div className="pointer-events-none absolute inset-0 z-[1] opacity-90" style={{ background: 'linear-gradient(90deg, rgba(255,255,255,0.10), transparent 22%, transparent 78%, rgba(255,255,255,0.08)), radial-gradient(circle at 62% 50%, var(--roulette-shadow), transparent 28%)' }} />
-            <div className="pointer-events-none absolute inset-x-[4%] top-0 z-[2] h-px" style={{ background: 'linear-gradient(90deg, transparent, var(--roulette-accent), var(--roulette-accent-2), transparent)', boxShadow: '0 0 22px var(--roulette-shadow)' }} />
-            <div className="pointer-events-none absolute inset-x-[7%] bottom-[3%] z-[2] h-[3px]" style={{ background: skinChrome.bevel, boxShadow: '0 0 22px var(--roulette-shadow)' }} />
-            <div className="pointer-events-none absolute right-0 top-[10%] z-[2] h-[80%] w-[34px]" style={{ background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.16), rgba(0,0,0,0.18)), repeating-linear-gradient(180deg, transparent 0 10px, rgba(255,255,255,0.12) 10px 11px)' }} />
-            <div className="pointer-events-none absolute left-1/2 top-[7%] z-30 h-0 w-0 -translate-x-1/2 border-x-[16px] border-t-[28px] border-x-transparent" style={{ borderTopColor: 'var(--roulette-accent-2)', filter: 'drop-shadow(0 0 16px var(--roulette-shadow))' }} />
-            <div className="relative z-10 grid min-w-0 content-center border-b p-[clamp(18px,2.6vw,34px)] lg:border-b-0 lg:border-r" style={{ borderColor: 'var(--roulette-line)' }}>
-              {renderIdentity()}
-            </div>
-            <div className="relative z-20 grid min-w-0 place-items-center p-[clamp(16px,2.4vw,32px)]">
-              {renderReelWindow()}
-            </div>
-          </section>
-        )}
+    <div className="min-h-screen w-screen overflow-hidden text-white" style={{ backgroundColor: 'transparent', ...t.css }}>
+      {error ? <div className="fixed left-1/2 top-5 z-50 -translate-x-1/2 rounded-lg border border-red-300/30 bg-slate-950/90 px-3 py-2 text-xs font-semibold text-red-100 shadow-lg">{error}</div> : null}
+      <div className="grid h-[100dvh] w-full place-items-center p-[clamp(10px,2vw,24px)]">
+        {layout === 'wheel' ? renderWheel() : renderReelWindow()}
       </div>
     </div>
   );

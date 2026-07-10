@@ -265,7 +265,7 @@ export function EventLogsPage() {
 
   return (
     <div className="grid gap-5">
-      <Card className="overflow-hidden bg-[linear-gradient(135deg,hsl(var(--card)),hsl(var(--accent-mint)/0.26),hsl(var(--accent-sky)/0.22))]">
+      <Card className="overflow-hidden">
         <CardHeader>
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div>

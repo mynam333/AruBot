@@ -89,7 +89,7 @@ function ViewerShell({ children }: { children: React.ReactNode }) {
   return (
     <main className="min-h-screen px-[var(--page-gutter)] py-[clamp(1rem,2.6vw,1.75rem)]">
       <header className="mx-auto flex max-w-7xl items-center justify-between gap-3">
-        <Link href="/" className="inline-flex items-center gap-3 rounded-full bg-card/75 px-3 py-2 shadow-subtle backdrop-blur-xl transition hover:-translate-y-0.5">
+        <Link href="/" className="inline-flex items-center gap-3 rounded-lg border bg-card px-3 py-2 shadow-subtle transition-colors hover:bg-muted">
           <img src="/files/logo.png" alt="" className="aspect-square w-[clamp(2rem,4vw,2.5rem)] object-contain" />
           <span className="text-sm font-semibold">AruBot</span>
         </Link>
@@ -269,11 +269,11 @@ export function ViewerConnectPage() {
   return (
     <ViewerShell>
       <section className="mx-auto mt-[clamp(2rem,6vw,4rem)] max-w-7xl">
-        <div className="rounded-[var(--radius-panel)] border bg-[linear-gradient(135deg,hsl(var(--card)),hsl(var(--accent-mint)/0.35)_54%,hsl(var(--accent-sky)/0.28))] p-[clamp(1.25rem,3.5vw,2.5rem)] shadow-soft">
+        <div className="rounded-[var(--radius-panel)] border bg-card p-[clamp(1.25rem,3.5vw,2.5rem)] shadow-soft">
           <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(28%,0.38fr)] lg:items-end">
             <div>
               <Badge tone={platforms.length ? 'mint' : 'sky'}>{platforms.length ? '계정 연결됨' : '계정 연결'}</Badge>
-              <h1 className="mt-5 max-w-4xl break-keep text-[clamp(2.15rem,5.5vw,4.5rem)] font-semibold leading-tight">
+              <h1 className="mt-5 max-w-4xl break-keep text-[clamp(2rem,4.5vw,3.5rem)] font-bold leading-tight tracking-tight">
                 어디서 보든 내 참여가 이어지게.
               </h1>
               <p className="mt-4 max-w-2xl break-keep text-sm leading-7 text-muted-foreground md:text-base">

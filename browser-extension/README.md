@@ -26,7 +26,7 @@ Chrome/Firefox용 영상 후원 감지 확장 프로그램입니다. CHZZK, CIME
 
 - CIME: 오버레이 HTML의 `socketUrl`/`alertKey`를 읽고 `DONATION_VIDEO` WebSocket을 구독합니다. 패킷에 `ci.me/clips/{id}`가 있으면 `https://ci.me/json/clips/{id}`에서 `bodyData.clips[0].duration`과 `playback.url`을 보강합니다.
 - CHZZK: `video@...` 세션 ID로 `/manage/v1/alerts/{id}/session-url`을 조회한 뒤 Socket.IO WebSocket을 연결합니다.
-- Toonation: alertbox HTML의 `payload`를 읽고 `wss://toon.at:8071/{payload}`에 연결합니다.
+- Toonation: alertbox HTML의 `payload`를 읽고 `wss://ws.toon.at/{payload}`에 연결합니다.
 - AruBot: PVD viewer URL 또는 토큰에서 viewer token을 추출하고 `/api/pvd/ws?token=...`에 연결합니다. 운영 주소 `https://arubot.yuaru.com/pvd/{token}`은 자동으로 `https://arubotapi.yuaru.com` API를 사용합니다. 로컬 프론트가 `localhost:3000`이면 현재 프로젝트의 `getBrowserApiBase()`와 동일하게 `http://127.0.0.1:3001`을 사용합니다. 옵션의 `AruBot API base`로 명시적 API 주소를 덮어쓸 수 있습니다.
 
 ## AruBot PVD 동기화

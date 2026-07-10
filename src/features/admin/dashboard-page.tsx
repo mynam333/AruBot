@@ -1,28 +1,29 @@
 'use client';
 
 import {
+  Activity,
   Cable,
-  CheckCircle2,
   ChevronRight,
   Coins,
   HeartHandshake,
   MessageSquare,
   PlaySquare,
   Radio,
+  RefreshCw,
   Settings,
   Sparkles,
   Timer,
   Wand2,
 } from 'lucide-react';
-import { useEffect, useMemo, useState, useTransition } from 'react';
+import Link from 'next/link';
+import { useCallback, useEffect, useMemo, useState, useTransition } from 'react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button, LinkButton } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Tooltip } from '@/components/ui/tooltip';
+import { EmptyState, ErrorState, PageHeader, SectionHeader, StatusDot } from '@/components/ui/page';
 import { CommandCreateDialog, RouletteCreateDialog } from '@/features/admin/admin-action-dialogs';
-import { apiUrl, readJson } from '@/shared/api/http';
-import { cn } from '@/shared/lib/utils';
+import { apiUrl, readJsonResult } from '@/shared/api/http';
 
 type PlatformAccount = {
   provider?: string;
@@ -41,158 +42,71 @@ type PlatformAccount = {
   };
 };
 
-type DashboardData = {
-  platforms?: PlatformAccount[];
-  youtubeStreamerStatus?: YoutubeStreamerStatus | null;
-  settings?: Record<string, unknown> | null;
-  stats?: Record<string, unknown> | null;
-  queue?: unknown;
-};
-
 type YoutubeStreamerStatus = {
   configured?: boolean;
-  botConfigured?: boolean;
   channel?: {
     youtubeChannelId?: string | null;
     youtubeHandle?: string | null;
     title?: string | null;
     thumbnailUrl?: string | null;
-    moderatorRegistered?: boolean;
   } | null;
 };
 
+type DashboardData = {
+  platforms: PlatformAccount[];
+  youtubeStreamerStatus: YoutubeStreamerStatus | null;
+  settings: Record<string, unknown> | null;
+  stats: Record<string, unknown> | null;
+  queue: unknown;
+};
+
 type SetupTemplateResult = {
-  ok?: boolean;
   applied?: Array<{ type?: string; name?: string }>;
-  skipped?: Array<{ type?: string; name?: string; reason?: string }>;
-  counts?: {
-    applied?: number;
-    skipped?: number;
-  };
+  skipped?: Array<{ type?: string; name?: string }>;
+  counts?: { applied?: number; skipped?: number };
 };
 
 const providers = [
-  {
-    id: 'chzzk',
-    label: 'CHZZK',
-    loginPath: '/api/auth/chzzk/login',
-    iconPath: '/brands/chzzk.svg',
-    tone: 'mint',
-  },
-  {
-    id: 'cime',
-    label: 'CIME',
-    loginPath: '/api/auth/cime/login',
-    iconPath: '/brands/cime.svg',
-    tone: 'sky',
-  },
-  {
-    id: 'youtube',
-    label: 'YouTube',
-    connectionPath: '/connection?platform=youtube',
-    iconPath: '/brands/youtube.svg',
-    tone: 'rose',
-  },
+  { id: 'chzzk', label: 'CHZZK', loginPath: '/api/auth/chzzk/login', iconPath: '/brands/chzzk.svg' },
+  { id: 'cime', label: 'CIME', loginPath: '/api/auth/cime/login', iconPath: '/brands/cime.svg' },
+  { id: 'youtube', label: 'YouTube', iconPath: '/brands/youtube.svg' },
 ] as const;
 
-const featureCards = [
-  {
-    href: '/commands',
-    title: '채팅 명령어',
-    body: '반복 안내와 자주 묻는 질문에 자동으로 응답합니다.',
-    action: '명령어 관리',
-    icon: MessageSquare,
-    tone: 'sky',
-  },
-  {
-    href: '/points',
-    title: '시청자 포인트',
-    body: '출석, 채팅, 이벤트 참여를 포인트로 이어 시청자의 재방문 이유를 만듭니다.',
-    action: '포인트 설정',
-    icon: Coins,
-    tone: 'mint',
-  },
-  {
-    href: '/video-donations/queue',
-    title: '영상 후원',
-    body: '신청된 영상이 순서대로 이어져 방송 화면에 깔끔하게 재생됩니다.',
-    action: '후원 큐 열기',
-    icon: PlaySquare,
-    tone: 'coral',
-  },
-  {
-    href: '/roulette',
-    title: '룰렛',
-    body: '시청자 참여와 후원이 긴장감 있는 당첨 순간으로 바뀝니다.',
-    action: '룰렛 관리',
-    icon: Sparkles,
-    tone: 'lemon',
-  },
-  {
-    href: '/donations/rules',
-    title: '후원 반응',
-    body: '후원 순간에 맞춘 채팅과 화면 반응으로 감사 표현이 더 또렷해집니다.',
-    action: '반응 설정',
-    icon: HeartHandshake,
-    tone: 'coral',
-  },
-  {
-    href: '/macros',
-    title: '자동 알림',
-    body: '공지와 안내 메시지를 방송 분위기에 맞춰 자연스럽게 반복합니다.',
-    action: '알림 관리',
-    icon: Timer,
-    tone: 'sky',
-  },
+const featureLinks = [
+  { href: '/commands', title: '채팅 명령어', description: '반복 안내와 참여 명령을 관리합니다.', icon: MessageSquare },
+  { href: '/points', title: '시청자 포인트', description: '적립 정책과 시청자 잔액을 관리합니다.', icon: Coins },
+  { href: '/roulette', title: '룰렛', description: '참여 항목과 방송 오버레이를 설정합니다.', icon: Sparkles },
+  { href: '/video-donations/queue', title: '영상 후원', description: '재생 대기열과 현재 후원을 제어합니다.', icon: PlaySquare },
+  { href: '/donations/rules', title: '후원 반응', description: '금액과 조건별 반응 규칙을 구성합니다.', icon: HeartHandshake },
+  { href: '/macros', title: '자동 알림', description: '주기적인 채팅 공지를 예약합니다.', icon: Timer },
 ] as const;
 
-const quickActions = [
-  { href: '/connection', label: '플랫폼 연결', icon: Cable, help: 'CHZZK, CIME, YouTube 시청자를 함께 맞이합니다.' },
-  { href: 'dialog:command', label: '명령어 만들기', icon: MessageSquare, help: '채팅에서 바로 반응하는 참여 문구를 추가합니다.' },
-  { href: '/video-donations/queue', label: '포인트 영상후원', icon: PlaySquare, help: '신청 영상이 방송 화면에 자연스럽게 이어지게 합니다.' },
-  { href: 'dialog:roulette', label: '룰렛 만들기', icon: Sparkles, help: '포인트와 후원이 당첨의 재미로 바뀌게 합니다.' },
-  { href: '/settings', label: '방송 스타일', icon: Settings, help: 'AruBot의 말투와 공개 화면을 내 방송 분위기에 맞춥니다.' },
-] as const;
-
-const compactNumberFormatter = new Intl.NumberFormat('ko-KR', { notation: 'compact', maximumFractionDigits: 1 });
+const compactNumber = new Intl.NumberFormat('ko-KR', { notation: 'compact', maximumFractionDigits: 1 });
 
 function pickRows(data: unknown) {
   if (Array.isArray(data)) return data;
   if (!data || typeof data !== 'object') return [];
   const object = data as Record<string, unknown>;
-  return (
-    (['items', 'queue', 'rows', 'data']
-      .map((key) => object[key])
-      .find(Array.isArray) as unknown[] | undefined) || []
-  );
+  return (['items', 'queue', 'rows', 'data'].map((key) => object[key]).find(Array.isArray) as unknown[] | undefined) || [];
 }
 
 function providerLabel(provider?: string) {
-  const value = provider?.toLowerCase();
-  if (value === 'chzzk') return 'CHZZK';
-  if (value === 'cime') return 'CIME';
-  if (value === 'youtube') return 'YouTube';
+  if (provider?.toLowerCase() === 'chzzk') return 'CHZZK';
+  if (provider?.toLowerCase() === 'cime') return 'CIME';
+  if (provider?.toLowerCase() === 'youtube') return 'YouTube';
   return provider || '채널';
 }
 
-function compactCount(value?: number | null) {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
-  return compactNumberFormatter.format(value);
+function countLabel(value?: number | null) {
+  return typeof value === 'number' && Number.isFinite(value) ? compactNumber.format(value) : null;
 }
 
 function ChannelAvatar({ account }: { account: PlatformAccount }) {
   const imageUrl = account.profile_image_url || account.avatar_url;
   if (imageUrl) {
-    return (
-      <img
-        src={imageUrl}
-        alt=""
-        referrerPolicy="no-referrer"
-        className="aspect-square w-[var(--icon-box)] rounded-[var(--radius-control)] border object-cover"
-      />
-    );
+    return <img src={imageUrl} alt="" referrerPolicy="no-referrer" className="h-10 w-10 shrink-0 rounded-lg border object-cover" />;
   }
-  return <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-muted text-xs font-semibold text-primary">{providerLabel(account.provider).slice(0, 2)}</span>;
+  return <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border bg-muted text-[0.6875rem] font-bold text-primary">{providerLabel(account.provider).slice(0, 2)}</span>;
 }
 
 async function postJson<T>(path: string, body: unknown): Promise<T> {
@@ -203,17 +117,11 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   });
   const data = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(data?.error || 'request_failed');
+  if (!response.ok) throw new Error(data?.error || '요청을 처리하지 못했습니다.');
   return data as T;
 }
 
-function refreshSetupResources() {
-  ['/api/bot/rules', '/api/roulette/definitions', '/api/macros', '/api/bot/settings'].forEach((endpoint) => {
-    window.dispatchEvent(new CustomEvent('arubot:resource-refresh', { detail: { endpoint } }));
-  });
-}
-
-function QuickStartTemplatePanel() {
+function QuickStartPanel() {
   const [result, setResult] = useState<SetupTemplateResult | null>(null);
   const [isPending, startTransition] = useTransition();
 
@@ -222,48 +130,34 @@ function QuickStartTemplatePanel() {
       try {
         const payload = await postJson<SetupTemplateResult>('/api/setup/templates/apply', { template: 'quick-start' });
         setResult(payload);
-        refreshSetupResources();
+        ['/api/bot/rules', '/api/roulette/definitions', '/api/macros', '/api/bot/settings'].forEach((endpoint) => {
+          window.dispatchEvent(new CustomEvent('arubot:resource-refresh', { detail: { endpoint } }));
+        });
         const applied = Number(payload.counts?.applied || payload.applied?.length || 0);
         const skipped = Number(payload.counts?.skipped || payload.skipped?.length || 0);
-        toast.success(applied ? `빠른 시작 항목 ${applied}개를 추가했습니다.` : `이미 빠른 시작 항목이 준비되어 있습니다.`, {
-          description: skipped ? `${skipped}개 항목은 기존 설정을 유지했습니다.` : undefined,
+        toast.success(applied ? `기본 설정 ${applied}개를 추가했습니다.` : '필요한 기본 설정이 이미 준비되어 있습니다.', {
+          description: skipped ? `${skipped}개 기존 설정은 유지했습니다.` : undefined,
         });
       } catch (error) {
-        toast.error(error instanceof Error ? error.message : '빠른 시작 세트를 적용하지 못했습니다.');
+        toast.error(error instanceof Error ? error.message : '기본 설정을 적용하지 못했습니다.');
       }
     });
   };
 
   return (
-    <Card className="overflow-hidden bg-[linear-gradient(135deg,hsl(var(--card)),hsl(var(--accent-mint)/0.24),hsl(var(--accent-sky)/0.18))]">
-      <CardContent className="grid gap-4 p-[clamp(1rem,2vw,1.35rem)] lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
-        <div className="min-w-0">
-          <div className="mb-3 flex flex-wrap items-center gap-2">
-            <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-primary/12 text-primary">
-              <Wand2 className="h-5 w-5" />
-            </span>
-            <Badge tone="mint">빠른 시작</Badge>
-            {result ? <Badge tone="sky">{Number(result.counts?.applied || 0)}개 추가</Badge> : null}
-          </div>
-          <h2 className="break-keep text-xl font-semibold">방송 참여 기본 세트를 한 번에 준비합니다.</h2>
-          <p className="mt-2 max-w-3xl break-keep text-sm leading-6 text-muted-foreground">
-            포인트 확인, 명령어 안내, 기본 룰렛, 영상 후원 명령어와 참여 안내 알림을 추가합니다. 이미 있는 항목은 그대로 둡니다.
-          </p>
+    <Card>
+      <CardHeader>
+        <div className="flex items-center gap-2"><Wand2 className="h-4 w-4 text-primary" /><CardTitle>초기 설정 도구</CardTitle></div>
+        <CardDescription>포인트 확인, 기본 명령어, 룰렛과 참여 안내를 추가하며 기존 설정은 변경하지 않습니다.</CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0 text-sm text-muted-foreground">
           {result ? (
-            <div className="mt-3 flex flex-wrap gap-2">
-              {(result.applied || []).slice(0, 5).map((item) => (
-                <Badge key={`${item.type}-${item.name}`} tone="mint">
-                  <CheckCircle2 className="mr-1 h-3.5 w-3.5" />
-                  {item.name}
-                </Badge>
-              ))}
-              {Number(result.counts?.skipped || 0) ? <Badge tone="neutral">{result.counts?.skipped}개 기존 항목 유지</Badge> : null}
-            </div>
-          ) : null}
+            <span><strong className="text-foreground">{Number(result.counts?.applied || 0)}개 추가</strong> · {Number(result.counts?.skipped || 0)}개 유지</span>
+          ) : '새 채널의 필수 참여 기능을 안전하게 구성합니다.'}
         </div>
-        <Button type="button" onClick={applyTemplate} disabled={isPending} className="justify-center">
-          <Wand2 className={isPending ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
-          {isPending ? '준비 중' : '빠른 시작 세트 적용'}
+        <Button type="button" size="sm" onClick={applyTemplate} disabled={isPending}>
+          <Wand2 className={isPending ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />{isPending ? '적용 중' : '기본 설정 적용'}
         </Button>
       </CardContent>
     </Card>
@@ -271,51 +165,58 @@ function QuickStartTemplatePanel() {
 }
 
 export function DashboardPage() {
-  const [dashboardData, setDashboardData] = useState<DashboardData>({});
+  const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadDashboard = useCallback(async (signal?: AbortSignal) => {
+    setLoading(true);
+    setError(null);
+    const [platformsResult, youtubeResult] = await Promise.all([
+      readJsonResult<{ platforms?: PlatformAccount[] }>('/api/account/platforms', { signal }),
+      readJsonResult<YoutubeStreamerStatus>('/api/youtube/streamer-channel', { signal }),
+    ]);
+    if (!platformsResult.ok && !youtubeResult.ok) {
+      setError('message' in platformsResult ? platformsResult.message : 'message' in youtubeResult ? youtubeResult.message : '운영 정보를 불러오지 못했습니다.');
+      setLoading(false);
+      return;
+    }
+
+    const platforms = platformsResult.ok && Array.isArray(platformsResult.data.platforms) ? platformsResult.data.platforms : [];
+    const youtube = youtubeResult.ok ? youtubeResult.data : null;
+    if (!platforms.length && youtube?.configured !== true) {
+      setDashboardData({ platforms, youtubeStreamerStatus: youtube, settings: null, stats: null, queue: [] });
+      setLoading(false);
+      return;
+    }
+
+    const [settingsResult, statsResult, queueResult] = await Promise.all([
+      readJsonResult<Record<string, unknown>>('/api/bot/settings', { signal }),
+      readJsonResult<Record<string, unknown>>('/api/bot/stats', { signal }),
+      readJsonResult<unknown>('/api/video-donation/queue', { signal }),
+    ]);
+    setDashboardData({
+      platforms,
+      youtubeStreamerStatus: youtube,
+      settings: settingsResult.ok ? settingsResult.data : null,
+      stats: statsResult.ok ? statsResult.data : null,
+      queue: queueResult.ok ? queueResult.data : [],
+    });
+    setLoading(false);
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
-    let alive = true;
-    async function loadDashboard() {
-      const [platforms, youtubeStreamerStatus] = await Promise.all([
-        readJson<{ platforms?: PlatformAccount[] }>('/api/account/platforms', { signal: controller.signal }),
-        readJson<YoutubeStreamerStatus>('/api/youtube/streamer-channel', { signal: controller.signal }).catch(() => null),
-      ]);
-      if (!alive) return;
-      const platformRows = Array.isArray(platforms?.platforms) ? platforms.platforms : [];
-      const youtubeConfigured = youtubeStreamerStatus?.configured === true;
-      if (!platformRows.length && !youtubeConfigured) {
-        setDashboardData({ platforms: platformRows, youtubeStreamerStatus, settings: null, stats: null, queue: [] });
-        return;
-      }
-      const [settings, stats, queue] = await Promise.all([
-        readJson<Record<string, unknown>>('/api/bot/settings', { signal: controller.signal }),
-        readJson<Record<string, unknown>>('/api/bot/stats', { signal: controller.signal }),
-        readJson<unknown>('/api/video-donation/queue', { signal: controller.signal }),
-      ]);
-      if (!alive) return;
-      setDashboardData({
-        platforms: platformRows,
-        youtubeStreamerStatus,
-        settings,
-        stats,
-        queue,
-      });
-    }
-    loadDashboard();
-    return () => {
-      alive = false;
-      controller.abort();
-    };
-  }, []);
+    void loadDashboard(controller.signal);
+    return () => controller.abort();
+  }, [loadDashboard]);
 
-  const accounts = useMemo(() => dashboardData.platforms || [], [dashboardData.platforms]);
-  const youtubeStreamerStatus = dashboardData.youtubeStreamerStatus || null;
-  const youtubeConfigured = youtubeStreamerStatus?.configured === true;
-  const youtubeLoginHref = apiUrl(`/api/auth/youtube/login?returnTo=${encodeURIComponent('/connection?platform=youtube')}`);
+  const accounts = useMemo(() => dashboardData?.platforms || [], [dashboardData]);
+  const youtubeStatus = dashboardData?.youtubeStreamerStatus || null;
+  const youtubeConfigured = youtubeStatus?.configured === true;
   const youtubeAccount = useMemo<PlatformAccount | null>(() => {
     if (!youtubeConfigured || accounts.some((account) => account.provider?.toLowerCase() === 'youtube')) return null;
-    const channel = youtubeStreamerStatus?.channel || {};
+    const channel = youtubeStatus?.channel || {};
     return {
       provider: 'youtube',
       channel_id: channel.youtubeChannelId || undefined,
@@ -323,244 +224,130 @@ export function DashboardPage() {
       channel_handle: channel.youtubeHandle || undefined,
       avatar_url: channel.thumbnailUrl || undefined,
     };
-  }, [accounts, youtubeConfigured, youtubeStreamerStatus]);
-  const visibleAccounts = useMemo(() => (
-    youtubeAccount ? [...accounts, youtubeAccount] : accounts
-  ), [accounts, youtubeAccount]);
-  const queueCount = pickRows(dashboardData.queue).length;
-  const botEnabled = dashboardData.settings && 'botEnabled' in dashboardData.settings ? dashboardData.settings.botEnabled !== false : null;
-  const statsCount = typeof dashboardData.stats?.commands === 'number' ? dashboardData.stats.commands : undefined;
+  }, [accounts, youtubeConfigured, youtubeStatus]);
+  const visibleAccounts = useMemo(() => youtubeAccount ? [...accounts, youtubeAccount] : accounts, [accounts, youtubeAccount]);
+  const queueCount = pickRows(dashboardData?.queue).length;
+  const botEnabled = dashboardData?.settings && 'botEnabled' in dashboardData.settings ? dashboardData.settings.botEnabled !== false : null;
+  const commandCount = typeof dashboardData?.stats?.commands === 'number' ? dashboardData.stats.commands : null;
   const connectedProviders = new Set(accounts.map((account) => account.provider?.toLowerCase()).filter(Boolean));
   if (youtubeConfigured) connectedProviders.add('youtube');
+  const youtubeLoginHref = apiUrl(`/api/auth/youtube/login?returnTo=${encodeURIComponent('/connection?platform=youtube')}`);
 
-  const statusItems = [
-    {
-      title: '플랫폼 연결',
-      value: visibleAccounts.length ? `${visibleAccounts.length}개 채널` : '연결 필요',
-      label: visibleAccounts.length ? '연결됨' : '시작하기',
-      tone: visibleAccounts.length ? 'mint' : 'amber',
-      icon: Cable,
-    },
-    {
-      title: '봇 상태',
-      value: botEnabled == null ? '확인 중' : botEnabled ? '사용 중' : '꺼짐',
-      label: botEnabled ? '준비됨' : botEnabled === false ? '꺼짐' : '확인',
-      tone: botEnabled ? 'mint' : botEnabled === false ? 'rose' : 'neutral',
-      icon: Radio,
-    },
-    {
-      title: '영상 후원',
-      value: queueCount ? `${queueCount}개 대기` : '대기 없음',
-      label: queueCount ? '대기 중' : '비어 있음',
-      tone: queueCount ? 'coral' : 'neutral',
-      icon: PlaySquare,
-    },
-    {
-      title: '채팅 응답',
-      value: statsCount == null ? '확인 중' : `${statsCount}회`,
-      label: statsCount ? '활성' : '준비',
-      tone: statsCount ? 'sky' : 'neutral',
-      icon: MessageSquare,
-    },
+  const metrics = [
+    { label: '연결 채널', value: loading ? '—' : `${visibleAccounts.length}개`, detail: visibleAccounts.length ? '연결 정상' : '연결 필요', icon: Cable, status: visibleAccounts.length ? 'success' : 'warning' },
+    { label: '봇 상태', value: loading ? '—' : botEnabled == null ? '확인 불가' : botEnabled ? '사용 중' : '중지', detail: botEnabled ? '응답 가능' : botEnabled === false ? '설정에서 켜기' : '채널 연결 후 확인', icon: Radio, status: botEnabled ? 'success' : botEnabled === false ? 'danger' : 'neutral' },
+    { label: '영상 대기열', value: loading ? '—' : `${queueCount}개`, detail: queueCount ? '재생 대기 중' : '대기 없음', icon: PlaySquare, status: queueCount ? 'info' : 'neutral' },
+    { label: '명령 응답', value: loading ? '—' : commandCount == null ? '확인 불가' : `${commandCount}회`, detail: commandCount ? '누적 처리' : '기록 없음', icon: Activity, status: commandCount ? 'success' : 'neutral' },
   ] as const;
 
   return (
     <>
-      <section className="overflow-hidden rounded-[var(--radius-panel)] border bg-[linear-gradient(135deg,hsl(var(--card))_0%,hsl(var(--accent-sky)/0.38)_54%,hsl(var(--accent-lemon)/0.32)_100%)] p-[clamp(1.25rem,3vw,2rem)] shadow-soft">
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(28%,0.42fr)] lg:items-stretch">
-          <div className="animate-fade-up">
-            <Badge tone="mint">방송 관리 콘솔</Badge>
-            <h1 className="mt-4 max-w-3xl break-keep text-3xl font-semibold leading-tight tracking-normal md:text-5xl">
-              채팅 참여를 더 쉽게 만들고<br />방송 진행은 더 가볍게.
-            </h1>
-            <p className="mt-4 max-w-2xl text-sm leading-7 text-muted-foreground md:text-base">
-              CHZZK, CIME, YouTube 시청자가 채팅 명령어, 포인트, 이벤트에 함께 참여합니다.
-            </p>
-            <div className="mt-6 flex flex-wrap gap-2">
-              {providers.map((provider) => {
-                const connected = connectedProviders.has(provider.id);
-                if (provider.id === 'youtube') {
-                  return (
-                    <Button key={provider.id} asChild variant={connected ? 'secondary' : 'default'} size="lg">
-                      <a href={youtubeLoginHref}>
-                        <img
-                          src={provider.iconPath}
-                          alt=""
-                          aria-hidden="true"
-                          className="h-5 w-5 shrink-0 rounded-[calc(var(--radius-control)*0.35)] object-contain"
-                          draggable={false}
-                        />
-                        {connected ? 'YouTube 다시 연결' : 'YouTube로 로그인'}
-                      </a>
-                    </Button>
-                  );
-                }
-                return (
-                  <Button key={provider.id} asChild variant={connected ? 'secondary' : 'default'} size="lg">
-                    <a href={apiUrl(provider.loginPath)}>
-                      <img
-                        src={provider.iconPath}
-                        alt=""
-                        aria-hidden="true"
-                        className="h-5 w-5 shrink-0 rounded-[calc(var(--radius-control)*0.35)] object-contain"
-                        draggable={false}
-                      />
-                      {provider.label}
-                      {connected ? ' 다시 연결' : '로 로그인'}
-                    </a>
-                  </Button>
-                );
-              })}
-              <CommandCreateDialog variant="outline" label="명령어 만들기" />
-            </div>
-          </div>
+      <PageHeader
+        eyebrow="Overview"
+        title="방송 운영 현황"
+        description="연결 상태와 진행 중인 참여 기능을 확인하고, 필요한 작업으로 바로 이동합니다."
+        actions={<Button type="button" variant="outline" size="sm" onClick={() => void loadDashboard()} disabled={loading}><RefreshCw className={loading ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />새로고침</Button>}
+      />
 
-          <Card className="animate-fade-up bg-card/80" style={{ animationDelay: '80ms' } as React.CSSProperties}>
-            <CardHeader>
-              <div className="flex items-center justify-between gap-3">
-                <CardTitle>연결된 채널</CardTitle>
-                <Badge tone={visibleAccounts.length ? 'mint' : 'amber'}>{visibleAccounts.length ? '사용 가능' : '연결 필요'}</Badge>
-              </div>
-              <CardDescription>연결된 채널마다 시청자 참여 기능이 바로 열립니다.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {visibleAccounts.length ? (
-                <div className="grid gap-2">
-                  {visibleAccounts.map((account) => (
-                    <div key={`${account.provider}-${account.channel_id}`} className="flex items-center justify-between gap-3 rounded-[var(--radius-control)] border bg-background/75 p-[clamp(0.75rem,1.4vw,1rem)]">
-                      <div className="flex min-w-0 items-center gap-3">
-                        <ChannelAvatar account={account} />
-                        <div className="min-w-0">
-                          <div className="truncate text-sm font-semibold">{account.channel_name || account.channel_id || '연결된 채널'}</div>
-                          <div className="mt-1 truncate text-xs font-medium uppercase text-muted-foreground">{account.channel_handle || providerLabel(account.provider)}</div>
-                          <div className="mt-2 flex flex-wrap gap-1.5">
-                            {account.metadata?.publicProfile?.isLive ? <Badge tone="rose">라이브 중</Badge> : null}
-                            {compactCount(account.metadata?.publicProfile?.followerCount) ? (
-                              <Badge tone="neutral">{compactCount(account.metadata?.publicProfile?.followerCount)} 팔로워</Badge>
-                            ) : null}
-                            {compactCount(account.metadata?.publicProfile?.subscriberCount) ? (
-                              <Badge tone="neutral">{compactCount(account.metadata?.publicProfile?.subscriberCount)} 구독자</Badge>
-                            ) : null}
-                            {account.metadata?.publicProfile?.status === 'failed' ? <Badge tone="amber">프로필 확인 필요</Badge> : null}
-                          </div>
-                        </div>
+      {error ? <ErrorState description={error} onRetry={() => void loadDashboard()} /> : null}
+
+      <section aria-label="운영 지표" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {metrics.map((metric) => {
+          const Icon = metric.icon;
+          return (
+            <Card key={metric.label}>
+              <CardContent className="flex items-start gap-3 p-4">
+                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground"><Icon className="h-4 w-4" /></span>
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-medium text-muted-foreground">{metric.label}</div>
+                  <div className="mt-1 text-xl font-bold tracking-tight">{metric.value}</div>
+                  <div className="mt-2"><StatusDot status={metric.status} label={metric.detail} /></div>
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })}
+      </section>
+
+      <section className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(20rem,0.65fr)]">
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between gap-3">
+              <div><CardTitle>연결된 채널</CardTitle><CardDescription>현재 AruBot이 운영하는 방송 채널입니다.</CardDescription></div>
+              <Badge tone={visibleAccounts.length ? 'mint' : 'amber'}>{visibleAccounts.length ? `${visibleAccounts.length}개 연결` : '연결 필요'}</Badge>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {visibleAccounts.length ? (
+              <div className="divide-y rounded-lg border">
+                {visibleAccounts.map((account) => (
+                  <div key={`${account.provider}-${account.channel_id || account.channel_name}`} className="flex min-w-0 items-center gap-3 p-3.5">
+                    <ChannelAvatar account={account} />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-semibold">{account.channel_name || account.channel_id || '연결된 채널'}</div>
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                        <span>{account.channel_handle || providerLabel(account.provider)}</span>
+                        {account.metadata?.publicProfile?.followerCount != null ? <span>팔로워 {countLabel(account.metadata.publicProfile.followerCount)}</span> : null}
+                        {account.metadata?.publicProfile?.subscriberCount != null ? <span>구독자 {countLabel(account.metadata.publicProfile.subscriberCount)}</span> : null}
                       </div>
-                      <Badge tone="mint">연결됨</Badge>
                     </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="rounded-[var(--radius-control)] border bg-background/75 p-[clamp(1rem,1.8vw,1.25rem)] text-sm leading-6 text-muted-foreground">
-                  CHZZK, CIME 또는 YouTube로 시작하면 다른 플랫폼 시청자도 함께 맞이할 수 있습니다.
-                </div>
-              )}
-              <LinkButton href="/connection" variant="soft" className="mt-4 w-full justify-center">
-                연결 관리 열기
-                <ChevronRight className="h-4 w-4" />
-              </LinkButton>
-            </CardContent>
-          </Card>
+                    {account.metadata?.publicProfile?.isLive ? <Badge tone="rose">LIVE</Badge> : <StatusDot status={account.metadata?.publicProfile?.status === 'failed' ? 'warning' : 'success'} label={account.metadata?.publicProfile?.status === 'failed' ? '정보 확인 필요' : '연결됨'} />}
+                  </div>
+                ))}
+              </div>
+            ) : loading ? (
+              <div className="loading-skeleton h-48 rounded-lg" />
+            ) : (
+              <EmptyState title="연결된 방송 채널이 없습니다" description="플랫폼을 연결하면 명령어, 포인트, 룰렛과 후원 기능이 활성화됩니다." action={<LinkButton href="/connection" size="sm"><Cable className="h-4 w-4" />플랫폼 연결</LinkButton>} />
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader><CardTitle>빠른 작업</CardTitle><CardDescription>방송 중 자주 사용하는 관리 작업입니다.</CardDescription></CardHeader>
+          <CardContent className="grid gap-2">
+            <CommandCreateDialog variant="outline" label="명령어 만들기" trailingChevron className="w-full justify-between" />
+            <RouletteCreateDialog variant="outline" label="룰렛 만들기" trailingChevron className="w-full justify-between" />
+            <LinkButton href="/video-donations/queue" variant="outline" className="w-full justify-between"><span className="inline-flex items-center gap-2"><PlaySquare className="h-4 w-4 text-primary" />영상 후원 대기열</span><ChevronRight className="h-4 w-4 text-muted-foreground" /></LinkButton>
+            <LinkButton href="/settings" variant="outline" className="w-full justify-between"><span className="inline-flex items-center gap-2"><Settings className="h-4 w-4 text-primary" />방송 설정</span><ChevronRight className="h-4 w-4 text-muted-foreground" /></LinkButton>
+          </CardContent>
+        </Card>
+      </section>
+
+      {!visibleAccounts.length && !loading ? (
+        <Card>
+          <CardHeader><CardTitle>플랫폼 연결</CardTitle><CardDescription>실제로 사용할 방송 계정으로 로그인하세요.</CardDescription></CardHeader>
+          <CardContent className="flex flex-wrap gap-2">
+            {providers.map((provider) => {
+              const connected = connectedProviders.has(provider.id);
+              const href = provider.id === 'youtube' ? youtubeLoginHref : apiUrl(provider.loginPath);
+              return (
+                <Button key={provider.id} asChild variant={connected ? 'secondary' : 'default'}>
+                  <a href={href}><img src={provider.iconPath} alt="" aria-hidden="true" className="h-5 w-5 rounded-sm object-contain" />{provider.label}{connected ? ' 다시 연결' : '로 로그인'}</a>
+                </Button>
+              );
+            })}
+          </CardContent>
+        </Card>
+      ) : null}
+
+      <section>
+        <SectionHeader title="기능 관리" description="방송 참여와 연출 기능을 설정합니다." className="mb-3" />
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {featureLinks.map((item) => {
+            const Icon = item.icon;
+            return (
+              <Link key={item.href} href={item.href} prefetch={false} className="group flex min-w-0 items-center gap-3 rounded-[var(--radius-card)] border bg-card p-4 shadow-subtle transition-colors hover:border-primary/35 hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary"><Icon className="h-5 w-5" /></span>
+                <span className="min-w-0 flex-1"><span className="block text-sm font-semibold">{item.title}</span><span className="mt-1 block truncate text-xs text-muted-foreground">{item.description}</span></span>
+                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+              </Link>
+            );
+          })}
         </div>
       </section>
 
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {statusItems.map((item) => {
-          const Icon = item.icon;
-          return (
-            <Card key={item.title} className="animate-fade-up bg-card/85">
-              <CardContent className="flex items-center gap-3 p-4">
-                <span className="grid aspect-square w-[var(--icon-box)] shrink-0 place-items-center rounded-[var(--radius-control)] bg-muted text-primary">
-                  <Icon className="h-4 w-4" />
-                </span>
-                <div className="min-w-0">
-                  <div className="text-xs font-medium text-muted-foreground">{item.title}</div>
-                  <div className="mt-1 truncate text-sm font-semibold">{item.value}</div>
-                </div>
-                <Badge tone={item.tone} className="ml-auto">{item.label}</Badge>
-              </CardContent>
-            </Card>
-          );
-        })}
-      </section>
-
-      <section className="grid gap-3 md:grid-cols-5">
-        {quickActions.map((action) => {
-          const Icon = action.icon;
-          if (action.href === 'dialog:command') {
-            return (
-              <CommandCreateDialog
-                key={action.href}
-                variant="outline"
-                label={action.label}
-                trailingChevron
-                className="min-h-[var(--control-height-lg)] justify-between bg-card/85 px-[clamp(0.875rem,1.6vw,1.125rem)]"
-              />
-            );
-          }
-          if (action.href === 'dialog:roulette') {
-            return (
-              <RouletteCreateDialog
-                key={action.href}
-                variant="outline"
-                label={action.label}
-                trailingChevron
-                className="min-h-[var(--control-height-lg)] justify-between bg-card/85 px-[clamp(0.875rem,1.6vw,1.125rem)]"
-              />
-            );
-          }
-          return (
-            <Tooltip key={action.href} content={action.help}>
-              <LinkButton href={action.href} variant="outline" className="min-h-[var(--control-height-lg)] justify-between bg-card/85 px-[clamp(0.875rem,1.6vw,1.125rem)]">
-                <span className="inline-flex min-w-0 items-center gap-2">
-                  <Icon className="h-4 w-4 shrink-0 text-primary" />
-                  <span className="truncate">{action.label}</span>
-                </span>
-                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-              </LinkButton>
-            </Tooltip>
-          );
-        })}
-      </section>
-
-      <QuickStartTemplatePanel />
-
-      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        {featureCards.map((item, index) => {
-          const Icon = item.icon;
-          return (
-            <Card
-              key={item.href}
-              className="group animate-fade-up overflow-hidden transition hover:-translate-y-0.5 hover:shadow-glow"
-              style={{ animationDelay: `${index * 35}ms` } as React.CSSProperties}
-            >
-              <CardHeader>
-                <div className="flex items-start justify-between gap-3">
-                  <span
-                    className={cn(
-                      'grid aspect-square w-[var(--icon-box)] shrink-0 place-items-center rounded-[var(--radius-control)] text-foreground ring-1 ring-border',
-                      item.tone === 'mint' && 'bg-pastel-mint/70',
-                      item.tone === 'coral' && 'bg-pastel-coral/70',
-                      item.tone === 'lemon' && 'bg-pastel-lemon/80',
-                      item.tone === 'sky' && 'bg-pastel-sky/75',
-                    )}
-                  >
-                    <Icon className="h-5 w-5" />
-                  </span>
-                  <Badge tone={item.tone}>{item.title}</Badge>
-                </div>
-                <CardTitle>{item.title}</CardTitle>
-                <CardDescription>{item.body}</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <LinkButton href={item.href} variant="outline" className="w-full justify-between">
-                  {item.action}
-                  <ChevronRight className="h-4 w-4" />
-                </LinkButton>
-              </CardContent>
-            </Card>
-          );
-        })}
-      </section>
+      {visibleAccounts.length ? <QuickStartPanel /> : null}
     </>
   );
 }

@@ -1,11 +1,12 @@
 'use client';
 
-import { ArrowDownLeft, ArrowDownRight, ArrowUpLeft, ArrowUpRight, BarChart3, CheckCircle2, Copy, Lock, RotateCcw, Send, Trophy, XCircle } from 'lucide-react';
+import { ArrowDownLeft, ArrowDownRight, ArrowUpLeft, ArrowUpRight, CheckCircle2, Copy, Lock, RotateCcw, Send, Trophy, XCircle } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { EmptyState, PageHeader } from '@/components/ui/page';
 import { PredictionOverlayCard } from '@/features/predictions/prediction-overlay-card';
 import { apiUrl, apiWsUrl, readJson } from '@/shared/api/http';
 
@@ -302,31 +303,19 @@ export function PredictionsPage() {
 
   return (
     <div className="grid gap-[clamp(1rem,2vw,1.5rem)]">
-      <section className="relative overflow-hidden rounded-[var(--radius-panel)] border bg-[radial-gradient(circle_at_10%_10%,hsl(var(--accent-mint)/0.72),transparent_34%),linear-gradient(135deg,hsl(var(--card)),hsl(var(--accent-sky)/0.28))] p-[clamp(1.25rem,2.8vw,2rem)] shadow-subtle">
+      <section className="border-b pb-5">
         <div className="grid gap-[clamp(1.25rem,2.4vw,2rem)] lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)] lg:items-end">
-          <div className="min-w-0">
-            <div className="mb-[clamp(0.9rem,1.8vw,1.25rem)] flex flex-wrap items-center gap-[clamp(0.5rem,1vw,0.75rem)]">
-              <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-primary/12 text-primary">
-                <BarChart3 className="h-[1.15em] w-[1.15em]" />
-              </span>
-              <Badge tone="mint">시청자 예측</Badge>
-              <Badge tone={statusTone(active?.status)}>{statusLabel(active?.status)}</Badge>
-            </div>
-            <h1 className="text-[clamp(2rem,4vw,3rem)] font-semibold leading-tight">예측 베팅</h1>
-            <p className="mt-[clamp(0.75rem,1.5vw,1rem)] max-w-2xl text-[clamp(0.95rem,1.35vw,1.12rem)] leading-relaxed text-muted-foreground">
-              방송의 다음 순간을 시청자가 포인트로 예측하고, 채팅 명령어와 오버레이로 현재 상황을 보여줘요.
-            </p>
-          </div>
+          <PageHeader className="border-0 pb-0" eyebrow="Live prediction" title="예측 베팅" description="진행 중인 예측과 참여 포인트를 관리하고 결과를 확정합니다." actions={<Badge tone={statusTone(active?.status)}>{statusLabel(active?.status)}</Badge>} />
           <div className="grid min-w-0 grid-cols-[repeat(3,minmax(0,1fr))] gap-[clamp(0.5rem,1.1vw,0.85rem)]">
-            <div className="min-w-0 rounded-[var(--radius-card)] border bg-card/78 p-[clamp(0.75rem,1.5vw,1rem)] text-center">
+            <div className="min-w-0 rounded-[var(--radius-card)] border bg-card p-[clamp(0.75rem,1.5vw,1rem)] text-center shadow-subtle">
               <div className="truncate text-[clamp(1.1rem,2vw,1.45rem)] font-bold">{formatPoints(latest?.totalPoints || 0)}</div>
               <div className="mt-[clamp(0.2rem,0.6vw,0.4rem)] text-[clamp(0.78rem,1vw,0.92rem)] text-muted-foreground">총 베팅</div>
             </div>
-            <div className="min-w-0 rounded-[var(--radius-card)] border bg-card/78 p-[clamp(0.75rem,1.5vw,1rem)] text-center">
+            <div className="min-w-0 rounded-[var(--radius-card)] border bg-card p-[clamp(0.75rem,1.5vw,1rem)] text-center shadow-subtle">
               <div className="truncate text-[clamp(1.1rem,2vw,1.45rem)] font-bold">{latest?.participantCount || 0}</div>
               <div className="mt-[clamp(0.2rem,0.6vw,0.4rem)] text-[clamp(0.78rem,1vw,0.92rem)] text-muted-foreground">참여자</div>
             </div>
-            <div className="min-w-0 rounded-[var(--radius-card)] border bg-card/78 p-[clamp(0.75rem,1.5vw,1rem)] text-center">
+            <div className="min-w-0 rounded-[var(--radius-card)] border bg-card p-[clamp(0.75rem,1.5vw,1rem)] text-center shadow-subtle">
               <div className="truncate text-[clamp(1.1rem,2vw,1.45rem)] font-bold">{latest?.options.length || optionRows.length}</div>
               <div className="mt-[clamp(0.2rem,0.6vw,0.4rem)] text-[clamp(0.78rem,1vw,0.92rem)] text-muted-foreground">선택지</div>
             </div>
@@ -335,7 +324,7 @@ export function PredictionsPage() {
       </section>
 
       {notice ? (
-        <div className="rounded-[var(--radius-card)] border bg-pastel-lemon/55 p-[clamp(0.85rem,1.5vw,1.1rem)] text-[clamp(0.9rem,1.2vw,1rem)] font-medium text-amber-950 dark:bg-amber-500/12 dark:text-amber-100">
+        <div className="rounded-[var(--radius-card)] border border-amber-500/25 bg-amber-500/10 p-[clamp(0.85rem,1.5vw,1.1rem)] text-[clamp(0.9rem,1.2vw,1rem)] font-medium text-amber-900 dark:text-amber-100">
           {notice}
         </div>
       ) : null}
@@ -495,14 +484,14 @@ export function PredictionsPage() {
           </CardContent>
         </Card>
 
-        <Card className="bg-[linear-gradient(135deg,hsl(222_30%_12%),hsl(225_28%_18%))] text-white">
+        <Card className="bg-slate-950 text-white">
           <CardHeader>
-            <CardTitle>오버레이 미리보기</CardTitle>
-            <CardDescription className="text-white/65">방송 화면에 표시될 모습을 확인해요.</CardDescription>
+            <CardTitle>실제 오버레이</CardTitle>
+            <CardDescription className="text-white/65">현재 예측 데이터가 방송 화면에 표시되는 상태입니다.</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className={`flex min-h-[clamp(18rem,28vw,24rem)] overflow-x-auto rounded-[var(--radius-panel)] border border-white/10 bg-[linear-gradient(135deg,rgba(255,255,255,0.11),rgba(255,255,255,0.05))] p-[clamp(0.85rem,1.7vw,1.25rem)] shadow-2xl backdrop-blur-xl ${OVERLAY_PREVIEW_ALIGNMENT[overlayPosition]}`}>
-              <PredictionOverlayCard prediction={latest} />
+            <div className={`flex min-h-[clamp(18rem,28vw,24rem)] overflow-x-auto rounded-[var(--radius-panel)] border border-white/10 bg-slate-900 p-[clamp(0.85rem,1.7vw,1.25rem)] ${OVERLAY_PREVIEW_ALIGNMENT[overlayPosition]}`}>
+              {latest ? <PredictionOverlayCard prediction={latest} /> : <EmptyState className="w-full border-white/15 bg-white/5 text-white" title="표시할 예측이 없습니다" description="실제 예측을 열면 현재 데이터가 이 영역과 OBS 오버레이에 표시됩니다." />}
             </div>
           </CardContent>
         </Card>

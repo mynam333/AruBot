@@ -44,6 +44,8 @@
     "wss://*.ci.me/*",
     "https://toon.at/*",
     "wss://toon.at/*",
+    "wss://ws.toon.at/*",
+    "wss://*.toon.at/*",
     "https://arubot.yuaru.com/*",
     "https://arubotapi.yuaru.com/*",
     "wss://arubotapi.yuaru.com/*",

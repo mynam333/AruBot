@@ -12,11 +12,9 @@ describe('룰렛 오버레이 레이아웃 회귀 방지', () => {
   test('관리자 페이지는 릴/휠 표현 형태를 별도 선택으로 저장해야 함', () => {
     expect(roulettePage).toContain('ROULETTE_LAYOUT_OPTIONS');
     expect(roulettePage).toContain('ROULETTE_SKIN_OPTIONS');
-    expect(roulettePage).toContain('ROULETTE_SKIN_PREVIEWS');
-    expect(roulettePage).toContain('RouletteSkinPreview');
     expect(roulettePage).toContain('표현 형태');
     expect(roulettePage).toContain('스킨');
-    expect(roulettePage).toContain('미리보기');
+    expect(roulettePage).toContain('실제 데이터 사용');
     expect(roulettePage).toContain('릴 형태');
     expect(roulettePage).toContain('휠 형태');
     expect(roulettePage).toContain('프리즘');
@@ -69,13 +67,13 @@ describe('룰렛 오버레이 레이아웃 회귀 방지', () => {
     expect(rouletteViewer).toContain("type RouletteLayout = 'reel' | 'wheel'");
     expect(rouletteViewer).toContain('function parseRouletteLook');
     expect(rouletteViewer).toContain("const layout: RouletteLayout = urlLook.layout || serverLayout || 'reel'");
-    expect(rouletteViewer).toContain('skinChrome');
+    expect(rouletteViewer).toContain("...t.css");
     expect(rouletteViewer).toContain('roulette-result-lock');
     expect(rouletteViewer).toContain("layout === 'wheel'");
     expect(rouletteViewer).toContain('renderReelWindow()');
   });
 
-  test('휠 라벨은 SVG 중심 정렬과 스킨별 장식 레이어를 사용해야 함', () => {
+  test('휠 라벨과 섹터는 실제 항목 수를 기준으로 동적 렌더링해야 함', () => {
     expect(rouletteViewer).toContain('wheelLabelLines');
     expect(rouletteViewer).toContain('WheelSelectedSegment');
     expect(rouletteViewer).toContain('WheelSegmentsSvg');
@@ -88,8 +86,12 @@ describe('룰렛 오버레이 레이아웃 회귀 방지', () => {
     expect(rouletteViewer).toContain('function equivalentForwardRotation');
     expect(rouletteViewer).toContain('function buildWheelItemsForResult');
     expect(rouletteViewer).toContain('const nextWheelItems = buildWheelItemsForResult(pool, finalLabel, wheelTargetIndex)');
-    expect(rouletteViewer).toContain('wheelStopRotationForIndex(wheelTargetIndex)');
-    expect(rouletteViewer).toContain("{wheelSettled ? (state.label || state.value || '준비 완료') : '회전 중'}");
+    expect(rouletteViewer).toContain('wheelStopRotationForIndex(wheelTargetIndex, nextWheelItems.length)');
+    expect(rouletteViewer).toContain("{wheelSettled ? (state.label || state.value || '') : '회전 중'}");
+    expect(rouletteViewer).not.toContain('WHEEL_SEGMENT_COUNT');
+    expect(rouletteViewer).not.toContain('WHEEL_FALLBACK_ITEMS');
+    expect(rouletteViewer).not.toContain('테스트 시청자');
+    expect(rouletteViewer).toContain('segmentCount={wheelCount}');
     expect(rouletteViewer).not.toContain('const wheelRotation = offsetRows * 24');
     expect(rouletteWheelUtils).toContain('function splitWheelLabel');
     expect(rouletteWheelUtils).toContain('const splitAt = Math.ceil(parts.length / 2)');
@@ -102,15 +104,9 @@ describe('룰렛 오버레이 레이아웃 회귀 방지', () => {
     expect(rouletteWheelSkins).toContain('feTurbulence');
     expect(rouletteWheelSkins).toContain('rouletteSegmentFill');
     expect(rouletteWheelSkins).toContain('function segmentPath');
-    expect(rouletteWheelSkins).toContain('rouletteVelvetRuby');
-    expect(rouletteWheelSkins).toContain('roulettePrismShard');
-    expect(rouletteWheelSkins).toContain('rouletteMonoSteel');
-    expect(rouletteWheelSkins).toContain('rouletteDecoGold');
-    expect(rouletteWheelSkins).toContain('rouletteCrystalIce');
-    expect(rouletteWheelSkins).toContain('rouletteInkFeather');
-    expect(rouletteWheelSkins).toContain('rouletteNovaStar');
-    expect(rouletteWheelSkins).toContain('rouletteCeramicBlue');
-    expect(rouletteWheelSkins).toContain('rouletteArcadeNeon');
-    expect(rouletteWheelSkins).toContain('roulette-wheel-ornament-secondary');
+    expect(rouletteWheelSkins).toContain('segmentCount');
+    expect(rouletteWheelSkins).toContain('const segmentDeg = 360 / count');
+    expect(rouletteWheelSkins).toContain('Array.from({ length: count })');
+    expect(rouletteWheelSkins).toContain('roulette-wheel-ornaments');
   });
 });

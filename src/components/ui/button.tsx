@@ -4,22 +4,22 @@ import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from '@/shared/lib/utils';
 
 const buttonVariants = cva(
-  'inline-flex min-h-[var(--control-height)] max-w-full min-w-0 items-center justify-center gap-2 whitespace-normal rounded-[var(--radius-control)] px-[clamp(0.875rem,1.6vw,1.125rem)] text-center text-sm font-semibold leading-tight tracking-normal transition duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 max-sm:w-full sm:whitespace-nowrap [&>svg]:shrink-0',
+  'inline-flex min-h-[var(--control-height)] max-w-full min-w-0 items-center justify-center gap-2 whitespace-nowrap rounded-[var(--radius-control)] px-4 text-center text-sm font-semibold leading-tight transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&>svg]:shrink-0',
   {
     variants: {
       variant: {
-        default: 'bg-primary text-primary-foreground shadow-subtle hover:-translate-y-0.5 hover:shadow-lift active:translate-y-0',
-        secondary: 'bg-secondary text-secondary-foreground hover:-translate-y-0.5 hover:bg-muted active:translate-y-0',
-        ghost: 'hover:bg-muted active:translate-y-0',
-        outline: 'border bg-card/80 hover:-translate-y-0.5 hover:border-primary/35 hover:bg-pastel-sky/45 active:translate-y-0 dark:hover:bg-muted',
-        soft: 'bg-pastel-mint/70 text-teal-950 hover:-translate-y-0.5 hover:bg-pastel-mint dark:bg-primary/20 dark:text-teal-50 dark:hover:bg-primary/25',
-        destructive: 'bg-destructive text-destructive-foreground shadow-subtle hover:-translate-y-0.5 hover:shadow-lift active:translate-y-0',
+        default: 'border border-primary bg-primary text-primary-foreground shadow-subtle hover:bg-primary/90',
+        secondary: 'border border-transparent bg-secondary text-secondary-foreground hover:bg-secondary/75',
+        ghost: 'border border-transparent hover:bg-muted hover:text-foreground',
+        outline: 'border bg-card text-foreground shadow-subtle hover:border-primary/40 hover:bg-muted/70',
+        soft: 'border border-primary/20 bg-primary/10 text-primary hover:bg-primary/15',
+        destructive: 'border border-destructive bg-destructive text-destructive-foreground shadow-subtle hover:bg-destructive/90',
       },
       size: {
         default: 'min-h-[var(--control-height)]',
-        sm: 'min-h-[var(--control-height-sm)] px-[clamp(0.75rem,1.2vw,1rem)] text-xs',
-        lg: 'min-h-[var(--control-height-lg)] px-[clamp(1rem,1.9vw,1.375rem)]',
-        icon: 'aspect-square min-h-[var(--control-height)] w-[var(--control-height)] px-0 max-sm:w-[var(--control-height)]',
+        sm: 'min-h-[var(--control-height-sm)] px-3 text-xs',
+        lg: 'min-h-[var(--control-height-lg)] px-5',
+        icon: 'aspect-square min-h-[var(--control-height)] w-[var(--control-height)] px-0',
       },
     },
     defaultVariants: {

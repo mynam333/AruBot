@@ -117,7 +117,7 @@ function ViewerShell({ children }: { children: React.ReactNode }) {
   return (
     <main className="min-h-screen px-[var(--page-gutter)] py-[clamp(1rem,2.6vw,1.75rem)]">
       <header className="mx-auto flex max-w-7xl items-center justify-between gap-3">
-        <Link href="/" className="inline-flex items-center gap-3 rounded-full bg-card/75 px-3 py-2 shadow-subtle backdrop-blur-xl transition hover:-translate-y-0.5">
+        <Link href="/" className="inline-flex items-center gap-3 rounded-lg border bg-card px-3 py-2 shadow-subtle transition-colors hover:bg-muted">
           <img src="/files/logo.png" alt="" className="aspect-square w-[clamp(2rem,4vw,2.5rem)] object-contain" />
           <span className="text-sm font-semibold">AruBot</span>
         </Link>
@@ -260,7 +260,7 @@ function StationChannelDialog({
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-foreground/24 backdrop-blur-[clamp(0.5rem,1.4vw,1rem)] data-[state=open]:animate-fade-in" />
         <Dialog.Content className="fixed left-1/2 top-1/2 z-50 grid max-h-[min(90svh,44rem)] w-[min(94vw,42rem)] -translate-x-1/2 -translate-y-1/2 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-[var(--radius-panel)] border bg-card/96 shadow-lift outline-none backdrop-blur-2xl data-[state=open]:animate-modal-in">
-          <div className="border-b bg-[linear-gradient(135deg,hsl(var(--card)),hsl(var(--accent-mint)/0.32),hsl(var(--accent-sky)/0.24))] p-[clamp(1rem,3vw,1.6rem)]">
+          <div className="border-b bg-card p-[clamp(1rem,3vw,1.6rem)]">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <Badge tone="mint">
@@ -489,9 +489,9 @@ export function ViewerPointsPage() {
     return (
       <ViewerShell>
         <section className="mx-auto mt-[clamp(3rem,8vw,6rem)] grid max-w-6xl gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(30%,0.42fr)] lg:items-center">
-          <div className="rounded-[var(--radius-panel)] border bg-[linear-gradient(135deg,hsl(var(--card)),hsl(var(--accent-mint)/0.38),hsl(var(--accent-sky)/0.28))] p-[clamp(1.5rem,4vw,3rem)] shadow-soft">
+          <div className="rounded-[var(--radius-panel)] border bg-card p-[clamp(1.5rem,4vw,3rem)] shadow-soft">
             <Badge tone="mint">시청자 포인트</Badge>
-            <h1 className="mt-5 max-w-3xl break-keep text-[clamp(2.25rem,6vw,4.75rem)] font-semibold leading-tight">
+            <h1 className="mt-5 max-w-3xl break-keep text-[clamp(2rem,4.8vw,3.6rem)] font-bold leading-tight tracking-tight">
               보는 플랫폼이 달라도 내 포인트는 하나로.
             </h1>
             <p className="mt-5 max-w-2xl break-keep text-sm leading-7 text-muted-foreground md:text-base">
@@ -527,11 +527,11 @@ export function ViewerPointsPage() {
   return (
     <ViewerShell>
       <section className="mx-auto mt-[clamp(2rem,6vw,4rem)] max-w-7xl">
-        <div className="rounded-[var(--radius-panel)] border bg-[linear-gradient(135deg,hsl(var(--card)),hsl(var(--accent-mint)/0.35)_52%,hsl(var(--accent-coral)/0.24))] p-[clamp(1.25rem,3.5vw,2.5rem)] shadow-soft">
+        <div className="rounded-[var(--radius-panel)] border bg-card p-[clamp(1.25rem,3.5vw,2.5rem)] shadow-soft">
           <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(28%,0.38fr)] lg:items-end">
             <div>
               <Badge tone={hasArubotIdentity ? 'mint' : 'sky'}>{hasArubotIdentity ? '아루봇 계정 연동' : '시청자 포인트'}</Badge>
-              <h1 className="mt-5 max-w-4xl break-keep text-[clamp(2.15rem,5.5vw,4.5rem)] font-semibold leading-tight">
+              <h1 className="mt-5 max-w-4xl break-keep text-[clamp(2rem,4.5vw,3.5rem)] font-bold leading-tight tracking-tight">
                 내가 쌓은 방송별 포인트를 한눈에.
               </h1>
               <p className="mt-4 max-w-2xl break-keep text-sm leading-7 text-muted-foreground md:text-base">

@@ -28,6 +28,7 @@ import { Button, LinkButton } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Tooltip } from '@/components/ui/tooltip';
+import { PageHeader } from '@/components/ui/page';
 import { apiUrl, readJson } from '@/shared/api/http';
 import { cn } from '@/shared/lib/utils';
 
@@ -1321,31 +1322,19 @@ export function AutomationsPage() {
 
   return (
     <div className="grid gap-[clamp(1rem,2vw,1.5rem)]">
-      <section className="overflow-hidden rounded-[var(--radius-panel)] border bg-[radial-gradient(circle_at_15%_10%,hsl(var(--accent-mint)/0.68),transparent_30%),radial-gradient(circle_at_86%_16%,hsl(var(--accent-coral)/0.55),transparent_28%),linear-gradient(135deg,hsl(var(--card)),hsl(var(--accent-sky)/0.26))] p-[clamp(1.25rem,3vw,2rem)] shadow-soft">
+      <section className="border-b pb-5">
         <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,0.42fr)] lg:items-end">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge tone="mint">방송 자동화</Badge>
-              <Badge tone={hasOnlineAgent ? 'mint' : 'neutral'}>{hasOnlineAgent ? '로컬 온라인' : '로컬 대기'}</Badge>
-              <Badge tone="sky">{publishedBlueprints.length}개 게시 액션</Badge>
-            </div>
-            <h1 className="mt-4 max-w-3xl break-keep text-3xl font-semibold leading-tight md:text-5xl">
-              방송의 순간을 한 번의 액션으로 움직이세요.
-            </h1>
-            <p className="mt-4 max-w-2xl text-sm leading-7 text-muted-foreground md:text-base">
-              OBS, T.I.T.S., VTube Studio, TTS, 사운드, 버튼 앱을 연결합니다.
-            </p>
-          </div>
+          <PageHeader className="border-0 pb-0" eyebrow="Integrations" title="방송 자동화" description="OBS, T.I.T.S., VTube Studio, TTS와 로컬 실행 환경을 연결합니다." actions={<Badge tone={hasOnlineAgent ? 'mint' : 'neutral'}>{hasOnlineAgent ? '로컬 온라인' : '로컬 대기'}</Badge>} />
           <div className="grid min-w-0 gap-2 sm:grid-cols-[repeat(3,minmax(0,1fr))]">
-            <div className="min-w-0 rounded-[var(--radius-card)] border bg-card/78 p-[clamp(0.75rem,1.4vw,1rem)] text-center">
+            <div className="min-w-0 rounded-[var(--radius-card)] border bg-card p-[clamp(0.75rem,1.4vw,1rem)] text-center shadow-subtle">
               <div className="truncate text-xl font-bold">{localAgents.length}</div>
               <div className="mt-1 text-xs text-muted-foreground">로컬</div>
             </div>
-            <div className="min-w-0 rounded-[var(--radius-card)] border bg-card/78 p-[clamp(0.75rem,1.4vw,1rem)] text-center">
+            <div className="min-w-0 rounded-[var(--radius-card)] border bg-card p-[clamp(0.75rem,1.4vw,1rem)] text-center shadow-subtle">
               <div className="truncate text-xl font-bold">{connections.length}</div>
               <div className="mt-1 text-xs text-muted-foreground">연결</div>
             </div>
-            <div className="min-w-0 rounded-[var(--radius-card)] border bg-card/78 p-[clamp(0.75rem,1.4vw,1rem)] text-center">
+            <div className="min-w-0 rounded-[var(--radius-card)] border bg-card p-[clamp(0.75rem,1.4vw,1rem)] text-center shadow-subtle">
               <div className="truncate text-xl font-bold">{publishedBlueprints.length}</div>
               <div className="mt-1 text-xs text-muted-foreground">액션</div>
             </div>

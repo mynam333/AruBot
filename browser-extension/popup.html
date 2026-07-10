@@ -3,24 +3,27 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>후원시 유튜브 일시정지</title>
+    <title>AruBot 영상 후원 제어</title>
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
     <main class="shell">
       <header class="topbar">
-        <div>
-          <h1>후원시 유튜브 일시정지</h1>
-          <p id="summary">Loading</p>
+        <div class="brand">
+          <img src="icons/icon-32.png" alt="" />
+          <div>
+            <h1>영상 후원 제어</h1>
+            <p id="summary">상태 확인 중</p>
+          </div>
         </div>
-        <label class="switch" title="Monitoring">
+        <label class="switch" title="후원 감지">
           <input id="monitoring" type="checkbox" />
           <span></span>
         </label>
       </header>
 
       <section class="hero">
-        <span class="eyebrow">YouTube paused</span>
+        <span class="eyebrow">YouTube 일시정지 남은 시간</span>
         <strong id="remaining">00:00</strong>
         <div class="meter"><span id="meterFill"></span></div>
       </section>
@@ -28,9 +31,9 @@
       <section class="services" id="services"></section>
 
       <footer class="actions">
-        <button id="testPause" type="button">10s test</button>
-        <button id="clearPause" type="button">Resume</button>
-        <button id="openOptions" type="button" class="primary">Overlay URLs</button>
+        <button id="testPause" type="button">10초 테스트</button>
+        <button id="clearPause" type="button">즉시 재생</button>
+        <button id="openOptions" type="button" class="primary">연결 설정</button>
       </footer>
       <nav class="links" aria-label="관련 링크">
         <a href="https://arubot.yuaru.com" target="_blank" rel="noreferrer">AruBot</a>

@@ -145,7 +145,7 @@ function VideoDonationItemCard({
       onDragEnd={onDragEnd}
       className={[
         'grid min-w-0 gap-[clamp(0.85rem,1.6vw,1.15rem)] rounded-[var(--radius-card)] border bg-card/88 p-[clamp(0.85rem,1.6vw,1.1rem)] shadow-subtle transition',
-        current ? 'border-primary/28 bg-[linear-gradient(135deg,hsl(var(--card)),hsl(var(--accent-mint)/0.18))]' : '',
+        current ? 'border-primary/35 bg-primary/5' : '',
         dragging ? 'scale-[0.99] opacity-55 ring-2 ring-primary/30' : 'hover:-translate-y-0.5 hover:shadow-lift',
       ].filter(Boolean).join(' ')}
     >
@@ -386,7 +386,7 @@ export function VideoDonationQueuePage() {
 
   return (
     <div className="grid gap-[clamp(1rem,2vw,1.5rem)]">
-      <section className="relative overflow-hidden rounded-[var(--radius-panel)] border bg-[linear-gradient(135deg,hsl(var(--card)),hsl(var(--accent-coral)/0.16),hsl(var(--accent-sky)/0.14))] p-[clamp(1.25rem,2.6vw,1.75rem)] shadow-subtle">
+      <section className="border-b pb-5">
         <div className="relative flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
           <div className="max-w-4xl">
             <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -400,7 +400,7 @@ export function VideoDonationQueuePage() {
                 {realtimeState === 'connected' ? '실시간 연결' : realtimeState === 'connecting' ? '실시간 연결 중' : '실시간 재연결 대기'}
               </Badge>
             </div>
-            <h1 className="text-3xl font-semibold leading-tight tracking-normal md:text-4xl">영상 후원 큐</h1>
+            <h1 className="text-2xl font-bold leading-tight tracking-tight md:text-3xl">영상 후원 큐</h1>
             <p className="mt-3 max-w-3xl text-sm leading-7 text-muted-foreground md:text-base">
               시청자가 신청한 영상을 지금 재생 중인 항목과 다음 순서로 나눠 보여줍니다. 순서를 바꾸거나 맞지 않는 신청을 정리할 수 있어요.
             </p>

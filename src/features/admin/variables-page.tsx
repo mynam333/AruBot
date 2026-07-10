@@ -62,7 +62,7 @@ export function VariablesPage() {
 
   return (
     <div className="grid gap-[clamp(1rem,2vw,1.5rem)]">
-      <section className="relative overflow-hidden rounded-[var(--radius-panel)] border bg-[linear-gradient(135deg,hsl(var(--card)),hsl(var(--accent-sky)/0.24),hsl(var(--accent-lemon)/0.18))] p-[clamp(1.25rem,2.8vw,2rem)] shadow-subtle">
+      <section className="border-b pb-5">
         <div className="max-w-3xl">
           <div className="mb-4 flex flex-wrap items-center gap-2">
             <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-primary/12 text-primary">
@@ -71,7 +71,7 @@ export function VariablesPage() {
             <Badge tone="sky">치환 변수</Badge>
             <Badge tone={variables.length ? 'mint' : 'neutral'}>{variables.length}개</Badge>
           </div>
-          <h1 className="break-keep text-3xl font-semibold leading-tight md:text-4xl">명령어 답변에 바로 넣을 수 있는 변수입니다.</h1>
+          <h1 className="break-keep text-2xl font-bold leading-tight tracking-tight md:text-3xl">치환 변수</h1>
           <p className="mt-3 max-w-2xl text-sm leading-7 text-muted-foreground md:text-base">
             변수는 채팅 명령어, 자동 응답, 방송 안내 문구에서 시청자와 방송 상태에 맞는 값으로 바뀝니다.
           </p>

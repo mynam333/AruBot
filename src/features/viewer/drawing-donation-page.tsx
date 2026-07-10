@@ -101,7 +101,7 @@ function ViewerShell({ children }: { children: React.ReactNode }) {
   return (
     <main className="min-h-screen px-[var(--page-gutter)] py-[clamp(1rem,2.6vw,1.75rem)]">
       <header className="mx-auto flex max-w-7xl items-center justify-between gap-3">
-        <Link href="/" className="inline-flex items-center gap-3 rounded-full bg-card/75 px-3 py-2 shadow-subtle backdrop-blur-xl transition hover:-translate-y-0.5">
+        <Link href="/" className="inline-flex items-center gap-3 rounded-lg border bg-card px-3 py-2 shadow-subtle transition-colors hover:bg-muted">
           <img src="/files/logo.png" alt="" className="aspect-square w-[clamp(2rem,4vw,2.5rem)] object-contain" />
           <span className="text-sm font-semibold">AruBot</span>
         </Link>
@@ -784,7 +784,7 @@ export function DrawingDonationEditorPage({ channelUid }: { channelUid: string }
                   referrerPolicy="no-referrer-when-downgrade"
                 />
               ) : (
-                <div className="absolute inset-0 grid place-items-center bg-[radial-gradient(circle_at_30%_20%,rgba(125,211,252,.28),transparent_34%),radial-gradient(circle_at_78%_20%,rgba(251,113,133,.22),transparent_30%),linear-gradient(135deg,rgba(15,23,42,.08),rgba(20,184,166,.08))] text-center text-sm text-muted-foreground">
+                <div className="absolute inset-0 grid place-items-center bg-muted/30 text-center text-sm text-muted-foreground">
                   <span>방송 화면 위에 올라갈 위치를 생각하며 그려주세요.</span>
                 </div>
               )}

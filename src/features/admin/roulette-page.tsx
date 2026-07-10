@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button, LinkButton } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { EmptyState, PageHeader } from '@/components/ui/page';
 import { Pagination } from '@/components/ui/pagination';
 import {
   normalizeEditableRouletteItems,
@@ -83,24 +84,6 @@ const ROULETTE_LEGACY_SKIN_MAP: Record<string, RouletteSkin> = {
   midnight: 'mono',
   sunset: 'solar',
 };
-const ROULETTE_SKIN_PREVIEWS: Record<RouletteSkin, { accent: string; accent2: string; panel: string; result: string; palette: string[] }> = {
-  studio: { accent: '#f8fafc', accent2: '#38bdf8', panel: '#0a0d16', result: '#ffffff', palette: ['#f8fafc', '#111827', '#8b5cf6', '#06b6d4', '#f59e0b', '#e5e7eb'] },
-  prism: { accent: '#22d3ee', accent2: '#bef264', panel: '#14102a', result: '#eaff9a', palette: ['#22d3ee', '#f0abfc', '#bef264', '#fb7185', '#a78bfa', '#67e8f9'] },
-  aurora: { accent: '#5eead4', accent2: '#c4b5fd', panel: '#081325', result: '#ccfbf1', palette: ['#5eead4', '#8b5cf6', '#2dd4bf', '#c4b5fd', '#22c55e', '#38bdf8'] },
-  velvet: { accent: '#f9d27d', accent2: '#fecdd3', panel: '#320a18', result: '#ffe8a3', palette: ['#f9d27d', '#7f1d1d', '#be123c', '#fbbf24', '#581c87', '#fecdd3'] },
-  mono: { accent: '#f9fafb', accent2: '#a3a3a3', panel: '#030508', result: '#ffffff', palette: ['#f9fafb', '#1f2937', '#d1d5db', '#4b5563', '#ffffff', '#111827'] },
-  deco: { accent: '#f8d77e', accent2: '#c9912a', panel: '#080706', result: '#fff2b6', palette: ['#f8d77e', '#121212', '#d6a33f', '#2f2414', '#fff4bf', '#0b0d11'] },
-  crystal: { accent: '#7dd3fc', accent2: '#c4b5fd', panel: '#061e34', result: '#f0fdff', palette: ['#e0faff', '#7dd3fc', '#c4b5fd', '#38bdf8', '#f8feff', '#93c5fd'] },
-  ink: { accent: '#f7f7f2', accent2: '#c1121f', panel: '#030405', result: '#fff8f4', palette: ['#f7f7f2', '#1f2933', '#e8ecef', '#0b0d10', '#d9dde0', '#c1121f'] },
-  nova: { accent: '#c4b5fd', accent2: '#38bdf8', panel: '#06061a', result: '#fef08a', palette: ['#c4b5fd', '#38bdf8', '#312e81', '#f0abfc', '#0f172a', '#fef08a'] },
-  ceramic: { accent: '#60a5fa', accent2: '#eff6ff', panel: '#06122a', result: '#ffffff', palette: ['#f8fbff', '#1d4ed8', '#dbeafe', '#60a5fa', '#eff6ff', '#2563eb'] },
-  arcade: { accent: '#67e8f9', accent2: '#bef264', panel: '#040512', result: '#f8ff9a', palette: ['#67e8f9', '#f0abfc', '#bef264', '#111827', '#22d3ee', '#fb7185'] },
-  sakura: { accent: '#fda4af', accent2: '#fef3c7', panel: '#361425', result: '#ffe5ee', palette: ['#fda4af', '#fecdd3', '#f9a8d4', '#f0abfc', '#ffe4e6', '#fb7185'] },
-  ocean: { accent: '#7dd3fc', accent2: '#5eead4', panel: '#031f38', result: '#dffcff', palette: ['#7dd3fc', '#0ea5e9', '#5eead4', '#0369a1', '#bae6fd', '#67e8f9'] },
-  solar: { accent: '#fbbf24', accent2: '#fb923c', panel: '#361709', result: '#fff0b3', palette: ['#fbbf24', '#fb923c', '#f97316', '#fde68a', '#ef4444', '#fed7aa'] },
-  cyber: { accent: '#f0abfc', accent2: '#bef264', panel: '#14082a', result: '#d9ff8f', palette: ['#f0abfc', '#22d3ee', '#bef264', '#a78bfa', '#fb7185', '#67e8f9'] },
-  gold: { accent: '#ffd66b', accent2: '#fff1b8', panel: '#22190a', result: '#fff5bf', palette: ['#ffd66b', '#b8892f', '#fff1b8', '#f4a261', '#d4af37', '#ffe8a3'] },
-};
 
 function parseRouletteTheme(value?: string | null) {
   const text = String(value || 'studio').toLowerCase().trim();
@@ -115,45 +98,6 @@ function getRouletteSkinLabel(value: string) {
   return ROULETTE_SKIN_OPTIONS.find((option) => option.value === value)?.label || '스튜디오';
 }
 
-function RouletteSkinPreview({ layout, skin }: { layout: RouletteLayout; skin: RouletteSkin }) {
-  const preview = ROULETTE_SKIN_PREVIEWS[skin] || ROULETTE_SKIN_PREVIEWS.studio;
-  const gradient = `conic-gradient(${preview.palette.map((color, index) => {
-    const slice = 360 / preview.palette.length;
-    return `${color} ${index * slice}deg ${(index + 1) * slice}deg`;
-  }).join(', ')})`;
-
-  return (
-    <div className="grid gap-3 rounded-[var(--radius-control)] border bg-background/72 p-4 shadow-subtle">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="text-sm font-semibold">미리보기</div>
-        <div className="text-xs font-semibold text-muted-foreground">{layout === 'wheel' ? '휠 형태' : '릴 형태'} · {getRouletteSkinLabel(skin)}</div>
-      </div>
-      <div className="grid min-h-[8rem] place-items-center overflow-hidden rounded-[var(--radius-control)] border" style={{ borderColor: `${preview.accent}55`, background: `radial-gradient(circle at 58% 42%, ${preview.accent}2e, transparent 34%), linear-gradient(135deg, ${preview.panel}, #050608)` }}>
-        {layout === 'wheel' ? (
-          <div className="relative grid aspect-square w-[7.6rem] place-items-center rounded-full" style={{ background: `linear-gradient(135deg, ${preview.accent2}, ${preview.accent})`, boxShadow: `0 0 28px ${preview.accent}55` }}>
-            <div className="absolute inset-[0.45rem] rounded-full" style={{ background: gradient }} />
-            <div className="absolute inset-[2.1rem] grid place-items-center rounded-full border bg-black/72 text-center" style={{ borderColor: `${preview.accent}66` }}>
-              <span className="text-[0.68rem] font-black tracking-[0.18em] text-white/55">RESULT</span>
-              <span className="text-lg font-black leading-none" style={{ color: preview.result, textShadow: `0 0 14px ${preview.accent}` }}>대박</span>
-            </div>
-            <div className="absolute -top-1 h-0 w-0 border-x-[0.5rem] border-t-[0.9rem] border-x-transparent" style={{ borderTopColor: preview.accent2 }} />
-          </div>
-        ) : (
-          <div className="relative grid w-[min(92%,22rem)] grid-cols-[0.42fr_0.58fr] overflow-hidden rounded-[0.45rem] border" style={{ borderColor: `${preview.accent}66`, clipPath: 'polygon(0 16%, 6% 0, 100% 0, 100% 84%, 94% 100%, 0 100%)', boxShadow: `0 0 28px ${preview.accent}3f` }}>
-            <div className="grid content-center gap-2 p-4" style={{ background: `linear-gradient(135deg, ${preview.panel}, #111827)` }}>
-              <div className="h-7 w-7 rounded-full border" style={{ borderColor: `${preview.accent}66`, background: `radial-gradient(circle, ${preview.accent}, transparent 62%)` }} />
-              <div className="truncate text-sm font-black text-white">스페셜 룰렛</div>
-              <div className="truncate text-xs font-semibold text-white/68">테스트 시청자님</div>
-            </div>
-            <div className="grid place-items-center border-l p-4" style={{ borderColor: `${preview.accent}44`, background: `linear-gradient(90deg, #050608, ${preview.panel})` }}>
-              <div className="text-[2rem] font-black leading-none" style={{ color: preview.result, textShadow: `0 0 18px ${preview.accent}` }}>대박</div>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
 
 async function postJson<T>(path: string, body: unknown): Promise<T> {
   const response = await fetch(apiUrl(path), {
@@ -255,9 +199,8 @@ function RouletteEditDialog({
           className="fixed left-1/2 top-1/2 z-50 grid max-h-[min(92svh,54rem)] w-[min(94vw,58rem)] -translate-x-1/2 -translate-y-1/2 grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-[var(--radius-panel)] border bg-card/96 shadow-lift outline-none backdrop-blur-2xl data-[state=open]:animate-modal-in"
           onOpenAutoFocus={(event) => event.preventDefault()}
         >
-          <div className="relative overflow-hidden bg-[radial-gradient(circle_at_12%_0%,hsl(var(--accent-lemon)/0.74),transparent_36%),linear-gradient(135deg,hsl(var(--card)),hsl(var(--accent-sky)/0.22),hsl(var(--accent-mint)/0.2))] p-[clamp(1.25rem,3vw,2rem)]">
-            <div className="absolute inset-x-[8%] top-0 h-[max(0.125rem,0.18vw)] rounded-full bg-[linear-gradient(90deg,hsl(var(--accent-lemon)),hsl(var(--accent-mint)),hsl(var(--accent-sky)))]" />
-            <div className="relative flex items-start justify-between gap-[clamp(1rem,2vw,1.5rem)]">
+          <div className="border-b bg-card p-[clamp(1.25rem,3vw,2rem)]">
+            <div className="flex items-start justify-between gap-[clamp(1rem,2vw,1.5rem)]">
               <div className="min-w-0">
                 <div className="mb-[clamp(0.75rem,1.6vw,1rem)] flex flex-wrap items-center gap-[clamp(0.5rem,1vw,0.75rem)]">
                   <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-primary/12 text-primary ring-1 ring-primary/25">
@@ -266,7 +209,7 @@ function RouletteEditDialog({
                   <Badge tone="lemon">룰렛 편집</Badge>
                   <Badge tone="neutral">{normalizeEditableRouletteItems(items).length}개 항목</Badge>
                 </div>
-                <Dialog.Title className="break-keep text-[clamp(1.5rem,4vw,2.35rem)] font-semibold leading-tight tracking-normal">
+                <Dialog.Title className="break-keep text-[clamp(1.5rem,4vw,2.1rem)] font-bold leading-tight tracking-tight">
                   {definition.name}
                 </Dialog.Title>
                 <Dialog.Description className="mt-[clamp(0.75rem,1.4vw,1rem)] max-w-[64ch] break-keep text-sm leading-7 text-muted-foreground md:text-base">
@@ -301,7 +244,13 @@ function RouletteEditDialog({
               </label>
             </div>
 
-            <RouletteSkinPreview layout={layout} skin={theme} />
+            <div className="flex flex-col gap-3 rounded-[var(--radius-card)] border bg-muted/25 p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <div className="text-sm font-semibold">방송 화면 설정</div>
+                <div className="mt-1 text-xs leading-5 text-muted-foreground">{layout === 'wheel' ? '휠 형태' : '릴 형태'} · {getRouletteSkinLabel(theme)} 스킨이 다음 실행부터 실제 OBS 화면에 적용됩니다.</div>
+              </div>
+              <Badge tone="mint">실제 데이터 사용</Badge>
+            </div>
 
             <div className="grid gap-[clamp(0.5rem,1vw,0.75rem)]">
               <div className="text-sm font-semibold">룰렛 항목</div>
@@ -388,32 +337,21 @@ export function RoulettePage() {
 
   return (
     <div className="grid gap-[clamp(1rem,2vw,1.5rem)]">
-      <section className="relative overflow-hidden rounded-[var(--radius-panel)] border bg-[linear-gradient(135deg,hsl(var(--card)),hsl(var(--accent-lemon)/0.2),hsl(var(--accent-mint)/0.16))] p-[clamp(1.25rem,2.6vw,1.75rem)] shadow-subtle">
-        <div className="relative flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
-          <div className="max-w-4xl">
-            <div className="mb-4 flex flex-wrap items-center gap-2">
-              <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-primary/12 text-primary ring-1 ring-primary/25">
-                <Sparkles className="h-5 w-5" />
-              </span>
-              <Badge tone="lemon">룰렛</Badge>
-              <Badge tone="mint">{definitions.length}개</Badge>
-              <Badge tone="neutral">{totalItems}개 항목</Badge>
-            </div>
-            <h1 className="text-3xl font-semibold leading-tight tracking-normal md:text-4xl">룰렛 이벤트</h1>
-            <p className="mt-3 max-w-3xl text-sm leading-7 text-muted-foreground md:text-base">
-              포인트와 후원 반응에서 실행할 룰렛을 관리하고, 방송 화면에 표시될 룰렛 오버레이 주소를 같은 화면에서 바로 확인합니다.
-            </p>
-          </div>
-          <div className="flex max-w-full flex-wrap items-center gap-2">
+      <PageHeader
+        eyebrow="Broadcast overlay"
+        title="룰렛"
+        description="룰렛 항목과 표시 방식을 관리하고 실제 OBS 브라우저 소스 주소를 확인합니다."
+        actions={
+          <>
             <RouletteCreateDialog />
             <LinkButton href="/roulette/logs" variant="outline">결과 보기</LinkButton>
             <Button type="button" variant="outline" onClick={load} disabled={isPending}>
               <RefreshCw className={isPending ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
               새로고침
             </Button>
-          </div>
-        </div>
-      </section>
+          </>
+        }
+      />
 
       <ViewerTokenPanel
         title="룰렛 화면 주소"
@@ -489,13 +427,7 @@ export function RoulettePage() {
             </Card>
           );
         })}
-        {!definitions.length ? (
-          <Card className="lg:col-span-2">
-            <CardContent className="p-8 text-center text-sm text-muted-foreground">
-              {isPending ? '룰렛을 불러오는 중입니다.' : '아직 만든 룰렛이 없습니다.'}
-            </CardContent>
-          </Card>
-        ) : null}
+        {!definitions.length ? <EmptyState className="lg:col-span-2" icon={Sparkles} title={isPending ? '룰렛을 불러오는 중입니다' : '만든 룰렛이 없습니다'} description={isPending ? '잠시만 기다려 주세요.' : '실제 방송에 사용할 첫 룰렛을 만들어 주세요.'} action={isPending ? undefined : <RouletteCreateDialog />} /> : null}
       </div>
       <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
     </div>

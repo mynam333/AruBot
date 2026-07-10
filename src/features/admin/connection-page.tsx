@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { PageHeader } from '@/components/ui/page';
 import { apiUrl, readJson } from '@/shared/api/http';
 import { cn } from '@/shared/lib/utils';
 
@@ -364,18 +365,10 @@ export function ConnectionPage() {
 
   return (
     <>
-      <section className="rounded-[var(--radius-panel)] border bg-[linear-gradient(135deg,hsl(var(--card)),hsl(var(--accent-mint)/0.34)_58%,hsl(var(--accent-sky)/0.32))] p-[clamp(1.25rem,3vw,2rem)] shadow-soft">
+      <section className="border-b pb-5">
         <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(24%,0.34fr)] lg:items-end">
-          <div>
-            <Badge tone="mint">계정 연결</Badge>
-            <h1 className="mt-4 max-w-3xl break-keep text-3xl font-semibold leading-tight md:text-5xl">
-              여러 플랫폼 시청자를 한 방송으로.
-            </h1>
-            <p className="mt-4 max-w-2xl text-sm leading-7 text-muted-foreground md:text-base">
-              CHZZK, CIME, YouTube 채널을 연결해 명령어, 포인트, 이벤트 참여를 함께 관리하세요.
-            </p>
-          </div>
-          <Card className="bg-card/75">
+          <PageHeader className="border-0 pb-0" eyebrow="Accounts" title="플랫폼 연결" description="CHZZK, CIME, YouTube 채널의 연결 상태와 권한을 관리합니다." />
+          <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <ShieldCheck className="h-5 w-5 text-primary" />

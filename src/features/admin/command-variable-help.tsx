@@ -81,8 +81,7 @@ export function CommandVariableHelpButton() {
           className="fixed left-1/2 top-1/2 z-[80] grid max-h-[min(92svh,54rem)] w-[min(94vw,58rem)] -translate-x-1/2 -translate-y-1/2 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-[var(--radius-panel)] border bg-card/96 shadow-lift outline-none backdrop-blur-2xl data-[state=open]:animate-modal-in"
           onOpenAutoFocus={(event) => event.preventDefault()}
         >
-          <div className="relative overflow-hidden border-b bg-[radial-gradient(circle_at_12%_0%,hsl(var(--accent-sky)/0.72),transparent_36%),linear-gradient(135deg,hsl(var(--card)),hsl(var(--accent-mint)/0.24),hsl(var(--accent-lemon)/0.18))] p-[clamp(1rem,2.8vw,1.75rem)]">
-            <div className="absolute inset-x-[8%] top-0 h-[max(0.125rem,0.18vw)] rounded-full bg-[linear-gradient(90deg,hsl(var(--accent-mint)),hsl(var(--accent-sky)),hsl(var(--accent-coral)))]" />
+          <div className="border-b bg-card p-[clamp(1rem,2.8vw,1.75rem)]">
             <div className="relative flex items-start justify-between gap-4">
               <div className="min-w-0">
                 <div className="mb-3 flex flex-wrap items-center gap-2">

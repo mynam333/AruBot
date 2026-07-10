@@ -2425,8 +2425,7 @@ export function ActionBlueprintPage() {
 
   return (
     <div className="grid gap-[clamp(1rem,2vw,1.5rem)]">
-      <section className="relative overflow-hidden rounded-[var(--radius-panel)] border bg-[linear-gradient(135deg,hsl(var(--card))_0%,hsl(var(--accent-sky)/0.22)_52%,hsl(var(--accent-mint)/0.18)_100%)] p-[clamp(1rem,2.4vw,1.5rem)] shadow-soft">
-        <div className="absolute inset-x-[6%] top-0 h-[max(0.125rem,0.16vw)] rounded-full bg-[linear-gradient(90deg,hsl(var(--accent-mint)),hsl(var(--accent-sky)),hsl(var(--accent-coral)))] opacity-80" />
+      <section className="border-b pb-5">
         <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
           <div className="min-w-0">
             <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -2440,7 +2439,7 @@ export function ActionBlueprintPage() {
                 {draftStatus === 'restored' ? '임시 초안 복원' : draftStatus === 'saved' ? '자동 저장됨' : '편집 중'}
               </Badge>
             </div>
-            <h1 className="max-w-[18ch] break-keep text-[clamp(2rem,4vw,3.4rem)] font-extrabold leading-[0.98] tracking-normal">블루프린트 노드로 방송 액션을 설계하세요.</h1>
+            <h1 className="max-w-[22ch] break-keep text-[clamp(1.75rem,3.2vw,2.7rem)] font-bold leading-tight tracking-tight">방송 액션 설계</h1>
             <p className="mt-4 max-w-3xl break-keep text-sm leading-7 text-muted-foreground md:text-base">
               캔버스를 드래그해 이동하고, 휠로 확대/축소하고, 포트끼리 연결해 채팅·포인트·룰렛·오버레이·로컬 프로그램 액션을 실행합니다.
             </p>
@@ -2596,7 +2595,7 @@ export function ActionBlueprintPage() {
         </Card>
 
         <Card className="overflow-hidden border-border/70 bg-card/82 shadow-soft">
-          <CardHeader className="border-b bg-[linear-gradient(180deg,hsl(var(--card)/0.96),hsl(var(--card)/0.74))] p-3">
+          <CardHeader className="border-b bg-card p-3">
             <div className="flex flex-col gap-3">
               <div className="grid gap-2 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)_auto] lg:items-center">
                 <Input value={blueprint.name} onChange={(event) => setBlueprint((current) => ({ ...current, name: event.target.value }))} aria-label="블루프린트 이름" className="font-bold" />
@@ -2663,7 +2662,7 @@ export function ActionBlueprintPage() {
               tabIndex={0}
               data-flow-node-count={flowNodes.length}
               data-flow-edge-count={flowEdges.length}
-              className="relative h-[min(72svh,46rem)] min-h-[32rem] overflow-hidden bg-[radial-gradient(circle_at_18%_18%,hsl(var(--accent-sky)/0.18),transparent_30%),linear-gradient(135deg,hsl(var(--background)),hsl(var(--card)))] outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="relative h-[min(72svh,46rem)] min-h-[32rem] overflow-hidden bg-background outline-none focus-visible:ring-2 focus-visible:ring-ring"
               onKeyDown={handleCanvasKeyDown}
             >
               <div className="absolute left-3 right-3 top-3 z-20 flex items-center gap-2 rounded-full border bg-card/88 px-3 py-2 text-[0.68rem] font-semibold text-muted-foreground shadow-subtle backdrop-blur-xl sm:right-auto sm:text-xs">
@@ -2959,8 +2958,7 @@ export function ActionBlueprintPage() {
           <Dialog.Content className="fixed left-1/2 top-1/2 z-50 max-h-[min(86svh,48rem)] w-[min(42rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-[var(--radius-panel)] border bg-card text-card-foreground shadow-lift outline-none data-[state=open]:animate-scale-in">
             {editingNode ? (
               <>
-                <div className="relative overflow-hidden bg-[linear-gradient(135deg,hsl(var(--card)),hsl(var(--accent-sky)/0.22),hsl(var(--accent-mint)/0.16))] p-[clamp(1rem,2vw,1.35rem)]">
-                  <div className="absolute inset-x-[8%] top-0 h-[max(0.125rem,0.16vw)] rounded-full bg-[linear-gradient(90deg,hsl(var(--accent-mint)),hsl(var(--accent-sky)),hsl(var(--accent-coral)))]" />
+                <div className="border-b bg-card p-[clamp(1rem,2vw,1.35rem)]">
                   <div className="flex items-start justify-between gap-4">
                     <div>
                       <Dialog.Title className="break-keep text-xl font-extrabold leading-tight">노드 수정</Dialog.Title>
@@ -3051,7 +3049,7 @@ function NodeReferencePanel({ node }: { node: BlueprintNode }) {
   const spec = nodeSpec(node.type);
   const details = nodeOutputDetails(node);
   return (
-    <section className="overflow-hidden rounded-[var(--radius-control)] border bg-[linear-gradient(135deg,hsl(var(--background)/0.92),hsl(var(--muted)/0.48))] shadow-subtle">
+    <section className="overflow-hidden rounded-[var(--radius-control)] border bg-card shadow-subtle">
       <div className="border-b bg-background/55 p-3">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div className="min-w-0">
@@ -3133,7 +3131,7 @@ function ConfigFields({
     return (
       <div className="grid gap-3">
         {node.type === 'condition' ? (
-          <div className="flex items-center justify-between gap-3 rounded-[var(--radius-control)] border bg-[linear-gradient(135deg,hsl(var(--background)/0.82),hsl(var(--accent-lemon)/0.16))] p-3 shadow-subtle">
+          <div className="flex items-center justify-between gap-3 rounded-[var(--radius-control)] border bg-muted/30 p-3 shadow-subtle">
             <div className="min-w-0">
               <div className="text-sm font-extrabold">조건에 사용할 변수</div>
               <div className="text-xs font-medium leading-5 text-muted-foreground">좌변이나 우변에 넣을 수 있는 치환 변수를 모아봅니다.</div>
@@ -3260,7 +3258,7 @@ function ConfigFields({
         ) : null}
         {normalizedKind !== 'sound' ? (
           <>
-            <div className="relative overflow-hidden rounded-[var(--radius-control)] border bg-[radial-gradient(circle_at_12%_0%,hsl(var(--accent-sky)/0.22),transparent_38%),linear-gradient(135deg,hsl(var(--background)/0.84),hsl(var(--card)/0.92))] p-3 shadow-subtle">
+            <div className="relative overflow-hidden rounded-[var(--radius-control)] border bg-card p-3 shadow-subtle">
               <div className="mb-3 flex items-center justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-2">
                   <span className="grid h-8 w-8 shrink-0 place-items-center rounded-[var(--radius-control)] border bg-card/78 text-primary shadow-subtle">
