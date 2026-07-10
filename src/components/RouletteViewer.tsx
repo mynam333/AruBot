@@ -1,7 +1,9 @@
 import React from 'react';
 import { getBrowserApiBase } from '@/shared/api/http';
-import { WheelLabelsSvg, WheelSegmentsSvg, WheelSelectedSegment, WheelSkinOrnaments } from './rouletteWheelSkins';
-import { getWheelSkinFamily, splitWheelLabel } from './rouletteWheelUtils';
+import { RouletteThemeAtmosphere } from './rouletteThemeAtmosphere';
+import { getRouletteThemeMaterial } from './rouletteThemeMaterials';
+import { WheelGlassOverlay, WheelLabelsSvg, WheelPointer, WheelSegmentsSvg, WheelSelectedSegment, WheelSkinOrnaments } from './rouletteWheelSkins';
+import { splitWheelLabel } from './rouletteWheelUtils';
 
 // Module-scope overlay kind and component to avoid remounts on parent re-renders
 type OverlayKind = 'none' | 'sakura' | 'midnight' | 'sunset' | 'grid' | 'noise' | 'embers' | 'snow' | 'scan' | 'shimmer' | 'confetti' | 'leaves' | 'gold-sweep';
@@ -407,13 +409,37 @@ type RouletteViewerProps = {
   viewerToken?: string;
 };
 
+type WheelSpinPlan = {
+  id: number;
+  startRotation: number;
+  finalRotation: number;
+  durationMs: number;
+};
+
+const WHEEL_STOP_EDGE_PADDING_RATIO = 0.14;
+
 function normalizeWheelResultLabel(value: unknown) {
   return String(value || '').replace(/\s+/g, '').trim();
 }
 
-function wheelStopRotationForIndex(index: number, segmentCount: number) {
-  const segmentDeg = 360 / Math.max(1, segmentCount);
-  return -((index * segmentDeg) + (segmentDeg / 2));
+function randomWheelStopOffsetRatio() {
+  const maxOffset = 0.5 - WHEEL_STOP_EDGE_PADDING_RATIO;
+  return ((Math.random() * 2) - 1) * maxOffset;
+}
+
+function wheelStopRotationForIndex(index: number, segmentCount: number, offsetRatio = 0) {
+  const count = Math.max(1, segmentCount);
+  const segmentDeg = 360 / count;
+  const maxOffset = 0.5 - WHEEL_STOP_EDGE_PADDING_RATIO;
+  const safeOffsetRatio = Math.max(-maxOffset, Math.min(maxOffset, offsetRatio));
+  return -((index * segmentDeg) + (segmentDeg / 2) + (safeOffsetRatio * segmentDeg));
+}
+
+function wheelIndexAtPointer(rotation: number, segmentCount: number) {
+  const count = Math.max(1, segmentCount);
+  const segmentDeg = 360 / count;
+  const pointerAngle = (((-rotation) % 360) + 360) % 360;
+  return Math.min(count - 1, Math.floor(pointerAngle / segmentDeg));
 }
 
 function equivalentForwardRotation(currentRotation: number, targetModuloRotation: number, turns = 6) {
@@ -454,6 +480,10 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
   const [wheelSelectedIndex, setWheelSelectedIndex] = React.useState(-1);
   const [wheelRotationDeg, setWheelRotationDeg] = React.useState(0);
   const [wheelSettled, setWheelSettled] = React.useState(false);
+  const [wheelSpinPlan, setWheelSpinPlan] = React.useState<WheelSpinPlan | null>(null);
+  const wheelDiscRef = React.useRef<HTMLDivElement | null>(null);
+  const wheelAnimationRef = React.useRef<Animation | null>(null);
+  const wheelSpinPlanIdRef = React.useRef(0);
   const wheelRotationRef = React.useRef(0);
   // RAF physics refs
   const rafIdRef = React.useRef<number | null>(null);
@@ -677,6 +707,66 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     const look = parseRouletteLook(value);
     if (look.theme) setServerTheme(look.theme);
     if (look.layout) setServerLayout(look.layout);
+  }, []);
+
+  React.useEffect(() => {
+    if (!active || layout !== 'wheel' || !wheelSpinPlan) return;
+    const wheel = wheelDiscRef.current;
+    if (!wheel) return;
+
+    try { wheelAnimationRef.current?.cancel(); } catch {}
+
+    const { id, startRotation, finalRotation, durationMs } = wheelSpinPlan;
+    wheel.style.transform = `rotate(${startRotation}deg)`;
+
+    if (typeof wheel.animate !== 'function') {
+      wheel.style.transition = `transform ${durationMs}ms cubic-bezier(0.12, 0.68, 0.1, 1)`;
+      const frameId = window.requestAnimationFrame(() => {
+        wheel.style.transform = `rotate(${finalRotation}deg)`;
+      });
+      const settleId = window.setTimeout(() => {
+        if (wheelSpinPlanIdRef.current !== id) return;
+        wheelRotationRef.current = finalRotation;
+        setWheelRotationDeg(finalRotation);
+        setWheelSettled(true);
+      }, durationMs);
+      return () => {
+        window.cancelAnimationFrame(frameId);
+        window.clearTimeout(settleId);
+        wheel.style.transition = '';
+      };
+    }
+
+    const animation = wheel.animate(
+      [
+        { transform: `rotate(${startRotation}deg)` },
+        { transform: `rotate(${finalRotation}deg)` },
+      ],
+      {
+        duration: durationMs,
+        easing: 'cubic-bezier(0.12, 0.68, 0.1, 1)',
+        fill: 'forwards',
+      },
+    );
+    wheelAnimationRef.current = animation;
+    animation.onfinish = () => {
+      if (wheelSpinPlanIdRef.current !== id) return;
+      wheelRotationRef.current = finalRotation;
+      setWheelRotationDeg(finalRotation);
+      setWheelSettled(true);
+    };
+
+    return () => {
+      animation.onfinish = null;
+      if (wheelAnimationRef.current === animation && animation.playState !== 'finished') {
+        try { animation.cancel(); } catch {}
+        wheelAnimationRef.current = null;
+      }
+    };
+  }, [active, layout, wheelSpinPlan]);
+
+  React.useEffect(() => () => {
+    try { wheelAnimationRef.current?.cancel(); } catch {}
   }, []);
   // SFX defaults to ON; allow disabling with ?sfx=off
   const sfxOn = React.useMemo(() => {
@@ -1125,6 +1215,10 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       cancelAnimationFrame(rafIdRef.current);
       rafIdRef.current = null;
     }
+    wheelSpinPlanIdRef.current += 1;
+    try { wheelAnimationRef.current?.cancel(); } catch {}
+    wheelAnimationRef.current = null;
+    setWheelSpinPlan(null);
     // Fade out whole content layer first
     setActive(false);
     const OUT_MS = FADE_MS;
@@ -1148,7 +1242,11 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       setScrollIndex(0);
       const instantWheelIndex = 0;
       const instantWheelItems = buildWheelItemsForResult(poolRef.current, finalLabel, instantWheelIndex);
-      const instantWheelRotation = wheelStopRotationForIndex(instantWheelIndex, instantWheelItems.length);
+      const instantWheelRotation = wheelStopRotationForIndex(
+        instantWheelIndex,
+        instantWheelItems.length,
+        randomWheelStopOffsetRatio(),
+      );
       setWheelItemsState(instantWheelItems);
       setWheelSelectedIndex(instantWheelIndex);
       wheelRotationRef.current = instantWheelRotation;
@@ -1180,6 +1278,9 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     // clear previous timers
     timersRef.current.forEach(id => window.clearTimeout(id));
     timersRef.current = [];
+    wheelSpinPlanIdRef.current += 1;
+    try { wheelAnimationRef.current?.cancel(); } catch {}
+    wheelAnimationRef.current = null;
     // keep reel view; no separate final stage view
     // Build reel with random items and inject final at stop time to avoid blanks
     const baseItems = Array.isArray(itemsFromServer) && itemsFromServer.length > 0
@@ -1193,14 +1294,24 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     const wheelTargetIndex = Math.floor(Math.random() * wheelItemCount);
     const nextWheelItems = buildWheelItemsForResult(pool, finalLabel, wheelTargetIndex);
     setWheelItemsState(nextWheelItems);
-    setWheelSelectedIndex(wheelTargetIndex);
     setWheelSettled(false);
     const wheelStartRotation = wheelRotationRef.current;
+    const wheelStopOffsetRatio = randomWheelStopOffsetRatio();
     const wheelFinalRotation = equivalentForwardRotation(
       wheelStartRotation,
-      wheelStopRotationForIndex(wheelTargetIndex, nextWheelItems.length),
+      wheelStopRotationForIndex(wheelTargetIndex, nextWheelItems.length, wheelStopOffsetRatio),
       6 + Math.floor(Math.random() * 3)
     );
+    const wheelResolvedIndex = wheelIndexAtPointer(wheelFinalRotation, nextWheelItems.length);
+    setWheelSelectedIndex(wheelResolvedIndex);
+    const spinDurationMs = durationRef.current;
+    setWheelRotationDeg(wheelStartRotation);
+    setWheelSpinPlan({
+      id: wheelSpinPlanIdRef.current,
+      startRotation: wheelStartRotation,
+      finalRotation: wheelFinalRotation,
+      durationMs: spinDurationMs,
+    });
     const rand = () => pool[Math.floor(Math.random() * pool.length)];
     const seq: string[] = [];
     // Initial head padding based on viewport
@@ -1231,7 +1342,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     targetIndexRef.current = targetIdx;
     animStartRef.current = performance.now();
     const distancePx = (targetIdx - startIdx) * rowHpx;
-    const T = durationRef.current; // 5200ms
+    const T = spinDurationMs;
     const a = (2 * distancePx) / (T * T); // decel
     const v0 = a * T; // initial velocity px/ms
     aRef.current = a; v0Ref.current = v0;
@@ -1242,28 +1353,20 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       const clamped = Math.min(T, Math.max(0, t));
       const s = (v0 * clamped) - (0.5 * a * clamped * clamped); // px
       const currentCenter = startIdx + (s / rowHpx);
-      const wheelProgress = distancePx > 0 ? Math.max(0, Math.min(1, s / distancePx)) : Math.max(0, Math.min(1, clamped / T));
-      const currentWheelRotation = wheelStartRotation + ((wheelFinalRotation - wheelStartRotation) * wheelProgress);
       setOffsetRows(currentCenter);
       setScrollIndex(Math.floor(currentCenter));
-      wheelRotationRef.current = currentWheelRotation;
-      setWheelRotationDeg(currentWheelRotation);
       if (t < T) {
         rafIdRef.current = requestAnimationFrame(run);
       } else {
         // Final snap to exact center and small overshoot bounce
         setOffsetRows(targetIdx);
         setScrollIndex(targetIdx);
-        wheelRotationRef.current = wheelFinalRotation;
-        setWheelRotationDeg(wheelFinalRotation);
         // Overshoot: +2px then settle back
         const px2rows = (px: number) => px / rowHpx;
         const overshoot = () => {
           setOffsetRows(targetIdx + px2rows(2));
-          setWheelRotationDeg(wheelFinalRotation + 1.4);
           requestAnimationFrame(() => {
             setOffsetRows(targetIdx - px2rows(1));
-            setWheelRotationDeg(wheelFinalRotation - 0.45);
             requestAnimationFrame(() => {
               setOffsetRows(targetIdx);
               wheelRotationRef.current = wheelFinalRotation;
@@ -1754,7 +1857,8 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     },
   };
 
-  const t = ROULETTE_SKINS[(serverTheme || theme || 'studio') as Theme] || ROULETTE_SKINS.studio;
+  const t = ROULETTE_SKINS[theme] || ROULETTE_SKINS.studio;
+  const themeMaterial = getRouletteThemeMaterial(t.id);
   const overlayKind: OverlayKind = t.overlay || 'none';
   const overlayEl = React.useMemo(() => <OverlaySvg kind={overlayKind} />, [overlayKind]);
 
@@ -1858,7 +1962,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     [wheelItemsState]
   );
   const wheelLabelLines = React.useMemo(() => wheelItems.map(splitWheelLabel), [wheelItems]);
-  const wheelSkinFamily = React.useMemo(() => getWheelSkinFamily(t.id), [t.id]);
+  const wheelSkinFamily = themeMaterial.family;
 
   const wheelCount = Math.max(1, wheelItems.length);
   const progressPercent = batchProgress.id
@@ -1868,24 +1972,28 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
   const renderReelWindow = () => (
     <section
       aria-label="룰렛 릴 오버레이"
-      className={`roulette-stage relative w-[min(94vw,960px)] overflow-hidden rounded-2xl border transition-[opacity,transform] ${active ? 'scale-100 opacity-100' : 'pointer-events-none scale-[0.98] opacity-0'}`}
+      className={`roulette-stage relative isolate w-[min(94vw,1040px)] overflow-hidden border transition-[opacity,transform] ${active ? 'scale-100 opacity-100' : 'pointer-events-none scale-[0.985] opacity-0'}`}
       style={{
         borderColor: 'var(--roulette-line)',
-        background: 'linear-gradient(135deg, var(--roulette-panel-strong), var(--roulette-panel))',
-        boxShadow: '0 24px 72px rgba(0,0,0,0.42), inset 0 1px 0 rgba(255,255,255,0.12)',
+        borderRadius: 'var(--roulette-radius)',
+        background: 'var(--roulette-backdrop)',
+        boxShadow: '0 32px 90px rgba(0,0,0,.52), 0 0 54px var(--roulette-shadow), inset 0 1px 0 rgba(255,255,255,.16)',
         color: 'var(--roulette-text)',
         transitionDuration: FADE_MS + 'ms',
       }}
     >
-      {active ? <div className="pointer-events-none absolute inset-0 overflow-hidden opacity-45">{overlayEl}</div> : null}
+      <RouletteThemeAtmosphere kind={themeMaterial.atmosphere} active={active} compact />
+      {active ? <div className="pointer-events-none absolute inset-0 overflow-hidden opacity-20 mix-blend-soft-light">{overlayEl}</div> : null}
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-20 h-px" style={{ background: 'linear-gradient(90deg,transparent,var(--roulette-accent),transparent)', boxShadow: '0 0 18px var(--roulette-shadow)' }} />
       <div className="relative z-10 grid lg:grid-cols-[minmax(230px,0.66fr)_minmax(430px,1.34fr)]">
-        <header className="flex min-w-0 flex-col justify-between gap-6 border-b p-[clamp(20px,3.4vw,38px)] lg:border-b-0 lg:border-r" style={{ borderColor: 'var(--roulette-line)' }}>
+        <header className="relative flex min-w-0 flex-col justify-between gap-6 overflow-hidden border-b p-[clamp(22px,3.6vw,42px)] lg:border-b-0 lg:border-r" style={{ borderColor: 'var(--roulette-line)', background: 'linear-gradient(145deg,rgba(255,255,255,.055),transparent 58%)' }}>
+          <div className="pointer-events-none absolute bottom-0 left-0 top-0 w-1" style={{ background: 'linear-gradient(180deg,transparent,var(--roulette-accent),transparent)', boxShadow: '0 0 18px var(--roulette-shadow)' }} />
           <div className="min-w-0">
-            <div className="mb-3 flex items-center gap-2 text-[clamp(11px,1.1vw,13px)] font-bold tracking-[0.08em]" style={{ color: 'var(--roulette-accent-2)' }}>
+            <div className="mb-4 flex items-center gap-2.5 text-[clamp(10px,1vw,12px)] font-extrabold tracking-[0.16em]" style={{ color: 'var(--roulette-accent-2)' }}>
               <span className="h-2 w-2 rounded-full" style={{ background: 'currentColor', boxShadow: '0 0 12px currentColor' }} />
               룰렛 실행
             </div>
-            <h1 className="truncate text-[clamp(24px,3.2vw,44px)] font-black leading-tight">{state.name || '룰렛'}</h1>
+            <h1 className="max-w-[12ch] break-keep text-[clamp(26px,3.4vw,48px)] font-black leading-[1.08] tracking-[-0.035em]" style={{ fontFamily: 'var(--roulette-font-display)' }}>{state.name || '룰렛'}</h1>
             {state.username ? <p className="mt-3 truncate text-[clamp(15px,1.6vw,22px)] font-semibold" style={{ color: 'var(--roulette-muted)' }}>{state.username}님</p> : null}
           </div>
           {batchProgress.id ? (
@@ -1896,10 +2004,12 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
           ) : null}
         </header>
 
-        <div className="relative min-h-[clamp(260px,34vw,420px)] p-[clamp(18px,3vw,34px)]">
-          <div className="absolute inset-x-[12%] top-1/2 z-20 h-[clamp(88px,11vw,128px)] -translate-y-1/2 rounded-xl border" style={{ borderColor: 'var(--roulette-accent-2)', background: 'rgba(255,255,255,0.055)', boxShadow: '0 0 30px var(--roulette-shadow), inset 0 0 24px rgba(255,255,255,0.04)' }} />
-          <div className="pointer-events-none absolute inset-x-[10%] top-1/2 z-30 h-px -translate-y-1/2" style={{ background: 'var(--roulette-accent-2)', boxShadow: '0 0 16px var(--roulette-shadow)' }} />
-          <div ref={reelRef} className="relative h-full min-h-[clamp(224px,29vw,352px)] overflow-hidden rounded-xl border bg-black/20" style={{ borderColor: 'var(--roulette-line)' }}>
+        <div className="relative min-h-[clamp(280px,35vw,440px)] p-[clamp(20px,3.2vw,38px)]">
+          <div className="absolute inset-x-[10%] top-1/2 z-20 h-[clamp(92px,11vw,132px)] -translate-y-1/2 border" style={{ borderColor: 'var(--roulette-accent-2)', borderRadius: 'calc(var(--roulette-radius) * .55)', background: 'var(--roulette-track)', boxShadow: '0 0 36px var(--roulette-shadow), inset 0 0 28px rgba(255,255,255,.055)' }} />
+          <div className="pointer-events-none absolute inset-x-[8%] top-1/2 z-30 h-px -translate-y-1/2" style={{ background: 'linear-gradient(90deg,transparent,var(--roulette-accent-2),transparent)', boxShadow: '0 0 18px var(--roulette-shadow)' }} />
+          <div className="pointer-events-none absolute left-[7.2%] top-1/2 z-30 h-[clamp(48px,6vw,70px)] w-1 -translate-y-1/2" style={{ background: 'var(--roulette-accent)', boxShadow: '0 0 16px var(--roulette-shadow)' }} />
+          <div className="pointer-events-none absolute right-[7.2%] top-1/2 z-30 h-[clamp(48px,6vw,70px)] w-1 -translate-y-1/2" style={{ background: 'var(--roulette-accent)', boxShadow: '0 0 16px var(--roulette-shadow)' }} />
+          <div ref={reelRef} className="relative h-full min-h-[clamp(236px,30vw,370px)] overflow-hidden border bg-black/25" style={{ borderColor: 'var(--roulette-line)', borderRadius: 'calc(var(--roulette-radius) * .72)', boxShadow: 'inset 0 18px 36px rgba(0,0,0,.3), inset 0 -18px 36px rgba(0,0,0,.3)' }}>
             <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-[32%] bg-gradient-to-b from-black/70 to-transparent" />
             <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-[32%] bg-gradient-to-t from-black/70 to-transparent" />
             <div ref={rowRef} className="invisible absolute left-0 top-1/2 w-full -translate-y-1/2"><div className="px-4 text-center text-[clamp(44px,7vw,86px)] font-black leading-tight">8</div></div>
@@ -1922,7 +2032,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
                     const isCenter = index === Math.round(center);
                     return (
                       <div key={index} className="flex w-full items-center justify-center px-4" style={{ height: rh }}>
-                        <div className={`max-w-full truncate text-center text-[clamp(44px,7vw,86px)] font-black leading-tight ${isCenter ? 'roulette-result-lock' : ''}`} style={{ color: isCenter ? 'var(--roulette-result)' : 'rgba(255,255,255,0.24)', textShadow: isCenter ? '0 0 22px var(--roulette-shadow), 0 8px 24px rgba(0,0,0,0.5)' : 'none', transform: isCenter ? 'scale(1)' : 'scale(0.88)' }}>{label}</div>
+                        <div className={`max-w-full truncate text-center text-[clamp(44px,7vw,86px)] font-black leading-tight tracking-[-0.035em] ${isCenter ? 'roulette-result-lock' : ''}`} style={{ color: isCenter ? 'var(--roulette-result)' : 'rgba(255,255,255,.24)', fontFamily: 'var(--roulette-font-display)', textShadow: isCenter ? '0 0 24px var(--roulette-shadow), 0 8px 24px rgba(0,0,0,.58)' : 'none', transform: isCenter ? 'scale(1)' : 'scale(.88)' }}>{label}</div>
                       </div>
                     );
                   })}
@@ -1938,23 +2048,36 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
   const renderWheel = () => (
     <section
       aria-label="룰렛 휠 오버레이"
-      className={`roulette-stage relative grid aspect-square w-[min(88vmin,700px)] place-items-center transition-[opacity,transform] ${active ? 'scale-100 opacity-100' : 'pointer-events-none scale-[0.98] opacity-0'}`}
-      style={{ color: 'var(--roulette-text)', filter: 'drop-shadow(0 26px 62px rgba(0,0,0,0.46))', transitionDuration: FADE_MS + 'ms' }}
+      className={`roulette-stage relative isolate grid aspect-square w-[min(89vmin,760px)] place-items-center transition-[opacity,transform] ${active ? 'scale-100 opacity-100' : 'pointer-events-none scale-[0.985] opacity-0'}`}
+      style={{ color: 'var(--roulette-text)', filter: 'drop-shadow(0 30px 72px rgba(0,0,0,.58))', transitionDuration: FADE_MS + 'ms' }}
     >
-      <div className="absolute inset-[-1.5%] rounded-full" style={{ background: 'radial-gradient(circle, var(--roulette-shadow), transparent 66%)', filter: 'blur(16px)', opacity: 0.66 }} />
-      <div className="absolute inset-0 rounded-full border" style={{ borderColor: 'rgba(255,255,255,0.24)', background: 'linear-gradient(145deg, var(--roulette-panel-strong), #05070b)', boxShadow: 'inset 0 0 0 clamp(8px,1.3vmin,13px) rgba(255,255,255,0.05), inset 0 0 0 clamp(13px,2.2vmin,22px) rgba(0,0,0,0.32)' }} />
-      <WheelSkinOrnaments family={wheelSkinFamily} />
-      <div className="absolute inset-[8%] overflow-hidden rounded-full" style={{ transform: `rotate(${wheelRotationDeg}deg)`, boxShadow: '0 0 32px var(--roulette-shadow), inset 0 0 30px rgba(0,0,0,0.3)' }}>
-        <WheelSegmentsSvg family={wheelSkinFamily} palette={t.palette} segmentCount={wheelCount} />
-        <WheelSelectedSegment selectedIndex={wheelSelectedIndex} segmentCount={wheelCount} />
-        <WheelLabelsSvg labelLines={wheelLabelLines} selectedIndex={wheelSelectedIndex} />
+      <RouletteThemeAtmosphere kind={themeMaterial.atmosphere} active={active} />
+      {active ? <div className="pointer-events-none absolute inset-[-8%] z-0 overflow-hidden rounded-full opacity-10 mix-blend-soft-light">{overlayEl}</div> : null}
+      <div className="absolute inset-[-5%] z-0 rounded-full" style={{ background: 'radial-gradient(circle,var(--roulette-shadow),transparent 67%)', filter: 'blur(22px)', opacity: .84 }} />
+      <div className="absolute inset-0 z-10 rounded-full p-[clamp(13px,2.2vmin,22px)]" style={{ background: 'var(--roulette-rim-outer)', boxShadow: '0 22px 65px rgba(0,0,0,.56), 0 0 44px var(--roulette-shadow), inset 0 1px 1px rgba(255,255,255,.62)' }}>
+        <div className="h-full w-full rounded-full" style={{ background: 'var(--roulette-rim-inner)', boxShadow: 'inset 0 0 0 clamp(5px,.8vmin,8px) rgba(0,0,0,.46), inset 0 0 24px rgba(0,0,0,.62)' }} />
       </div>
-      <div className="absolute left-1/2 top-[1.5%] z-40 h-0 w-0 -translate-x-1/2 border-x-[clamp(12px,2vmin,18px)] border-t-[clamp(24px,3.6vmin,34px)] border-x-transparent" style={{ borderTopColor: 'var(--roulette-result)', filter: 'drop-shadow(0 0 12px var(--roulette-shadow))' }} />
-      <div className="absolute inset-[32%] z-30 grid place-items-center rounded-full border p-[clamp(12px,2vmin,22px)] text-center" style={{ borderColor: 'rgba(255,255,255,0.28)', background: 'radial-gradient(circle at 50% 24%, rgba(255,255,255,0.13), transparent 34%), rgba(5,7,11,0.97)', boxShadow: '0 0 34px var(--roulette-shadow), inset 0 1px 0 rgba(255,255,255,0.18)' }}>
-        <div className="grid max-w-full justify-items-center gap-[clamp(3px,0.8vmin,7px)]">
-          <div className="max-w-full truncate text-[clamp(11px,1.6vmin,16px)] font-bold" style={{ color: 'var(--roulette-muted)' }}>{state.name || '룰렛'}</div>
+      <WheelSkinOrnaments family={wheelSkinFamily} themeId={t.id} />
+      <div
+        ref={wheelDiscRef}
+        data-testid="roulette-wheel-disc"
+        data-selected-index={wheelSelectedIndex}
+        data-settled={wheelSettled ? 'true' : 'false'}
+        className="absolute inset-[8.6%] z-10 overflow-hidden rounded-full will-change-transform"
+        style={{ transform: `rotate(${wheelRotationDeg}deg)`, boxShadow: '0 0 38px var(--roulette-shadow), inset 0 0 34px rgba(0,0,0,.34)' }}
+      >
+        <WheelSegmentsSvg family={wheelSkinFamily} palette={t.palette} segmentCount={wheelCount} themeId={t.id} />
+        <WheelSelectedSegment selectedIndex={wheelSettled ? wheelSelectedIndex : -1} segmentCount={wheelCount} family={wheelSkinFamily} />
+        <WheelLabelsSvg labelLines={wheelLabelLines} selectedIndex={wheelSettled ? wheelSelectedIndex : -1} />
+      </div>
+      <WheelGlassOverlay />
+      <WheelPointer themeId={t.id} />
+      <div className="absolute inset-[35.2%] z-40 grid place-items-center rounded-full border p-[clamp(10px,1.6vmin,18px)] text-center" style={{ borderColor: 'var(--roulette-hub-line)', background: 'var(--roulette-hub)', boxShadow: '0 0 38px var(--roulette-shadow), 0 12px 32px rgba(0,0,0,.48), inset 0 1px 1px rgba(255,255,255,.28), inset 0 -10px 22px rgba(0,0,0,.30)' }}>
+        <div className="pointer-events-none absolute inset-[9%] rounded-full border" style={{ borderColor: 'rgba(255,255,255,.16)' }} />
+        <div className="grid max-w-full justify-items-center gap-[clamp(2px,.65vmin,6px)]">
+          <div className="max-w-full truncate text-[clamp(10px,1.4vmin,14px)] font-extrabold tracking-[0.08em]" style={{ color: 'var(--roulette-muted)', fontFamily: 'var(--roulette-font-display)' }}>{state.name || '룰렛'}</div>
           {state.username ? <div className="max-w-full truncate text-[clamp(10px,1.4vmin,14px)] font-semibold" style={{ color: 'var(--roulette-muted)' }}>{state.username}님</div> : null}
-          <div className={wheelSettled ? 'roulette-result-lock max-w-[90%] truncate text-[clamp(28px,5vmin,52px)] font-black leading-tight' : 'max-w-[90%] truncate text-[clamp(22px,3.8vmin,40px)] font-black leading-tight'} style={{ color: 'var(--roulette-result)', textShadow: '0 0 20px var(--roulette-shadow)' }}>{wheelSettled ? (state.label || state.value || '') : '회전 중'}</div>
+          <div className={wheelSettled ? 'roulette-result-lock max-w-[94%] break-keep text-center text-[clamp(18px,4vmin,42px)] font-black leading-[.98] tracking-[-0.04em]' : 'max-w-[92%] truncate text-[clamp(18px,3.2vmin,32px)] font-black leading-none tracking-[-0.03em]'} style={{ color: 'var(--roulette-result)', fontFamily: 'var(--roulette-font-display)', textShadow: '0 0 22px var(--roulette-shadow), 0 4px 12px rgba(0,0,0,.46)' }}>{wheelSettled ? (state.label || state.value || '') : '회전 중'}</div>
           {batchProgress.id ? <div className="text-[clamp(10px,1.3vmin,13px)] font-bold" style={{ color: 'var(--roulette-accent-2)' }}>진행 {batchProgress.done} / {batchProgress.total}</div> : null}
         </div>
       </div>
@@ -1962,7 +2085,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
   );
 
   return (
-    <div className="min-h-screen w-screen overflow-hidden text-white" style={{ backgroundColor: 'transparent', ...t.css }}>
+    <div className="min-h-screen w-screen overflow-hidden text-white" data-roulette-theme={t.id} data-roulette-material={themeMaterial.material} style={{ backgroundColor: 'transparent', ...t.css, ...themeMaterial.css }}>
       {error ? <div className="fixed left-1/2 top-5 z-50 -translate-x-1/2 rounded-lg border border-red-300/30 bg-slate-950/90 px-3 py-2 text-xs font-semibold text-red-100 shadow-lg">{error}</div> : null}
       <div className="grid h-[100dvh] w-full place-items-center p-[clamp(10px,2vw,24px)]">
         {layout === 'wheel' ? renderWheel() : renderReelWindow()}

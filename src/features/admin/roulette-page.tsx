@@ -12,6 +12,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { EmptyState, PageHeader } from '@/components/ui/page';
 import { Pagination } from '@/components/ui/pagination';
+import { RouletteThemeSwatch } from '@/components/rouletteThemeSwatch';
 import {
   normalizeEditableRouletteItems,
   RouletteItemsEditor,
@@ -238,9 +239,12 @@ function RouletteEditDialog({
               </label>
               <label className="grid gap-[clamp(0.5rem,1vw,0.75rem)] text-sm font-semibold">
                 스킨
-                <select value={theme} onChange={(event) => setTheme((ROULETTE_SKIN_NAMES.includes(event.target.value as RouletteSkin) ? event.target.value : 'studio') as RouletteSkin)} className="min-h-[var(--control-height)] rounded-[var(--radius-control)] border bg-background px-3 text-sm">
-                  {ROULETTE_SKIN_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                </select>
+                <span className="flex min-w-0 items-center gap-2">
+                  <RouletteThemeSwatch themeId={theme} />
+                  <select value={theme} onChange={(event) => setTheme((ROULETTE_SKIN_NAMES.includes(event.target.value as RouletteSkin) ? event.target.value : 'studio') as RouletteSkin)} className="min-h-[var(--control-height)] min-w-0 flex-1 rounded-[var(--radius-control)] border bg-background px-3 text-sm">
+                    {ROULETTE_SKIN_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </select>
+                </span>
               </label>
             </div>
 

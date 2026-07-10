@@ -20,6 +20,7 @@ import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { RouletteThemeSwatch } from '@/components/rouletteThemeSwatch';
 import { CommandVariableHelpButton } from '@/features/admin/command-variable-help';
 import {
   createDefaultRouletteItems,
@@ -436,9 +437,12 @@ export function RouletteCreateDialog({ variant = 'secondary', label = '룰렛 �
           </select>
         </Field>
         <Field label="스킨">
-          <select value={skin} onChange={(event) => setSkin((ROULETTE_SKIN_NAMES.includes(event.target.value as RouletteSkin) ? event.target.value : 'studio') as RouletteSkin)} className="min-h-[var(--control-height)] rounded-[var(--radius-control)] border bg-background px-3 text-sm">
-            {ROULETTE_SKIN_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-          </select>
+          <span className="flex min-w-0 items-center gap-2">
+            <RouletteThemeSwatch themeId={skin} />
+            <select value={skin} onChange={(event) => setSkin((ROULETTE_SKIN_NAMES.includes(event.target.value as RouletteSkin) ? event.target.value : 'studio') as RouletteSkin)} className="min-h-[var(--control-height)] min-w-0 flex-1 rounded-[var(--radius-control)] border bg-background px-3 text-sm">
+              {ROULETTE_SKIN_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </span>
         </Field>
       </div>
       <div className="grid gap-[clamp(0.5rem,1vw,0.75rem)] text-sm font-semibold">
