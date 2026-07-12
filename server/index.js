@@ -314,6 +314,7 @@ app.use('/files', cors(corsOptions), express.static(path.join(path.dirname(new U
 const sessionContextCache = new Map(); // sidToken -> { sid, channelId, userId, lastActivity, sessionKey }
 const sessionStore = new Map(); // sid -> entry
 const activeSids = new Map(); // sid -> lastSeenTs
+const chzzkRuntimeErrors = new Map(); // sid -> { message, status, at }
 const youtubeSessionStore = new Map(); // ownerUserId -> entry
 const youtubeSessionCreatePromises = new Map(); // ownerUserId -> Promise(entry)
 const youtubeSendQueues = new Map(); // ownerUserId -> Promise
@@ -5841,6 +5842,7 @@ app.get('/healthz', (req, res) => {
   const memory = process.memoryUsage();
   res.json({
     ok: true,
+    check: 'liveness',
     role: PROCESS_ROLE,
     dbProvider: DB_PROVIDER,
     releaseSha: RELEASE_SHA,
@@ -5860,11 +5862,12 @@ app.get('/healthz', (req, res) => {
   });
 });
 
-app.get('/readyz', async (req, res) => {
+async function handleReadiness(req, res) {
   const db = await checkDatabaseReady();
   const ready = db.ok && runtimeReadinessState.initialBootstrapCompleted && !runtimeReadinessState.shuttingDown;
   return res.status(ready ? 200 : 503).json({
     ok: ready,
+    check: 'readiness',
     role: PROCESS_ROLE,
     dbProvider: DB_PROVIDER,
     releaseSha: RELEASE_SHA,
@@ -5877,7 +5880,10 @@ app.get('/readyz', async (req, res) => {
     },
     db,
   });
-});
+}
+
+app.get('/readyz', handleReadiness);
+app.get('/api/readiness', handleReadiness);
 
 // Send a command to desktop clients via API key
 // POST /api/desktop/command
@@ -9767,6 +9773,10 @@ async function recordPredictionEventLogs(sid, prediction, context = {}) {
 
 async function recordCommandExecutionLog(sid, context = {}) {
   if (!context.executed) return;
+  const statsUpdate = updateBotStats(sid, { messagesProcessed: 0, commandsHandled: 1 }).catch((error) => {
+    console.warn('[Bot Stats] command increment skipped:', error?.message || error);
+    return null;
+  });
   await recordBotEventLogSafe(sid, {
     category: context.category || 'command',
     eventType: context.eventType || 'command_execute',
@@ -9802,6 +9812,7 @@ async function recordCommandExecutionLog(sid, context = {}) {
       source: context.source || null,
     },
   });
+  await statsUpdate;
 }
 
 async function recordDonationRuleExecutionLog(sid, context = {}) {
@@ -10636,10 +10647,21 @@ async function ensureChzzkChatSessionForLiveSid(sid, channelId = null) {
 
   const promise = ensureSession(sid, targetChannelId)
     .then((entry) => {
+      chzzkRuntimeErrors.delete(String(sid));
       console.log(`[CHZZK] Live chat session ensured for ${sid} channel=${targetChannelId}`);
       return entry;
     })
     .catch((error) => {
+      const responseError = error?.response?.data?.error;
+      const message = compactLogText(
+        responseError?.message || (typeof responseError === 'string' ? responseError : '') || error?.message || 'chzzk_chat_session_failed',
+        400
+      );
+      chzzkRuntimeErrors.set(String(sid), {
+        message,
+        status: Number(error?.status || error?.response?.status || 0) || null,
+        at: new Date().toISOString(),
+      });
       console.warn(`[CHZZK] Failed to ensure live chat session for ${sid} channel=${targetChannelId}:`, error?.response?.data || error?.message || error);
       return null;
     })
@@ -10669,6 +10691,8 @@ function closeChzzkChatSessionForOfflineSid(sid, channelId = null, reason = 'liv
   }
 
   entry.connected = false;
+  entry.expectedDisconnect = true;
+  chzzkRuntimeErrors.delete(String(sid || entry.primarySid || ''));
   try { entry.subscribed?.clear?.(); } catch { }
   try { entry.sids?.clear?.(); } catch { }
   try {
@@ -10703,9 +10727,12 @@ async function refreshChzzkLiveStatusForSid(sid, options = {}) {
   let anyLive = false;
   let liveChannelId = null;
   let startTs = null;
+  let successfulLiveChecks = 0;
+  let lastLiveCheckError = null;
   for (const uid of channelUids) {
     try {
       const r = await axiosGetWithRetry(`https://api.chzzk.naver.com/service/v2/channels/${encodeURIComponent(uid)}/live-detail`);
+      successfulLiveChecks += 1;
       const content = r?.data?.content || r?.data || {};
       if (isChzzkLiveDetailOpen(content)) {
         anyLive = true;
@@ -10715,8 +10742,32 @@ async function refreshChzzkLiveStatusForSid(sid, options = {}) {
         break;
       }
     } catch (e) {
+      lastLiveCheckError = e;
       console.warn('[live-detail] fetch failed for', uid, e?.code || e?.message || e);
     }
+  }
+
+  if (successfulLiveChecks === 0) {
+    const message = compactLogText(lastLiveCheckError?.message || lastLiveCheckError || 'chzzk_live_status_unavailable', 400);
+    chzzkRuntimeErrors.set(String(sid), {
+      message,
+      status: Number(lastLiveCheckError?.status || lastLiveCheckError?.response?.status || 0) || null,
+      at: new Date().toISOString(),
+    });
+    if (cached?.provider === 'chzzk') {
+      if (cached.live && options.ensureChat !== false) {
+        ensureChzzkChatSessionForLiveSid(sid, cached.channelId).catch(() => { });
+      }
+      return {
+        live: !!cached.live,
+        channelId: cached.channelId || channelUids[0] || null,
+        startTs: cached.startTs || null,
+        cached: true,
+        stale: true,
+        error: message,
+      };
+    }
+    return { live: false, channelId: channelUids[0] || null, startTs: null, stale: true, error: message };
   }
 
   const previousLive = cached?.provider === 'chzzk' ? !!cached.live : undefined;
@@ -19868,7 +19919,7 @@ async function ensureSession(sid, channelId) {
   const createPromise = (async () => {
     const io = await getIoClient();
     const socket = typeof io === 'function' ? io(url, socketOption) : io.connect(url, socketOption);
-    entry = { socket, sessionKey: null, queue: [], connected: false, subscribed: new Set(), channelId: chKey || null, sids: new Set([sid]), primarySid: sid };
+    entry = { socket, sessionKey: null, queue: [], connected: false, subscribed: new Set(), channelId: chKey || null, sids: new Set([sid]), primarySid: sid, expectedDisconnect: false };
     sessionStore.set(sid, entry);
     if (chKey) channelSessionStore.set(chKey, entry);
 
@@ -19884,6 +19935,8 @@ async function ensureSession(sid, channelId) {
         if (type === 'connected') {
           entry.sessionKey = data?.data?.sessionKey || entry.sessionKey;
           entry.connected = true;
+          entry.expectedDisconnect = false;
+          chzzkRuntimeErrors.delete(String(sid));
           // Subscribe events for this channel
           await ensureSubscribed(entry, sid, channelId);
         } else if (type === 'revoked' || type === 'unsubscribed') {
@@ -20796,13 +20849,31 @@ async function ensureSession(sid, channelId) {
       pushEvent(entry, ev);
     });
 
-    socket.on('disconnect', () => {
+    socket.on('disconnect', (reason) => {
       entry.connected = false;
+      if (entry.expectedDisconnect) {
+        entry.expectedDisconnect = false;
+        chzzkRuntimeErrors.delete(String(sid));
+        return;
+      }
+      chzzkRuntimeErrors.set(String(sid), {
+        message: compactLogText(reason || 'chzzk_socket_disconnected', 400),
+        status: null,
+        at: new Date().toISOString(),
+      });
     });
 
-    socket.on('error', (err) => {
-      console.error('[CHZZK socket error]', err);
-    });
+    const recordSocketError = (error) => {
+      const message = compactLogText(error?.message || error || 'chzzk_socket_error', 400);
+      chzzkRuntimeErrors.set(String(sid), {
+        message,
+        status: Number(error?.status || 0) || null,
+        at: new Date().toISOString(),
+      });
+      console.error('[CHZZK socket error]', message);
+    };
+    socket.on('connect_error', recordSocketError);
+    socket.on('error', recordSocketError);
 
     return entry;
   })();
@@ -20811,6 +20882,7 @@ async function ensureSession(sid, channelId) {
   try {
     const created = await createPromise;
     await ensureSubscribed(created, sid, channelId);
+    chzzkRuntimeErrors.delete(String(sid));
     return created;
   } finally {
     sessionCreatePromises.delete(sid);
@@ -23244,7 +23316,10 @@ app.get('/api/platforms/status', async (req, res) => {
     if (refresh && chzzkAccount?.channel_id) {
       chzzkState = await refreshChzzkLiveStatusForSid(sid, { channelUids: [String(chzzkAccount.channel_id)], force: true }).catch(() => chzzkState);
       if (chzzkState && Object.prototype.hasOwnProperty.call(chzzkState, 'live')) chzzkLive = !!chzzkState.live;
+      if (chzzkLive) await ensureChzzkChatSessionForLiveSid(sid, chzzkState?.channelId || chzzkAccount.channel_id);
     }
+    const chzzkEntry = sessionStore.get(sid) || null;
+    const chzzkDiagnostic = chzzkRuntimeErrors.get(sid) || null;
 
     const cimeAccount = byProvider.get('cime') || null;
     let cimeEntry = cimeSessionStore.get(ownerUserId) || null;
@@ -23253,8 +23328,22 @@ app.get('/api/platforms/status', async (req, res) => {
       cimeEntry = null;
     }
     let cimeLive = null;
+    let cimeRefreshError = null;
     if (cimeAccount) {
-      cimeLive = refresh ? await refreshCimeLiveStatus(ownerUserId, sid, cimeAccount.channel_id || cimeAccount.platform_user_id).catch(() => false) : (liveStatusCache.get(sid)?.provider === 'cime' ? !!liveStatusCache.get(sid)?.live : null);
+      if (refresh) {
+        cimeLive = await refreshCimeLiveStatus(ownerUserId, sid, cimeAccount.channel_id || cimeAccount.platform_user_id).catch((error) => {
+          cimeRefreshError = compactLogText(error?.message || error, 400);
+          return false;
+        });
+        if (cimeLive) {
+          cimeEntry = await ensureCimeSession(ownerUserId).catch((error) => {
+            cimeRefreshError = compactLogText(error?.message || error, 400);
+            return cimeSessionStore.get(ownerUserId) || null;
+          });
+        }
+      } else {
+        cimeLive = liveStatusCache.get(sid)?.provider === 'cime' ? !!liveStatusCache.get(sid)?.live : null;
+      }
     }
 
     const youtubeAccount = byProvider.get('youtube') || null;
@@ -23265,9 +23354,19 @@ app.get('/api/platforms/status', async (req, res) => {
       disconnectProviderRuntimeState(ownerUserId, 'youtube', null, 'platform_status_disconnected');
       youtubeEntry = null;
     }
+    let youtubeRefreshError = null;
     const youtubeState = refresh && (youtubeAccount || youtubeStreamerChannel)
-      ? await refreshYoutubeLiveStatus(ownerUserId, sid, { force: true }).catch(() => liveStatusCache.get(sid))
+      ? await refreshYoutubeLiveStatus(ownerUserId, sid, { force: true }).catch((error) => {
+          youtubeRefreshError = compactLogText(error?.message || error, 400);
+          return liveStatusCache.get(sid);
+        })
       : liveStatusCache.get(sid);
+    if (refresh && youtubeState?.provider === 'youtube' && youtubeState.live) {
+      youtubeEntry = await ensureYoutubeSession(ownerUserId).catch((error) => {
+        youtubeRefreshError = compactLogText(error?.message || error, 400);
+        return youtubeSessionStore.get(ownerUserId) || null;
+      });
+    }
 
     const items = [
       {
@@ -23276,11 +23375,13 @@ app.get('/api/platforms/status', async (req, res) => {
         connected: !!chzzkAccount,
         channel: chzzkAccount?.channel_name || chzzkAccount?.channel_id || null,
         live: chzzkLive,
-        streamConnected: !!sessionStore.get(sid)?.connected,
-        queueSize: Array.isArray(sessionStore.get(sid)?.queue) ? sessionStore.get(sid).queue.length : 0,
+        streamConnected: !!chzzkEntry?.connected,
+        queueSize: Array.isArray(chzzkEntry?.queue) ? chzzkEntry.queue.length : 0,
         mode: 'socket',
-        lastError: null,
-        reauthRequired: false,
+        transportVersion: '2.x',
+        lastError: chzzkDiagnostic?.message || null,
+        lastStatus: chzzkDiagnostic?.status || null,
+        reauthRequired: chzzkDiagnostic?.status === 401,
         ignoredDonations: { count: 0, byReason: {}, recent: [] }
       },
       {
@@ -23292,7 +23393,7 @@ app.get('/api/platforms/status', async (req, res) => {
         streamConnected: !!cimeEntry?.connected,
         queueSize: Array.isArray(cimeEntry?.queue) ? cimeEntry.queue.length : 0,
         mode: 'websocket',
-        lastError: cimeEntry?.lastError || null,
+        lastError: cimeRefreshError || cimeEntry?.lastError || null,
         reauthRequired: false,
         ignoredDonations: { count: 0, byReason: {}, recent: [] }
       },
@@ -23305,7 +23406,7 @@ app.get('/api/platforms/status', async (req, res) => {
         streamConnected: !!youtubeEntry?.connected,
         queueSize: Array.isArray(youtubeEntry?.queue) ? youtubeEntry.queue.length : 0,
         mode: 'youtube-live-chat-api',
-        lastError: youtubeEntry?.lastError || null,
+        lastError: youtubeRefreshError || youtubeEntry?.lastError || null,
         lastStatus: youtubeEntry?.lastStatus || null,
         reauthRequired: isYoutubeReauthRequired(youtubeEntry) || youtubeBotProfile?.status === 'reauth_required',
         botConfigured: !!youtubeBotProfile?.selectedChannelId,

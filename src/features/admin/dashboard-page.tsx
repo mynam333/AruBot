@@ -57,10 +57,27 @@ type DashboardData = {
   youtubeStreamerStatus: YoutubeStreamerStatus | null;
   settings: Record<string, unknown> | null;
   stats: Record<string, unknown> | null;
+  platformStatus: PlatformStatusResponse | null;
   queue: unknown;
 };
 
-type DashboardDetailKey = 'settings' | 'stats' | 'queue';
+type DashboardDetailKey = 'settings' | 'stats' | 'platformStatus' | 'queue';
+
+type BotSettingsResponse = { settings?: Record<string, unknown> | null };
+type BotStatsResponse = { stats?: Record<string, unknown> | null };
+
+type PlatformStatusItem = {
+  provider?: string;
+  connected?: boolean;
+  live?: boolean | null;
+  streamConnected?: boolean;
+  lastError?: string | null;
+  reauthRequired?: boolean;
+};
+
+type PlatformStatusResponse = {
+  items?: PlatformStatusItem[];
+};
 
 type SetupTemplateResult = {
   applied?: Array<{ type?: string; name?: string }>;
@@ -101,6 +118,33 @@ function providerLabel(provider?: string) {
 
 function countLabel(value?: number | null) {
   return typeof value === 'number' && Number.isFinite(value) ? compactNumber.format(value) : null;
+}
+
+function platformRuntimeError(item?: PlatformStatusItem | null) {
+  const error = String(item?.lastError || '').trim();
+  if (!error) return null;
+  if (item?.live === false && ['not_live', 'offline'].includes(error.toLowerCase())) return null;
+  return error;
+}
+
+function platformRuntimeLabel(item?: PlatformStatusItem | null) {
+  if (!item) return '상태 확인 중';
+  if (item.reauthRequired) return '재인증 필요';
+  if (platformRuntimeError(item)) return '연결 점검 필요';
+  if (!item.connected) return '채널 미연결';
+  if (item.streamConnected) return '채팅 수신 중';
+  if (item.live === true) return '채팅 연결 중';
+  if (item.live === false) return '방송 대기';
+  return '연결됨';
+}
+
+function platformRuntimeStatus(item?: PlatformStatusItem | null) {
+  if (!item) return 'neutral' as const;
+  if (item.reauthRequired || platformRuntimeError(item)) return 'danger' as const;
+  if (!item.connected) return 'warning' as const;
+  if (item.streamConnected) return 'success' as const;
+  if (item.live === true) return 'info' as const;
+  return 'neutral' as const;
 }
 
 function ChannelAvatar({ account }: { account: PlatformAccount }) {
@@ -198,6 +242,7 @@ export function DashboardPage() {
         youtubeStreamerStatus: youtube,
         settings: hasConnectedChannel ? current?.settings ?? null : null,
         stats: hasConnectedChannel ? current?.stats ?? null : null,
+        platformStatus: hasConnectedChannel ? current?.platformStatus ?? null : null,
         queue: hasConnectedChannel ? current?.queue ?? [] : [],
       }));
       setLoading(false);
@@ -205,31 +250,23 @@ export function DashboardPage() {
 
       if (!hasConnectedChannel) return;
 
-      const detailRequests: Array<{
-        key: DashboardDetailKey;
-        request: Promise<ReturnType<typeof readJsonResult<unknown>> extends Promise<infer T> ? T : never>;
-        fallback: unknown;
-      }> = [
-        { key: 'settings', request: readJsonResult<Record<string, unknown>>('/api/bot/settings', { signal }), fallback: null },
-        { key: 'stats', request: readJsonResult<Record<string, unknown>>('/api/bot/stats', { signal }), fallback: null },
-        { key: 'queue', request: readJsonResult<unknown>('/api/video-donation/queue', { signal }), fallback: [] },
-      ];
-      setPendingDetails(new Set(detailRequests.map(({ key }) => key)));
-      await Promise.all(detailRequests.map(async ({ key, request, fallback }) => {
-        try {
-          const result = await request;
-          if (signal?.aborted) return;
-          setDashboardData((current) => current ? { ...current, [key]: result.ok ? result.data : fallback } : current);
-        } finally {
-          if (!signal?.aborted) {
-            setPendingDetails((current) => {
-              const next = new Set(current);
-              next.delete(key);
-              return next;
-            });
-          }
-        }
-      }));
+      const detailKeys: DashboardDetailKey[] = ['settings', 'stats', 'platformStatus', 'queue'];
+      setPendingDetails(new Set(detailKeys));
+      const [settingsResult, statsResult, platformStatusResult, queueResult] = await Promise.all([
+        readJsonResult<BotSettingsResponse>('/api/bot/settings', { signal }),
+        readJsonResult<BotStatsResponse>('/api/bot/stats', { signal }),
+        readJsonResult<PlatformStatusResponse>('/api/platforms/status?refresh=true', { signal }),
+        readJsonResult<unknown>('/api/video-donation/queue', { signal }),
+      ]);
+      if (signal?.aborted) return;
+      setDashboardData((current) => current ? {
+        ...current,
+        settings: settingsResult.ok ? settingsResult.data.settings ?? {} : null,
+        stats: statsResult.ok ? statsResult.data.stats ?? {} : null,
+        platformStatus: platformStatusResult.ok ? platformStatusResult.data : null,
+        queue: queueResult.ok ? queueResult.data : [],
+      } : current);
+      setPendingDetails(new Set());
     } catch (loadError) {
       if (loadError instanceof DOMException && loadError.name === 'AbortError') return;
       setError(loadError instanceof Error ? loadError.message : '운영 정보를 불러오지 못했습니다.');
@@ -265,18 +302,38 @@ export function DashboardPage() {
   const queueCount = pickRows(dashboardData?.queue).length;
   const settingsLoading = pendingDetails.has('settings');
   const statsLoading = pendingDetails.has('stats');
+  const platformStatusLoading = pendingDetails.has('platformStatus');
   const queueLoading = pendingDetails.has('queue');
-  const botEnabled = dashboardData?.settings && 'botEnabled' in dashboardData.settings ? dashboardData.settings.botEnabled !== false : null;
-  const commandCount = typeof dashboardData?.stats?.commands === 'number' ? dashboardData.stats.commands : null;
+  const botEnabled = dashboardData?.settings ? dashboardData.settings.botEnabled !== false : null;
+  const commandCount = typeof dashboardData?.stats?.commandsHandled === 'number' ? dashboardData.stats.commandsHandled : null;
+  const platformStatusItems = dashboardData?.platformStatus?.items?.filter((item) => item && typeof item.provider === 'string') || [];
+  const runtimeByProvider = new Map(platformStatusItems.map((item) => [String(item.provider).toLowerCase(), item]));
+  const connectedRuntimeItems = platformStatusItems.filter((item) => item.connected);
+  const streamingRuntimeItems = connectedRuntimeItems.filter((item) => item.streamConnected);
+  const liveRuntimeItems = connectedRuntimeItems.filter((item) => item.live === true);
+  const runtimeProblem = connectedRuntimeItems.find((item) => item.reauthRequired || platformRuntimeError(item)) || null;
   const connectedProviders = new Set(accounts.map((account) => account.provider?.toLowerCase()).filter(Boolean));
   if (youtubeConfigured) connectedProviders.add('youtube');
   const youtubeLoginHref = apiUrl(`/api/auth/youtube/login?returnTo=${encodeURIComponent('/connection?platform=youtube')}`);
 
+  const botMetric = (() => {
+    if (loading || settingsLoading || platformStatusLoading) return { value: '—', detail: '실시간 상태 확인 중', status: 'neutral' as const };
+    if (!visibleAccounts.length) return { value: '연결 필요', detail: '플랫폼 채널을 연결하세요', status: 'warning' as const };
+    if (botEnabled == null) return { value: '설정 확인 필요', detail: '봇 설정을 다시 불러오세요', status: 'warning' as const };
+    if (!botEnabled) return { value: '중지', detail: '설정에서 켜기', status: 'danger' as const };
+    if (!dashboardData?.platformStatus) return { value: '연결 확인 필요', detail: '런타임 상태 조회 실패', status: 'warning' as const };
+    if (runtimeProblem) return { value: '점검 필요', detail: runtimeProblem.reauthRequired ? '플랫폼 재인증 필요' : '채팅 연결 오류', status: 'danger' as const };
+    if (streamingRuntimeItems.length) return { value: '작동 중', detail: `${streamingRuntimeItems.length}개 채널 채팅 수신`, status: 'success' as const };
+    if (liveRuntimeItems.length) return { value: '연결 중', detail: '방송 채팅 연결 복구 중', status: 'info' as const };
+    if (connectedRuntimeItems.length) return { value: '방송 대기', detail: '방송 시작 시 자동 연결', status: 'neutral' as const };
+    return { value: '연결 필요', detail: '플랫폼 채널을 연결하세요', status: 'warning' as const };
+  })();
+
   const metrics = [
     { label: '연결 채널', value: loading ? '—' : `${visibleAccounts.length}개`, detail: visibleAccounts.length ? '연결 정상' : '연결 필요', icon: Cable, status: visibleAccounts.length ? 'success' : 'warning' },
-    { label: '봇 상태', value: loading || settingsLoading ? '—' : botEnabled == null ? '확인 불가' : botEnabled ? '사용 중' : '중지', detail: settingsLoading ? '설정 확인 중' : botEnabled ? '응답 가능' : botEnabled === false ? '설정에서 켜기' : '채널 연결 후 확인', icon: Radio, status: botEnabled ? 'success' : botEnabled === false ? 'danger' : 'neutral' },
+    { label: '봇 상태', ...botMetric, icon: Radio },
     { label: '영상 대기열', value: loading || queueLoading ? '—' : `${queueCount}개`, detail: queueLoading ? '대기열 확인 중' : queueCount ? '재생 대기 중' : '대기 없음', icon: Clapperboard, status: queueCount ? 'info' : 'neutral' },
-    { label: '명령 응답', value: loading || statsLoading ? '—' : commandCount == null ? '확인 불가' : `${commandCount}회`, detail: statsLoading ? '통계 확인 중' : commandCount ? '누적 처리' : '기록 없음', icon: Activity, status: commandCount ? 'success' : 'neutral' },
+    { label: '명령 응답', value: loading || statsLoading ? '—' : commandCount == null ? '통계 확인 필요' : `${commandCount}회`, detail: statsLoading ? '통계 확인 중' : commandCount == null ? '통계 조회 실패' : commandCount ? '누적 처리' : '아직 응답 없음', icon: Activity, status: commandCount == null ? 'warning' : commandCount ? 'success' : 'neutral' },
   ] as const;
 
   return (
@@ -319,7 +376,10 @@ export function DashboardPage() {
           <CardContent>
             {visibleAccounts.length ? (
               <div className="divide-y rounded-lg border">
-                {visibleAccounts.map((account) => (
+                {visibleAccounts.map((account) => {
+                  const runtime = runtimeByProvider.get(String(account.provider || '').toLowerCase()) || null;
+                  const runtimeError = platformRuntimeError(runtime);
+                  return (
                   <div key={`${account.provider}-${account.channel_id || account.channel_name}`} className="flex min-w-0 items-center gap-3 p-3.5">
                     <ChannelAvatar account={account} />
                     <div className="min-w-0 flex-1">
@@ -329,10 +389,15 @@ export function DashboardPage() {
                         {account.metadata?.publicProfile?.followerCount != null ? <span>팔로워 {countLabel(account.metadata.publicProfile.followerCount)}</span> : null}
                         {account.metadata?.publicProfile?.subscriberCount != null ? <span>구독자 {countLabel(account.metadata.publicProfile.subscriberCount)}</span> : null}
                       </div>
+                      {runtimeError ? <div className="mt-1 truncate text-xs text-destructive" title={runtimeError}>{runtimeError}</div> : null}
                     </div>
-                    {account.metadata?.publicProfile?.isLive ? <Badge tone="rose">LIVE</Badge> : <StatusDot status={account.metadata?.publicProfile?.status === 'failed' ? 'warning' : 'success'} label={account.metadata?.publicProfile?.status === 'failed' ? '정보 확인 필요' : '연결됨'} />}
+                    <div className="flex shrink-0 items-center gap-2">
+                      {runtime?.live === true || account.metadata?.publicProfile?.isLive ? <Badge tone="rose">LIVE</Badge> : null}
+                      <StatusDot status={platformRuntimeStatus(runtime)} label={platformRuntimeLabel(runtime)} />
+                    </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             ) : loading ? (
               <div className="loading-skeleton h-48 rounded-lg" />

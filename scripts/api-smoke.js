@@ -61,13 +61,19 @@ async function main() {
   const timeoutMs = Math.max(1000, Number(parseArg('timeout-ms') || process.env.API_SMOKE_TIMEOUT_MS || 5000));
 
   const checks = [];
-  for (const path of ['/api/health', '/readyz', '/api/version', '/api/bot/settings']) {
+  for (const path of ['/api/health', '/api/readiness', '/api/version', '/api/bot/settings']) {
     const result = await requestJson(baseUrl, path, { timeoutMs });
     checks.push(result);
   }
 
   assertOk(checks[0], (body) => body?.ok === true);
-  assertOk(checks[1], (body) => body?.ok === true && body?.db && typeof body.db.max === 'number');
+  assertOk(checks[1], (body) => (
+    body?.ok === true
+    && body?.check === 'readiness'
+    && body?.readiness?.initialBootstrapCompleted === true
+    && body?.readiness?.shuttingDown === false
+    && body?.db?.ok === true
+  ));
   assertOk(checks[2], (body) => body?.ok === true);
   assertOk(checks[3], (body) => body && typeof body === 'object' && 'settings' in body);
 

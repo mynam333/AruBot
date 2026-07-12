@@ -189,13 +189,16 @@ describe('database provider regression', () => {
   test('health endpoints expose active database provider for smoke checks', () => {
     const versionStart = serverIndex.indexOf("app.get('/api/version'");
     const healthStart = serverIndex.indexOf("app.get('/api/health'");
-    const readyStart = serverIndex.indexOf("app.get('/readyz'");
+    const readyStart = serverIndex.indexOf('async function handleReadiness');
+    const readyEnd = serverIndex.indexOf("app.get('/readyz'", readyStart);
     const versionBody = serverIndex.slice(versionStart, serverIndex.indexOf('});', versionStart));
     const healthBody = serverIndex.slice(healthStart, serverIndex.indexOf('});', healthStart));
-    const readyBody = serverIndex.slice(readyStart, serverIndex.indexOf('});', readyStart));
+    const readyBody = serverIndex.slice(readyStart, readyEnd);
 
     expect(versionBody).toContain('dbProvider: DB_PROVIDER');
     expect(healthBody).toContain('dbProvider: DB_PROVIDER');
     expect(readyBody).toContain('dbProvider: DB_PROVIDER');
+    expect(readyBody).toContain("check: 'readiness'");
+    expect(serverIndex).toContain("app.get('/api/readiness', handleReadiness)");
   });
 });

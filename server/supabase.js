@@ -6408,11 +6408,32 @@ export function getBotStats(sid) {
 
 export async function updateBotStats(sid, delta = { messagesProcessed: 0, commandsHandled: 0 }) {
   ensure();
+  const messagesDelta = Number.isFinite(Number(delta.messagesProcessed)) ? Math.trunc(Number(delta.messagesProcessed)) : 0;
+  const commandsDelta = Number.isFinite(Number(delta.commandsHandled)) ? Math.trunc(Number(delta.commandsHandled)) : 0;
+  const lastActive = new Date().toISOString();
+  if (getDbUrl()) {
+    const result = await withPgClient((pg) => pg.query(
+      `insert into bot_stats (sid, messages_processed, commands_handled, last_active)
+       values ($1, $2, $3, $4)
+       on conflict (sid) do update set
+         messages_processed = coalesce(bot_stats.messages_processed, 0) + excluded.messages_processed,
+         commands_handled = coalesce(bot_stats.commands_handled, 0) + excluded.commands_handled,
+         last_active = excluded.last_active
+       returning messages_processed, commands_handled, last_active`,
+      [String(sid), messagesDelta, commandsDelta, lastActive]
+    ));
+    const row = result.rows?.[0] || {};
+    return {
+      messagesProcessed: Number(row.messages_processed || 0),
+      commandsHandled: Number(row.commands_handled || 0),
+      lastActive: row.last_active || lastActive,
+    };
+  }
   const current = await getBotStats(sid);
   const next = {
-    messagesProcessed: (current.messagesProcessed || 0) + (delta.messagesProcessed || 0),
-    commandsHandled: (current.commandsHandled || 0) + (delta.commandsHandled || 0),
-    lastActive: new Date().toISOString()
+    messagesProcessed: (current.messagesProcessed || 0) + messagesDelta,
+    commandsHandled: (current.commandsHandled || 0) + commandsDelta,
+    lastActive
   };
   // Build row only with columns that exist to avoid PostgREST schema cache errors
   const hasMP = await tableHasColumn('bot_stats', 'messages_processed');
