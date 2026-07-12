@@ -123,7 +123,9 @@ function countLabel(value?: number | null) {
 function platformRuntimeError(item?: PlatformStatusItem | null) {
   const error = String(item?.lastError || '').trim();
   if (!error) return null;
-  if (item?.live === false && ['not_live', 'offline'].includes(error.toLowerCase())) return null;
+  const normalizedError = error.toLowerCase();
+  if (normalizedError === 'not_live') return null;
+  if (item?.live === false && normalizedError === 'offline') return null;
   return error;
 }
 

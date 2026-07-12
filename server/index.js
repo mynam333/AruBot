@@ -22099,7 +22099,7 @@ async function ensureYoutubeSession(ownerUserId) {
     };
     youtubeSessionStore.set(ownerUserId, entry);
     if (!liveState.live || !liveState.liveChatId) {
-      entry.lastError = liveState.live ? 'live_chat_unavailable' : 'not_live';
+      entry.lastError = liveState.live ? 'live_chat_unavailable' : null;
       return entry;
     }
     try {
@@ -23367,6 +23367,10 @@ app.get('/api/platforms/status', async (req, res) => {
         return youtubeSessionStore.get(ownerUserId) || null;
       });
     }
+    const youtubeLastError = youtubeRefreshError || youtubeEntry?.lastError || null;
+    const visibleYoutubeLastError = String(youtubeLastError || '').trim().toLowerCase() === 'not_live'
+      ? null
+      : youtubeLastError;
 
     const items = [
       {
@@ -23406,7 +23410,7 @@ app.get('/api/platforms/status', async (req, res) => {
         streamConnected: !!youtubeEntry?.connected,
         queueSize: Array.isArray(youtubeEntry?.queue) ? youtubeEntry.queue.length : 0,
         mode: 'youtube-live-chat-api',
-        lastError: youtubeRefreshError || youtubeEntry?.lastError || null,
+        lastError: visibleYoutubeLastError,
         lastStatus: youtubeEntry?.lastStatus || null,
         reauthRequired: isYoutubeReauthRequired(youtubeEntry) || youtubeBotProfile?.status === 'reauth_required',
         botConfigured: !!youtubeBotProfile?.selectedChannelId,
