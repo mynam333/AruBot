@@ -67,6 +67,11 @@ async function main() {
   }
 
   assertOk(checks[0], (body) => body?.ok === true);
+
+  if (expectedRelease && checks[2].body?.releaseSha !== expectedRelease) {
+    throw new Error(`Expected releaseSha=${expectedRelease}, got ${checks[2].body?.releaseSha || 'missing'}`);
+  }
+
   assertOk(checks[1], (body) => (
     body?.ok === true
     && body?.check === 'readiness'
@@ -84,10 +89,6 @@ async function main() {
     if (!providerBodies.includes(expectedProvider)) {
       throw new Error(`Expected dbProvider=${expectedProvider}, got ${providerBodies.join(', ') || 'none'}`);
     }
-  }
-
-  if (expectedRelease && checks[2].body?.releaseSha !== expectedRelease) {
-    throw new Error(`Expected releaseSha=${expectedRelease}, got ${checks[2].body?.releaseSha || 'missing'}`);
   }
 
   const result = {

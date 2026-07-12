@@ -1,6 +1,6 @@
 const path = require('path');
 
-const rootDir = __dirname;
+const rootDir = path.resolve(process.env.ARUBOT_APP_CWD || '/home/ubuntu/AruBot/current');
 try {
   require('dotenv').config({ path: path.join(rootDir, '.env') });
 } catch {
@@ -40,6 +40,9 @@ module.exports = {
         SERVER_PORT: port,
         ARUBOT_PROCESS_ROLE: 'api-runtime',
         ARUBOT_RELEASE_SHA: releaseSha,
+      },
+      env_production: {
+        NODE_ENV: 'production',
       },
     },
   ],

@@ -28,7 +28,7 @@ jobs:
       ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
       ORACLE_USER: ${{ secrets.ORACLE_USER }}
       ORACLE_PORT: ${{ secrets.ORACLE_PORT || '22' }}
-      BACKEND_APP_DIR: ${{ vars.BACKEND_APP_DIR || '/opt/arubot' }}
+      BACKEND_APP_DIR: /home/ubuntu/AruBot
       RELEASE_SHA: ${{ github.sha }}
       ARCHIVE_NAME: arubot-backend-${{ github.sha }}.tar.gz
       NODE_VERSION: '22'
@@ -92,7 +92,7 @@ jobs:
             "APP_DIR='$BACKEND_APP_DIR' RELEASE_SHA='$RELEASE_SHA' ARCHIVE_NAME='$ARCHIVE_NAME' NODE_VERSION='$NODE_VERSION' REMOTE_NODE_BIN_DIR='$REMOTE_NODE_BIN_DIR' RELEASES_TO_KEEP='$BACKEND_RELEASES_TO_KEEP' bash -s" <<'REMOTE'
           set -euo pipefail
 
-          APP_DIR="${APP_DIR:-/opt/arubot}"
+          APP_DIR="${APP_DIR:-/home/ubuntu/AruBot}"
           RELEASE_SHA="${RELEASE_SHA:?RELEASE_SHA is required}"
           ARCHIVE_NAME="${ARCHIVE_NAME:?ARCHIVE_NAME is required}"
           NODE_VERSION="${NODE_VERSION:-22}"
@@ -288,12 +288,27 @@ jobs:
             mv -Tf "$next_link" "$CURRENT_DIR"
           }
 
-          start_or_reload_release() {
+          start_release() {
             local release_dir="$1"
             local release_sha="$2"
-            cd "$release_dir"
+            local stable_cwd="/home/ubuntu/AruBot/current"
+            local current_real
+            local release_real
+
+            current_real="$(readlink -f "$stable_cwd" || true)"
+            release_real="$(readlink -f "$release_dir" || true)"
+            if [ -z "$current_real" ] || [ "$current_real" != "$release_real" ]; then
+              echo "Refusing to start PM2 from an unexpected release: current=$current_real expected=$release_real" >&2
+              return 1
+            fi
+
+            cd "$stable_cwd"
+            export ARUBOT_APP_CWD="$stable_cwd"
             export ARUBOT_RELEASE_SHA="$release_sha"
-            pm2 startOrReload ecosystem.config.cjs --env production --update-env
+            # startOrReload can retain a previous release's absolute cwd and script path.
+            # Recreate this single process so deployments and rollbacks always use current.
+            pm2 delete arubot-api >/dev/null 2>&1 || true
+            pm2 start ecosystem.config.cjs --env production --update-env
           }
 
           wait_for_release() {
@@ -325,7 +340,7 @@ jobs:
             fi
             echo "Rolling back backend to $PREVIOUS_CURRENT_REAL" >&2
             point_current_to "$PREVIOUS_CURRENT_REAL"
-            if ! start_or_reload_release "$PREVIOUS_CURRENT_REAL" "$previous_sha"; then
+            if ! start_release "$PREVIOUS_CURRENT_REAL" "$previous_sha"; then
               echo "Rollback process failed to start." >&2
               return 1
             fi
@@ -429,7 +444,7 @@ jobs:
           printf '%s\n' "$RELEASE_SHA" > "$RELEASE_DIR/.release-sha"
           switch_current_release
 
-          if ! start_or_reload_release "$RELEASE_DIR" "$RELEASE_SHA" || ! wait_for_release "$RELEASE_SHA"; then
+          if ! start_release "$RELEASE_DIR" "$RELEASE_SHA" || ! wait_for_release "$RELEASE_SHA"; then
             echo "Backend candidate failed to start or pass API health/readiness checks." >&2
             rollback_release || echo "Automatic rollback failed; operator intervention is required." >&2
             exit 1

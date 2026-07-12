@@ -91,12 +91,21 @@ describe('production security exception and deployment gates', () => {
     expect(workflow).toContain('npm run audit:production');
     expect(workflow).toContain('npm test -- --runInBand');
     expect(workflow).toContain('npm run build');
-    expect(workflow).toContain('pm2 startOrReload ecosystem.config.cjs');
+    expect(workflow).toContain('BACKEND_APP_DIR: /home/ubuntu/AruBot');
+    expect(workflow).toContain('local stable_cwd="/home/ubuntu/AruBot/current"');
+    expect(workflow).toContain('export ARUBOT_APP_CWD="$stable_cwd"');
+    expect(workflow).toContain('pm2 delete arubot-api');
+    expect(workflow).toContain('pm2 start ecosystem.config.cjs');
     expect(workflow).toContain('npm run api:smoke -- --expect-release="$release_sha"');
     expect(workflow).toContain('rollback_release');
     expect(workflow).toContain('point_current_to "$PREVIOUS_CURRENT_REAL"');
     expect(workflow).toContain('> "$RELEASE_DIR/.release-sha"');
     expect(workflow).toContain('if [ "$RELEASES_TO_KEEP" -lt 2 ]');
+
+    const ecosystem = fs.readFileSync(path.join(root, 'ecosystem.config.cjs'), 'utf8');
+    expect(ecosystem).toContain("process.env.ARUBOT_APP_CWD || '/home/ubuntu/AruBot/current'");
+    expect(ecosystem).toContain('cwd: rootDir');
+    expect(ecosystem).toContain('env_production');
   });
 
   test('the security exception documents the upgrade prohibition and controls', () => {
