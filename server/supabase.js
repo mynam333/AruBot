@@ -249,6 +249,54 @@ const DEFAULT_UPSERT_CONFLICT_COLUMNS = {
   bot_rules: ['sid', 'id'],
 };
 
+const PG_JSON_COLUMNS = Object.freeze({
+  action_blueprint_run_steps: new Set(['input', 'output']),
+  action_blueprint_runs: new Set(['context']),
+  action_blueprint_versions: new Set(['nodes', 'edges', 'viewport']),
+  app_users: new Set(['metadata']),
+  automation_connections: new Set(['config', 'capabilities', 'discovery_cache']),
+  automation_jobs: new Set(['payload', 'result']),
+  automation_local_agents: new Set(['capabilities']),
+  automation_settings: new Set(['settings']),
+  bot_event_logs: new Set(['metadata']),
+  bot_rules: new Set(['keywords', 'responses']),
+  bot_settings: new Set(['settings']),
+  channel_tokens: new Set(['metadata']),
+  channel_viewer_tokens: new Set(['metadata']),
+  drawing_donation_items: new Set(['point_deductions', 'canvas', 'strokes', 'metrics', 'replay']),
+  durable_runtime_jobs: new Set(['payload', 'result']),
+  macro_schedules: new Set(['metadata']),
+  migration_log: new Set(['details']),
+  platform_accounts: new Set(['metadata']),
+  prediction_events: new Set(['options']),
+  video_donation_queue: new Set(['metadata']),
+  viewer_playback_state: new Set(['metadata']),
+  youtube_streamer_channels: new Set(['metadata']),
+});
+
+export function isPgJsonColumn(table, column) {
+  return PG_JSON_COLUMNS[String(table || '')]?.has(String(column || '')) === true;
+}
+
+export function normalizePgJsonColumnValue(table, column, value) {
+  if (!isPgJsonColumn(table, column) || value == null) return value ?? null;
+  if (typeof value === 'string') {
+    try {
+      JSON.parse(value);
+      return value;
+    } catch {
+      return JSON.stringify(value);
+    }
+  }
+  return JSON.stringify(value);
+}
+
+function addPgColumnValue(values, table, column, value) {
+  const jsonColumn = isPgJsonColumn(table, column);
+  const position = values.push(normalizePgJsonColumnValue(table, column, value));
+  return `$${position}${jsonColumn ? '::jsonb' : ''}`;
+}
+
 class PgQueryBuilder {
   constructor(table) {
     this.table = table;
@@ -411,7 +459,7 @@ class PgQueryBuilder {
     if (!rows.length) return { sql: 'select null where false', values };
     const columns = [...new Set(rows.flatMap((row) => Object.keys(row || {})))];
     if (!columns.length) return { sql: 'select null where false', values };
-    const tuples = rows.map((row) => `(${columns.map((column) => `$${values.push(row[column] ?? null)}`).join(', ')})`);
+    const tuples = rows.map((row) => `(${columns.map((column) => addPgColumnValue(values, this.table, column, row[column] ?? null)).join(', ')})`);
     let sql = `insert into ${quoteIdent(this.table)} (${columns.map(quoteIdent).join(', ')}) values ${tuples.join(', ')}`;
     if (upsert) {
       if (!this.conflictColumns.length) {
@@ -442,7 +490,7 @@ class PgQueryBuilder {
     if (this.action === 'update') {
       const entries = Object.entries(this.payload || {});
       if (!entries.length) return { sql: 'select null where false', values };
-      const setSql = entries.map(([column, value]) => `${quoteIdent(column)} = $${values.push(value)}`).join(', ');
+      const setSql = entries.map(([column, value]) => `${quoteIdent(column)} = ${addPgColumnValue(values, this.table, column, value)}`).join(', ');
       const returningSql = this.returning || this.singleMode ? ' returning *' : '';
       return {
         sql: `update ${table} set ${setSql}${this._whereSql(values)}${returningSql}`,
@@ -6843,14 +6891,12 @@ export async function upsertBotRule(sid, rule) {
   };
   if (getDbUrl()) {
     const columns = Object.keys(row);
-    const values = Object.values(row).map((value, index) => {
-      const column = columns[index];
-      if (column === 'keywords' || column === 'responses') return JSON.stringify(value);
-      return value;
-    });
+    const values = Object.values(row).map((value, index) =>
+      normalizePgJsonColumnValue('bot_rules', columns[index], value)
+    );
     const placeholders = columns.map((column, index) => {
       const placeholder = `$${index + 1}`;
-      return column === 'keywords' || column === 'responses' ? `${placeholder}::jsonb` : placeholder;
+      return isPgJsonColumn('bot_rules', column) ? `${placeholder}::jsonb` : placeholder;
     });
     const updateColumns = columns.filter((column) => !['sid', 'id'].includes(column));
     await withPgClient((pg) => pg.query(
