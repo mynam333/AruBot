@@ -10,6 +10,7 @@ import cookieParser from 'cookie-parser';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
 import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, revokeSession, getSessionUserId, listChannelPoints, listChannelPointsPage, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, deductChannelPointsIfEnough, getChannelPoints, getChannelPointBalanceSummary, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, issueApiWebSocketTicket, consumeApiWebSocketTicket, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, findSidByChannelViewerTokenSupabase, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, findAppUserIdByChannelUid, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, markPlatformTokenValidated, deletePlatformTokens, deletePlatformAccount, getAppUserAdminStatus, getYoutubeBotProfile, upsertYoutubeBotProfile, updateYoutubeBotProfileTokens, markYoutubeBotProfileStatus, deleteYoutubeBotProfile, getYoutubeStreamerChannel, upsertYoutubeStreamerChannel, markYoutubeStreamerChannelModeratorRegistered, deleteYoutubeStreamerChannel, listYoutubeStreamerChannelsByYoutubeChannelId, updateYoutubeStreamerChannelLive, updateYoutubeStreamerChannelWebsub, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, claimBotRuleCooldown, enqueueDurableRuntimeJob, enqueuePaidDurableRuntimeJob, claimDurableRuntimeJobs, completeDurableRuntimeJob, failDurableRuntimeJob, claimRuntimeLease, releaseRuntimeLease, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps, recordBotEventLog, listBotEventLogs, getBotEventLog, insertDrawingDonationItem, listDrawingDonationItems, getDrawingDonationItem, getCurrentDrawingDonationItem, updateDrawingDonationItemStatus, deleteDrawingDonationItem, reorderDrawingDonationItems, uploadDrawingDonationObject, deleteDrawingDonationObjectKeys, deleteAccountData, cleanupPrivacyRetentionData, validateSecretEncryptionConfig, getPgPoolStatus, checkDatabaseReady, closeDatabaseConnections } from './supabase.js';
+import { confirmPlatformTokenConsent, confirmYoutubeBotProfileConsent, touchPlatformTokenUsed, touchYoutubeBotProfileUsed } from './supabase.js';
 import { createPlatformProfileService } from './platform-profiles.js';
 import { executeAndStripLiveChangeTokens, filterLiveInfoByProvider, selectCategorySearchResult } from './live-command-actions.js';
 import { buildYoutubeLiveInfoFallback, buildYoutubeLiveLookupContext } from './youtube-live-info.js';
@@ -15059,7 +15060,7 @@ async function exchangeYoutubeToken(params) {
   return response?.data || {};
 }
 
-async function getValidYoutubeAccessToken(ownerUserId) {
+async function getValidYoutubeAccessToken(ownerUserId, { trackUse = true } = {}) {
   assertProviderRuntimeConnected(ownerUserId, 'youtube');
   let tokens = await getPlatformTokens('youtube', ownerUserId);
   if (!tokens) throw new Error('No YouTube tokens stored');
@@ -15070,6 +15071,7 @@ async function getValidYoutubeAccessToken(ownerUserId) {
       error.provider = 'youtube';
       error.reauthRequired = true;
       error.status = 401;
+      await deleteYoutubeAuthorizedData(ownerUserId, tokens.platformUserId, 'authorization_invalid').catch(() => null);
       throw error;
     }
     const platformUserId = tokens.platformUserId;
@@ -15085,17 +15087,21 @@ async function getValidYoutubeAccessToken(ownerUserId) {
       const message = e?.response?.data?.error_description || e?.response?.data?.error || e?.message || 'youtube_token_refresh_failed';
       const error = new Error(String(message));
       error.provider = 'youtube';
-      error.reauthRequired = true;
-      error.status = e?.response?.status || 401;
+      error.status = e?.response?.status || 500;
+      error.reauthRequired = isYoutubeReauthRequired({ status: error.status, message });
+      if (error.reauthRequired) {
+        await deleteYoutubeAuthorizedData(ownerUserId, tokens.platformUserId, 'authorization_invalid').catch(() => null);
+      }
       throw error;
     }
     tokens = normalizeGoogleTokenPayload(payload, tokens);
     await upsertPlatformTokens('youtube', ownerUserId, platformUserId, tokens);
   }
+  if (trackUse) await touchPlatformTokenUsed('youtube', ownerUserId).catch(() => null);
   return tokens.accessToken;
 }
 
-async function getValidYoutubeBotProfile() {
+async function getValidYoutubeBotProfile({ trackUse = true } = {}) {
   let profile = await getYoutubeBotProfile(YOUTUBE_BOT_PROFILE_ID);
   if (!profile?.accessToken) {
     const error = new Error('YouTube central bot is not configured');
@@ -15106,7 +15112,8 @@ async function getValidYoutubeBotProfile() {
   const expiresAt = new Date(profile.expiresAt);
   if (isNaN(expiresAt.getTime()) || expiresAt <= new Date(Date.now() + 60 * 1000)) {
     if (!profile.refreshToken) {
-      await markYoutubeBotProfileStatus(profile.id, { status: 'reauth_required', lastError: 'No YouTube bot refresh token stored' }).catch(() => null);
+      await deleteYoutubeBotProfile(profile.id).catch(() => null);
+      for (const key of Array.from(youtubeSessionStore.keys())) closeYoutubeSession(key, 'youtube_bot_authorization_invalid');
       const error = new Error('No YouTube bot refresh token stored');
       error.code = 'youtube_bot_reauth_required';
       error.status = 401;
@@ -15122,20 +15129,27 @@ async function getValidYoutubeBotProfile() {
       });
     } catch (e) {
       const message = e?.response?.data?.error_description || e?.response?.data?.error || e?.message || 'youtube_bot_token_refresh_failed';
-      await markYoutubeBotProfileStatus(profile.id, { status: 'reauth_required', lastError: message }).catch(() => null);
       const error = new Error(String(message));
       error.code = 'youtube_bot_reauth_required';
-      error.status = e?.response?.status || 401;
+      error.status = e?.response?.status || 500;
+      error.reauthRequired = isYoutubeReauthRequired({ status: error.status, message });
+      if (error.reauthRequired) {
+        await deleteYoutubeBotProfile(profile.id).catch(() => null);
+        for (const key of Array.from(youtubeSessionStore.keys())) closeYoutubeSession(key, 'youtube_bot_authorization_invalid');
+      } else {
+        await markYoutubeBotProfileStatus(profile.id, { status: 'error', lastError: message }).catch(() => null);
+      }
       throw error;
     }
     const tokens = normalizeGoogleTokenPayload(payload, profile);
     profile = await updateYoutubeBotProfileTokens(profile.id, tokens);
   }
+  if (trackUse) await touchYoutubeBotProfileUsed(profile.id).catch(() => null);
   return profile;
 }
 
-async function getValidYoutubeBotAccessToken() {
-  const profile = await getValidYoutubeBotProfile();
+async function getValidYoutubeBotAccessToken(options = {}) {
+  const profile = await getValidYoutubeBotProfile(options);
   return profile.accessToken;
 }
 
@@ -15245,8 +15259,39 @@ async function fetchYoutubeMyChannel(ownerUserId) {
   return normalizeYoutubeProfile(item);
 }
 
+function latestIsoTimestamp(...values) {
+  const timestamps = values
+    .map((value) => new Date(value || 0).getTime())
+    .filter((value) => Number.isFinite(value) && value > 0);
+  return timestamps.length ? new Date(Math.max(...timestamps)).toISOString() : null;
+}
+
+function addTimestampMs(value, durationMs) {
+  const timestamp = new Date(value || 0).getTime();
+  return Number.isFinite(timestamp) && timestamp > 0 ? new Date(timestamp + durationMs).toISOString() : null;
+}
+
+function publicYoutubeAuthorization(tokens, account = null) {
+  if (!tokens) return null;
+  const lastActivityAt = latestIsoTimestamp(tokens.lastUsedAt, tokens.consentConfirmedAt, account?.last_login_at);
+  return {
+    active: true,
+    scope: tokens.scope || null,
+    consentGrantedAt: tokens.consentGrantedAt || null,
+    consentConfirmedAt: tokens.consentConfirmedAt || null,
+    lastUsedAt: tokens.lastUsedAt || null,
+    lastValidatedAt: tokens.lastValidatedAt || null,
+    lastActivityAt,
+    validationIntervalDays: Math.ceil(YOUTUBE_AUTH_VALIDATION_MAX_AGE_MS / (24 * 60 * 60 * 1000)),
+    inactivityDays: Math.ceil(YOUTUBE_AUTH_INACTIVITY_MAX_AGE_MS / (24 * 60 * 60 * 1000)),
+    nextValidationAt: addTimestampMs(tokens.lastValidatedAt, YOUTUBE_AUTH_VALIDATION_MAX_AGE_MS),
+    inactivityRevocationAt: addTimestampMs(lastActivityAt, YOUTUBE_AUTH_INACTIVITY_MAX_AGE_MS),
+  };
+}
+
 function publicYoutubeBotProfile(profile) {
   if (!profile) return null;
+  const lastActivityAt = latestIsoTimestamp(profile.lastUsedAt, profile.consentConfirmedAt);
   return {
     id: profile.id,
     selectedChannelId: profile.selectedChannelId,
@@ -15254,7 +15299,16 @@ function publicYoutubeBotProfile(profile) {
     selectedChannelHandle: profile.selectedChannelHandle,
     selectedChannelThumbnailUrl: profile.selectedChannelThumbnailUrl,
     status: profile.status,
+    scope: profile.scope || null,
+    consentGrantedAt: profile.consentGrantedAt || null,
+    consentConfirmedAt: profile.consentConfirmedAt || null,
+    lastUsedAt: profile.lastUsedAt || null,
+    lastActivityAt,
     lastVerifiedAt: profile.lastVerifiedAt,
+    validationIntervalDays: Math.ceil(YOUTUBE_AUTH_VALIDATION_MAX_AGE_MS / (24 * 60 * 60 * 1000)),
+    inactivityDays: Math.ceil(YOUTUBE_AUTH_INACTIVITY_MAX_AGE_MS / (24 * 60 * 60 * 1000)),
+    nextValidationAt: addTimestampMs(profile.lastVerifiedAt, YOUTUBE_AUTH_VALIDATION_MAX_AGE_MS),
+    inactivityRevocationAt: addTimestampMs(lastActivityAt, YOUTUBE_AUTH_INACTIVITY_MAX_AGE_MS),
     lastError: profile.lastError,
     configuredBy: profile.configuredBy,
     updatedAt: profile.updatedAt,
@@ -15646,6 +15700,7 @@ app.get('/api/auth/youtube/callback', async (req, res) => {
         : YOUTUBE_BOT_AUTH_SCOPE;
     const tokens = normalizeGoogleTokenPayload(tokenPayload, {}, tokenFallbackScope);
     if (!tokens.accessToken) throw new Error('YouTube token response did not include access_token');
+    const consentGrantedAt = new Date().toISOString();
 
     if (oauthMode === 'central_bot') {
       const admin = await getCurrentAdminUserForCallback(req);
@@ -15658,6 +15713,7 @@ app.get('/api/auth/youtube/callback', async (req, res) => {
       youtubeBotOAuthPendingStore.set(String(ownerUserId), {
         tokens,
         channels,
+        consentGrantedAt,
         createdAt: Date.now()
       });
       if (channels.length === 1) {
@@ -15673,6 +15729,9 @@ app.get('/api/auth/youtube/callback', async (req, res) => {
           tokenType: tokens.tokenType,
           expiresAt: tokens.expiresAt,
           scope: tokens.scope,
+          consentGrantedAt,
+          consentConfirmedAt: consentGrantedAt,
+          lastUsedAt: consentGrantedAt,
           configuredBy: ownerUserId,
           status: 'active'
         });
@@ -15687,7 +15746,12 @@ app.get('/api/auth/youtube/callback', async (req, res) => {
 
     const preferredUserId = await getCurrentSessionUserId(req);
     const { userId } = await upsertPlatformIdentity('youtube', profile, preferredUserId);
-    await upsertPlatformTokens('youtube', userId, profile.platformUserId, tokens);
+    await upsertPlatformTokens('youtube', userId, profile.platformUserId, {
+      ...tokens,
+      consentGrantedAt,
+      consentConfirmedAt: consentGrantedAt,
+      lastUsedAt: consentGrantedAt,
+    });
     markProviderRuntimeConnected(userId, 'youtube');
 
     await rotateAuthenticatedSession(req, res, userId);
@@ -15721,6 +15785,31 @@ app.get('/api/auth/youtube/token', async (req, res) => {
     const msg = String(e?.message || e);
     const status = msg.includes('No YouTube tokens') ? 404 : 500;
     return res.status(status).json({ error: msg });
+  }
+});
+
+app.post('/api/auth/youtube/consent/confirm', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const ownerUserId = await getCurrentSessionUserId(req);
+    if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const tokens = await getPlatformTokens('youtube', ownerUserId);
+    if (!tokens) return res.status(404).json({ error: 'YouTube authorization not found' });
+    const accessToken = await getValidYoutubeAccessToken(ownerUserId, { trackUse: false });
+    const profile = await fetchYoutubeMyChannelWithAccessToken(accessToken);
+    if (!profile.platformUserId || String(profile.platformUserId) !== String(tokens.platformUserId || '')) {
+      return res.status(409).json({ error: 'Authorized YouTube channel no longer matches the stored connection' });
+    }
+    await updatePlatformAccountProfile('youtube', ownerUserId, tokens.platformUserId, profile);
+    await confirmPlatformTokenConsent('youtube', ownerUserId);
+    const [updatedTokens, accounts] = await Promise.all([
+      getPlatformTokens('youtube', ownerUserId),
+      listPlatformAccounts(ownerUserId),
+    ]);
+    const account = (accounts || []).find((item) => String(item.provider || '').toLowerCase() === 'youtube') || null;
+    return res.json({ ok: true, authorization: publicYoutubeAuthorization(updatedTokens, account) });
+  } catch (e) {
+    const status = isYoutubeReauthRequired(e) ? 401 : (e?.status || e?.response?.status || 500);
+    return res.status(status).json({ error: e?.message || 'Failed to confirm YouTube authorization' });
   }
 });
 
@@ -16048,6 +16137,9 @@ app.post('/api/youtube/bot/select-channel', rateLimiters.userWrite, async (req, 
       tokenType: pending.tokens.tokenType,
       expiresAt: pending.tokens.expiresAt,
       scope: pending.tokens.scope,
+      consentGrantedAt: pending.consentGrantedAt || new Date().toISOString(),
+      consentConfirmedAt: pending.consentGrantedAt || new Date().toISOString(),
+      lastUsedAt: pending.consentGrantedAt || new Date().toISOString(),
       configuredBy: ownerUserId,
       status: 'active'
     });
@@ -16081,6 +16173,9 @@ app.post('/api/youtube/bot/verify', rateLimiters.userWrite, async (req, res) => 
       tokenType: profile.tokenType,
       expiresAt: profile.expiresAt,
       scope: profile.scope,
+      consentGrantedAt: profile.consentGrantedAt,
+      consentConfirmedAt: profile.consentConfirmedAt,
+      lastUsedAt: profile.lastUsedAt,
       configuredBy: ownerUserId,
       status: 'active'
     });
@@ -16088,6 +16183,40 @@ app.post('/api/youtube/bot/verify', rateLimiters.userWrite, async (req, res) => 
   } catch (e) {
     const status = e?.status || 500;
     return res.status(status).json({ error: e?.message || 'Failed to verify YouTube bot channel' });
+  }
+});
+
+app.post('/api/youtube/bot/consent/confirm', rateLimiters.userWrite, async (req, res) => {
+  try {
+    const admin = await requireCurrentAdminUser(req, res);
+    if (!admin) return;
+    const profile = await getValidYoutubeBotProfile({ trackUse: false });
+    const channels = await fetchYoutubeMyChannelsWithAccessToken(profile.accessToken);
+    const matched = channels.find((channel) => String(channel.channelId || '') === String(profile.selectedChannelId || ''));
+    if (!matched) return res.status(409).json({ error: 'Selected bot channel is not available for this OAuth token' });
+    const confirmedAt = new Date().toISOString();
+    const updated = await upsertYoutubeBotProfile({
+      id: profile.id,
+      selectedChannelId: matched.channelId,
+      selectedChannelTitle: matched.channelName,
+      selectedChannelHandle: matched.channelHandle,
+      selectedChannelThumbnailUrl: matched.channelImageUrl,
+      accessToken: profile.accessToken,
+      refreshToken: profile.refreshToken,
+      tokenType: profile.tokenType,
+      expiresAt: profile.expiresAt,
+      scope: profile.scope,
+      consentGrantedAt: profile.consentGrantedAt,
+      consentConfirmedAt: confirmedAt,
+      lastUsedAt: profile.lastUsedAt,
+      configuredBy: admin.userId,
+      status: 'active',
+    });
+    await confirmYoutubeBotProfileConsent(profile.id);
+    return res.json({ ok: true, profile: publicYoutubeBotProfile({ ...updated, consentConfirmedAt: confirmedAt }) });
+  } catch (e) {
+    const status = isYoutubeReauthRequired(e) ? 401 : (e?.status || e?.response?.status || 500);
+    return res.status(status).json({ error: e?.message || 'Failed to confirm YouTube bot authorization' });
   }
 });
 
@@ -16442,8 +16571,17 @@ app.get('/api/account/platforms', async (req, res) => {
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.json({ userId: null, sid: null, platforms: [] });
-    const platforms = await listPlatformAccounts(ownerUserId).catch(() => []);
-    return res.json({ userId: ownerUserId, sid: `user:${ownerUserId}`, platforms });
+    const [platforms, youtubeTokens] = await Promise.all([
+      listPlatformAccounts(ownerUserId).catch(() => []),
+      getPlatformTokens('youtube', ownerUserId).catch(() => null),
+    ]);
+    const youtubeAccount = (platforms || []).find((account) => String(account.provider || '').toLowerCase() === 'youtube') || null;
+    return res.json({
+      userId: ownerUserId,
+      sid: `user:${ownerUserId}`,
+      platforms,
+      authorizations: { youtube: publicYoutubeAuthorization(youtubeTokens, youtubeAccount) },
+    });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to load platform accounts' });
   }
@@ -24435,24 +24573,123 @@ const YOUTUBE_AUTH_VALIDATION_MAX_AGE_MS = Math.min(
   30 * 24 * 60 * 60 * 1000,
   Math.max(24 * 60 * 60 * 1000, Number(process.env.YOUTUBE_AUTH_VALIDATION_MAX_AGE_MS || 29 * 24 * 60 * 60 * 1000))
 );
+const YOUTUBE_AUTH_INACTIVITY_MAX_AGE_MS = Math.min(
+  365 * 24 * 60 * 60 * 1000,
+  Math.max(30 * 24 * 60 * 60 * 1000, Number(process.env.YOUTUBE_AUTH_INACTIVITY_MAX_AGE_MS || 180 * 24 * 60 * 60 * 1000))
+);
 let youtubeAuthorizationValidationRunning = false;
+
+function youtubeAuthorizationIsInactive(record) {
+  const lastActivityAt = latestIsoTimestamp(
+    record?.lastUsedAt,
+    record?.consentConfirmedAt,
+    record?.lastLoginAt,
+    record?.consentGrantedAt,
+  );
+  if (!lastActivityAt) return true;
+  return Date.now() - new Date(lastActivityAt).getTime() >= YOUTUBE_AUTH_INACTIVITY_MAX_AGE_MS;
+}
+
+async function deleteYoutubeCentralBotAuthorization(profile, reason) {
+  if (!profile) return false;
+  await revokeYoutubeOAuthGrant(profile);
+  await deleteYoutubeBotProfile(profile.id || YOUTUBE_BOT_PROFILE_ID);
+  for (const key of Array.from(youtubeSessionStore.keys())) closeYoutubeSession(key, reason);
+  return true;
+}
+
+async function validateYoutubeCentralBotAuthorization(summary) {
+  const profile = await getYoutubeBotProfile(YOUTUBE_BOT_PROFILE_ID).catch(() => null);
+  if (!profile?.accessToken) return;
+  if (youtubeAuthorizationIsInactive(profile)) {
+    await deleteYoutubeCentralBotAuthorization(profile, 'youtube_bot_authorization_inactive');
+    summary.centralDeleted += 1;
+    return;
+  }
+  const lastVerifiedAt = new Date(profile.lastVerifiedAt || 0).getTime();
+  if (Number.isFinite(lastVerifiedAt) && Date.now() - lastVerifiedAt < YOUTUBE_AUTH_VALIDATION_MAX_AGE_MS) return;
+  summary.centralChecked += 1;
+  try {
+    const validProfile = await getValidYoutubeBotProfile({ trackUse: false });
+    const channels = await fetchYoutubeMyChannelsWithAccessToken(validProfile.accessToken);
+    const matched = channels.find((channel) => String(channel.channelId || '') === String(validProfile.selectedChannelId || ''));
+    if (!matched) {
+      await deleteYoutubeCentralBotAuthorization(validProfile, 'youtube_bot_authorization_channel_missing');
+      summary.centralDeleted += 1;
+      return;
+    }
+    await upsertYoutubeBotProfile({
+      id: validProfile.id,
+      selectedChannelId: matched.channelId,
+      selectedChannelTitle: matched.channelName,
+      selectedChannelHandle: matched.channelHandle,
+      selectedChannelThumbnailUrl: matched.channelImageUrl,
+      accessToken: validProfile.accessToken,
+      refreshToken: validProfile.refreshToken,
+      tokenType: validProfile.tokenType,
+      expiresAt: validProfile.expiresAt,
+      scope: validProfile.scope,
+      consentGrantedAt: validProfile.consentGrantedAt,
+      consentConfirmedAt: validProfile.consentConfirmedAt,
+      lastUsedAt: validProfile.lastUsedAt,
+      configuredBy: validProfile.configuredBy,
+      status: 'active',
+    });
+    summary.centralValid += 1;
+  } catch (error) {
+    if (isYoutubeReauthRequired(error)) {
+      const current = await getYoutubeBotProfile(YOUTUBE_BOT_PROFILE_ID).catch(() => null);
+      if (current) await deleteYoutubeCentralBotAuthorization(current, 'youtube_bot_authorization_invalid').catch(() => null);
+      summary.centralDeleted += 1;
+      return;
+    }
+    summary.centralDeferred += 1;
+    console.warn('[YouTube] Central bot authorization validation deferred:', error?.response?.data || error?.message || error);
+  }
+}
 
 async function validateYoutubeAuthorizations(reason = 'scheduled') {
   if (youtubeAuthorizationValidationRunning) return null;
   youtubeAuthorizationValidationRunning = true;
-  const summary = { reason, checked: 0, valid: 0, deleted: 0, deferred: 0 };
+  const summary = {
+    reason,
+    checked: 0,
+    valid: 0,
+    deleted: 0,
+    deferred: 0,
+    centralChecked: 0,
+    centralValid: 0,
+    centralDeleted: 0,
+    centralDeferred: 0,
+  };
   try {
+    await validateYoutubeCentralBotAuthorization(summary).catch((error) => {
+      summary.centralDeferred += 1;
+      console.warn('[YouTube] Central bot authorization validation failed:', error?.response?.data || error?.message || error);
+    });
     const users = await listPlatformTokenUsers('youtube');
     await forEachWithConcurrency(users, Math.min(REGISTERED_RUNTIME_MONITOR_CONCURRENCY, 3), async (user) => {
       const ownerUserId = String(user?.userId || '').trim();
       if (!ownerUserId) return;
+      if (youtubeAuthorizationIsInactive(user)) {
+        try {
+          const tokens = await getPlatformTokens('youtube', ownerUserId);
+          await revokeYoutubeOAuthGrant(tokens);
+          await deleteYoutubeAuthorizedData(ownerUserId, user?.platformUserId || null, 'authorization_inactive');
+          summary.deleted += 1;
+        } catch (error) {
+          summary.deferred += 1;
+          console.warn('[YouTube] Inactive authorization revocation deferred:', ownerUserId, error?.response?.data || error?.message || error);
+        }
+        return;
+      }
       const lastValidatedAt = new Date(user?.lastValidatedAt || 0).getTime();
       if (Number.isFinite(lastValidatedAt) && Date.now() - lastValidatedAt < YOUTUBE_AUTH_VALIDATION_MAX_AGE_MS) return;
       summary.checked += 1;
       try {
-        const accessToken = await getValidYoutubeAccessToken(ownerUserId);
+        const accessToken = await getValidYoutubeAccessToken(ownerUserId, { trackUse: false });
         const profile = await fetchYoutubeMyChannelWithAccessToken(accessToken);
-        await upsertPlatformIdentity('youtube', profile, ownerUserId);
+        await updatePlatformAccountProfile('youtube', ownerUserId, user.platformUserId, profile);
         const currentChannel = await getYoutubeStreamerChannel(ownerUserId).catch(() => null);
         if (currentChannel?.youtubeChannelId === profile.channelId) {
           const refreshedChannel = buildYoutubeStreamerChannelFromProfile(profile, { id: currentChannel.botProfileId });

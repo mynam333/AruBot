@@ -22,6 +22,7 @@ type PlatformAccount = {
   channel_handle?: string;
   avatar_url?: string;
   profile_image_url?: string;
+  last_login_at?: string;
   metadata?: {
     publicProfile?: {
       status?: 'ok' | 'failed' | 'skipped';
@@ -37,6 +38,20 @@ type PlatformAccount = {
       source?: string;
     };
   };
+};
+
+type YoutubeAuthorizationStatus = {
+  active?: boolean;
+  scope?: string | null;
+  consentGrantedAt?: string | null;
+  consentConfirmedAt?: string | null;
+  lastUsedAt?: string | null;
+  lastValidatedAt?: string | null;
+  lastActivityAt?: string | null;
+  validationIntervalDays?: number;
+  inactivityDays?: number;
+  nextValidationAt?: string | null;
+  inactivityRevocationAt?: string | null;
 };
 
 type YoutubeBotProfile = {
@@ -116,6 +131,7 @@ const providerConfigs = [
 ] as const;
 
 const compactNumberFormatter = new Intl.NumberFormat('ko-KR', { notation: 'compact', maximumFractionDigits: 1 });
+const authorizationDateFormatter = new Intl.DateTimeFormat('ko-KR', { dateStyle: 'medium', timeStyle: 'short' });
 
 function normalizeProvider(provider?: string) {
   return provider?.toLowerCase() as ProviderId | undefined;
@@ -178,6 +194,21 @@ function compactCount(value?: number | null) {
   return compactNumberFormatter.format(value);
 }
 
+function formatAuthorizationDate(value?: string | null) {
+  if (!value) return '기록 없음';
+  const date = new Date(value);
+  return Number.isFinite(date.getTime())
+    ? authorizationDateFormatter.format(date)
+    : '기록 없음';
+}
+
+function formatYoutubeScope(value?: string | null) {
+  const scope = String(value || '');
+  if (scope.includes('youtube.force-ssl')) return '라이브 채팅 관리';
+  if (scope.includes('youtube.readonly')) return 'YouTube 채널 읽기';
+  return 'Google 동의 화면에서 승인한 범위';
+}
+
 export function ConnectionPage() {
   const searchParams = useSearchParams();
   const [platforms, setPlatforms] = useState<PlatformAccount[]>([]);
@@ -185,6 +216,7 @@ export function ConnectionPage() {
   const [busyAccount, setBusyAccount] = useState<string | null>(null);
   const [syncingProvider, setSyncingProvider] = useState<ProviderId | 'all' | null>(null);
   const [youtubeStreamerStatus, setYoutubeStreamerStatus] = useState<YoutubeStreamerStatus | null>(null);
+  const [youtubeAuthorization, setYoutubeAuthorization] = useState<YoutubeAuthorizationStatus | null>(null);
   const [showYoutubeModal, setShowYoutubeModal] = useState(false);
   const [youtubeInput, setYoutubeInput] = useState('');
   const [youtubeBusy, setYoutubeBusy] = useState(false);
@@ -195,11 +227,12 @@ export function ConnectionPage() {
     let alive = true;
     setLoading(true);
     Promise.all([
-      readJson<{ platforms?: PlatformAccount[] }>('/api/account/platforms', { signal: controller.signal }),
+      readJson<{ platforms?: PlatformAccount[]; authorizations?: { youtube?: YoutubeAuthorizationStatus | null } }>('/api/account/platforms', { signal: controller.signal }),
       readJson<YoutubeStreamerStatus>('/api/youtube/streamer-channel', { signal: controller.signal }),
     ]).then(([platformResult, streamerResult]) => {
       if (!alive) return;
       setPlatforms(Array.isArray(platformResult?.platforms) ? platformResult.platforms : []);
+      setYoutubeAuthorization(platformResult?.authorizations?.youtube || null);
       setYoutubeStreamerStatus(streamerResult);
       setLoading(false);
     });
@@ -233,6 +266,7 @@ export function ConnectionPage() {
     const config = providerConfigs.find((item) => item.id === provider);
     if (!config) return;
     const platformUserId = account.platform_user_id || account.channel_id || '';
+    if (provider === 'youtube' && !window.confirm('YouTube 연결을 해제하면 Google OAuth 권한과 AruBot에 저장된 YouTube 연결 데이터가 삭제됩니다. YouTube에 있는 채널, 영상, 채팅 원본은 삭제되지 않습니다. 계속할까요?')) return;
     const busyKey = `${provider}:${platformUserId || 'account'}`;
     setBusyAccount(busyKey);
     try {
@@ -249,6 +283,26 @@ export function ConnectionPage() {
       refresh();
     } catch {
       toast.error(`${config.label} 연결 해제에 실패했습니다.`);
+    } finally {
+      setBusyAccount(null);
+    }
+  };
+
+  const confirmYoutubeConsent = async () => {
+    if (!window.confirm('현재 동의한 범위와 목적에 따라 AruBot이 YouTube 권한을 계속 보관하고 사용하는 것에 동의하시겠습니까?')) return;
+    setBusyAccount('youtube:consent');
+    try {
+      const response = await fetch(apiUrl('/api/auth/youtube/consent/confirm'), {
+        method: 'POST',
+        credentials: 'include',
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(data?.error || 'consent confirmation failed');
+      setYoutubeAuthorization(data?.authorization || null);
+      toast.success('YouTube 권한 유지 동의를 확인했습니다.');
+      refresh();
+    } catch {
+      toast.error('YouTube 권한을 확인하지 못했습니다. 다시 연결해 주세요.');
     } finally {
       setBusyAccount(null);
     }
@@ -283,6 +337,7 @@ export function ConnectionPage() {
   const youtubeBotConfigured = youtubeStreamerStatus?.botConfigured === true;
   const youtubeRegistered = youtubeStreamerStatus?.configured === true;
   const youtubeBotProfile = youtubeStreamerStatus?.botProfile || null;
+  const youtubeAccount = grouped.youtube[0] || (youtubeAuthorization ? { provider: 'youtube', channel_name: 'YouTube' } : null);
   const youtubeLoginHref = apiUrl(`/api/auth/youtube/login?returnTo=${encodeURIComponent('/connection?platform=youtube')}`);
 
   useEffect(() => {
@@ -519,6 +574,33 @@ export function ConnectionPage() {
                     </div>
                   )}
                 </div>
+                {config.id === 'youtube' && youtubeAuthorization ? (
+                  <div className="mt-4 grid gap-3 rounded-[var(--radius-control)] border border-rose-200/70 bg-rose-50/55 p-4 text-sm dark:border-rose-500/20 dark:bg-rose-500/10">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="font-semibold">YouTube 권한 보관</div>
+                      <Badge tone="mint">활성 동의</Badge>
+                    </div>
+                    <div className="grid gap-2 text-xs leading-5 text-muted-foreground sm:grid-cols-2">
+                      <div><span className="font-semibold text-foreground">권한 범위</span><br />{formatYoutubeScope(youtubeAuthorization.scope)}</div>
+                      <div><span className="font-semibold text-foreground">최근 동의 확인</span><br />{formatAuthorizationDate(youtubeAuthorization.consentConfirmedAt)}</div>
+                      <div><span className="font-semibold text-foreground">최근 권한 검증</span><br />{formatAuthorizationDate(youtubeAuthorization.lastValidatedAt)}</div>
+                      <div><span className="font-semibold text-foreground">다음 검증 기한</span><br />{formatAuthorizationDate(youtubeAuthorization.nextValidationAt)}</div>
+                      <div><span className="font-semibold text-foreground">미사용 자동 철회</span><br />{formatAuthorizationDate(youtubeAuthorization.inactivityRevocationAt)}</div>
+                    </div>
+                    <p className="text-xs leading-5 text-muted-foreground">
+                      활성 동의가 유지되는 동안만 암호화된 OAuth 토큰을 보관합니다. 권한은 {youtubeAuthorization.validationIntervalDays || 29}일 이내 주기로 재검증하며, {youtubeAuthorization.inactivityDays || 180}일 동안 사용 또는 동의 확인이 없으면 자동으로 철회하고 관련 YouTube 연결 데이터를 삭제합니다.
+                    </p>
+                    <p className="text-xs leading-5 text-muted-foreground">
+                      연결 해제는 Google 권한과 AruBot 저장 데이터만 제거하며 YouTube의 채널, 영상, 채팅 원본은 삭제하지 않습니다.
+                    </p>
+                    <div>
+                      <Button type="button" variant="outline" size="sm" onClick={confirmYoutubeConsent} disabled={busyAccount === 'youtube:consent'}>
+                        <ShieldCheck className="h-4 w-4" />
+                        {busyAccount === 'youtube:consent' ? '확인 중' : '권한 유지 확인'}
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
                 <div className="mt-4 flex flex-wrap gap-2">
                   {config.id === 'youtube' ? (
                     <>
@@ -559,6 +641,12 @@ export function ConnectionPage() {
                         <Button type="button" variant="outline" onClick={removeYoutubeChannel} disabled={youtubeBusy}>
                           <Unlink className="h-4 w-4" />
                           등록 해제
+                        </Button>
+                      ) : null}
+                      {youtubeAuthorization && youtubeAccount ? (
+                        <Button type="button" variant="destructive" onClick={() => revoke('youtube', youtubeAccount)} disabled={busyAccount?.startsWith('youtube:')}>
+                          <Unlink className="h-4 w-4" />
+                          OAuth 연결 해제
                         </Button>
                       ) : null}
                     </>

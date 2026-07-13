@@ -11,7 +11,7 @@ export const metadata: Metadata = {
   description: 'AruBot 서비스의 개인정보 수집, 이용, 보관, 삭제 및 외부 서비스 연동에 관한 안내입니다.',
 };
 
-const effectiveDate = '2026년 7월 11일';
+const effectiveDate = '2026년 7월 14일';
 const controllerName = 'AruBot 운영자';
 const privacyContact = 'mynam33333@gmail.com';
 
@@ -87,7 +87,7 @@ const processingRows = [
     items:
       'YouTube 채널 ID·채널명·핸들·프로필 이미지, OAuth 권한 범위·access token·refresh token·만료 시각, 방송·영상 ID·제목·썸네일·길이·라이브 상태·Live Chat ID, 채팅 메시지 ID·내용·게시 시각, 작성자 채널 ID·표시 이름·프로필 이미지·운영자/소유자/회원 여부, Super Chat 금액·통화·표시 금액·사용자 코멘트',
     basis: '사용자의 명시적 OAuth 동의, 서비스 이용계약 이행, YouTube API Services 정책 준수',
-    retention: 'OAuth 토큰은 연결 유지와 동의 목적에 필요한 기간 동안 암호화하여 보관하고 30일 이내 주기로 권한 유효성을 재확인. 그 밖의 Authorized Data는 목적에 필요한 기간 동안 보관하되 30일 이내 삭제 또는 새로고침. 연결 해제·권한 철회 시 지체 없이, 늦어도 7일 이내 삭제',
+    retention: 'OAuth 토큰은 연결 유지와 활성 동의 목적에 필요한 기간 동안 암호화하여 보관하고 30일 이내 주기로 권한 유효성을 재확인. 실제 사용·로그인·명시적 동의 확인이 모두 180일 동안 없으면 자동 철회·삭제. 그 밖의 Authorized Data는 목적에 필요한 기간 동안 보관하되 30일 이내 삭제 또는 새로고침. 연결 해제·권한 철회 시 지체 없이, 늦어도 7일 이내 삭제',
   },
 ] as const;
 
@@ -235,7 +235,9 @@ const sections = [
       'OAuth 토큰은 서버 데이터베이스에 암호화하여 저장하고 브라우저나 공개 페이지에 노출하지 않습니다. 채널·방송·영상·채팅 관련 Authorized Data는 AruBot 서버와 Oracle Cloud 대한민국 춘천 리전 데이터베이스에서 서비스 제공에 필요한 범위로 처리되며, Google/YouTube API 요청 외의 제3자에게 판매하지 않습니다.',
       'AruBot의 YouTube 동영상 표시 기능은 YouTube IFrame Player를 사용할 수 있습니다. 이 과정에서 Google/YouTube 등 제3자가 콘텐츠를 제공하며 광고가 포함되거나 노출될 수 있습니다. AruBot은 YouTube가 제공하는 광고나 플레이어 기능을 변경하거나 차단하지 않습니다.',
       '사용자는 플랫폼 연결 화면에서 YouTube 연결 해제를 선택하여 AruBot의 권한을 철회하고 저장된 YouTube OAuth 토큰과 Authorized Data를 삭제할 수 있습니다. AruBot은 연결 해제 요청을 받으면 Google에 토큰 철회를 요청하고 관련 데이터를 지체 없이 삭제합니다.',
+      'AruBot에서 YouTube 연결 데이터 또는 계정을 삭제하는 작업은 AruBot과 Google OAuth 연결에만 적용되며, YouTube에 저장된 채널, 영상, 댓글, 라이브 채팅 원본을 삭제하거나 변경하지 않습니다. YouTube 원본 데이터는 YouTube 또는 해당 기능을 지원하는 승인된 API 클라이언트에서 별도로 관리해야 합니다.',
       '사용자는 Google 계정의 서드 파티 앱 연결 페이지에서도 AruBot의 접근 권한을 직접 철회할 수 있습니다. AruBot은 토큰 유효성을 30일 이내 주기로 재확인하고 갱신할 수 없는 사용자에 관한 YouTube API Data를 삭제합니다.',
+      'AruBot은 자동 유효성 검사만으로 사용자의 활동 또는 동의가 갱신된 것으로 보지 않습니다. 실제 승인된 API 사용, 로그인 또는 서비스 내 권한 유지 확인이 모두 180일 동안 없는 경우 Google OAuth 권한을 철회하고 저장된 토큰과 관련 YouTube 연결 데이터를 삭제합니다.',
       `YouTube API Data 처리, 삭제 또는 권한 철회에 관한 문의는 ${privacyContact}로 접수할 수 있습니다.`,
     ],
     links: [

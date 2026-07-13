@@ -30,7 +30,16 @@ type YoutubeBotStatus = {
     selectedChannelHandle?: string | null;
     selectedChannelThumbnailUrl?: string | null;
     status?: string | null;
+    scope?: string | null;
+    consentGrantedAt?: string | null;
+    consentConfirmedAt?: string | null;
+    lastUsedAt?: string | null;
+    lastActivityAt?: string | null;
+    validationIntervalDays?: number;
+    inactivityDays?: number;
     lastVerifiedAt?: string | null;
+    nextValidationAt?: string | null;
+    inactivityRevocationAt?: string | null;
     lastError?: string | null;
     updatedAt?: string | null;
   } | null;
@@ -39,6 +48,23 @@ type YoutubeBotStatus = {
     expiresAt?: string;
   } | null;
 };
+
+const authorizationDateFormatter = new Intl.DateTimeFormat('ko-KR', { dateStyle: 'medium', timeStyle: 'short' });
+
+function formatAuthorizationDate(value?: string | null) {
+  if (!value) return '기록 없음';
+  const date = new Date(value);
+  return Number.isFinite(date.getTime())
+    ? authorizationDateFormatter.format(date)
+    : '기록 없음';
+}
+
+function formatYoutubeScope(value?: string | null) {
+  const scope = String(value || '');
+  if (scope.includes('youtube.force-ssl')) return '라이브 채팅 관리';
+  if (scope.includes('youtube.readonly')) return 'YouTube 채널 읽기';
+  return 'Google 동의 화면에서 승인한 범위';
+}
 
 export function ArubotAdminPage() {
   const searchParams = useSearchParams();
@@ -125,8 +151,27 @@ export function ArubotAdminPage() {
     }
   };
 
+  const confirmYoutubeBotConsent = async () => {
+    if (!window.confirm('현재 동의한 범위와 목적에 따라 AruBot이 중앙 봇의 YouTube 권한을 계속 보관하고 사용하는 것에 동의하시겠습니까?')) return;
+    setBusy('consent');
+    try {
+      const response = await fetch(apiUrl('/api/youtube/bot/consent/confirm'), {
+        method: 'POST',
+        credentials: 'include',
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(data?.error || 'consent confirmation failed');
+      toast.success('YouTube 중앙 봇 권한 유지 동의를 확인했습니다.');
+      refresh();
+    } catch {
+      toast.error('YouTube 중앙 봇 권한을 확인하지 못했습니다. 다시 연결해 주세요.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const deleteYoutubeBot = async () => {
-    if (!window.confirm('YouTube 중앙 봇 연결을 해제할까요? 모든 스트리머의 YouTube 봇 동작이 중단됩니다.')) return;
+    if (!window.confirm('YouTube 중앙 봇 연결을 해제하면 Google OAuth 권한과 AruBot에 저장된 봇 연결 데이터가 삭제되고 모든 스트리머의 YouTube 봇 동작이 중단됩니다. YouTube 원본 콘텐츠는 삭제되지 않습니다. 계속할까요?')) return;
     setBusy('delete');
     try {
       const response = await fetch(apiUrl('/api/youtube/bot'), {
@@ -204,6 +249,28 @@ export function ArubotAdminPage() {
               </div>
             )}
 
+            {profile ? (
+              <div className="mt-4 grid gap-3 rounded-[var(--radius-control)] border border-rose-200/70 bg-background/75 p-4 text-sm dark:border-rose-500/20">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="font-semibold">중앙 봇 OAuth 권한 보관</div>
+                  <Badge tone="mint">활성 동의</Badge>
+                </div>
+                <div className="grid gap-2 text-xs leading-5 text-muted-foreground sm:grid-cols-2">
+                  <div><span className="font-semibold text-foreground">권한 범위</span><br />{formatYoutubeScope(profile.scope)}</div>
+                  <div><span className="font-semibold text-foreground">최근 동의 확인</span><br />{formatAuthorizationDate(profile.consentConfirmedAt)}</div>
+                  <div><span className="font-semibold text-foreground">최근 권한 검증</span><br />{formatAuthorizationDate(profile.lastVerifiedAt)}</div>
+                  <div><span className="font-semibold text-foreground">다음 검증 기한</span><br />{formatAuthorizationDate(profile.nextValidationAt)}</div>
+                  <div><span className="font-semibold text-foreground">미사용 자동 철회</span><br />{formatAuthorizationDate(profile.inactivityRevocationAt)}</div>
+                </div>
+                <p className="text-xs leading-5 text-muted-foreground">
+                  활성 동의가 유지되는 동안만 암호화된 OAuth 토큰을 보관합니다. {profile.validationIntervalDays || 29}일 이내 주기로 재검증하며, {profile.inactivityDays || 180}일 동안 실제 사용 또는 동의 확인이 없으면 Google 권한과 관련 AruBot 연결 데이터를 자동 삭제합니다.
+                </p>
+                <p className="text-xs leading-5 text-muted-foreground">
+                  연결 해제는 Google 권한과 AruBot 저장 데이터만 제거하며 YouTube 채널, 영상, 채팅 원본은 삭제하지 않습니다.
+                </p>
+              </div>
+            ) : null}
+
             {youtubeBotStatus?.pending?.channels?.length ? (
               <div className="mt-4 grid gap-2">
                 <div className="text-sm font-semibold">봇으로 사용할 채널 선택</div>
@@ -237,6 +304,12 @@ export function ArubotAdminPage() {
                 <Button type="button" variant="outline" onClick={verifyYoutubeBot} disabled={!!busy}>
                   <RefreshCw className={busy === 'verify' ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
                   연결 확인
+                </Button>
+              ) : null}
+              {configured ? (
+                <Button type="button" variant="outline" onClick={confirmYoutubeBotConsent} disabled={!!busy}>
+                  <ShieldCheck className="h-4 w-4" />
+                  {busy === 'consent' ? '확인 중' : '권한 유지 확인'}
                 </Button>
               ) : null}
               {botChannelUrl ? (

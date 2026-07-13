@@ -208,6 +208,7 @@ export function ViewerConnectPage() {
 
   const revoke = async (provider: typeof providers[number], account: PlatformAccount) => {
     const platformUserId = account.platform_user_id || account.channel_id || '';
+    if (provider.id === 'youtube' && !window.confirm('YouTube 연결을 해제하면 Google OAuth 권한과 AruBot에 저장된 YouTube 연결 데이터가 삭제됩니다. YouTube의 채널, 영상, 채팅 원본은 삭제되지 않습니다. 계속할까요?')) return;
     const accountKey = `${provider.id}:${platformUserId || account.channel_name || 'account'}`;
     setBusyAccount(accountKey);
     try {

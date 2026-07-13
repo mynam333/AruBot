@@ -4385,6 +4385,9 @@ async function ensurePlatformIdentityTables() {
         token_type text,
         expires_at timestamptz,
         scope text,
+        consent_granted_at timestamptz not null default now(),
+        consent_confirmed_at timestamptz not null default now(),
+        last_used_at timestamptz not null default now(),
         last_validated_at timestamptz not null default now(),
         updated_at timestamptz not null default now(),
         primary key (provider, user_id),
@@ -4394,7 +4397,11 @@ async function ensurePlatformIdentityTables() {
       create index if not exists idx_platform_accounts_provider_channel on platform_accounts(provider, channel_id);
       create index if not exists idx_platform_tokens_expiry on platform_tokens(provider, expires_at) where expires_at is not null;
       alter table platform_tokens add column if not exists last_validated_at timestamptz not null default now();
+      alter table platform_tokens add column if not exists consent_granted_at timestamptz not null default now();
+      alter table platform_tokens add column if not exists consent_confirmed_at timestamptz not null default now();
+      alter table platform_tokens add column if not exists last_used_at timestamptz not null default now();
       create index if not exists idx_platform_tokens_validation on platform_tokens(provider, last_validated_at);
+      create index if not exists idx_platform_tokens_youtube_activity on platform_tokens(last_used_at) where provider = 'youtube';
       alter table sessions add column if not exists account_user_id text;
       create index if not exists idx_sessions_account_user_id on sessions(account_user_id);
     `);
@@ -4735,15 +4742,26 @@ export async function updatePlatformAccountProfile(provider, userId, platformUse
   });
 }
 
-export async function upsertPlatformTokens(provider, userId, platformUserId, { accessToken, refreshToken, tokenType, expiresAt, scope }) {
+export async function upsertPlatformTokens(provider, userId, platformUserId, {
+  accessToken,
+  refreshToken,
+  tokenType,
+  expiresAt,
+  scope,
+  consentGrantedAt = null,
+  consentConfirmedAt = null,
+  lastUsedAt = null,
+}) {
   const p = normalizeProvider(provider);
   if (!p || !userId || !platformUserId || !accessToken) throw new Error('provider, userId, platformUserId and accessToken are required');
   await ensurePlatformIdentityTables();
   await withPgClient(async (pg) => {
     await pg.query(
       `insert into platform_tokens
-        (provider, user_id, platform_user_id, access_token, refresh_token, token_type, expires_at, scope, last_validated_at, updated_at)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, now(), now())
+        (provider, user_id, platform_user_id, access_token, refresh_token, token_type, expires_at, scope,
+         consent_granted_at, consent_confirmed_at, last_used_at, last_validated_at, updated_at)
+       values ($1, $2, $3, $4, $5, $6, $7, $8,
+         coalesce($9::timestamptz, now()), coalesce($10::timestamptz, now()), coalesce($11::timestamptz, now()), now(), now())
        on conflict (provider, user_id) do update set
          platform_user_id = excluded.platform_user_id,
          access_token = excluded.access_token,
@@ -4751,9 +4769,24 @@ export async function upsertPlatformTokens(provider, userId, platformUserId, { a
          token_type = excluded.token_type,
          expires_at = excluded.expires_at,
          scope = excluded.scope,
+         consent_granted_at = coalesce($9::timestamptz, platform_tokens.consent_granted_at),
+         consent_confirmed_at = coalesce($10::timestamptz, platform_tokens.consent_confirmed_at),
+         last_used_at = greatest(platform_tokens.last_used_at, coalesce($11::timestamptz, platform_tokens.last_used_at)),
          last_validated_at = now(),
          updated_at = now()`,
-      [p, String(userId).replace(/^user:/, ''), String(platformUserId), protectSecret(accessToken), protectSecret(refreshToken || null), tokenType || 'Bearer', expiresAt || null, scope || null]
+      [
+        p,
+        String(userId).replace(/^user:/, ''),
+        String(platformUserId),
+        protectSecret(accessToken),
+        protectSecret(refreshToken || null),
+        tokenType || 'Bearer',
+        expiresAt || null,
+        scope || null,
+        consentGrantedAt,
+        consentConfirmedAt,
+        lastUsedAt,
+      ]
     );
   });
 }
@@ -4764,7 +4797,8 @@ export async function getPlatformTokens(provider, userId) {
   await ensurePlatformIdentityTables();
   return withPgClient(async (pg) => {
     const { rows } = await pg.query(
-      `select provider, user_id, platform_user_id, access_token, refresh_token, token_type, expires_at, scope, last_validated_at
+      `select provider, user_id, platform_user_id, access_token, refresh_token, token_type, expires_at, scope,
+              consent_granted_at, consent_confirmed_at, last_used_at, last_validated_at
        from platform_tokens
        where provider = $1 and user_id = $2
        limit 1`,
@@ -4794,6 +4828,9 @@ export async function getPlatformTokens(provider, userId) {
       tokenType: row.token_type,
       expiresAt: row.expires_at,
       scope: row.scope,
+      consentGrantedAt: row.consent_granted_at,
+      consentConfirmedAt: row.consent_confirmed_at,
+      lastUsedAt: row.last_used_at,
       lastValidatedAt: row.last_validated_at
     };
   });
@@ -4805,11 +4842,15 @@ export async function listPlatformTokenUsers(provider) {
   await ensurePlatformIdentityTables();
   return withPgClient(async (pg) => {
     const { rows } = await pg.query(
-      `select user_id, platform_user_id, expires_at, scope, last_validated_at
-         from platform_tokens
-        where provider = $1
-          and access_token is not null
-        order by updated_at desc`,
+      `select pt.user_id, pt.platform_user_id, pt.expires_at, pt.scope,
+              pt.consent_granted_at, pt.consent_confirmed_at, pt.last_used_at, pt.last_validated_at,
+              pa.last_login_at
+         from platform_tokens pt
+         left join platform_accounts pa
+           on pa.provider = pt.provider and pa.user_id = pt.user_id and pa.platform_user_id = pt.platform_user_id
+        where pt.provider = $1
+          and pt.access_token is not null
+        order by pt.updated_at desc`,
       [p]
     );
     return (rows || []).map((row) => ({
@@ -4817,6 +4858,10 @@ export async function listPlatformTokenUsers(provider) {
       platformUserId: row.platform_user_id,
       expiresAt: row.expires_at,
       scope: row.scope,
+      consentGrantedAt: row.consent_granted_at,
+      consentConfirmedAt: row.consent_confirmed_at,
+      lastUsedAt: row.last_used_at,
+      lastLoginAt: row.last_login_at,
       lastValidatedAt: row.last_validated_at
     }));
   });
@@ -4830,6 +4875,37 @@ export async function markPlatformTokenValidated(provider, userId) {
     const result = await pg.query(
       `update platform_tokens
           set last_validated_at = now(), updated_at = now()
+        where provider = $1 and user_id = $2`,
+      [p, String(userId).replace(/^user:/, '')]
+    );
+    return (result.rowCount || 0) > 0;
+  });
+}
+
+export async function touchPlatformTokenUsed(provider, userId) {
+  const p = normalizeProvider(provider);
+  if (!p || !userId || !getDbUrl()) return false;
+  await ensurePlatformIdentityTables();
+  return withPgClient(async (pg) => {
+    const result = await pg.query(
+      `update platform_tokens
+          set last_used_at = now(), updated_at = now()
+        where provider = $1 and user_id = $2
+          and last_used_at < now() - interval '5 minutes'`,
+      [p, String(userId).replace(/^user:/, '')]
+    );
+    return (result.rowCount || 0) > 0;
+  });
+}
+
+export async function confirmPlatformTokenConsent(provider, userId) {
+  const p = normalizeProvider(provider);
+  if (!p || !userId || !getDbUrl()) return false;
+  await ensurePlatformIdentityTables();
+  return withPgClient(async (pg) => {
+    const result = await pg.query(
+      `update platform_tokens
+          set consent_confirmed_at = now(), last_validated_at = now(), updated_at = now()
         where provider = $1 and user_id = $2`,
       [p, String(userId).replace(/^user:/, '')]
     );
@@ -4900,12 +4976,20 @@ async function ensureYoutubeCentralBotTables() {
         expires_at timestamptz,
         scope text,
         status text not null default 'active',
+        consent_granted_at timestamptz not null default now(),
+        consent_confirmed_at timestamptz not null default now(),
+        last_used_at timestamptz not null default now(),
         last_verified_at timestamptz,
         last_error text,
         configured_by text,
         created_at timestamptz not null default now(),
         updated_at timestamptz not null default now()
       );
+
+      alter table youtube_bot_profiles add column if not exists consent_granted_at timestamptz not null default now();
+      alter table youtube_bot_profiles add column if not exists consent_confirmed_at timestamptz not null default now();
+      alter table youtube_bot_profiles add column if not exists last_used_at timestamptz not null default now();
+      create index if not exists idx_youtube_bot_profiles_activity on youtube_bot_profiles(last_used_at);
 
       create table if not exists youtube_streamer_channels (
         owner_user_id text primary key references app_users(id) on delete cascade,
@@ -4952,6 +5036,9 @@ function normalizeYoutubeBotProfileRow(row) {
     expiresAt: row.expires_at,
     scope: row.scope,
     status: row.status || 'active',
+    consentGrantedAt: row.consent_granted_at,
+    consentConfirmedAt: row.consent_confirmed_at,
+    lastUsedAt: row.last_used_at,
     lastVerifiedAt: row.last_verified_at,
     lastError: row.last_error,
     configuredBy: row.configured_by,
@@ -4994,8 +5081,9 @@ export async function upsertYoutubeBotProfile(profile) {
       `insert into youtube_bot_profiles
         (id, selected_channel_id, selected_channel_title, selected_channel_handle, selected_channel_thumbnail_url,
          google_subject_hash, access_token, refresh_token, token_type, expires_at, scope, status,
-         last_verified_at, last_error, configured_by, updated_at)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, coalesce($12, 'active'), now(), null, $13, now())
+         consent_granted_at, consent_confirmed_at, last_used_at, last_verified_at, last_error, configured_by, updated_at)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, coalesce($12, 'active'),
+         coalesce($14::timestamptz, now()), coalesce($15::timestamptz, now()), coalesce($16::timestamptz, now()), now(), null, $13, now())
        on conflict (id) do update set
          selected_channel_id = excluded.selected_channel_id,
          selected_channel_title = excluded.selected_channel_title,
@@ -5008,6 +5096,9 @@ export async function upsertYoutubeBotProfile(profile) {
          expires_at = excluded.expires_at,
          scope = excluded.scope,
          status = excluded.status,
+         consent_granted_at = coalesce($14::timestamptz, youtube_bot_profiles.consent_granted_at),
+         consent_confirmed_at = coalesce($15::timestamptz, youtube_bot_profiles.consent_confirmed_at),
+         last_used_at = greatest(youtube_bot_profiles.last_used_at, coalesce($16::timestamptz, youtube_bot_profiles.last_used_at)),
          last_verified_at = now(),
          last_error = null,
          configured_by = excluded.configured_by,
@@ -5027,6 +5118,9 @@ export async function upsertYoutubeBotProfile(profile) {
         profile.scope || null,
         profile.status || 'active',
         profile.configuredBy || null,
+        profile.consentGrantedAt || null,
+        profile.consentConfirmedAt || null,
+        profile.lastUsedAt || null,
       ]
     );
     return normalizeYoutubeBotProfileRow(rows[0]);
@@ -5086,6 +5180,33 @@ export async function markYoutubeBotProfileStatus(id, { status = 'error', lastEr
       [String(id), String(status || 'error'), lastError ? String(lastError).slice(0, 1000) : null]
     );
     return normalizeYoutubeBotProfileRow(rows[0]);
+  });
+}
+
+export async function touchYoutubeBotProfileUsed(id = 'default') {
+  await ensureYoutubeCentralBotTables();
+  return withPgClient(async (pg) => {
+    const result = await pg.query(
+      `update youtube_bot_profiles
+          set last_used_at = now(), updated_at = now()
+        where id = $1
+          and last_used_at < now() - interval '5 minutes'`,
+      [String(id || 'default')]
+    );
+    return (result.rowCount || 0) > 0;
+  });
+}
+
+export async function confirmYoutubeBotProfileConsent(id = 'default') {
+  await ensureYoutubeCentralBotTables();
+  return withPgClient(async (pg) => {
+    const result = await pg.query(
+      `update youtube_bot_profiles
+          set consent_confirmed_at = now(), last_verified_at = now(), status = 'active', last_error = null, updated_at = now()
+        where id = $1`,
+      [String(id || 'default')]
+    );
+    return (result.rowCount || 0) > 0;
   });
 }
 

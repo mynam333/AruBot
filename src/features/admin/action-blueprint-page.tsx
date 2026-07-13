@@ -65,6 +65,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { Tooltip } from '@/components/ui/tooltip';
 import { CommandVariableHelpButton } from '@/features/admin/command-variable-help';
 import { cn, compactDateTime } from '@/shared/lib/utils';
 import { apiUrl, readJson } from '@/shared/api/http';
@@ -1942,7 +1943,7 @@ export function ActionBlueprintPage() {
       setBlueprints((current) => [data.blueprint, ...current.filter((item) => item.id !== data.blueprint.id)]);
       const versionData = data.blueprint.id ? await readJson<{ versions?: BlueprintVersion[] }>(`/api/action-blueprints/${encodeURIComponent(data.blueprint.id)}/versions`) : null;
       setVersions(versionData?.versions || []);
-      toast.success(data.validationErrors?.length ? '저장했습니다. 게시 전 확인할 항목이 있습니다.' : '블루프린트를 저장했습니다.');
+      toast.success(data.validationErrors?.length ? 'AruBot 초안을 저장했습니다. 게시 전 확인할 항목이 있습니다.' : 'AruBot 초안을 저장했습니다.');
       return data.blueprint;
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '저장하지 못했습니다.');
@@ -2577,10 +2578,12 @@ export function ActionBlueprintPage() {
               {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
               테스트
             </Button>
-            <Button type="button" variant="secondary" size="sm" onClick={save} disabled={saving}>
-              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-              저장
-            </Button>
+            <Tooltip content="AruBot 블루프린트 초안만 저장합니다. YouTube OAuth 권한이나 YouTube API 데이터는 이 버튼으로 저장되지 않습니다.">
+              <Button type="button" variant="secondary" size="sm" onClick={save} disabled={saving} aria-label="AruBot 초안 저장">
+                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                초안 저장
+              </Button>
+            </Tooltip>
             <Button type="button" size="sm" onClick={publish} disabled={!!validationErrors.length || saving}>
               <Radio className="h-4 w-4" />
               게시

@@ -7,6 +7,7 @@ describe('YouTube live chat integration regression', () => {
   const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
   const termsPage = fs.readFileSync(path.join(__dirname, '..', 'src', 'app', '(public)', 'terms', 'page.tsx'), 'utf8');
   const privacyPage = fs.readFileSync(path.join(__dirname, '..', 'src', 'app', '(public)', 'privacy', 'page.tsx'), 'utf8');
+  const blueprintPage = fs.readFileSync(path.join(__dirname, '..', 'src', 'features', 'admin', 'action-blueprint-page.tsx'), 'utf8');
   const connectionPage = fs.readFileSync(path.join(__dirname, '..', 'src', 'features', 'admin', 'connection-page.tsx'), 'utf8');
   const arubotAdminPage = fs.readFileSync(path.join(__dirname, '..', 'src', 'features', 'admin', 'arubot-admin-page.tsx'), 'utf8');
   const dashboardPage = fs.readFileSync(path.join(__dirname, '..', 'src', 'features', 'admin', 'dashboard-page.tsx'), 'utf8');
@@ -96,7 +97,7 @@ describe('YouTube live chat integration regression', () => {
     expect(serverIndex).toContain("const mode = requestedMode === 'central_bot'");
     expect(serverIndex).toContain("const preferredUserId = await getCurrentSessionUserId(req)");
     expect(serverIndex).toContain("const { userId } = await upsertPlatformIdentity('youtube', profile, preferredUserId)");
-    expect(serverIndex).toContain("await upsertPlatformTokens('youtube', userId, profile.platformUserId, tokens)");
+    expect(serverIndex).toContain("await upsertPlatformTokens('youtube', userId, profile.platformUserId, {");
     expect(serverIndex).toContain('await rotateAuthenticatedSession(req, res, userId)');
     expect(serverIndex).toContain('upsertYoutubeStreamerChannelFromOAuthProfile(req, userId, profile)');
     expect(serverIndex).toContain("reason: oauthMode === 'viewer' ? null : 'youtube_streamer_registered'");
@@ -179,10 +180,24 @@ describe('YouTube live chat integration regression', () => {
     expect(serverIndex).toContain('async function validateYoutubeAuthorizations');
     expect(serverIndex).toContain("await markPlatformTokenValidated('youtube', ownerUserId)");
     expect(serverDb).toContain('last_validated_at timestamptz not null default now()');
+    expect(serverDb).toContain('consent_confirmed_at timestamptz not null default now()');
+    expect(serverDb).toContain('last_used_at timestamptz not null default now()');
+    expect(serverIndex).toContain("app.post('/api/auth/youtube/consent/confirm'");
+    expect(serverIndex).toContain("app.post('/api/youtube/bot/consent/confirm'");
+    expect(serverIndex).toContain('YOUTUBE_AUTH_INACTIVITY_MAX_AGE_MS');
+    expect(serverIndex).toContain('async function validateYoutubeCentralBotAuthorization');
+    expect(serverIndex).toContain("getValidYoutubeAccessToken(ownerUserId, { trackUse: false })");
+    expect(serverIndex).toContain("await updatePlatformAccountProfile('youtube', ownerUserId, user.platformUserId, profile)");
+    expect(connectionPage).toContain('YouTube 권한 보관');
+    expect(connectionPage).toContain('OAuth 연결 해제');
+    expect(arubotAdminPage).toContain('중앙 봇 OAuth 권한 보관');
+    expect(blueprintPage).toContain('AruBot 초안 저장');
+    expect(blueprintPage).toContain('YouTube OAuth 권한이나 YouTube API 데이터는 이 버튼으로 저장되지 않습니다.');
     expect(termsPage).toContain('YouTube 서비스 약관에 구속되는 것에 동의합니다.');
     expect(privacyPage).toContain('AruBot은 YouTube API Services를 사용합니다.');
     expect(privacyPage).toContain('https://myaccount.google.com/connections?filters=3,4');
     expect(privacyPage).toContain('광고가 포함되거나 노출될 수 있습니다.');
+    expect(privacyPage).toContain('YouTube에 저장된 채널, 영상, 댓글, 라이브 채팅 원본을 삭제하거나 변경하지 않습니다.');
   });
 
   test('admin surfaces list YouTube consistently', () => {
