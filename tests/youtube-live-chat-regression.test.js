@@ -56,6 +56,23 @@ describe('YouTube live chat integration regression', () => {
     expect(sendBody).toContain('return sendYoutubeChat(ownerUserId, chatPost?.liveChatId || null, text)');
   });
 
+  test('resolves live-title placeholders only from the active YouTube broadcast', () => {
+    const liveInfoStart = serverIndex.indexOf('async function fetchYoutubeLiveInfoForSid');
+    const liveInfoEnd = serverIndex.indexOf('async function getChannelUidsForSid', liveInfoStart);
+    const liveInfoBody = serverIndex.slice(liveInfoStart, liveInfoEnd);
+    const refreshStart = serverIndex.indexOf('async function refreshYoutubeLiveStatus');
+    const refreshEnd = serverIndex.indexOf('function normalizeYoutubeChatEvent', refreshStart);
+    const refreshBody = serverIndex.slice(refreshStart, refreshEnd);
+
+    expect(liveInfoBody).toContain('youtubeSessionStore.get(ownerUserId)');
+    expect(liveInfoBody).toContain('buildYoutubeLiveLookupContext');
+    expect(liveInfoBody).toContain('fetchYoutubeVideoLiveDetails(broadcastId)');
+    expect(liveInfoBody).toContain('allowOwnerFallback: true');
+    expect(liveInfoBody).toContain('buildYoutubeLiveInfoFallback(lookup)');
+    expect(refreshBody).toContain('broadcastId: cached.broadcastId || null');
+    expect(refreshBody).toContain("title: cached.title || ''");
+  });
+
   test('normalizes non-local YouTube OAuth callback URLs to HTTPS', () => {
     expect(serverIndex).toContain('function normalizeYoutubeRedirectUri');
     expect(serverIndex).toContain("url.protocol === 'http:' && !isLocal");

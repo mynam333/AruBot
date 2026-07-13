@@ -1,4 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  createPvdIdlePlaybackOrder,
+  EMPTY_PVD_IDLE_PLAYLIST,
+  getPvdIdlePlaylistSignature,
+  normalizePvdIdlePlaylist,
+  type PvdIdlePlaylist,
+} from '@/components/pvdIdlePlaylist';
 import { getBrowserApiBase } from '@/shared/api/http';
 
 type PlaybackTarget = {
@@ -34,6 +41,7 @@ type ExternalVideoDonationItem = VideoDonationItem & {
 type YouTubePlayer = {
   destroy?: () => void;
   getCurrentTime?: () => number;
+  getVideoData?: () => { video_id?: string };
   loadModule?: (name: string) => void;
   loadVideoById?: (options: { videoId: string; startSeconds: number }) => void;
   mute?: () => void;
@@ -55,6 +63,8 @@ type YouTubeWindow = Window & {
   YT?: YouTubeApi;
   onYouTubeIframeAPIReady?: () => void;
 };
+
+type PlaybackMode = 'none' | 'donation' | 'idle';
 
 function isUnknownRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object';
@@ -104,6 +114,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
   const externalFrameRef = useRef<HTMLIFrameElement | null>(null);
   const externalVideoRef = useRef<HTMLVideoElement | null>(null);
   const playerRef = useRef<YouTubePlayer | null>(null);
+  const expectedYouTubeMediaIdRef = useRef<string | null>(null);
   const volumeRef = useRef(100);
   const externalProviderRef = useRef<string | null>(null);
   const externalMediaKeyRef = useRef<string | null>(null);
@@ -128,6 +139,16 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
   const tiktokDurationRef = useRef(0);
   const tiktokDurationReportedRef = useRef(0);
   const tiktokEarlyEndRetryRef = useRef(0);
+  const playbackModeRef = useRef<PlaybackMode>('none');
+  const idlePlaylistRef = useRef<PvdIdlePlaylist>(EMPTY_PVD_IDLE_PLAYLIST);
+  const idleSignatureRef = useRef('');
+  const idleOrderRef = useRef<string[]>([]);
+  const idleCursorRef = useRef(0);
+  const idleCurrentMediaIdRef = useRef<string | null>(null);
+  const idleResumeAtRef = useRef(0);
+  const idleExhaustedRef = useRef(false);
+  const idleFailedMediaIdsRef = useRef<Set<string>>(new Set());
+  const idleAdvanceRef = useRef<(cause: 'end' | 'error') => void>(() => {});
 
   // Parse token from /pvd/:token
   useEffect(() => {
@@ -340,6 +361,8 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
   }, [postToExternalPlayer]);
 
   const stopPlayer = useCallback(() => {
+    ensureSeqRef.current += 1;
+    expectedYouTubeMediaIdRef.current = null;
     try { playerRef.current && playerRef.current.stopVideo && playerRef.current.stopVideo(); } catch {}
     try { playerRef.current && playerRef.current.destroy && playerRef.current.destroy(); } catch {}
     playerRef.current = null;
@@ -359,11 +382,32 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
     currentVidRef.current = null;
     currentStartRef.current = 0;
     currentItemIdRef.current = null;
+    playbackModeRef.current = 'none';
     setYoutubeActive(false);
   }, []);
 
+  const isExpectedYouTubePlayerMedia = useCallback(() => {
+    const expected = expectedYouTubeMediaIdRef.current;
+    if (!expected || expected === '__external__') return expected !== '__external__';
+    try {
+      const actual = String(playerRef.current?.getVideoData?.()?.video_id || '').trim();
+      return !actual || actual === expected;
+    } catch {
+      return true;
+    }
+  }, []);
+
+  const captureIdlePosition = useCallback(() => {
+    if (playbackModeRef.current !== 'idle') return;
+    try {
+      const current = Number(playerRef.current?.getCurrentTime?.() || 0);
+      if (Number.isFinite(current) && current >= 0) idleResumeAtRef.current = current;
+    } catch {}
+    try { playerRef.current?.pauseVideo?.(); } catch {}
+  }, []);
+
   const report = useCallback((cause: 'error' | 'end') => {
-    if (!token) return;
+    if (!token || playbackModeRef.current !== 'donation') return;
     const itemId = currentItemIdRef.current;
     const now = Date.now();
     const lastReport = lastReportRef.current;
@@ -488,6 +532,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
   }, [applyExternalPlaybackTarget, applyVolume, emitControl, postToExternalPlayer, report]);
 
   const ensurePlayer = useCallback((videoId: string, start: number, opts?: PlaybackTarget) => {
+    expectedYouTubeMediaIdRef.current = videoId;
     const seq = ++ensureSeqRef.current;
     const safeStart = Math.max(0, Math.floor(Number(start || 0)));
     const target = Math.max(safeStart, Math.floor(Number(opts?.atSec ?? safeStart)));
@@ -526,14 +571,22 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
         origin: window.location.origin
       };
 
-      const onError = () => report('error');
+      const onError = () => {
+        if (!isExpectedYouTubePlayerMedia()) return;
+        if (playbackModeRef.current === 'idle') idleAdvanceRef.current('error');
+        else report('error');
+      };
       const onStateChange = (e: { data?: number }) => {
         try {
+          if (!isExpectedYouTubePlayerMedia()) return;
           const t = playerRef.current && playerRef.current.getCurrentTime ? Number(playerRef.current.getCurrentTime()) : 0;
           lastTimeRef.current = t;
           const now = Date.now();
           if (e && e.data === YT.PlayerState.ENDED) {
-            report('end');
+            if (playbackModeRef.current === 'idle') idleAdvanceRef.current('end');
+            else report('end');
+          } else if (playbackModeRef.current !== 'donation') {
+            return;
           } else if (e && e.data === YT.PlayerState.PAUSED) {
             if (!document.hidden && now > suppressUntilRef.current && now - lastEmitRef.current > 300) { lastEmitRef.current = now; emitControl('pause', Math.floor(t)); }
           } else if (e && e.data === YT.PlayerState.PLAYING) {
@@ -578,9 +631,10 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
         applyPlaybackTarget(target, opts?.paused, true);
       }, 250);
     }).catch(() => {});
-  }, [applyPlaybackTarget, applyVolume, applyYouTubeCaptions, captionsEnabled, emitControl, getYouTubeApi, report]);
+  }, [applyPlaybackTarget, applyVolume, applyYouTubeCaptions, captionsEnabled, emitControl, getYouTubeApi, isExpectedYouTubePlayerMedia, report]);
 
   const ensureExternalPlayer = useCallback((item: VideoDonationItem, opts?: PlaybackTarget) => {
+    expectedYouTubeMediaIdRef.current = '__external__';
     const provider = getItemProvider(item);
     const start = Math.max(0, Math.floor(Number(item?.startSec || 0) || 0));
     const target = Math.max(start, Math.floor(Number(opts?.atSec ?? start)));
@@ -633,6 +687,158 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
     }, 450);
   }, [applyExternalPlaybackTarget, applyVolume, buildExternalSrc, getItemProvider, getMediaKey]);
 
+  const applyIdlePlaylistConfig = useCallback((value: unknown) => {
+    const next = normalizePvdIdlePlaylist(value);
+    const signature = getPvdIdlePlaylistSignature(next);
+    if (signature !== idleSignatureRef.current) {
+      idleSignatureRef.current = signature;
+      idleOrderRef.current = createPvdIdlePlaybackOrder(next);
+      idleCursorRef.current = 0;
+      idleCurrentMediaIdRef.current = null;
+      idleResumeAtRef.current = 0;
+      idleExhaustedRef.current = false;
+      idleFailedMediaIdsRef.current = new Set();
+    }
+    idlePlaylistRef.current = next;
+    return next;
+  }, []);
+
+  const startIdlePlayback = useCallback(() => {
+    const playlist = idlePlaylistRef.current;
+    if (!playlist.enabled || !playlist.tracks.length) {
+      if (playbackModeRef.current === 'idle') stopPlayer();
+      return;
+    }
+    if (idleExhaustedRef.current) {
+      if (playbackModeRef.current === 'donation') stopPlayer();
+      return;
+    }
+    if (!idleOrderRef.current.length) {
+      idleOrderRef.current = createPvdIdlePlaybackOrder(playlist);
+      idleCursorRef.current = 0;
+    }
+
+    let mediaId = idleCurrentMediaIdRef.current;
+    if (!mediaId || !idleOrderRef.current.includes(mediaId)) {
+      idleCursorRef.current = Math.max(0, Math.min(idleCursorRef.current, idleOrderRef.current.length - 1));
+      mediaId = idleOrderRef.current[idleCursorRef.current] || null;
+      idleCurrentMediaIdRef.current = mediaId;
+      idleResumeAtRef.current = 0;
+    }
+    const track = playlist.tracks.find((item) => item.mediaId === mediaId);
+    if (!track) {
+      idleExhaustedRef.current = true;
+      stopPlayer();
+      return;
+    }
+
+    const alreadyActive = playbackModeRef.current === 'idle'
+      && currentVidRef.current === track.mediaId
+      && !!playerRef.current;
+    playbackModeRef.current = 'idle';
+    if (alreadyActive) {
+      applyYouTubeCaptions(captionsEnabled);
+      applyVolume(volumeRef.current);
+      try {
+        if (document.hidden) playerRef.current?.pauseVideo?.();
+        else playerRef.current?.playVideo?.();
+      } catch {}
+      return;
+    }
+
+    ensurePlayer(track.mediaId, 0, {
+      atSec: Math.max(0, idleResumeAtRef.current),
+      paused: document.hidden,
+      force: true,
+      itemId: `idle:${track.id}`,
+    });
+  }, [applyVolume, applyYouTubeCaptions, captionsEnabled, ensurePlayer, stopPlayer]);
+
+  const advanceIdlePlayback = useCallback((cause: 'end' | 'error') => {
+    const playlist = idlePlaylistRef.current;
+    const currentMediaId = idleCurrentMediaIdRef.current;
+    if (!playlist.enabled || !idleOrderRef.current.length) {
+      stopPlayer();
+      return;
+    }
+    if (cause === 'error' && currentMediaId) idleFailedMediaIdsRef.current.add(currentMediaId);
+
+    let order = idleOrderRef.current;
+    let cursor = idleCursorRef.current;
+    let nextMediaId: string | null = null;
+    let inspected = 0;
+    while (inspected < order.length) {
+      cursor += 1;
+      if (cursor >= order.length) {
+        if (!playlist.loop) break;
+        order = createPvdIdlePlaybackOrder(playlist);
+        if (order.length > 1 && order[0] === currentMediaId) {
+          [order[0], order[1]] = [order[1], order[0]];
+        }
+        idleOrderRef.current = order;
+        cursor = 0;
+      }
+      const candidate = order[cursor] || null;
+      inspected += 1;
+      if (candidate && !idleFailedMediaIdsRef.current.has(candidate)) {
+        nextMediaId = candidate;
+        break;
+      }
+    }
+
+    if (!nextMediaId) {
+      idleExhaustedRef.current = true;
+      idleCurrentMediaIdRef.current = null;
+      idleResumeAtRef.current = 0;
+      stopPlayer();
+      return;
+    }
+    idleCursorRef.current = cursor;
+    idleCurrentMediaIdRef.current = nextMediaId;
+    idleResumeAtRef.current = 0;
+    currentVidRef.current = null;
+    startIdlePlayback();
+  }, [startIdlePlayback, stopPlayer]);
+
+  useEffect(() => {
+    idleAdvanceRef.current = advanceIdlePlayback;
+    return () => {
+      idleAdvanceRef.current = () => {};
+    };
+  }, [advanceIdlePlayback]);
+
+  const playDonationItem = useCallback((item: VideoDonationItem, payload: Record<string, unknown>, force = false) => {
+    captureIdlePosition();
+    playbackModeRef.current = 'donation';
+    const start = Math.max(0, Math.floor(Number(item.startSec || 0) || 0));
+    const target = {
+      atSec: getPlaybackAtSec(item, payload),
+      paused: payload.paused === true,
+      force,
+      itemId: item.id ? String(item.id) : null,
+    };
+    if (getItemProvider(item) === 'youtube') {
+      ensurePlayer(String(item.videoId || item.mediaId), start, target);
+    } else {
+      ensureExternalPlayer(item, target);
+    }
+    suppressUntilRef.current = Date.now() + 1000;
+  }, [captureIdlePosition, ensureExternalPlayer, ensurePlayer, getItemProvider]);
+
+  const applyServerPlaybackPayload = useCallback((payload: Record<string, unknown>, force = false) => {
+    if (payload.volume != null) applyVolume(Number(payload.volume));
+    const playlist = Object.prototype.hasOwnProperty.call(payload, 'idlePlaylist')
+      ? applyIdlePlaylistConfig(payload.idlePlaylist)
+      : idlePlaylistRef.current;
+    const item = payload.item as VideoDonationItem | null | undefined;
+    if (item && (item.mediaProvider || item.videoId || item.embedUrl)) {
+      playDonationItem(item, payload, force);
+      return;
+    }
+    if (playlist.enabled) startIdlePlayback();
+    else stopPlayer();
+  }, [applyIdlePlaylistConfig, applyVolume, playDonationItem, startIdlePlayback, stopPlayer]);
+
   const toggleCaptions = useCallback(() => {
     const next = !captionsEnabled;
     setCaptionsEnabled(next);
@@ -649,34 +855,17 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
       const apiBase = getViewerApiBase();
       const r = await fetch(`${apiBase}/api/video-donation/now-playing?token=${encodeURIComponent(token)}`, { cache: 'no-store' });
       if (!r.ok) return;
-      const data = await r.json();
-      if (data?.volume != null) applyVolume(Number(data.volume));
-      const item = data?.item;
-      if (item && (item.mediaProvider || item.videoId || item.embedUrl)) {
-        const start = Math.max(0, Math.floor(Number(item.startSec || 0) || 0));
-        const target = {
-          atSec: getPlaybackAtSec(item, data),
-          paused: data?.paused === true,
-          force,
-          itemId: item?.id ? String(item.id) : null,
-        };
-        if (getItemProvider(item) === 'youtube') {
-          ensurePlayer(String(item.videoId || item.mediaId), start, target);
-        } else {
-          ensureExternalPlayer(item, target);
-        }
-        suppressUntilRef.current = Date.now() + 1000;
-      } else {
-        stopPlayer();
-      }
+      const data = await r.json() as Record<string, unknown>;
+      applyServerPlaybackPayload(data, force);
     } catch {}
-  }, [applyVolume, ensureExternalPlayer, ensurePlayer, getItemProvider, getViewerApiBase, stopPlayer, token]);
+  }, [applyServerPlaybackPayload, getViewerApiBase, token]);
 
   // Page lifecycle handling: pause locally while hidden, then force-align to server on return.
   useEffect(() => {
     if (!token) return;
 
     const pauseLocalOnly = () => {
+      captureIdlePosition();
       suppressUntilRef.current = Date.now() + 4000;
       try { playerRef.current && playerRef.current.pauseVideo && playerRef.current.pauseVideo(); } catch {}
     };
@@ -705,7 +894,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
       window.removeEventListener('pageshow', onResume);
       window.removeEventListener('online', onResume);
     };
-  }, [resyncFromServer, token]);
+  }, [captureIdlePosition, resyncFromServer, token]);
 
   // WS first; fallback to HTTP polling on error/close
   useEffect(() => {
@@ -746,38 +935,28 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
       };
       ws.onmessage = (ev) => {
         try {
-          const data = JSON.parse(ev.data);
+          const data = JSON.parse(ev.data) as Record<string, unknown>;
           if (data?.type === 'start') {
-            if (data?.volume != null) applyVolume(Number(data.volume));
-            if (data?.item && (data.item.mediaProvider || data.item.videoId || data.item.embedUrl)) {
-              const start = Math.max(0, Math.floor(Number(data.item.startSec || 0) || 0));
-              const paused = data?.paused === true;
-              const target = {
-                atSec: getPlaybackAtSec(data.item, data),
-                paused,
-                force: true,
-                itemId: data.item?.id ? String(data.item.id) : null,
-              };
-              if (getItemProvider(data.item) === 'youtube') {
-                ensurePlayer(String(data.item.videoId || data.item.mediaId), start, target);
-              } else {
-                ensureExternalPlayer(data.item, target);
-              }
-              suppressUntilRef.current = Date.now() + 1000;
-            } else {
-              // start notification with no item -> stop the player immediately (end of queue)
-              stopPlayer();
-            }
+            applyServerPlaybackPayload(data, true);
           } else if (data?.type === 'control') {
             const op = String(data.op || '').toLowerCase();
             if (op === 'volume') {
               applyVolume(Number(data.volume));
               return;
             }
+            if (op === 'idle-playlist') {
+              const playlist = applyIdlePlaylistConfig(data.idlePlaylist);
+              if (playbackModeRef.current !== 'donation') {
+                if (playlist.enabled) startIdlePlayback();
+                else stopPlayer();
+              }
+              return;
+            }
+            if (playbackModeRef.current !== 'donation') return;
             const at = Number(data.atSec || 0) || 0;
             if (playerRef.current) {
               applyPlaybackTarget(Math.max(0, Math.floor(at)), op === 'pause' || data?.paused === true, true, true);
-            } else if (externalFrameRef.current) {
+            } else if (externalFrameRef.current || externalVideoRef.current) {
               applyExternalPlaybackTarget(Math.max(0, Math.floor(at)), op === 'pause' || data?.paused === true);
             }
           }
@@ -817,13 +996,13 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
       try { playerRef.current && playerRef.current.destroy && playerRef.current.destroy(); } catch {}
       playerRef.current = null;
     };
-  }, [applyExternalPlaybackTarget, applyPlaybackTarget, applyVolume, ensureExternalPlayer, ensurePlayer, getItemProvider, getViewerApiBase, resyncFromServer, stopPlayer, token]);
+  }, [applyExternalPlaybackTarget, applyIdlePlaylistConfig, applyPlaybackTarget, applyServerPlaybackPayload, applyVolume, getViewerApiBase, resyncFromServer, startIdlePlayback, stopPlayer, token]);
 
   // Low-frequency drift guard for viewers that stay connected but whose YouTube iframe stalls.
   useEffect(() => {
     if (!token) return;
     const id = setInterval(() => {
-      if (!document.hidden && playerRef.current) void resyncFromServer(false);
+      if (!document.hidden && playbackModeRef.current === 'donation' && playerRef.current) void resyncFromServer(false);
     }, 7500);
     return () => {
       try { clearInterval(id); } catch {}
@@ -838,6 +1017,10 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
         const YT = (window as YouTubeWindow).YT;
         if (!YT || !playerRef.current || !playerRef.current.getCurrentTime) return;
         const t = Number(playerRef.current.getCurrentTime());
+        if (playbackModeRef.current !== 'donation') {
+          lastTimeRef.current = t;
+          return;
+        }
         const diff = Math.abs(t - lastTimeRef.current);
         const now = Date.now();
         if (!document.hidden && diff > 1.5 && now > suppressUntilRef.current) {

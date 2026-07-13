@@ -17,6 +17,7 @@ type DrawingItem = {
 
 const MAX_CANVAS_DPR = 2;
 const FADE_OUT_MS = 850;
+const DRAWING_ALERT_AUDIO_SRC = '/files/drawing_alert.mp3';
 
 function hexToRgb(color: string) {
   const match = String(color || '').trim().match(/^#?([0-9a-f]{6})$/i);
@@ -352,6 +353,7 @@ function buildReplayStrokes(item: DrawingItem | null): ReplayStroke[] {
 
 export default function DrawingDonationOverlay({ viewerToken }: { viewerToken: string }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const alertAudioRef = useRef<HTMLAudioElement | null>(null);
   const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
   const animationRef = useRef<number | null>(null);
   const holdTimerRef = useRef<number | null>(null);
@@ -408,14 +410,29 @@ export default function DrawingDonationOverlay({ viewerToken }: { viewerToken: s
     canvas.style.opacity = String(opacity);
   }, []);
 
-  const pop = useCallback(async () => {
+  const playDrawingAlert = useCallback(() => {
+    const audio = alertAudioRef.current;
+    if (!audio) return;
+    audio.pause();
+    audio.volume = 1;
+    try {
+      audio.currentTime = 0;
+      const playback = audio.play();
+      void playback.catch(() => undefined);
+    } catch {
+      // Audio playback failures must never interrupt the drawing replay.
+    }
+  }, []);
+
+  const pop = useCallback(async (completedItemId: string) => {
     await fetch(`${apiBase}/api/drawing-donation/pop-by-token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: viewerToken }),
     }).catch(() => undefined);
+    if (playingIdRef.current !== completedItemId) return;
     playingIdRef.current = null;
-    setItem(null);
+    setItem((current) => current?.id === completedItemId ? null : current);
   }, [apiBase, viewerToken]);
 
   const applyIncomingItem = useCallback((nextItem: DrawingItem | null) => {
@@ -426,7 +443,18 @@ export default function DrawingDonationOverlay({ viewerToken }: { viewerToken: s
     }
     if (nextItem.id === playingIdRef.current) return;
     playingIdRef.current = nextItem.id;
+    playDrawingAlert();
     setItem(nextItem);
+  }, [playDrawingAlert]);
+
+  useEffect(() => {
+    const audio = alertAudioRef.current;
+    if (!audio) return;
+    audio.load();
+    return () => {
+      audio.pause();
+      try { audio.currentTime = 0; } catch {}
+    };
   }, []);
 
   useEffect(() => {
@@ -505,7 +533,7 @@ export default function DrawingDonationOverlay({ viewerToken }: { viewerToken: s
         setCanvasOpacity(0, FADE_OUT_MS);
         fadeTimerRef.current = window.setTimeout(() => {
           renderAt(0);
-          void pop();
+          void pop(item.id);
         }, FADE_OUT_MS);
       }, holdMs);
     };
@@ -530,5 +558,10 @@ export default function DrawingDonationOverlay({ viewerToken }: { viewerToken: s
     return () => window.removeEventListener('resize', onResize);
   }, [item, renderAt]);
 
-  return <canvas ref={canvasRef} style={{ position: 'fixed', inset: 0, width: '100vw', height: '100vh', background: 'transparent', opacity: 0, willChange: 'opacity' }} />;
+  return (
+    <>
+      <audio ref={alertAudioRef} src={DRAWING_ALERT_AUDIO_SRC} preload="auto" playsInline aria-hidden="true" />
+      <canvas ref={canvasRef} style={{ position: 'fixed', inset: 0, width: '100vw', height: '100vh', background: 'transparent', opacity: 0, willChange: 'opacity' }} />
+    </>
+  );
 }

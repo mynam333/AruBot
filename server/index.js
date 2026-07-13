@@ -11,6 +11,8 @@ import crypto from 'crypto';
 import dotenv from 'dotenv';
 import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, revokeSession, getSessionUserId, listChannelPoints, listChannelPointsPage, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, deductChannelPointsIfEnough, getChannelPoints, getChannelPointBalanceSummary, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, issueApiWebSocketTicket, consumeApiWebSocketTicket, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, findSidByChannelViewerTokenSupabase, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, findAppUserIdByChannelUid, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, markPlatformTokenValidated, deletePlatformTokens, deletePlatformAccount, getAppUserAdminStatus, getYoutubeBotProfile, upsertYoutubeBotProfile, updateYoutubeBotProfileTokens, markYoutubeBotProfileStatus, deleteYoutubeBotProfile, getYoutubeStreamerChannel, upsertYoutubeStreamerChannel, markYoutubeStreamerChannelModeratorRegistered, deleteYoutubeStreamerChannel, listYoutubeStreamerChannelsByYoutubeChannelId, updateYoutubeStreamerChannelLive, updateYoutubeStreamerChannelWebsub, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, claimBotRuleCooldown, enqueueDurableRuntimeJob, enqueuePaidDurableRuntimeJob, claimDurableRuntimeJobs, completeDurableRuntimeJob, failDurableRuntimeJob, claimRuntimeLease, releaseRuntimeLease, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps, recordBotEventLog, listBotEventLogs, getBotEventLog, insertDrawingDonationItem, listDrawingDonationItems, getDrawingDonationItem, getCurrentDrawingDonationItem, updateDrawingDonationItemStatus, deleteDrawingDonationItem, reorderDrawingDonationItems, uploadDrawingDonationObject, deleteDrawingDonationObjectKeys, deleteAccountData, cleanupPrivacyRetentionData, validateSecretEncryptionConfig, getPgPoolStatus, checkDatabaseReady, closeDatabaseConnections } from './supabase.js';
 import { createPlatformProfileService } from './platform-profiles.js';
+import { executeAndStripLiveChangeTokens, filterLiveInfoByProvider, selectCategorySearchResult } from './live-command-actions.js';
+import { buildYoutubeLiveInfoFallback, buildYoutubeLiveLookupContext } from './youtube-live-info.js';
 import { WebSocketServer, WebSocket } from 'ws';
 
 dotenv.config();
@@ -2672,6 +2674,246 @@ async function searchYouTubeVideoIdByQuery(query) {
   return null;
 }
 
+const PVD_IDLE_PLAYLIST_MAX_TRACKS = 200;
+const PVD_IDLE_RECOMMENDATION_TRACKS = 12;
+
+function extractYouTubePlaylistId(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    if (!/(^|\.)youtube\.com$/i.test(url.hostname)) return null;
+    const id = String(url.searchParams.get('list') || '').trim();
+    return /^[A-Za-z0-9_-]{10,}$/.test(id) ? id : null;
+  } catch {
+    return /^[A-Za-z0-9_-]{10,}$/.test(raw) && /^(PL|UU|OLAK5uy_|RD)/i.test(raw) ? raw : null;
+  }
+}
+
+function normalizePvdIdleTrack(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const mediaId = extractYouTubeId(source.mediaId || source.videoId || source.mediaUrl || source.url || '')
+    || (/^[A-Za-z0-9_-]{6,}$/.test(String(source.mediaId || source.videoId || '').trim())
+      ? String(source.mediaId || source.videoId).trim()
+      : null);
+  if (!mediaId) return null;
+  const title = compactLogText(source.title || `YouTube ${mediaId}`, 300);
+  const durationValue = Number(source.durationSec);
+  const durationSec = Number.isFinite(durationValue) && durationValue > 0
+    ? Math.min(24 * 60 * 60, Math.ceil(durationValue))
+    : null;
+  return {
+    id: `youtube:${mediaId}`,
+    mediaProvider: 'youtube',
+    mediaId,
+    videoId: mediaId,
+    mediaUrl: `https://www.youtube.com/watch?v=${encodeURIComponent(mediaId)}`,
+    title: title || `YouTube ${mediaId}`,
+    thumbnailUrl: String(source.thumbnailUrl || `https://i.ytimg.com/vi/${encodeURIComponent(mediaId)}/hqdefault.jpg`).trim(),
+    durationSec,
+  };
+}
+
+function normalizePvdIdleTracks(values, limit = PVD_IDLE_PLAYLIST_MAX_TRACKS) {
+  const tracks = [];
+  const seen = new Set();
+  for (const value of Array.isArray(values) ? values : []) {
+    const track = normalizePvdIdleTrack(value);
+    if (!track || seen.has(track.mediaId)) continue;
+    seen.add(track.mediaId);
+    tracks.push(track);
+    if (tracks.length >= limit) break;
+  }
+  return tracks;
+}
+
+function normalizePvdIdlePlaylist(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const mode = source.mode === 'custom' ? 'custom' : 'recommended';
+  const legacyTracks = Array.isArray(source.tracks) ? source.tracks : [];
+  return {
+    enabled: source.enabled === true,
+    mode,
+    topic: compactLogText(source.topic || '로파이 집중', 80),
+    loop: source.loop !== false,
+    shuffle: source.shuffle === true,
+    recommendedTracks: normalizePvdIdleTracks(
+      Array.isArray(source.recommendedTracks) ? source.recommendedTracks : (mode === 'recommended' ? legacyTracks : []),
+    ),
+    customTracks: normalizePvdIdleTracks(
+      Array.isArray(source.customTracks) ? source.customTracks : (mode === 'custom' ? legacyTracks : []),
+    ),
+  };
+}
+
+function getPvdIdlePlaylistForViewer(value) {
+  const playlist = normalizePvdIdlePlaylist(value);
+  const tracks = playlist.mode === 'custom' ? playlist.customTracks : playlist.recommendedTracks;
+  return {
+    enabled: playlist.enabled && tracks.length > 0,
+    mode: playlist.mode,
+    topic: playlist.topic,
+    loop: playlist.loop,
+    shuffle: playlist.shuffle,
+    tracks,
+  };
+}
+
+function youtubeThumbnailFromSnippet(snippet, videoId) {
+  return snippet?.thumbnails?.maxres?.url
+    || snippet?.thumbnails?.standard?.url
+    || snippet?.thumbnails?.high?.url
+    || snippet?.thumbnails?.medium?.url
+    || snippet?.thumbnails?.default?.url
+    || `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/hqdefault.jpg`;
+}
+
+function mapYouTubeApiVideoToIdleTrack(item, fallback = null) {
+  const videoId = String(item?.id || fallback?.mediaId || fallback?.videoId || '').trim();
+  if (!videoId || item?.status?.embeddable === false || item?.status?.privacyStatus === 'private') return null;
+  const durationSec = parseIso8601Duration(item?.contentDetails?.duration || '') || fallback?.durationSec || null;
+  return normalizePvdIdleTrack({
+    mediaId: videoId,
+    title: item?.snippet?.title || fallback?.title || null,
+    thumbnailUrl: youtubeThumbnailFromSnippet(item?.snippet || fallback?.snippet, videoId),
+    durationSec,
+  });
+}
+
+async function hydrateYouTubeIdleTracks(seedTracks) {
+  const seeds = normalizePvdIdleTracks(seedTracks);
+  if (!seeds.length) return [];
+  const hydrated = [];
+  try {
+    for (let offset = 0; offset < seeds.length; offset += 50) {
+      const batch = seeds.slice(offset, offset + 50);
+      const response = await youtubeApiGetPublic('videos', {
+        part: 'snippet,contentDetails,status',
+        id: batch.map((track) => track.mediaId).join(','),
+        maxResults: 50,
+      });
+      const byId = new Map((Array.isArray(response?.data?.items) ? response.data.items : []).map((item) => [String(item?.id || ''), item]));
+      for (const fallback of batch) {
+        const item = byId.get(fallback.mediaId);
+        const track = item ? mapYouTubeApiVideoToIdleTrack(item, fallback) : null;
+        if (track) hydrated.push(track);
+      }
+    }
+    if (hydrated.length) return normalizePvdIdleTracks(hydrated);
+  } catch { }
+
+  if (seeds.length === 1) {
+    const info = await fetchYouTubeInfo(seeds[0].mediaId).catch(() => null);
+    return normalizePvdIdleTracks([{
+      ...seeds[0],
+      title: info?.title || seeds[0].title,
+      durationSec: info?.durationSec || seeds[0].durationSec,
+    }]);
+  }
+  return seeds;
+}
+
+async function fetchYouTubePlaylistIdleTracks(playlistId) {
+  const rawTracks = [];
+  try {
+    let pageToken = '';
+    do {
+      const response = await youtubeApiGetPublic('playlistItems', {
+        part: 'snippet,contentDetails',
+        playlistId,
+        maxResults: 50,
+        pageToken,
+      });
+      const items = Array.isArray(response?.data?.items) ? response.data.items : [];
+      for (const item of items) {
+        const videoId = String(item?.contentDetails?.videoId || item?.snippet?.resourceId?.videoId || '').trim();
+        if (!videoId) continue;
+        rawTracks.push({
+          mediaId: videoId,
+          title: item?.snippet?.title || null,
+          thumbnailUrl: youtubeThumbnailFromSnippet(item?.snippet, videoId),
+        });
+        if (rawTracks.length >= PVD_IDLE_PLAYLIST_MAX_TRACKS) break;
+      }
+      pageToken = String(response?.data?.nextPageToken || '');
+    } while (pageToken && rawTracks.length < PVD_IDLE_PLAYLIST_MAX_TRACKS);
+  } catch {
+    try {
+      const response = await axios.get(`https://www.youtube.com/playlist?list=${encodeURIComponent(playlistId)}&hl=ko&gl=KR`, {
+        timeout: 8000,
+        responseType: 'text',
+        headers: { 'Accept-Language': 'ko-KR,ko;q=0.9' },
+      });
+      const html = String(response?.data || '');
+      const seen = new Set();
+      for (const match of html.matchAll(/\"videoId\":\"([A-Za-z0-9_-]{11})\"/g)) {
+        const videoId = String(match[1] || '');
+        if (!videoId || seen.has(videoId)) continue;
+        seen.add(videoId);
+        rawTracks.push({ mediaId: videoId });
+        if (rawTracks.length >= PVD_IDLE_PLAYLIST_MAX_TRACKS) break;
+      }
+    } catch { }
+  }
+  return hydrateYouTubeIdleTracks(rawTracks);
+}
+
+function shufflePvdIdleTracks(values) {
+  const next = values.slice();
+  for (let index = next.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [next[index], next[swapIndex]] = [next[swapIndex], next[index]];
+  }
+  return next;
+}
+
+async function recommendYouTubeIdleTracks(topic, limit = PVD_IDLE_RECOMMENDATION_TRACKS) {
+  const normalizedTopic = compactLogText(topic || '로파이 집중', 80);
+  const safeLimit = Math.max(1, Math.min(30, Math.floor(Number(limit || PVD_IDLE_RECOMMENDATION_TRACKS))));
+  let seeds = [];
+  try {
+    const response = await youtubeApiGetPublic('search', {
+      part: 'snippet',
+      type: 'video',
+      q: `${normalizedTopic} 음악`,
+      maxResults: Math.min(50, Math.max(safeLimit * 2, 20)),
+      order: 'relevance',
+      regionCode: 'KR',
+      relevanceLanguage: 'ko',
+      safeSearch: 'moderate',
+      videoCategoryId: '10',
+      videoEmbeddable: 'true',
+      videoSyndicated: 'true',
+    });
+    seeds = (Array.isArray(response?.data?.items) ? response.data.items : []).map((item) => ({
+      mediaId: item?.id?.videoId,
+      title: item?.snippet?.title,
+      thumbnailUrl: youtubeThumbnailFromSnippet(item?.snippet, item?.id?.videoId),
+    }));
+  } catch {
+    const first = await searchYouTubeVideoIdByQuery(`${normalizedTopic} 음악`).catch(() => null);
+    if (first) seeds = [{ mediaId: first }];
+  }
+  const tracks = await hydrateYouTubeIdleTracks(seeds);
+  return shufflePvdIdleTracks(tracks).slice(0, safeLimit);
+}
+
+async function resolvePvdIdlePlaylistInput(input) {
+  const raw = String(input || '').trim();
+  if (!raw) return { kind: 'empty', tracks: [] };
+  const playlistId = extractYouTubePlaylistId(raw);
+  if (playlistId) {
+    return { kind: 'playlist', playlistId, tracks: await fetchYouTubePlaylistIdleTracks(playlistId) };
+  }
+  const videoId = extractYouTubeId(raw);
+  if (videoId) {
+    const tracks = await hydrateYouTubeIdleTracks([{ mediaId: videoId }]);
+    return { kind: 'track', tracks };
+  }
+  const tracks = await recommendYouTubeIdleTracks(raw, 1);
+  return { kind: 'search', tracks };
+}
+
 // Public: control by token (viewer may request sync operations)
 app.post('/api/video-donation/control-by-token', async (req, res) => {
   try {
@@ -4617,7 +4859,7 @@ setInterval(async () => {
         if (macroTimerManager.shouldSendMacro(sid, timerMacroId, m.intervalSec)) {
           let msg = String(m.message || '').slice(0, 1000);
           try {
-            msg = String(await substituteAllPlaceholders(String(m.message || ''), sid, '', '') || '').slice(0, 1000);
+            msg = String(await substituteAllPlaceholders(String(m.message || ''), sid, '', '', { provider: target.provider }) || '').slice(0, 1000);
           } catch { }
           let sendSuccess = false;
           let errorDetails = null;
@@ -5514,6 +5756,14 @@ async function getPvdVolumeForSid(sid) {
   return normalizePvdVolume(settings.videoDonationVolume ?? 100);
 }
 
+async function getPvdViewerSettingsForSid(sid) {
+  const settings = await getBotSettings(sid).catch(() => ({})) || {};
+  return {
+    volume: normalizePvdVolume(settings.videoDonationVolume ?? 100),
+    idlePlaylist: getPvdIdlePlaylistForViewer(settings.videoDonationIdlePlaylist),
+  };
+}
+
 function getPvdItemStartSec(item) {
   return Math.max(0, Math.floor(Number(item?.startSec || 0)));
 }
@@ -5753,7 +6003,7 @@ function scheduleNextPvdAutoPop(sid) {
 async function broadcastPvdStart(sid) {
   try {
     const q = getVideoQueue(sid);
-    const volume = await getPvdVolumeForSid(sid);
+    const viewerSettings = await getPvdViewerSettingsForSid(sid);
 
     // Rebase playback state when a new head starts
     if (q[0]) {
@@ -5771,7 +6021,8 @@ async function broadcastPvdStart(sid) {
       paused: q[0] ? false : null,
       atSec: q[0] ? getCurrentAtSec(sid) : 0,
       elapsedSec: q[0] ? getCurrentPvdElapsedSec(sid) : 0,
-      volume,
+      volume: viewerSettings.volume,
+      idlePlaylist: viewerSettings.idlePlaylist,
       serverNow: Date.now()
     };
 
@@ -5924,10 +6175,41 @@ app.get('/api/video-donation/settings', async (req, res) => {
     const perUserLimit = Math.max(0, Number(settings.videoDonationPerUserQueueLimit ?? 0));
     const volume = normalizePvdVolume(settings.videoDonationVolume ?? 100);
     const providers = normalizePvdProviders(settings.videoDonationProviders);
-    return res.json({ pointsPerSecond: pps, acceptEnabled: enabled, maxDurationSec: maxDur, perUserLimit, volume, providers });
+    const idlePlaylist = normalizePvdIdlePlaylist(settings.videoDonationIdlePlaylist);
+    return res.json({ pointsPerSecond: pps, acceptEnabled: enabled, maxDurationSec: maxDur, perUserLimit, volume, providers, idlePlaylist });
   } catch (e) {
     console.error('[pvd:settings:get] error', e?.message || e);
     return res.status(500).json({ error: 'Failed to get settings' });
+  }
+});
+
+app.post('/api/video-donation/idle-playlist/resolve', rateLimiters.externalLookup, async (req, res) => {
+  try {
+    const sid = await getPartitionId(req, res);
+    if (!sid) return res.status(401).json({ error: '로그인이 필요합니다.' });
+    const input = String(req.body?.input || req.body?.url || req.body?.query || '').trim();
+    if (!input) return res.status(400).json({ error: '곡, 영상 또는 플레이리스트를 입력해 주세요.' });
+    const result = await resolvePvdIdlePlaylistInput(input);
+    if (!result.tracks.length) return res.status(404).json({ error: '재생 가능한 YouTube 항목을 찾지 못했습니다.' });
+    return res.json(result);
+  } catch (error) {
+    console.warn('[pvd:idle-playlist:resolve] failed', error?.message || error);
+    return res.status(502).json({ error: '플레이리스트 정보를 불러오지 못했습니다.' });
+  }
+});
+
+app.post('/api/video-donation/idle-playlist/recommend', rateLimiters.externalLookup, async (req, res) => {
+  try {
+    const sid = await getPartitionId(req, res);
+    if (!sid) return res.status(401).json({ error: '로그인이 필요합니다.' });
+    const topic = compactLogText(req.body?.topic || '로파이 집중', 80);
+    const limit = Math.max(1, Math.min(30, Math.floor(Number(req.body?.limit || PVD_IDLE_RECOMMENDATION_TRACKS))));
+    const tracks = await recommendYouTubeIdleTracks(topic, limit);
+    if (!tracks.length) return res.status(404).json({ error: '이 주제의 추천곡을 찾지 못했습니다.' });
+    return res.json({ topic, tracks });
+  } catch (error) {
+    console.warn('[pvd:idle-playlist:recommend] failed', error?.message || error);
+    return res.status(502).json({ error: '추천 플레이리스트를 만들지 못했습니다.' });
   }
 });
 
@@ -6006,10 +6288,34 @@ app.post('/api/video-donation/settings', async (req, res) => {
     const volume = normalizePvdVolume(body.volume ?? 100);
     const settings = await getBotSettings(sid) || {};
     const providers = normalizePvdProviders(body.providers || body.videoDonationProviders || settings.videoDonationProviders);
-    const next = { ...settings, videoDonationPointsPerSecond: pps, videoDonationAcceptEnabled: enabled, videoDonationMaxDurationSec: maxDur, videoDonationPerUserQueueLimit: perUserLimit, videoDonationVolume: volume, videoDonationProviders: providers };
+    const hasIdlePlaylistInput = Object.prototype.hasOwnProperty.call(body, 'idlePlaylist');
+    const idleSource = hasIdlePlaylistInput ? body.idlePlaylist : settings.videoDonationIdlePlaylist;
+    const idlePlaylist = normalizePvdIdlePlaylist(idleSource);
+    if (idlePlaylist.enabled && idlePlaylist.mode === 'recommended' && idlePlaylist.recommendedTracks.length === 0) {
+      idlePlaylist.recommendedTracks = await recommendYouTubeIdleTracks(idlePlaylist.topic, PVD_IDLE_RECOMMENDATION_TRACKS);
+      if (!idlePlaylist.recommendedTracks.length) {
+        return res.status(400).json({ error: '추천곡을 찾지 못했습니다. 다른 주제를 입력해 주세요.' });
+      }
+    }
+    if (idlePlaylist.enabled && idlePlaylist.mode === 'custom' && idlePlaylist.customTracks.length === 0) {
+      return res.status(400).json({ error: '직접 구성 플레이리스트에 곡을 하나 이상 추가해 주세요.' });
+    }
+    const next = {
+      ...settings,
+      videoDonationPointsPerSecond: pps,
+      videoDonationAcceptEnabled: enabled,
+      videoDonationMaxDurationSec: maxDur,
+      videoDonationPerUserQueueLimit: perUserLimit,
+      videoDonationVolume: volume,
+      videoDonationProviders: providers,
+      videoDonationIdlePlaylist: idlePlaylist,
+    };
     await setBotSettings(sid, next);
-    await broadcastPvdControl(sid, { op: 'volume', volume }).catch(() => null);
-    return res.json({ ok: true });
+    await Promise.all([
+      broadcastPvdControl(sid, { op: 'volume', volume }).catch(() => null),
+      broadcastPvdControl(sid, { op: 'idle-playlist', idlePlaylist: getPvdIdlePlaylistForViewer(idlePlaylist) }).catch(() => null),
+    ]);
+    return res.json({ ok: true, idlePlaylist });
   } catch (e) {
     console.error('[pvd:settings:post] error', e?.message || e);
     return res.status(500).json({ error: 'Failed to save settings' });
@@ -6214,6 +6520,7 @@ app.get('/api/video-donation/now-playing', async (req, res) => {
       atSec: getCurrentAtSec(sid),
       elapsedSec: getCurrentPvdElapsedSec(sid),
       volume: normalizePvdVolume(settings.videoDonationVolume ?? 100),
+      idlePlaylist: getPvdIdlePlaylistForViewer(settings.videoDonationIdlePlaylist),
       serverNow: Date.now()
     });
   } catch (e) {
@@ -7227,14 +7534,15 @@ async function getRuntimeActionBlueprint(ownerUserId, idOrSlug) {
 }
 
 async function executeBlueprintChatNode(ownerUserId, sid, node, text, context = {}) {
-  const platform = String(context.platform || context.trigger?.platform || context.chatPost?.platform || '').toLowerCase();
+  const platform = String(context.platform || context.trigger?.platform || context.chatPost?.provider || context.chatPost?.platform || '').toLowerCase();
   if (context.dryRun || context.source === 'manual_test') {
     return { sent: false, dryRun: true, platform: platform || 'simulator', text };
   }
   const chatPost = context.chatPost || null;
-  if (chatPost && (!platform || platform === String(chatPost.platform || '').toLowerCase())) {
+  const chatPostPlatform = String(chatPost?.provider || chatPost?.platform || '').toLowerCase();
+  if (chatPost && (!platform || platform === chatPostPlatform)) {
     await sendChatByPost(sid, chatPost, text, { timeout: 5000 });
-    return { sent: true, platform: chatPost.platform || platform || 'trigger' };
+    return { sent: true, platform: chatPostPlatform || platform || 'trigger' };
   }
   if (platform === 'cime') {
     await sendCimeChat(ownerUserId, text);
@@ -8796,6 +9104,127 @@ async function executeAndStripActionVariableTokens(sid, text, context = {}) {
   return { text: stripActionVariableTokens(source), used: true, jobs };
 }
 
+function openApiList(response) {
+  const content = response?.data?.content ?? response?.data ?? {};
+  if (Array.isArray(content)) return content;
+  if (Array.isArray(content?.data)) return content.data;
+  if (Array.isArray(content?.items)) return content.items;
+  return [];
+}
+
+function invalidateLiveInfoForProvider(sid, provider) {
+  const normalizedProvider = String(provider || '').trim().toLowerCase();
+  liveInfoCache.delete(String(sid));
+  if (normalizedProvider) liveInfoCache.delete(`${normalizedProvider}:${sid}`);
+}
+
+async function searchLiveCategory(provider, query) {
+  const normalizedProvider = String(provider || '').trim().toLowerCase();
+  const keyword = String(query || '').trim();
+  if (!keyword) return null;
+  if (normalizedProvider === 'chzzk') {
+    if (!CHZZK_CLIENT_ID || !CHZZK_CLIENT_SECRET) throw new Error('CHZZK client credentials are not configured');
+    const response = await axios.get(`${OPENAPI_BASE}/open/v1/categories/search`, {
+      params: { query: keyword, size: 50 },
+      headers: {
+        'Client-Id': CHZZK_CLIENT_ID,
+        'Client-Secret': CHZZK_CLIENT_SECRET,
+        'Content-Type': 'application/json',
+      },
+      timeout: DEFAULT_TIMEOUT,
+    });
+    return selectCategorySearchResult(openApiList(response), keyword);
+  }
+  if (normalizedProvider === 'cime') {
+    if (!CIME_CLIENT_ID || !CIME_CLIENT_SECRET) throw new Error('CIME client credentials are not configured');
+    const response = await axios.get(`${CIME_OPENAPI_BASE}/open/v1/categories/search`, {
+      params: { keyword: keyword.slice(0, 100), size: 50 },
+      headers: {
+        'Client-Id': CIME_CLIENT_ID,
+        'Client-Secret': CIME_CLIENT_SECRET,
+        'Content-Type': 'application/json',
+      },
+      timeout: DEFAULT_TIMEOUT,
+    });
+    return selectCategorySearchResult(openApiList(response), keyword);
+  }
+  return null;
+}
+
+async function changeLiveTitleForProvider(sid, provider, title) {
+  const normalizedProvider = String(provider || '').trim().toLowerCase();
+  const defaultLiveTitle = String(title || '').trim();
+  if (!defaultLiveTitle) return null;
+  if (normalizedProvider === 'chzzk') {
+    const accessToken = await getValidAccessToken(sid);
+    const response = await axios.patch(`${OPENAPI_BASE}/open/v1/lives/setting`, { defaultLiveTitle }, {
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      timeout: DEFAULT_TIMEOUT,
+    });
+    invalidateLiveInfoForProvider(sid, normalizedProvider);
+    return response?.data?.content ?? response?.data ?? null;
+  }
+  if (normalizedProvider === 'cime') {
+    if (Array.from(defaultLiveTitle).length > 100) throw new Error('CIME live title must be 100 characters or fewer');
+    const ownerUserId = ownerUserIdFromSid(sid);
+    if (!ownerUserId) throw new Error('CIME owner user is unavailable');
+    const accessToken = await getValidCimeAccessToken(ownerUserId);
+    const response = await axios.patch(`${CIME_OPENAPI_BASE}/open/v1/lives/setting`, { defaultLiveTitle }, {
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      timeout: DEFAULT_TIMEOUT,
+    });
+    invalidateLiveInfoForProvider(sid, normalizedProvider);
+    return unwrapOpenApiContent(response);
+  }
+  return null;
+}
+
+async function changeLiveGameForProvider(sid, provider, query) {
+  const normalizedProvider = String(provider || '').trim().toLowerCase();
+  const category = await searchLiveCategory(normalizedProvider, query);
+  if (!category?.categoryId) throw new Error(`Live category was not found: ${query}`);
+  if (normalizedProvider === 'chzzk') {
+    const accessToken = await getValidAccessToken(sid);
+    const response = await axios.patch(`${OPENAPI_BASE}/open/v1/lives/setting`, {
+      categoryType: category.categoryType,
+      categoryId: category.categoryId,
+    }, {
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      timeout: DEFAULT_TIMEOUT,
+    });
+    invalidateLiveInfoForProvider(sid, normalizedProvider);
+    return response?.data?.content ?? response?.data ?? null;
+  }
+  if (normalizedProvider === 'cime') {
+    const ownerUserId = ownerUserIdFromSid(sid);
+    if (!ownerUserId) throw new Error('CIME owner user is unavailable');
+    const accessToken = await getValidCimeAccessToken(ownerUserId);
+    const response = await axios.patch(`${CIME_OPENAPI_BASE}/open/v1/lives/setting`, {
+      categoryId: category.categoryId,
+    }, {
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      timeout: DEFAULT_TIMEOUT,
+    });
+    invalidateLiveInfoForProvider(sid, normalizedProvider);
+    return unwrapOpenApiContent(response);
+  }
+  return null;
+}
+
+async function executeCommandLiveChangeTokens(sid, text, context = {}) {
+  const provider = String(context.provider || context.platform || context.chatPost?.provider || '').trim().toLowerCase();
+  const result = await executeAndStripLiveChangeTokens(text, {
+    provider,
+    argsText: context.argsText,
+    changeTitle: (value) => changeLiveTitleForProvider(sid, provider, value),
+    changeGame: (value) => changeLiveGameForProvider(sid, provider, value),
+  });
+  for (const failure of result.errors) {
+    console.error(`[Live Command] ${provider || 'unknown'} ${failure.name} failed:`, failure.error?.response?.data || failure.error?.message || failure.error);
+  }
+  return result;
+}
+
 async function startRouletteSpin(sid, rouletteName, userId, username, opts = {}) {
   const channelContext = await getChannelContext(sid);
   if (!channelContext) {
@@ -9093,21 +9522,31 @@ async function executeRouletteResultCommand(sid, commandText, userId, username, 
       console.log(`[Roulette Command] Command cost: ${commandCost}, skipping points check due to roulette context`);
 
 
-      try {
-        response = await substituteAllPlaceholders(response, sid, userId, username);
-      } catch (e) {
-        console.error('[Roulette Command] Placeholder substitution failed:', e);
-      }
-
       const vdRe = /\$\{\s*video_donation\s*\}/i;
       const rlRe = /\$\{\s*roulette::([^}]+)\s*\}/i;
 
       let responseToSend = response;
       let ruleUsed = false;
+      const argsText = text.slice((matchedKeyword || '').length).trim();
 
-      if (allowExecute && typeof response === 'string' && vdRe.test(response)) {
+      if (allowExecute && typeof responseToSend === 'string') {
+        const liveChangeResult = await executeCommandLiveChangeTokens(sid, responseToSend, {
+          provider: chatPostProvider || 'chzzk',
+          argsText,
+        });
+        responseToSend = liveChangeResult.text;
+        if (liveChangeResult.executed.length > 0) ruleUsed = true;
+      }
+
+      try {
+        responseToSend = await substituteAllPlaceholders(responseToSend, sid, userId, username, { provider: chatPostProvider || 'chzzk' });
+      } catch (e) {
+        console.error('[Roulette Command] Placeholder substitution failed:', e);
+      }
+
+      if (allowExecute && typeof responseToSend === 'string' && vdRe.test(responseToSend)) {
         console.log('[Roulette Command] Processing video donation trigger (no points deduction)');
-        responseToSend = String(response).replace(/\$\{\s*video_donation\s*\}/ig, '').trim() || '룰렛 결과로 실행되었습니다. 포인트는 차감하지 않았습니다.';
+        responseToSend = String(responseToSend).replace(/\$\{\s*video_donation\s*\}/ig, '').trim() || '룰렛 결과로 실행되었습니다. 포인트는 차감하지 않았습니다.';
       }
 
       if (typeof responseToSend === 'string' && rlRe.test(responseToSend)) {
@@ -9310,13 +9749,13 @@ async function fetchLiveDetail(uid) {
   const status = String(content?.status || '').toLowerCase();
   const live = isChzzkLiveDetailOpen(content);
   const title = content?.liveTitle || content?.title || '';
-  const category = content?.liveCategory?.categoryType || content?.categoryType || content?.liveCategoryName || '';
+  const category = content?.liveCategoryValue || content?.liveCategory?.categoryValue || content?.liveCategoryName || content?.liveCategory?.categoryType || content?.categoryType || '';
   const viewers = Number(content?.concurrentUserCount || content?.currentViewerCount || 0);
   const openCandidate = content?.startedAt || content?.started_at || content?.openDate || content?.openTime || content?.openedAt || content?.liveStartAt || content?.startTime || content?.createdAt || null;
   const startedAtTs = parseChzzkLiveTimestamp(openCandidate, null);
   const startedAt = startedAtTs ? new Date(startedAtTs + 9 * 60 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 16) : '';
   const channel = content?.channel?.channelName || content?.channel?.name || '';
-  return { status, title, category, viewers, startedAt, startedAtTs, channel, live, raw: content };
+  return { status, title, category, viewers, startedAt, startedAtTs, channel, live, raw: content, provider: 'chzzk' };
 }
 
 // (moved) getPartitionIdByApiKey defined below imports
@@ -9339,15 +9778,31 @@ async function getOwnerInfoForSid(sid) {
   }
 }
 
-async function getLiveInfoForSid(sid) {
-  const cached = liveInfoCache.get(sid);
+async function getLiveInfoForSid(sid, options = {}) {
+  const provider = String(typeof options === 'string' ? options : options?.provider || '').trim().toLowerCase();
+  const supportedProvider = ['chzzk', 'cime', 'youtube'].includes(provider) ? provider : '';
+  const cacheKey = supportedProvider ? `${supportedProvider}:${sid}` : String(sid);
+  const cached = liveInfoCache.get(cacheKey);
   const now = Date.now();
-  if (cached && (now - cached.ts) < 30 * 1000) return cached.info;
+  const cachedProvider = String(cached?.info?.provider || '').trim().toLowerCase();
+  const cachedMatchesProvider = !supportedProvider || cachedProvider === supportedProvider;
+  if (cached && cachedMatchesProvider && (now - cached.ts) < 30 * 1000) return cached.info;
+  if (cached && supportedProvider && !cachedMatchesProvider) liveInfoCache.delete(cacheKey);
+
+  if (supportedProvider === 'cime') {
+    const cimeInfo = await fetchCimeLiveInfoForSid(sid);
+    if (cimeInfo) liveInfoCache.set(cacheKey, { ts: now, info: cimeInfo });
+    return cimeInfo;
+  }
+  if (supportedProvider === 'youtube') {
+    const youtubeInfo = await fetchYoutubeLiveInfoForSid(sid);
+    if (youtubeInfo) liveInfoCache.set(cacheKey, { ts: now, info: youtubeInfo });
+    return youtubeInfo;
+  }
+
   const settings = await getBotSettings(sid) || {};
   let channelUids = await resolveChzzkChannelUidsForSid(sid, settings);
-
   if (!channelUids.length) {
-    // Fallback: try to resolve via /open/v1/users/me (requires valid token)
     try {
       const accessToken = await getValidAccessToken(sid);
       const me = await axios.get(`${OPENAPI_BASE}/open/v1/users/me`, {
@@ -9357,38 +9812,48 @@ async function getLiveInfoForSid(sid) {
       if (content?.channelId) channelUids = [String(content.channelId)];
     } catch { }
   }
+  if (supportedProvider === 'chzzk') {
+    if (!channelUids.length) return null;
+    try {
+      const info = await fetchLiveDetail(channelUids[0]);
+      liveInfoCache.set(cacheKey, { ts: now, info });
+      return info;
+    } catch {
+      return null;
+    }
+  }
   if (!channelUids.length) {
     const cimeInfo = await fetchCimeLiveInfoForSid(sid);
-    if (cimeInfo) liveInfoCache.set(sid, { ts: now, info: cimeInfo });
+    if (cimeInfo) liveInfoCache.set(cacheKey, { ts: now, info: cimeInfo });
     if (cimeInfo) return cimeInfo;
     const youtubeInfo = await fetchYoutubeLiveInfoForSid(sid);
-    if (youtubeInfo) liveInfoCache.set(sid, { ts: now, info: youtubeInfo });
+    if (youtubeInfo) liveInfoCache.set(cacheKey, { ts: now, info: youtubeInfo });
     return youtubeInfo;
   }
   try {
     const info = await fetchLiveDetail(channelUids[0]);
     if (info?.live) {
-      liveInfoCache.set(sid, { ts: now, info });
+      liveInfoCache.set(cacheKey, { ts: now, info });
       return info;
     }
     const cimeInfo = await fetchCimeLiveInfoForSid(sid);
     if (cimeInfo?.live) {
-      liveInfoCache.set(sid, { ts: now, info: cimeInfo });
+      liveInfoCache.set(cacheKey, { ts: now, info: cimeInfo });
       return cimeInfo;
     }
     const youtubeInfo = await fetchYoutubeLiveInfoForSid(sid);
     if (youtubeInfo?.live) {
-      liveInfoCache.set(sid, { ts: now, info: youtubeInfo });
+      liveInfoCache.set(cacheKey, { ts: now, info: youtubeInfo });
       return youtubeInfo;
     }
-    liveInfoCache.set(sid, { ts: now, info });
+    liveInfoCache.set(cacheKey, { ts: now, info });
     return info;
   } catch {
     const cimeInfo = await fetchCimeLiveInfoForSid(sid);
-    if (cimeInfo) liveInfoCache.set(sid, { ts: now, info: cimeInfo });
+    if (cimeInfo) liveInfoCache.set(cacheKey, { ts: now, info: cimeInfo });
     if (cimeInfo) return cimeInfo;
     const youtubeInfo = await fetchYoutubeLiveInfoForSid(sid);
-    if (youtubeInfo) liveInfoCache.set(sid, { ts: now, info: youtubeInfo });
+    if (youtubeInfo) liveInfoCache.set(cacheKey, { ts: now, info: youtubeInfo });
     return youtubeInfo;
   }
 }
@@ -9452,11 +9917,17 @@ function formatElapsedStrings(startedAtTs) {
   return { elapsed, elapsedKo };
 }
 
-async function substituteAllPlaceholders(text, sid, userId, username) {
+async function substituteAllPlaceholders(text, sid, userId, username, context = {}) {
   if (!text) return text;
   let out = String(text);
+  const provider = String(context?.provider || context?.platform || '').trim().toLowerCase();
   if (/\{live\.(?:title|category|viewers|startedAt|elapsed|elapsed_ko|channel)\}/.test(out)) {
-    const liveInfo = await getLiveInfoForSid(sid);
+    let liveInfo = await getLiveInfoForSid(sid, { provider });
+    const providerScopedLiveInfo = filterLiveInfoByProvider(liveInfo, provider);
+    if (liveInfo && !providerScopedLiveInfo) {
+      console.warn(`[Live Placeholder] Ignored cross-provider live info: expected=${provider} actual=${String(liveInfo?.provider || 'unknown')}`);
+    }
+    liveInfo = providerScopedLiveInfo;
     if (liveInfo) {
       const { elapsed, elapsedKo } = formatElapsedStrings(liveInfo.startedAtTs);
       const notLiveMsg = '[방송 중이 아닙니다.]';
@@ -9484,14 +9955,14 @@ async function substituteAllPlaceholders(text, sid, userId, username) {
   // Channel followers count
   if (/\{channel\.followers\}/.test(out)) {
     try {
-      const count = await getChannelFollowersCountForSid(sid);
+      const count = await getChannelFollowersCountForSid(sid, provider);
       out = out.replace(/\{channel\.followers\}/g, count != null ? String(count) : '');
     } catch { }
   }
   // User followedAt
   if (userId && /\{user\.followedAt\}/.test(out)) {
     try {
-      const dt = await findUserFollowedAtForSid(sid, userId, username);
+      const dt = await findUserFollowedAtForSid(sid, userId, username, provider);
       out = out.replace(/\{user\.followedAt\}/g, dt || '확인할 수 없음');
     } catch {
       out = out.replace(/\{user\.followedAt\}/g, '확인할 수 없음');
@@ -9510,14 +9981,14 @@ async function substituteAllPlaceholders(text, sid, userId, username) {
   // User subscription months
   if (userId && /\{user\.subscriptionMonths\}/.test(out)) {
     try {
-      const months = await getUserSubscriptionMonthsForSid(sid, userId);
+      const months = await getUserSubscriptionMonthsForSid(sid, userId, provider);
       out = out.replace(/\{user\.subscriptionMonths\}/g, months != null ? String(months) : '');
     } catch { }
   }
   // User channel points
   if (userId && (/{user\.points}/.test(out) || /{user\.channelPoints}/.test(out))) {
     try {
-      const channelUid = await resolveStreamerUidForSid(sid);
+      const channelUid = await resolveStreamerUidForSid(sid, provider);
       if (channelUid) {
         const pts = await getChannelPoints(channelUid, userId);
         out = out.replace(/{user\.points}/g, String(pts)).replace(/{user\.channelPoints}/g, String(pts));
@@ -9540,7 +10011,7 @@ async function substituteAllPlaceholders(text, sid, userId, username) {
   // Days since follow (inclusive, follow day counts as 1)
   if (userId && /\{user\.followedDays\}/.test(out)) {
     try {
-      const followedAt = await findUserFollowedAtForSid(sid, userId, username); // 'YYYY-MM-DD'
+      const followedAt = await findUserFollowedAtForSid(sid, userId, username, provider); // 'YYYY-MM-DD'
       if (followedAt) {
         const todayKst = getKstDateString(); // 'YYYY-MM-DD'
         const start = new Date(`${followedAt}T00:00:00Z`).getTime();
@@ -9559,9 +10030,9 @@ async function substituteAllPlaceholders(text, sid, userId, username) {
 }
 
 // --- Channel followers and user relationship helpers (best-effort, cached) ---
-const followersCountCache = new Map(); // sid -> { ts, count }
-const userFollowedAtCache = new Map(); // key `${sid}:${userId}` -> { ts, date }
-const userSubMonthsCache = new Map(); // key `${sid}:${userId}` -> { ts, months }
+const followersCountCache = new Map(); // key `${provider}:${sid}` -> { ts, count }
+const userFollowedAtCache = new Map(); // key `${sid}:${provider}:${userId}:${username}` -> { ts, date }
+const userSubMonthsCache = new Map(); // key `${sid}:${provider}:${userId}` -> { ts, months }
 
 function addFollowerLookupCandidate(set, value) {
   const text = String(value || '').trim();
@@ -9891,10 +10362,19 @@ async function fetchCimeLiveInfoForSid(sid) {
   try {
     const r = await axios.get(`${CIME_OPENAPI_BASE}/v1/${encodeURIComponent(channelId)}/live-status`, { timeout: DEFAULT_TIMEOUT });
     const content = unwrapOpenApiContent(r);
+    let liveSetting = null;
+    try {
+      const accessToken = await getValidCimeAccessToken(ownerUserIdFromSid(sid));
+      const settingResponse = await axios.get(`${CIME_OPENAPI_BASE}/open/v1/lives/setting`, {
+        headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+        timeout: DEFAULT_TIMEOUT,
+      });
+      liveSetting = unwrapOpenApiContent(settingResponse);
+    } catch { }
     const status = String(content?.status || content?.liveStatus || content?.state || '').toLowerCase();
     const live = isCimeLiveContentOpen(content);
-    const title = content?.liveTitle || content?.title || content?.streamTitle || '';
-    const category = content?.categoryName || content?.category || content?.liveCategoryName || '';
+    const title = content?.liveTitle || content?.title || content?.streamTitle || liveSetting?.defaultLiveTitle || '';
+    const category = liveSetting?.category?.categoryValue || content?.categoryName || content?.category?.categoryValue || content?.liveCategoryName || '';
     const viewers = Number(content?.viewerCount || content?.currentViewerCount || content?.concurrentUserCount || 0);
     const startedCandidate = content?.startedAt || content?.started_at || content?.openDate || content?.openTime || content?.openedAt || content?.liveStartAt || content?.startTime || content?.createdAt || null;
     const cached = liveStatusCache.get(sid);
@@ -9942,11 +10422,36 @@ async function getYoutubePlatformAccountForSid(sid) {
 
 async function fetchYoutubeLiveInfoForSid(sid) {
   const ownerUserId = ownerUserIdFromSid(sid);
-  const account = await getYoutubePlatformAccountForSid(sid);
-  if (!ownerUserId || !account) return null;
-  try {
-    const info = await fetchYoutubeActiveLive(ownerUserId);
-    if (!info) return null;
+  if (!ownerUserId) return null;
+  const [account, streamerChannel] = await Promise.all([
+    getYoutubePlatformAccountForSid(sid),
+    getYoutubeStreamerChannel(ownerUserId).catch(() => null),
+  ]);
+  const entry = youtubeSessionStore.get(ownerUserId) || null;
+  const lookup = buildYoutubeLiveLookupContext({
+    ownerUserId,
+    account,
+    streamerChannel,
+    entry,
+    cachedState: liveStatusCache.get(sid) || null,
+  });
+  if (!lookup.hasIdentity) return null;
+
+  let info = null;
+  for (const broadcastId of lookup.broadcastIds) {
+    const candidate = await fetchYoutubeVideoLiveDetails(broadcastId).catch(() => null);
+    if (candidate?.live === true || candidate?.liveChatId) {
+      info = candidate;
+      break;
+    }
+  }
+  if (!info) {
+    info = await fetchYoutubeActiveLive(ownerUserId, {
+      allowOwnerFallback: true,
+      allowSearch: lookup.live && lookup.broadcastIds.length === 0,
+    }).catch(() => null);
+  }
+  if (info?.live === true || info?.liveChatId) {
     return {
       status: info.status || '',
       title: info.title || '',
@@ -9954,14 +10459,13 @@ async function fetchYoutubeLiveInfoForSid(sid) {
       viewers: info.viewers,
       startedAt: info.startedAt || '',
       startedAtTs: info.startedAtTs || null,
-      channel: info.channel || account.channel_name || account.channel_handle || '',
-      live: !!info.live,
+      channel: info.channel || lookup.channel || '',
+      live: true,
       raw: info.raw || {},
       provider: 'youtube'
     };
-  } catch {
-    return null;
   }
+  return buildYoutubeLiveInfoFallback(lookup);
 }
 
 async function getChannelUidsForSid(sid) {
@@ -9969,50 +10473,58 @@ async function getChannelUidsForSid(sid) {
   return resolveChzzkChannelUidsForSid(sid, settings);
 }
 
-async function getChannelFollowersCountForSid(sid) {
-  const cached = followersCountCache.get(sid);
+async function getChannelFollowersCountForSid(sid, provider = '') {
+  const normalizedProvider = String(provider || '').trim().toLowerCase();
+  const cacheKey = normalizedProvider ? `${normalizedProvider}:${sid}` : String(sid);
+  const cached = followersCountCache.get(cacheKey);
   const now = Date.now();
   if (cached && (now - cached.ts) < 5 * 60 * 1000) return cached.count;
-  const uids = await getChannelUidsForSid(sid);
-  if (!uids.length) return null;
-  const channelId = uids[0];
   let count = null;
-  try {
-    // Try open API first
-    const accessToken = await getValidAccessToken(sid);
-    const r1 = await axios.get(`${OPENAPI_BASE}/open/v1/channels/${encodeURIComponent(channelId)}/followers/count`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    count = Number(r1?.data?.content?.totalCount ?? r1?.data?.totalCount ?? r1?.data?.count ?? NaN);
-  } catch { }
-  if (count == null || Number.isNaN(count)) {
+  if (!normalizedProvider || normalizedProvider === 'chzzk') {
+    const uids = await getChannelUidsForSid(sid);
+    const channelId = uids[0] || null;
+    if (channelId) {
+      try {
+        const accessToken = await getValidAccessToken(sid);
+        const r1 = await axios.get(`${OPENAPI_BASE}/open/v1/channels/${encodeURIComponent(channelId)}/followers/count`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        count = Number(r1?.data?.content?.totalCount ?? r1?.data?.totalCount ?? r1?.data?.count ?? NaN);
+      } catch { }
+    }
+    if (channelId && (count == null || Number.isNaN(count))) {
+      try {
+        const r2 = await axios.get(`https://api.chzzk.naver.com/service/v1/channels/${encodeURIComponent(channelId)}/followers/count`);
+        count = Number(r2?.data?.content?.totalCount ?? r2?.data?.totalCount ?? r2?.data?.count ?? NaN);
+      } catch { }
+    }
+    if (count != null && !Number.isNaN(count)) {
+      followersCountCache.set(cacheKey, { ts: now, count });
+      return count;
+    }
+    if (normalizedProvider === 'chzzk') return null;
+  }
+  if (normalizedProvider === 'youtube') return null;
+  if (!normalizedProvider || normalizedProvider === 'cime') {
     try {
-      // Fallback to service API if available
-      const r2 = await axios.get(`https://api.chzzk.naver.com/service/v1/channels/${encodeURIComponent(channelId)}/followers/count`);
-      count = Number(r2?.data?.content?.totalCount ?? r2?.data?.totalCount ?? r2?.data?.count ?? NaN);
+      const cimeAccount = await getCimePlatformAccountForSid(sid);
+      const publicProfile = cimeAccount?.metadata?.publicProfile || {};
+      const cimeCount = readFiniteNumber(publicProfile.followerCount, publicProfile.raw?.followerCount, publicProfile.raw?.followers, publicProfile.raw?.followCount);
+      if (cimeCount != null) {
+        followersCountCache.set(cacheKey, { ts: now, count: cimeCount });
+        return cimeCount;
+      }
     } catch { }
   }
-  if (count != null && !Number.isNaN(count)) {
-    followersCountCache.set(sid, { ts: now, count });
-    return count;
-  }
-  try {
-    const cimeAccount = await getCimePlatformAccountForSid(sid);
-    const publicProfile = cimeAccount?.metadata?.publicProfile || {};
-    const cimeCount = readFiniteNumber(publicProfile.followerCount, publicProfile.raw?.followerCount, publicProfile.raw?.followers, publicProfile.raw?.followCount);
-    if (cimeCount != null) {
-      followersCountCache.set(sid, { ts: now, count: cimeCount });
-      return cimeCount;
-    }
-  } catch { }
   return null;
 }
 
 // (moved) API Key management endpoints are registered after app initialization
 
-async function findUserFollowedAtForSid(sid, userId, username = '') {
+async function findUserFollowedAtForSid(sid, userId, username = '', provider = '') {
   if (!userId) return null;
-  const key = `${sid}:${userId}:${username}`;
+  const normalizedProvider = String(provider || '').trim().toLowerCase();
+  const key = `${sid}:${normalizedProvider || 'auto'}:${userId}:${username}`;
   const cached = userFollowedAtCache.get(key);
   const now = Date.now();
   if (cached && (now - cached.ts) < 10 * 60 * 1000) return cached.date;
@@ -10020,7 +10532,7 @@ async function findUserFollowedAtForSid(sid, userId, username = '') {
   const maxChzzkPages = Math.max(1, Math.min(10000, Number(process.env.CHZZK_FOLLOWER_SCAN_PAGES || process.env.FOLLOWER_SCAN_PAGES || 10000)));
   const maxCimePages = Math.max(1, Math.min(1000, Number(process.env.CIME_FOLLOWER_SCAN_PAGES || process.env.FOLLOWER_SCAN_PAGES || 1000)));
   const lookupTimeout = Math.max(500, Math.min(30000, Number(process.env.FOLLOWER_LOOKUP_HTTP_TIMEOUT_MS || DEFAULT_TIMEOUT)));
-  const uids = await getChannelUidsForSid(sid);
+  const uids = (!normalizedProvider || normalizedProvider === 'chzzk') ? await getChannelUidsForSid(sid) : [];
   if (uids.length) {
     const channelId = uids[0];
     try {
@@ -10057,6 +10569,10 @@ async function findUserFollowedAtForSid(sid, userId, username = '') {
       }
     } catch (e) { console.error(e) }
   }
+  if (normalizedProvider === 'chzzk' || normalizedProvider === 'youtube') {
+    userFollowedAtCache.set(key, { ts: now, date: '' });
+    return null;
+  }
   try {
     const ownerUserId = ownerUserIdFromSid(sid);
     if (ownerUserId) {
@@ -10092,15 +10608,23 @@ async function findUserFollowedAtForSid(sid, userId, username = '') {
   return null;
 }
 
-async function getUserSubscriptionMonthsForSid(sid, userId) {
+async function getUserSubscriptionMonthsForSid(sid, userId, provider = '') {
   if (!userId) return null;
-  const key = `${sid}:${userId}`;
+  const normalizedProvider = String(provider || '').trim().toLowerCase();
+  const key = `${sid}:${normalizedProvider || 'auto'}:${userId}`;
   const cached = userSubMonthsCache.get(key);
   const now = Date.now();
   if (cached && (now - cached.ts) < 10 * 60 * 1000) return cached.months;
+  if (normalizedProvider === 'cime') {
+    const eventCached = userSubMonthsCache.get(`${sid}:cime:${userId}`) || userSubMonthsCache.get(`${sid}:${userId}`);
+    if (eventCached && (now - eventCached.ts) < 24 * 60 * 60 * 1000) return eventCached.months;
+    return null;
+  }
+  if (normalizedProvider === 'youtube') return null;
   const uids = await getChannelUidsForSid(sid);
   if (!uids.length) {
-    const cimeCached = userSubMonthsCache.get(key);
+    if (normalizedProvider === 'chzzk') return null;
+    const cimeCached = userSubMonthsCache.get(`${sid}:cime:${userId}`) || userSubMonthsCache.get(`${sid}:${userId}`);
     if (cimeCached && (now - cimeCached.ts) < 24 * 60 * 60 * 1000) return cimeCached.months;
     return null;
   }
@@ -10137,7 +10661,8 @@ async function getUserSubscriptionMonthsForSid(sid, userId) {
       if (list.length < size) break;
     }
   } catch { }
-  const cimeCached = userSubMonthsCache.get(key);
+  if (normalizedProvider === 'chzzk') return null;
+  const cimeCached = userSubMonthsCache.get(`${sid}:cime:${userId}`) || userSubMonthsCache.get(`${sid}:${userId}`);
   if (cimeCached && (now - cimeCached.ts) < 24 * 60 * 60 * 1000) return cimeCached.months;
   return null;
 }
@@ -10911,10 +11436,46 @@ const CIME_CLIENT_SECRET = process.env.CIME_CLIENT_SECRET;
 const CIME_REDIRECT_URI = process.env.CIME_REDIRECT_URI || `http://localhost:${PORT}/api/auth/cime/callback`;
 const CIME_OPENAPI_BASE = process.env.CIME_OPENAPI_BASE || 'https://ci.me/api/openapi';
 const CIME_AUTH_URL = process.env.CIME_AUTH_URL || 'https://ci.me/auth/openapi/account-interlock';
-const CIME_AUTH_SCOPE = String(
-  process.env.CIME_AUTH_SCOPE ||
-  'READ:CHANNEL READ:LIVE_CHAT WRITE:LIVE_CHAT READ:DONATION READ:SUBSCRIPTION'
-).trim();
+const CIME_REQUIRED_AUTH_SCOPES = [
+  'READ:USER',
+  'READ:CHANNEL',
+  'READ:LIVE_CHAT',
+  'WRITE:LIVE_CHAT',
+  'READ:DONATION',
+  'READ:SUBSCRIPTION',
+  'READ:LIVE_STREAM_SETTINGS',
+  'WRITE:LIVE_STREAM_SETTINGS',
+];
+const CIME_AUTH_SCOPE = Array.from(new Set([
+  ...String(process.env.CIME_AUTH_SCOPE || '').trim().split(/\s+/).filter(Boolean),
+  ...CIME_REQUIRED_AUTH_SCOPES,
+])).join(' ');
+
+function normalizeOAuthScopeSet(value) {
+  if (Array.isArray(value)) {
+    return new Set(value.flatMap((entry) => Array.from(normalizeOAuthScopeSet(entry))));
+  }
+  const text = String(value || '').trim();
+  if (!text) return new Set();
+  if ((text.startsWith('[') && text.endsWith(']')) || (text.startsWith('{') && text.endsWith('}'))) {
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) return normalizeOAuthScopeSet(parsed);
+    } catch { }
+  }
+  return new Set(
+    text
+      .replace(/^[{\[]|[}\]]$/g, '')
+      .split(/[\s,]+/)
+      .map((scope) => scope.replace(/^['"]|['"]$/g, '').trim())
+      .filter(Boolean)
+  );
+}
+
+function getMissingOAuthScopes(grantedScopes, requiredScopes) {
+  const granted = normalizeOAuthScopeSet(grantedScopes);
+  return (requiredScopes || []).filter((scope) => !granted.has(scope));
+}
 const CIME_APP_API_BASE = process.env.CIME_APP_API_BASE || 'https://ci.me/api/app';
 const CIME_UNOFFICIAL_PROFILE_URL_TEMPLATE = process.env.CIME_UNOFFICIAL_PROFILE_URL_TEMPLATE || '';
 const YOUTUBE_CLIENT_ID = process.env.YOUTUBE_CLIENT_ID || process.env.GOOGLE_YOUTUBE_CLIENT_ID || '';
@@ -14698,18 +15259,23 @@ async function fetchYoutubeVideoLiveDetails(videoId) {
   const details = item.liveStreamingDetails || {};
   const snippet = item.snippet || {};
   const startedAt = details.actualStartTime || details.scheduledStartTime || null;
+  const viewers = details.concurrentViewers == null ? null : Number(details.concurrentViewers);
+  const live = !!details.activeLiveChatId && !details.actualEndTime;
   return {
     provider: 'youtube',
     broadcastId: id,
     videoId: id,
     videoUrl: getYoutubeWatchUrl(id),
     liveChatId: details.activeLiveChatId || null,
+    status: live ? 'live' : (details.actualEndTime ? 'complete' : 'scheduled'),
     title: snippet.title || '',
+    category: snippet.categoryId || '',
+    viewers: Number.isFinite(viewers) ? viewers : null,
     channel: snippet.channelTitle || '',
     channelId: snippet.channelId || null,
     startedAt,
     startedAtTs: startedAt ? Date.parse(startedAt) : null,
-    live: !!details.activeLiveChatId,
+    live,
     raw: item
   };
 }
@@ -17355,7 +17921,7 @@ app.get('/api/public/:uid/live', async (req, res) => {
       const status = String(content?.status || '').toLowerCase();
       const channelName = content?.channel?.channelName || content?.channel?.name || '';
       const title = content?.liveTitle || content?.title || '';
-      const category = content?.liveCategory?.categoryType || content?.categoryType || content?.liveCategoryName || '';
+      const category = content?.liveCategoryValue || content?.liveCategory?.categoryValue || content?.liveCategoryName || content?.liveCategory?.categoryType || content?.categoryType || '';
       const viewers = Number(content?.concurrentUserCount || content?.currentViewerCount || 0);
       const startedCandidate = content?.startedAt || content?.started_at || content?.openDate || content?.openTime || content?.openedAt || content?.liveStartAt || content?.startTime || content?.createdAt || null;
       const startedAtTs = parseChzzkLiveTimestamp(startedCandidate, null);
@@ -17452,6 +18018,8 @@ const BOT_VARIABLES = [
   { key: '{live.elapsed_ko}', label: '방송 진행 시간', description: '한국어 형식으로 표시되는 방송 진행 시간입니다.', group: '방송', providers: BOT_VARIABLE_PROVIDERS },
   { key: '{live.channel}', label: '방송 채널', description: '현재 방송 채널 이름 또는 식별자입니다.', group: '방송', providers: BOT_VARIABLE_PROVIDERS },
   { key: '{channel.followers}', label: '팔로워 수', description: '확인 가능한 현재 채널 팔로워 수입니다.', group: '채널', providers: ['chzzk', 'cime'], caveat: '씨미는 프로필 동기화로 저장된 공개 수치를 사용합니다.' },
+  { key: '${live.title_change}', label: '방송 제목 변경', description: '명령어 뒤에 입력한 전체 문장으로 현재 플랫폼의 방송 제목을 변경합니다.', group: '특수 실행', providers: ['chzzk', 'cime'], caveat: '채팅에는 출력되지 않습니다. 명령어 인자가 없으면 실행하지 않으며, 제거 후 응답이 비어 있으면 채팅도 보내지 않습니다.' },
+  { key: '${live.game_change}', label: '방송 카테고리 변경', description: '명령어 뒤에 입력한 전체 문장으로 현재 플랫폼의 카테고리를 검색해 변경합니다.', group: '특수 실행', providers: ['chzzk', 'cime'], caveat: '채팅에는 출력되지 않습니다. 명령어 인자가 없으면 실행하지 않으며, 제거 후 응답이 비어 있으면 채팅도 보내지 않습니다.' },
   { key: '${video_donation}', label: '영상 후원 신청 실행', description: '명령어 인자로 받은 링크나 검색어를 영상 후원 대기열에 넣고 포인트를 차감합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, caveat: '명령어 응답에 넣으면 채팅에 그대로 출력되지 않고 영상 후원 신청 동작으로 실행됩니다.' },
   { key: '${roulette::룰렛이름}', label: '룰렛 실행', description: '지정한 룰렛을 즉시 실행하고 결과를 채팅/오버레이 흐름에 반영합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, caveat: '룰렛 이름 또는 ID를 :: 뒤에 입력하세요. 예: ${roulette::오늘의 벌칙}' },
   { key: '${action::액션이름}', label: '블루프린트 실행', description: '게시된 실행 액션 블루프린트를 명령어 응답 중 실행합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, caveat: '채팅으로 출력되지 않고 액션이 실행됩니다. 액션 이름, slug 또는 ID를 사용할 수 있습니다.' },
@@ -17693,12 +18261,17 @@ app.post('/api/bot/rules/delete', async (req, res) => {
 });
 
 // --- Channel Points endpoints ---
-async function resolveStreamerUidForSid(sid) {
+async function resolveStreamerUidForSid(sid, provider = '') {
   try {
     const ownerUserId = ownerUserIdFromSid(sid);
+    const normalizedProvider = String(provider || '').trim().toLowerCase();
+    if (normalizedProvider === 'cime' || normalizedProvider === 'youtube') {
+      return await resolveChannelIdForOwnerUserId(ownerUserId, { provider: normalizedProvider, allowFallback: false }).catch(() => null);
+    }
     const settings = await getBotSettings(sid) || {};
     let channelUids = await resolveChzzkChannelUidsForSid(sid, settings);
     if (channelUids.length) return channelUids[0];
+    if (normalizedProvider === 'chzzk') return null;
     for (const provider of ['cime', 'youtube']) {
       const channelId = await resolveChannelIdForOwnerUserId(ownerUserId, { provider, allowFallback: false }).catch(() => null);
       if (channelId) return channelId;
@@ -20348,21 +20921,34 @@ async function ensureSession(sid, channelId) {
               }
             }
 
-            // Substitute placeholders (live/channel/user)
-            try {
-              response = await substituteAllPlaceholders(response, sid, resolvedUserId, resolvedUsername);
-            } catch { }
-
             // Prepare args for trigger handling (remove matched keyword from start)
             const restForVd = text.slice((matchedKeyword || '').length).trim();
             const argsVd = restForVd.length ? restForVd.split(/\s+/).map(String) : [];
 
+            let responseToSend = response;
+            let ruleUsed = false; // mark when this rule executed (even if no chat message output)
+            if (allowExecute && typeof responseToSend === 'string') {
+              const liveChangeResult = await executeCommandLiveChangeTokens(sid, responseToSend, {
+                provider: 'chzzk',
+                argsText: restForVd,
+              });
+              responseToSend = liveChangeResult.text;
+              if (liveChangeResult.executed.length > 0) {
+                ruleUsed = true;
+                if (liveChangeResult.executed.includes('title_change')) commandFeatures.push('live_title_change');
+                if (liveChangeResult.executed.includes('game_change')) commandFeatures.push('live_game_change');
+              }
+            }
+
+            // Substitute placeholders after live-setting actions so this response sees fresh platform data.
+            try {
+              responseToSend = await substituteAllPlaceholders(responseToSend, sid, resolvedUserId, resolvedUsername, { provider: 'chzzk' });
+            } catch { }
+
             // Special trigger: ${video_donation} -> enqueue video donation instead of printing token
             const vdRe = /\$\{\s*video_donation\s*\}/i;
             const vdReAll = /\$\{\s*video_donation\s*\}/ig;
-            let responseToSend = response;
-            let ruleUsed = false; // mark when this rule executed (even if no chat message output)
-            if (allowExecute && typeof response === 'string' && vdRe.test(response)) {
+            if (allowExecute && typeof responseToSend === 'string' && vdRe.test(responseToSend)) {
               // args were parsed above as 'args' from user message
               const firstArg = Array.isArray(argsVd) ? (argsVd[0] || '') : '';
               
@@ -20379,7 +20965,7 @@ async function ensureSession(sid, channelId) {
                     userId: resolvedUserId,
                     username: resolvedUsername,
                     args: argsVd,
-                    response,
+                    response: responseToSend,
                     vdReAll,
                     context: {
                       source: 'chat-command',
@@ -20392,7 +20978,7 @@ async function ensureSession(sid, channelId) {
                   responseToSend = '요청 처리 중 오류가 발생했습니다.';
                 }
               } else {
-                responseToSend = (String(response).replace(vdReAll, '').trim() || '링크를 입력해 주세요.');
+                responseToSend = (String(responseToSend).replace(vdReAll, '').trim() || '링크를 입력해 주세요.');
               }
             }
 
@@ -20772,7 +21358,7 @@ async function ensureSession(sid, channelId) {
               let built = tmpl.replace(/\$\{\s*(username|amount|message)\s*\}/g, (_, k) => String(vars[k]));
               // Apply global placeholders like {live.*}, {channel.*}, {user.*}
               try {
-                built = await substituteAllPlaceholders(built, sid, donorId ? String(donorId) : '', donorName || '');
+                built = await substituteAllPlaceholders(built, sid, donorId ? String(donorId) : '', donorName || '', { provider: 'chzzk' });
               } catch { }
               const donationFeatures = [];
               // Handle optional roulette trigger inside response
@@ -20979,12 +21565,7 @@ function isYoutubeLiveBroadcastActive(item) {
   return status === 'live' || status === 'active' || status.includes('live');
 }
 
-async function fetchYoutubeActiveLive(ownerUserId, options = {}) {
-  const centralLive = await refreshYoutubeLiveFromRegisteredChannel(ownerUserId, { allowSearch: options.allowSearch === true }).catch(() => null);
-  if (centralLive?.liveChatId) return centralLive;
-  const botProfile = await getYoutubeBotProfile(YOUTUBE_BOT_PROFILE_ID).catch(() => null);
-  const streamerChannel = await getYoutubeStreamerChannel(ownerUserId).catch(() => null);
-  if (botProfile?.selectedChannelId || streamerChannel?.youtubeChannelId) return centralLive || null;
+async function fetchYoutubeOwnedActiveLive(ownerUserId) {
   let response = null;
   try {
     response = await youtubeApiGet('liveBroadcasts', ownerUserId, {
@@ -21010,18 +21591,53 @@ async function fetchYoutubeActiveLive(ownerUserId, options = {}) {
   return active[0] || null;
 }
 
+async function fetchYoutubeActiveLive(ownerUserId, options = {}) {
+  const centralLive = await refreshYoutubeLiveFromRegisteredChannel(ownerUserId, { allowSearch: false }).catch(() => null);
+  if (centralLive?.liveChatId || centralLive?.live === true) return centralLive;
+
+  let ownerLookupError = null;
+  if (options.allowOwnerFallback === true) {
+    try {
+      const ownedLive = await fetchYoutubeOwnedActiveLive(ownerUserId);
+      if (ownedLive) return ownedLive;
+    } catch (error) {
+      ownerLookupError = error;
+    }
+  }
+
+  const streamerChannel = await getYoutubeStreamerChannel(ownerUserId).catch(() => null);
+  if (options.allowSearch === true && streamerChannel?.youtubeChannelId) {
+    const searchedLive = await refreshYoutubeLiveFromRegisteredChannel(ownerUserId, { allowSearch: true }).catch(() => null);
+    if (searchedLive?.liveChatId || searchedLive?.live === true) return searchedLive;
+  }
+
+  if (ownerLookupError && !streamerChannel?.youtubeChannelId) throw ownerLookupError;
+  return null;
+}
+
 async function refreshYoutubeLiveStatus(ownerUserId, sid, options = {}) {
   const normalizedSid = sid || `user:${ownerUserId}`;
   const now = Date.now();
   const cached = liveStatusCache.get(normalizedSid);
   const ttlMs = Number.isFinite(Number(options.ttlMs)) ? Number(options.ttlMs) : 30 * 1000;
   if (!options.force && cached?.provider === 'youtube' && (now - cached.ts) < ttlMs) {
-    return { live: !!cached.live, channelId: cached.channelId || null, liveChatId: cached.liveChatId || null, startTs: cached.startTs || null, cached: true };
+    return {
+      live: !!cached.live,
+      channelId: cached.channelId || null,
+      liveChatId: cached.liveChatId || null,
+      broadcastId: cached.broadcastId || null,
+      title: cached.title || '',
+      startTs: cached.startTs || null,
+      cached: true,
+    };
   }
 
   let liveInfo = null;
   try {
-    liveInfo = await fetchYoutubeActiveLive(ownerUserId, { allowSearch: options.force === true || options.allowSearch === true });
+    liveInfo = await fetchYoutubeActiveLive(ownerUserId, {
+      allowOwnerFallback: true,
+      allowSearch: options.force === true || options.allowSearch === true,
+    });
   } catch (e) {
     console.warn('[YouTube] Active live lookup failed:', e?.response?.data?.error?.message || e?.message || e);
   }
@@ -21502,7 +22118,7 @@ async function processYoutubeDonationAutomation(entry, ev) {
       const tmpl = String(r.response || '').trim();
       const vars = { username: donorName, amount, message: donorMessage };
       let built = tmpl.replace(/\$\{\s*(username|amount|message)\s*\}/g, (_, k) => String(vars[k]));
-      try { built = await substituteAllPlaceholders(built, sid, donorId, donorName); } catch { }
+      try { built = await substituteAllPlaceholders(built, sid, donorId, donorName, { provider: 'youtube' }); } catch { }
       const donationFeatures = [];
       const rlRe = /\$\{\s*roulette::([^}]+)\s*\}/i;
       const rlReAll = /\$\{\s*roulette::([^}]+)\s*\}/ig;
@@ -21725,10 +22341,19 @@ async function processYoutubeChatAutomation(entry, ev) {
         }
       }
 
-      try { response = await substituteAllPlaceholders(response, sid, resolvedUserId, resolvedUsername); } catch { }
-
       const cmd = matchedKeyword || '';
-      const args = text.slice(cmd.length).trim().split(/\s+/).map(String).filter(Boolean);
+      const argsText = text.slice(cmd.length).trim();
+      const args = argsText.split(/\s+/).map(String).filter(Boolean);
+      let cleaned = String(response || '');
+      if (allowExecute) {
+        const liveChangeResult = await executeCommandLiveChangeTokens(sid, cleaned, {
+          provider: 'youtube',
+          argsText,
+        });
+        cleaned = liveChangeResult.text;
+      }
+      try { cleaned = await substituteAllPlaceholders(cleaned, sid, resolvedUserId, resolvedUsername, { provider: 'youtube' }); } catch { }
+
       if (allowExecute && cmd) {
         const payload = {
           type: 'command',
@@ -21743,7 +22368,6 @@ async function processYoutubeChatAutomation(entry, ev) {
         try { broadcastToDesktop(sid, { ...payload, metadata: payload.executionContext }); } catch { }
       }
 
-      let cleaned = String(response || '');
       const vdRe = /\$\{\s*video_donation\s*\}/i;
       const vdReAll = /\$\{\s*video_donation\s*\}/ig;
       if (allowExecute && vdRe.test(cleaned)) {
@@ -22080,6 +22704,7 @@ async function ensureYoutubeSession(ownerUserId) {
       botChannelId: botProfile.selectedChannelId,
       liveChatId: liveState.liveChatId || null,
       broadcastId: liveState.broadcastId || null,
+      title: liveState.title || '',
       queue: [],
       connected: false,
       processedIds: new Set(),
@@ -22250,7 +22875,9 @@ function rememberCimeSubscriptionMonths(entry, ev) {
   const userId = String(ev?.userId || '').trim();
   const months = readFiniteNumber(ev?.months, ev?.raw?.month, ev?.raw?.months, ev?.raw?.subscriptionMonths);
   if (!sid || !userId || months == null) return;
-  userSubMonthsCache.set(`${sid}:${userId}`, { ts: Date.now(), months });
+  const value = { ts: Date.now(), months };
+  userSubMonthsCache.set(`${sid}:cime:${userId}`, value);
+  userSubMonthsCache.set(`${sid}:${userId}`, value);
 }
 
 async function getCimeChannelId(ownerUserId) {
@@ -22470,7 +23097,7 @@ async function processCimeChatAutomation(entry, ev) {
       resolvedUserId = `cime:nickname:${crypto.createHash('sha256').update(resolvedUsername).digest('hex').slice(0, 16)}`;
     }
     if (!resolvedUserId) resolvedUserId = 'unknown_user';
-    const pointChannelUid = entry.channelId || await resolveStreamerUidForSid(sid);
+    const pointChannelUid = entry.channelId || await resolveStreamerUidForSid(sid, 'cime');
     if (pointChannelUid && !entry.channelId) entry.channelId = pointChannelUid;
     const isOwner = entry.channelId && String(resolvedUserId) === String(entry.channelId);
     const isBotSelf = await isLikelyCimeBotSelfEcho(entry, ownerUserId, ev, resolvedUserId).catch(() => false);
@@ -22639,10 +23266,21 @@ async function processCimeChatAutomation(entry, ev) {
         }
       }
 
-      try { response = await substituteAllPlaceholders(response, sid, resolvedUserId, resolvedUsername); } catch { }
-
       const cmd = matchedKeyword || '';
-      const args = text.slice(cmd.length).trim().split(/\s+/).map(String).filter(Boolean);
+      const argsText = text.slice(cmd.length).trim();
+      const args = argsText.split(/\s+/).map(String).filter(Boolean);
+      let cleaned = String(response || '');
+      if (allowExecute) {
+        const liveChangeResult = await executeCommandLiveChangeTokens(sid, cleaned, {
+          provider: 'cime',
+          argsText,
+        });
+        cleaned = liveChangeResult.text;
+        if (liveChangeResult.executed.includes('title_change')) commandFeatures.push('live_title_change');
+        if (liveChangeResult.executed.includes('game_change')) commandFeatures.push('live_game_change');
+      }
+      try { cleaned = await substituteAllPlaceholders(cleaned, sid, resolvedUserId, resolvedUsername, { provider: 'cime' }); } catch { }
+
       if (allowExecute && cmd) {
         const payload = {
           type: 'command',
@@ -22657,7 +23295,6 @@ async function processCimeChatAutomation(entry, ev) {
         try { broadcastToDesktop(sid, { ...payload, metadata: payload.executionContext }); } catch { }
       }
 
-      let cleaned = String(response || '');
       const vdRe = /\$\{\s*video_donation\s*\}/i;
       const vdReAll = /\$\{\s*video_donation\s*\}/ig;
       if (allowExecute && vdRe.test(cleaned)) {
@@ -22837,7 +23474,7 @@ async function processCimeDonationAutomation(entry, ev) {
       const tmpl = String(r.response || '').trim();
       const vars = { username: donorName, amount, message: donorMessage };
       let built = tmpl.replace(/\$\{\s*(username|amount|message)\s*\}/g, (_, k) => String(vars[k]));
-      try { built = await substituteAllPlaceholders(built, sid, donorId, donorName); } catch { }
+      try { built = await substituteAllPlaceholders(built, sid, donorId, donorName, { provider: 'cime' }); } catch { }
       const donationFeatures = [];
       const rlRe = /\$\{\s*roulette::([^}]+)\s*\}/i;
       const rlReAll = /\$\{\s*roulette::([^}]+)\s*\}/ig;
@@ -23322,6 +23959,17 @@ app.get('/api/platforms/status', async (req, res) => {
     const chzzkDiagnostic = chzzkRuntimeErrors.get(sid) || null;
 
     const cimeAccount = byProvider.get('cime') || null;
+    const cimeTokenStatus = cimeAccount
+      ? await getPlatformTokens('cime', ownerUserId)
+        .then((tokens) => ({ checked: true, tokens }))
+        .catch(() => ({ checked: false, tokens: null }))
+      : { checked: true, tokens: null };
+    const cimeMissingScopes = cimeTokenStatus.checked && cimeTokenStatus.tokens
+      ? getMissingOAuthScopes(cimeTokenStatus.tokens.scope, CIME_REQUIRED_AUTH_SCOPES)
+      : [];
+    const cimeReauthRequired = !!cimeAccount
+      && cimeTokenStatus.checked
+      && (!cimeTokenStatus.tokens || cimeMissingScopes.length > 0);
     let cimeEntry = cimeSessionStore.get(ownerUserId) || null;
     if (!cimeAccount && cimeEntry?.connected) {
       disconnectProviderRuntimeState(ownerUserId, 'cime', null, 'platform_status_disconnected');
@@ -23398,7 +24046,8 @@ app.get('/api/platforms/status', async (req, res) => {
         queueSize: Array.isArray(cimeEntry?.queue) ? cimeEntry.queue.length : 0,
         mode: 'websocket',
         lastError: cimeRefreshError || cimeEntry?.lastError || null,
-        reauthRequired: false,
+        reauthRequired: cimeReauthRequired,
+        missingScopes: cimeMissingScopes,
         ignoredDonations: { count: 0, byReason: {}, recent: [] }
       },
       {
@@ -24411,6 +25060,7 @@ function registerPvdRoutes() {
       // Immediately send current now-playing to this socket so late joiners auto-start
       try {
         const q = getVideoQueue(sid);
+        const viewerSettings = await getPvdViewerSettingsForSid(sid);
         if (q[0]) await refreshChzzkClipPlaybackForItem(q[0]);
         const state = pvdPlaybackState.get(sid) || (q[0] ? createPvdPlaybackState(q[0]) : null);
         if (q[0] && state && !pvdPlaybackState.has(sid)) {
@@ -24425,6 +25075,8 @@ function registerPvdRoutes() {
           paused: q[0] ? state?.paused || false : null,
           atSec: q[0] ? getCurrentAtSec(sid) : 0,
           elapsedSec: q[0] ? getCurrentPvdElapsedSec(sid) : 0,
+          volume: viewerSettings.volume,
+          idlePlaylist: viewerSettings.idlePlaylist,
           serverNow: Date.now()
         };
         ws.send(JSON.stringify(payload), { compress: false });

@@ -30,6 +30,14 @@ import {
   normalizeEditableRouletteItems,
   type EditableRouletteItem,
 } from '@/features/admin/roulette-item-model';
+import {
+  VideoDonationIdlePlaylistEditor,
+} from '@/features/admin/video-donation-idle-playlist-editor';
+import {
+  createDefaultVideoDonationIdlePlaylist,
+  normalizeVideoDonationIdlePlaylist,
+  type VideoDonationIdlePlaylist,
+} from '@/features/admin/video-donation-idle-playlist-model';
 import { apiUrl } from '@/shared/api/http';
 import { cn } from '@/shared/lib/utils';
 import {
@@ -475,6 +483,7 @@ export function VideoDonationSettingsDialog({ variant = 'secondary', label = '�
     chzzk_clip: true,
     cime_clip: false,
   });
+  const [idlePlaylist, setIdlePlaylist] = useState<VideoDonationIdlePlaylist>(() => createDefaultVideoDonationIdlePlaylist());
   const [isPending, startTransition] = useTransition();
 
   const load = async () => {
@@ -493,6 +502,7 @@ export function VideoDonationSettingsDialog({ variant = 'secondary', label = '�
         chzzk_clip: payload.providers?.chzzk_clip !== false,
         cime_clip: payload.providers?.cime_clip === true,
       });
+      setIdlePlaylist(normalizeVideoDonationIdlePlaylist(payload.idlePlaylist));
     } catch {
       // Existing values remain editable when loading fails.
     }
@@ -508,12 +518,13 @@ export function VideoDonationSettingsDialog({ variant = 'secondary', label = '�
           perUserLimit: Math.max(0, Number(perUserLimit || 0)),
           volume: Math.max(0, Math.min(100, Math.round(Number(volume || 0)))),
           providers,
+          idlePlaylist,
         });
         toast.success('영상 후원 설정을 저장했어요.');
         refreshResource('/api/video-donation/queue');
         close();
-      } catch {
-        toast.error('영상 후원 설정을 저장하지 못했어요.');
+      } catch (error) {
+        toast.error(getApiErrorMessage(error, '영상 후원 설정을 저장하지 못했어요.'));
       }
     });
   };
@@ -556,6 +567,7 @@ export function VideoDonationSettingsDialog({ variant = 'secondary', label = '�
           label="CIME 클립 받기"
         />
       </div>
+      <VideoDonationIdlePlaylistEditor value={idlePlaylist} onChange={setIdlePlaylist} />
       <div className="grid min-w-0 gap-[clamp(1.15rem,2.4vw,1.65rem)] rounded-[var(--radius-card)] border bg-background/62 p-[clamp(1rem,2vw,1.25rem)] md:grid-cols-[repeat(2,minmax(0,1fr))]">
         <Field label="초당 포인트">
           <Input value={pointsPerSecond} onChange={(event) => setPointsPerSecond(event.target.value)} inputMode="decimal" />
