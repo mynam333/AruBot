@@ -41,6 +41,7 @@ type ExternalVideoDonationItem = VideoDonationItem & {
 type YouTubePlayer = {
   destroy?: () => void;
   getCurrentTime?: () => number;
+  getDuration?: () => number;
   getVideoData?: () => { video_id?: string };
   loadModule?: (name: string) => void;
   loadVideoById?: (options: { videoId: string; startSeconds: number }) => void;
@@ -131,6 +132,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
   const suppressUntilRef = useRef<number>(0);
   const currentItemIdRef = useRef<string | null>(null);
   const lastReportRef = useRef<{ itemId: string | null; at: number } | null>(null);
+  const youtubeDurationReportedRef = useRef<{ itemId: string | null; durationSec: number } | null>(null);
   const externalTargetRef = useRef(0);
   const externalPausedRef = useRef(false);
   const tiktokPlayingSeenRef = useRef(false);
@@ -295,6 +297,19 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
     }).catch(() => {});
   }, [getViewerApiBase, token]);
+
+  const reportYouTubeDuration = useCallback(() => {
+    if (playbackModeRef.current !== 'donation') return;
+    const player = playerRef.current;
+    const duration = Number(player?.getDuration?.());
+    if (!Number.isFinite(duration) || duration <= 0) return;
+    const durationSec = Math.ceil(duration);
+    const itemId = currentItemIdRef.current;
+    const previous = youtubeDurationReportedRef.current;
+    if (previous?.itemId === itemId && previous.durationSec === durationSec) return;
+    youtubeDurationReportedRef.current = { itemId, durationSec };
+    emitControl('duration', undefined, undefined, durationSec);
+  }, [emitControl]);
 
   const emitVolumeControl = useCallback((nextVolume: number) => {
     if (volumeEmitTimerRef.current) clearTimeout(volumeEmitTimerRef.current);
@@ -547,12 +562,14 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
       if (currentItemIdRef.current !== nextItemId) {
         currentItemIdRef.current = nextItemId;
         lastReportRef.current = null;
+        youtubeDurationReportedRef.current = null;
       }
 
       const sameItem = currentVidRef.current === videoId && currentStartRef.current === safeStart && playerRef.current;
       if (sameItem) {
         applyYouTubeCaptions(captionsEnabled);
         applyPlaybackTarget(target, opts?.paused, opts?.force);
+        reportYouTubeDuration();
         return;
       }
 
@@ -590,6 +607,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
           } else if (e && e.data === YT.PlayerState.PAUSED) {
             if (!document.hidden && now > suppressUntilRef.current && now - lastEmitRef.current > 300) { lastEmitRef.current = now; emitControl('pause', Math.floor(t)); }
           } else if (e && e.data === YT.PlayerState.PLAYING) {
+            reportYouTubeDuration();
             if (!document.hidden && now > suppressUntilRef.current && now - lastEmitRef.current > 300) { lastEmitRef.current = now; emitControl('play', Math.floor(t)); }
           }
         } catch {}
@@ -598,6 +616,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
         applyYouTubeCaptions(captionsEnabled);
         applyVolume(volumeRef.current);
         applyPlaybackTarget(target, opts?.paused, true);
+        reportYouTubeDuration();
       };
 
       if (!playerRef.current) {
@@ -631,7 +650,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
         applyPlaybackTarget(target, opts?.paused, true);
       }, 250);
     }).catch(() => {});
-  }, [applyPlaybackTarget, applyVolume, applyYouTubeCaptions, captionsEnabled, emitControl, getYouTubeApi, isExpectedYouTubePlayerMedia, report]);
+  }, [applyPlaybackTarget, applyVolume, applyYouTubeCaptions, captionsEnabled, emitControl, getYouTubeApi, isExpectedYouTubePlayerMedia, report, reportYouTubeDuration]);
 
   const ensureExternalPlayer = useCallback((item: VideoDonationItem, opts?: PlaybackTarget) => {
     expectedYouTubeMediaIdRef.current = '__external__';

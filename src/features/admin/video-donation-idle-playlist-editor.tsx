@@ -38,6 +38,14 @@ const TOPIC_PRESETS = [
   '클래식',
 ] as const;
 
+type PlaylistLookupResult = {
+  tracks?: VideoDonationIdleTrack[];
+  requestedCount?: number;
+  excludedCount?: number;
+  excludedTooLongCount?: number;
+  cacheHit?: boolean;
+};
+
 
 async function postPlaylistJson<T>(path: string, body: unknown): Promise<T> {
   const response = await fetch(apiUrl(path), {
@@ -60,6 +68,15 @@ function formatDuration(value: number | null) {
   return hours > 0
     ? `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`
     : `${minutes}:${seconds.toString().padStart(2, '0')}`;
+}
+
+function formatExcludedSummary(result: PlaylistLookupResult) {
+  const excludedCount = Math.max(0, Number(result.excludedCount) || 0);
+  const tooLongCount = Math.max(0, Number(result.excludedTooLongCount) || 0);
+  if (!excludedCount) return '';
+  if (tooLongCount === excludedCount) return ` · 10분 초과 ${tooLongCount}개 제외`;
+  if (tooLongCount > 0) return ` · ${excludedCount}개 제외(10분 초과 ${tooLongCount}개)`;
+  return ` · 재생 시간/상태 미확인 ${excludedCount}개 제외`;
 }
 
 function PlaylistToggle({
@@ -189,11 +206,14 @@ export function VideoDonationIdlePlaylistEditor({
     if (!topic) return toast.warning('추천 주제를 입력해 주세요.');
     setRecommendPending(true);
     try {
-      const result = await postPlaylistJson<{ tracks?: VideoDonationIdleTrack[] }>('/api/video-donation/idle-playlist/recommend', { topic, limit: 12 });
+      const result = await postPlaylistJson<PlaylistLookupResult>('/api/video-donation/idle-playlist/recommend', {
+        topic,
+        limit: value.recommendationCount,
+      });
       const tracks = normalizeVideoDonationIdleTracks(result.tracks);
       if (!tracks.length) throw new Error('추천곡을 찾지 못했습니다.');
       update({ recommendedTracks: tracks });
-      toast.success(`${tracks.length}곡으로 추천 플레이리스트를 만들었어요.`);
+      toast.success(`${tracks.length}곡으로 추천 플레이리스트를 만들었어요${formatExcludedSummary(result)}.`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '추천 플레이리스트를 만들지 못했습니다.');
     } finally {
@@ -206,13 +226,15 @@ export function VideoDonationIdlePlaylistEditor({
     if (!input) return toast.warning('곡, 영상 또는 플레이리스트를 입력해 주세요.');
     setAddPending(true);
     try {
-      const result = await postPlaylistJson<{ kind?: string; tracks?: VideoDonationIdleTrack[] }>('/api/video-donation/idle-playlist/resolve', { input });
+      const result = await postPlaylistJson<PlaylistLookupResult & { kind?: string }>('/api/video-donation/idle-playlist/resolve', { input });
       const incoming = normalizeVideoDonationIdleTracks(result.tracks);
       const next = mergeTracks(value.customTracks, incoming);
       const added = next.length - value.customTracks.length;
       update({ customTracks: next });
       setCustomInput('');
-      toast.success(added > 0 ? `${added}곡을 플레이리스트에 추가했어요.` : '이미 추가된 곡입니다.');
+      toast.success(added > 0
+        ? `${added}곡을 플레이리스트에 추가했어요${formatExcludedSummary(result)}.`
+        : '이미 추가된 곡입니다.');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '곡을 추가하지 못했습니다.');
     } finally {
@@ -278,20 +300,42 @@ export function VideoDonationIdlePlaylistEditor({
 
           {value.mode === 'recommended' ? (
             <div className="grid gap-3">
-              <label className="grid gap-2 text-sm font-semibold" htmlFor="video-donation-idle-topic">추천 주제</label>
-              <div className="flex min-w-0 flex-col gap-2 sm:flex-row">
-                <Input
-                  id="video-donation-idle-topic"
-                  list="video-donation-idle-topic-presets"
-                  value={value.topic}
-                  onChange={(event) => update({ topic: event.target.value, recommendedTracks: [] })}
-                  placeholder="예: 비 오는 밤 재즈"
-                  className="min-w-0 flex-1"
-                />
+              <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_8rem_auto] sm:items-end">
+                <label className="grid min-w-0 gap-2 text-sm font-semibold" htmlFor="video-donation-idle-topic">
+                  추천 주제
+                  <Input
+                    id="video-donation-idle-topic"
+                    list="video-donation-idle-topic-presets"
+                    value={value.topic}
+                    onChange={(event) => update({ topic: event.target.value, recommendedTracks: [] })}
+                    placeholder="예: 비 오는 밤 재즈"
+                    className="min-w-0"
+                  />
+                </label>
                 <datalist id="video-donation-idle-topic-presets">
                   {TOPIC_PRESETS.map((topic) => <option key={topic} value={topic} />)}
                 </datalist>
-                <Button type="button" variant="soft" onClick={() => void createRecommendations()} disabled={recommendPending}>
+                <label className="grid min-w-0 gap-2 text-sm font-semibold" htmlFor="video-donation-idle-recommendation-count">
+                  추천 곡 수
+                  <div className="relative min-w-0">
+                    <Input
+                      id="video-donation-idle-recommendation-count"
+                      type="number"
+                      min={1}
+                      max={MAX_VIDEO_DONATION_IDLE_TRACKS}
+                      inputMode="numeric"
+                      aria-label="추천 곡 수"
+                      value={value.recommendationCount}
+                      onChange={(event) => {
+                        const count = Math.max(1, Math.min(MAX_VIDEO_DONATION_IDLE_TRACKS, Math.floor(Number(event.target.value) || 1)));
+                        update({ recommendationCount: count, recommendedTracks: [] });
+                      }}
+                      className="min-w-0 pr-10 tabular-nums"
+                    />
+                    <span className="pointer-events-none absolute inset-y-0 right-3 grid place-items-center text-xs font-medium text-muted-foreground">곡</span>
+                  </div>
+                </label>
+                <Button type="button" variant="soft" className="sm:self-end" onClick={() => void createRecommendations()} disabled={recommendPending}>
                   {recommendPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
                   추천곡 구성
                 </Button>
@@ -325,7 +369,10 @@ export function VideoDonationIdlePlaylistEditor({
           <div className="grid gap-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="text-sm font-semibold">재생 목록</div>
-              <Badge tone={activeTracks.length ? 'mint' : 'neutral'}>{activeTracks.length}곡</Badge>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <Badge tone="neutral">최대 10분</Badge>
+                <Badge tone={activeTracks.length ? 'mint' : 'neutral'}>{activeTracks.length}곡</Badge>
+              </div>
             </div>
             <PlaylistTrackList
               tracks={activeTracks}

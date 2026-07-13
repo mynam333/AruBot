@@ -24,6 +24,33 @@ describe('영상 후원 대기 플레이리스트 회귀 방지', () => {
     expect(serverIndex).toContain("app.post('/api/video-donation/idle-playlist/recommend'");
   });
 
+  test('주제 추천 곡 수는 1~200곡으로 저장하고 50곡 단위 페이지를 이어서 구성해야 함', () => {
+    expect(serverIndex).toContain('normalizePvdIdleRecommendationCount');
+    expect(serverIndex).toContain('recommendationCount,');
+    expect(serverIndex).toContain('maxResults: 50');
+    expect(serverIndex).toContain('pageToken: entry.started ? entry.nextPageToken');
+    expect(serverIndex).toContain('entry.tracks.length < safeLimit');
+    expect(editor).toContain('value.recommendationCount');
+    expect(editor).toContain('max={MAX_VIDEO_DONATION_IDLE_TRACKS}');
+    expect(editor).toContain('추천 곡 수');
+  });
+
+  test('추천 결과는 주제별로 재사용하고 동시에 같은 주제를 구성해도 API 요청을 합쳐야 함', () => {
+    expect(serverIndex).toContain('PVD_IDLE_RECOMMENDATION_CACHE_TTL_MS = 24 * 60 * 60 * 1000');
+    expect(serverIndex).toContain('pvdIdleRecommendationCache');
+    expect(serverIndex).toContain('pvdIdleRecommendationInFlight');
+    expect(serverIndex).toContain('withPvdIdleRecommendationLock');
+    expect(serverIndex).toContain('cacheHit: hadFreshCache && searchRequests === 0 && detailRequests === 0');
+  });
+
+  test('재생 시간이 확인된 10분 이하 영상만 대기 음악으로 저장해야 함', () => {
+    expect(serverIndex).toContain('PVD_IDLE_TRACK_MAX_DURATION_SEC = 10 * 60');
+    expect(serverIndex).toContain('durationSec > PVD_IDLE_TRACK_MAX_DURATION_SEC');
+    expect(serverIndex).toContain('{ requireKnownDuration: true }');
+    expect(serverIndex).toContain('10분 이하이며 재생 시간이 확인된 YouTube 영상만 추가할 수 있습니다.');
+    expect(editor).toContain('최대 10분');
+  });
+
   test('대기곡 종료는 후원 큐를 pop하지 않고 후원 영상이 항상 우선해야 함', () => {
     expect(pvdViewer).toContain("playbackModeRef.current !== 'donation'");
     expect(pvdViewer).toContain("idleAdvanceRef.current('end')");
@@ -44,7 +71,7 @@ describe('영상 후원 대기 플레이리스트 회귀 방지', () => {
     expect(pvdViewer).toContain('idleExhaustedRef.current = true;');
   });
 
-  test('관리자 설정에서 대기 음악 토글, 모드, 주제, 반복, 셔플과 곡 편집을 제공해야 함', () => {
+  test('관리자 설정에서 대기 음악 토글, 모드, 주제, 곡 수, 반복, 셔플과 곡 편집을 제공해야 함', () => {
     expect(settingsDialog).toContain('<VideoDonationIdlePlaylistEditor value={idlePlaylist} onChange={setIdlePlaylist} />');
     expect(settingsDialog).toContain('idlePlaylist,');
     expect(editor).toContain('대기 음악');

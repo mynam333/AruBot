@@ -13,6 +13,7 @@ export type VideoDonationIdlePlaylist = {
   enabled: boolean;
   mode: 'recommended' | 'custom';
   topic: string;
+  recommendationCount: number;
   loop: boolean;
   shuffle: boolean;
   recommendedTracks: VideoDonationIdleTrack[];
@@ -20,12 +21,15 @@ export type VideoDonationIdlePlaylist = {
 };
 
 export const MAX_VIDEO_DONATION_IDLE_TRACKS = 200;
+export const MAX_VIDEO_DONATION_IDLE_TRACK_DURATION_SEC = 10 * 60;
+export const DEFAULT_VIDEO_DONATION_IDLE_RECOMMENDATION_COUNT = 12;
 
 export function createDefaultVideoDonationIdlePlaylist(): VideoDonationIdlePlaylist {
   return {
     enabled: false,
     mode: 'recommended',
     topic: '로파이 집중',
+    recommendationCount: DEFAULT_VIDEO_DONATION_IDLE_RECOMMENDATION_COUNT,
     loop: true,
     shuffle: false,
     recommendedTracks: [],
@@ -39,6 +43,7 @@ function normalizeTrack(value: unknown): VideoDonationIdleTrack | null {
   const mediaId = String(source.mediaId || source.videoId || '').trim();
   if (!mediaId) return null;
   const duration = Number(source.durationSec);
+  if (!Number.isFinite(duration) || duration <= 0 || duration > MAX_VIDEO_DONATION_IDLE_TRACK_DURATION_SEC) return null;
   return {
     id: String(source.id || `youtube:${mediaId}`),
     mediaProvider: 'youtube',
@@ -47,7 +52,7 @@ function normalizeTrack(value: unknown): VideoDonationIdleTrack | null {
     mediaUrl: String(source.mediaUrl || `https://www.youtube.com/watch?v=${encodeURIComponent(mediaId)}`),
     title: String(source.title || `YouTube ${mediaId}`),
     thumbnailUrl: String(source.thumbnailUrl || `https://i.ytimg.com/vi/${encodeURIComponent(mediaId)}/hqdefault.jpg`),
-    durationSec: Number.isFinite(duration) && duration > 0 ? Math.ceil(duration) : null,
+    durationSec: Math.ceil(duration),
   };
 }
 
@@ -70,13 +75,18 @@ export function normalizeVideoDonationIdlePlaylist(value: unknown): VideoDonatio
   const source = value as Partial<VideoDonationIdlePlaylist> & { tracks?: unknown };
   const mode = source.mode === 'custom' ? 'custom' : 'recommended';
   const legacyTracks = Array.isArray(source.tracks) ? source.tracks : [];
+  const parsedRecommendationCount = Math.floor(Number(source.recommendationCount));
+  const recommendationCount = Number.isFinite(parsedRecommendationCount)
+    ? Math.max(1, Math.min(MAX_VIDEO_DONATION_IDLE_TRACKS, parsedRecommendationCount))
+    : defaults.recommendationCount;
   return {
     enabled: source.enabled === true,
     mode,
     topic: String(source.topic || defaults.topic).trim().slice(0, 80) || defaults.topic,
+    recommendationCount,
     loop: source.loop !== false,
     shuffle: source.shuffle === true,
-    recommendedTracks: normalizeVideoDonationIdleTracks(source.recommendedTracks ?? (mode === 'recommended' ? legacyTracks : [])),
+    recommendedTracks: normalizeVideoDonationIdleTracks(source.recommendedTracks ?? (mode === 'recommended' ? legacyTracks : [])).slice(0, recommendationCount),
     customTracks: normalizeVideoDonationIdleTracks(source.customTracks ?? (mode === 'custom' ? legacyTracks : [])),
   };
 }

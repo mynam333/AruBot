@@ -13,6 +13,7 @@ import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSett
 import { createPlatformProfileService } from './platform-profiles.js';
 import { executeAndStripLiveChangeTokens, filterLiveInfoByProvider, selectCategorySearchResult } from './live-command-actions.js';
 import { buildYoutubeLiveInfoFallback, buildYoutubeLiveLookupContext } from './youtube-live-info.js';
+import { extractYouTubeWatchDurationSec, resolveVideoDonationTiming } from './video-donation-timing.js';
 import { WebSocketServer, WebSocket } from 'ws';
 
 dotenv.config();
@@ -2626,16 +2627,19 @@ async function fetchYouTubeInfo(videoIdOrUrl) {
       } catch { }
     }
 
-    // 3) Final fallback: fetch watch page and parse <title>
-    if (!title) {
+    // 3) Final fallback: fetch the watch page for missing title or duration.
+    if (!title || !durationSec) {
       try {
         const watchUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(id)}`;
         const r = await axios.get(watchUrl, { timeout: 7000, responseType: 'text' });
         const html = String(r?.data || '');
-        const m = html.match(/<title>([^<]+)<\/title>/i);
-        if (m && m[1]) {
-          title = m[1].replace(/\s*-\s*YouTube\s*$/i, '').trim();
+        if (!title) {
+          const m = html.match(/<title>([^<]+)<\/title>/i);
+          if (m && m[1]) {
+            title = m[1].replace(/\s*-\s*YouTube\s*$/i, '').trim();
+          }
         }
+        if (!durationSec) durationSec = extractYouTubeWatchDurationSec(html);
       } catch { }
     }
 
@@ -2676,6 +2680,19 @@ async function searchYouTubeVideoIdByQuery(query) {
 
 const PVD_IDLE_PLAYLIST_MAX_TRACKS = 200;
 const PVD_IDLE_RECOMMENDATION_TRACKS = 12;
+const PVD_IDLE_TRACK_MAX_DURATION_SEC = 10 * 60;
+const PVD_IDLE_RECOMMENDATION_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const PVD_IDLE_RECOMMENDATION_CACHE_MAX_TOPICS = 100;
+const PVD_IDLE_RECOMMENDATION_MAX_SEARCH_PAGES = 10;
+const pvdIdleRecommendationCache = new Map();
+const pvdIdleRecommendationInFlight = new Map();
+
+function normalizePvdIdleRecommendationCount(value) {
+  const parsed = Math.floor(Number(value));
+  return Number.isFinite(parsed)
+    ? Math.max(1, Math.min(PVD_IDLE_PLAYLIST_MAX_TRACKS, parsed))
+    : PVD_IDLE_RECOMMENDATION_TRACKS;
+}
 
 function extractYouTubePlaylistId(value) {
   const raw = String(value || '').trim();
@@ -2690,7 +2707,7 @@ function extractYouTubePlaylistId(value) {
   }
 }
 
-function normalizePvdIdleTrack(value) {
+function normalizePvdIdleTrack(value, options = {}) {
   const source = value && typeof value === 'object' ? value : {};
   const mediaId = extractYouTubeId(source.mediaId || source.videoId || source.mediaUrl || source.url || '')
     || (/^[A-Za-z0-9_-]{6,}$/.test(String(source.mediaId || source.videoId || '').trim())
@@ -2702,6 +2719,8 @@ function normalizePvdIdleTrack(value) {
   const durationSec = Number.isFinite(durationValue) && durationValue > 0
     ? Math.min(24 * 60 * 60, Math.ceil(durationValue))
     : null;
+  if (durationSec != null && durationSec > PVD_IDLE_TRACK_MAX_DURATION_SEC) return null;
+  if (options.requireKnownDuration === true && durationSec == null) return null;
   return {
     id: `youtube:${mediaId}`,
     mediaProvider: 'youtube',
@@ -2714,11 +2733,11 @@ function normalizePvdIdleTrack(value) {
   };
 }
 
-function normalizePvdIdleTracks(values, limit = PVD_IDLE_PLAYLIST_MAX_TRACKS) {
+function normalizePvdIdleTracks(values, limit = PVD_IDLE_PLAYLIST_MAX_TRACKS, options = {}) {
   const tracks = [];
   const seen = new Set();
   for (const value of Array.isArray(values) ? values : []) {
-    const track = normalizePvdIdleTrack(value);
+    const track = normalizePvdIdleTrack(value, options);
     if (!track || seen.has(track.mediaId)) continue;
     seen.add(track.mediaId);
     tracks.push(track);
@@ -2731,17 +2750,23 @@ function normalizePvdIdlePlaylist(value) {
   const source = value && typeof value === 'object' ? value : {};
   const mode = source.mode === 'custom' ? 'custom' : 'recommended';
   const legacyTracks = Array.isArray(source.tracks) ? source.tracks : [];
+  const recommendationCount = normalizePvdIdleRecommendationCount(source.recommendationCount);
   return {
     enabled: source.enabled === true,
     mode,
     topic: compactLogText(source.topic || '로파이 집중', 80),
+    recommendationCount,
     loop: source.loop !== false,
     shuffle: source.shuffle === true,
     recommendedTracks: normalizePvdIdleTracks(
       Array.isArray(source.recommendedTracks) ? source.recommendedTracks : (mode === 'recommended' ? legacyTracks : []),
+      recommendationCount,
+      { requireKnownDuration: true },
     ),
     customTracks: normalizePvdIdleTracks(
       Array.isArray(source.customTracks) ? source.customTracks : (mode === 'custom' ? legacyTracks : []),
+      PVD_IDLE_PLAYLIST_MAX_TRACKS,
+      { requireKnownDuration: true },
     ),
   };
 }
@@ -2777,47 +2802,73 @@ function mapYouTubeApiVideoToIdleTrack(item, fallback = null) {
     title: item?.snippet?.title || fallback?.title || null,
     thumbnailUrl: youtubeThumbnailFromSnippet(item?.snippet || fallback?.snippet, videoId),
     durationSec,
-  });
+  }, { requireKnownDuration: true });
 }
 
 async function hydrateYouTubeIdleTracks(seedTracks) {
-  const seeds = normalizePvdIdleTracks(seedTracks);
-  if (!seeds.length) return [];
+  const seeds = normalizePvdIdleTracks(seedTracks, PVD_IDLE_PLAYLIST_MAX_TRACKS, { requireKnownDuration: false });
+  if (!seeds.length) {
+    return { tracks: [], requestedCount: 0, excludedCount: 0, excludedTooLongCount: 0, detailRequests: 0 };
+  }
   const hydrated = [];
+  let detailRequests = 0;
+  let excludedTooLongCount = 0;
+  let apiCompleted = false;
   try {
     for (let offset = 0; offset < seeds.length; offset += 50) {
       const batch = seeds.slice(offset, offset + 50);
+      detailRequests += 1;
       const response = await youtubeApiGetPublic('videos', {
         part: 'snippet,contentDetails,status',
         id: batch.map((track) => track.mediaId).join(','),
-        maxResults: 50,
       });
       const byId = new Map((Array.isArray(response?.data?.items) ? response.data.items : []).map((item) => [String(item?.id || ''), item]));
       for (const fallback of batch) {
         const item = byId.get(fallback.mediaId);
+        const durationSec = parseIso8601Duration(item?.contentDetails?.duration || '');
+        if (durationSec != null && durationSec > PVD_IDLE_TRACK_MAX_DURATION_SEC) {
+          excludedTooLongCount += 1;
+          continue;
+        }
         const track = item ? mapYouTubeApiVideoToIdleTrack(item, fallback) : null;
         if (track) hydrated.push(track);
       }
     }
-    if (hydrated.length) return normalizePvdIdleTracks(hydrated);
+    apiCompleted = true;
   } catch { }
 
-  if (seeds.length === 1) {
+  if (!apiCompleted && hydrated.length === 0 && seeds.length === 1) {
     const info = await fetchYouTubeInfo(seeds[0].mediaId).catch(() => null);
-    return normalizePvdIdleTracks([{
+    if (Number(info?.durationSec) > PVD_IDLE_TRACK_MAX_DURATION_SEC) excludedTooLongCount = 1;
+    const fallbackTracks = normalizePvdIdleTracks([{
       ...seeds[0],
       title: info?.title || seeds[0].title,
       durationSec: info?.durationSec || seeds[0].durationSec,
-    }]);
+    }], PVD_IDLE_PLAYLIST_MAX_TRACKS, { requireKnownDuration: true });
+    hydrated.push(...fallbackTracks);
   }
-  return seeds;
+
+  const tracks = normalizePvdIdleTracks(hydrated, PVD_IDLE_PLAYLIST_MAX_TRACKS, { requireKnownDuration: true });
+  return {
+    tracks,
+    requestedCount: seeds.length,
+    excludedCount: Math.max(0, seeds.length - tracks.length),
+    excludedTooLongCount,
+    detailRequests,
+  };
 }
 
 async function fetchYouTubePlaylistIdleTracks(playlistId) {
-  const rawTracks = [];
+  let tracks = [];
+  let excludedCount = 0;
+  let excludedTooLongCount = 0;
+  let playlistItemRequests = 0;
+  let detailRequests = 0;
+  let apiFailed = false;
   try {
     let pageToken = '';
     do {
+      playlistItemRequests += 1;
       const response = await youtubeApiGetPublic('playlistItems', {
         part: 'snippet,contentDetails',
         playlistId,
@@ -2825,19 +2876,32 @@ async function fetchYouTubePlaylistIdleTracks(playlistId) {
         pageToken,
       });
       const items = Array.isArray(response?.data?.items) ? response.data.items : [];
+      const pageSeeds = [];
       for (const item of items) {
         const videoId = String(item?.contentDetails?.videoId || item?.snippet?.resourceId?.videoId || '').trim();
         if (!videoId) continue;
-        rawTracks.push({
+        pageSeeds.push({
           mediaId: videoId,
           title: item?.snippet?.title || null,
           thumbnailUrl: youtubeThumbnailFromSnippet(item?.snippet, videoId),
         });
-        if (rawTracks.length >= PVD_IDLE_PLAYLIST_MAX_TRACKS) break;
       }
+      const hydrated = await hydrateYouTubeIdleTracks(pageSeeds);
+      detailRequests += hydrated.detailRequests;
+      excludedCount += hydrated.excludedCount;
+      excludedTooLongCount += hydrated.excludedTooLongCount;
+      tracks = normalizePvdIdleTracks(
+        [...tracks, ...hydrated.tracks],
+        PVD_IDLE_PLAYLIST_MAX_TRACKS,
+        { requireKnownDuration: true },
+      );
       pageToken = String(response?.data?.nextPageToken || '');
-    } while (pageToken && rawTracks.length < PVD_IDLE_PLAYLIST_MAX_TRACKS);
+    } while (pageToken && tracks.length < PVD_IDLE_PLAYLIST_MAX_TRACKS && playlistItemRequests < PVD_IDLE_RECOMMENDATION_MAX_SEARCH_PAGES);
   } catch {
+    apiFailed = true;
+  }
+
+  if (apiFailed && tracks.length === 0) {
     try {
       const response = await axios.get(`https://www.youtube.com/playlist?list=${encodeURIComponent(playlistId)}&hl=ko&gl=KR`, {
         timeout: 8000,
@@ -2846,6 +2910,7 @@ async function fetchYouTubePlaylistIdleTracks(playlistId) {
       });
       const html = String(response?.data || '');
       const seen = new Set();
+      const rawTracks = [];
       for (const match of html.matchAll(/\"videoId\":\"([A-Za-z0-9_-]{11})\"/g)) {
         const videoId = String(match[1] || '');
         if (!videoId || seen.has(videoId)) continue;
@@ -2853,9 +2918,19 @@ async function fetchYouTubePlaylistIdleTracks(playlistId) {
         rawTracks.push({ mediaId: videoId });
         if (rawTracks.length >= PVD_IDLE_PLAYLIST_MAX_TRACKS) break;
       }
+      const hydrated = await hydrateYouTubeIdleTracks(rawTracks);
+      detailRequests += hydrated.detailRequests;
+      excludedCount += hydrated.excludedCount;
+      excludedTooLongCount += hydrated.excludedTooLongCount;
+      tracks = hydrated.tracks;
     } catch { }
   }
-  return hydrateYouTubeIdleTracks(rawTracks);
+  return {
+    tracks,
+    excludedCount,
+    excludedTooLongCount,
+    apiRequests: { playlistItems: playlistItemRequests, videos: detailRequests },
+  };
 }
 
 function shufflePvdIdleTracks(values) {
@@ -2867,35 +2942,136 @@ function shufflePvdIdleTracks(values) {
   return next;
 }
 
+function getPvdIdleRecommendationCacheKey(topic) {
+  return String(topic || '').normalize('NFKC').toLocaleLowerCase('ko-KR');
+}
+
+function prunePvdIdleRecommendationCache() {
+  const now = Date.now();
+  for (const [key, entry] of pvdIdleRecommendationCache) {
+    if (Number(entry?.expiresAt || 0) <= now) pvdIdleRecommendationCache.delete(key);
+  }
+  while (pvdIdleRecommendationCache.size > PVD_IDLE_RECOMMENDATION_CACHE_MAX_TOPICS) {
+    const oldestKey = pvdIdleRecommendationCache.keys().next().value;
+    if (!oldestKey) break;
+    pvdIdleRecommendationCache.delete(oldestKey);
+  }
+}
+
+function getPvdIdleRecommendationCacheEntry(key) {
+  prunePvdIdleRecommendationCache();
+  const entry = pvdIdleRecommendationCache.get(key) || null;
+  if (!entry) return null;
+  pvdIdleRecommendationCache.delete(key);
+  pvdIdleRecommendationCache.set(key, entry);
+  return entry;
+}
+
+function setPvdIdleRecommendationCacheEntry(key, entry) {
+  pvdIdleRecommendationCache.delete(key);
+  pvdIdleRecommendationCache.set(key, entry);
+  prunePvdIdleRecommendationCache();
+}
+
+function withPvdIdleRecommendationLock(key, task) {
+  const previous = pvdIdleRecommendationInFlight.get(key) || Promise.resolve();
+  const current = previous.catch(() => null).then(task);
+  pvdIdleRecommendationInFlight.set(key, current);
+  return current.finally(() => {
+    if (pvdIdleRecommendationInFlight.get(key) === current) pvdIdleRecommendationInFlight.delete(key);
+  });
+}
+
 async function recommendYouTubeIdleTracks(topic, limit = PVD_IDLE_RECOMMENDATION_TRACKS) {
   const normalizedTopic = compactLogText(topic || '로파이 집중', 80);
-  const safeLimit = Math.max(1, Math.min(30, Math.floor(Number(limit || PVD_IDLE_RECOMMENDATION_TRACKS))));
-  let seeds = [];
-  try {
-    const response = await youtubeApiGetPublic('search', {
-      part: 'snippet',
-      type: 'video',
-      q: `${normalizedTopic} 음악`,
-      maxResults: Math.min(50, Math.max(safeLimit * 2, 20)),
-      order: 'relevance',
-      regionCode: 'KR',
-      relevanceLanguage: 'ko',
-      safeSearch: 'moderate',
-      videoCategoryId: '10',
-      videoEmbeddable: 'true',
-      videoSyndicated: 'true',
-    });
-    seeds = (Array.isArray(response?.data?.items) ? response.data.items : []).map((item) => ({
-      mediaId: item?.id?.videoId,
-      title: item?.snippet?.title,
-      thumbnailUrl: youtubeThumbnailFromSnippet(item?.snippet, item?.id?.videoId),
-    }));
-  } catch {
-    const first = await searchYouTubeVideoIdByQuery(`${normalizedTopic} 음악`).catch(() => null);
-    if (first) seeds = [{ mediaId: first }];
-  }
-  const tracks = await hydrateYouTubeIdleTracks(seeds);
-  return shufflePvdIdleTracks(tracks).slice(0, safeLimit);
+  const safeLimit = normalizePvdIdleRecommendationCount(limit);
+  const cacheKey = getPvdIdleRecommendationCacheKey(normalizedTopic);
+
+  return withPvdIdleRecommendationLock(cacheKey, async () => {
+    let entry = getPvdIdleRecommendationCacheEntry(cacheKey);
+    const hadFreshCache = Boolean(entry);
+    if (!entry) {
+      entry = {
+        topic: normalizedTopic,
+        tracks: [],
+        nextPageToken: '',
+        started: false,
+        exhausted: false,
+        expiresAt: Date.now() + PVD_IDLE_RECOMMENDATION_CACHE_TTL_MS,
+      };
+    }
+
+    let searchRequests = 0;
+    let detailRequests = 0;
+    let excludedCount = 0;
+    let excludedTooLongCount = 0;
+
+    while (entry.tracks.length < safeLimit && !entry.exhausted && searchRequests < PVD_IDLE_RECOMMENDATION_MAX_SEARCH_PAGES) {
+      let response = null;
+      searchRequests += 1;
+      try {
+        response = await youtubeApiGetPublic('search', {
+          part: 'snippet',
+          type: 'video',
+          q: `${normalizedTopic} 음악 -플레이리스트 -모음 -mix`,
+          maxResults: 50,
+          order: 'relevance',
+          regionCode: 'KR',
+          relevanceLanguage: 'ko',
+          safeSearch: 'moderate',
+          videoCategoryId: '10',
+          videoEmbeddable: 'true',
+          videoSyndicated: 'true',
+          pageToken: entry.started ? entry.nextPageToken : '',
+        });
+      } catch {
+        if (!entry.started && entry.tracks.length === 0) {
+          const first = await searchYouTubeVideoIdByQuery(`${normalizedTopic} 음악`).catch(() => null);
+          if (first) {
+            const hydrated = await hydrateYouTubeIdleTracks([{ mediaId: first }]);
+            detailRequests += hydrated.detailRequests;
+            excludedCount += hydrated.excludedCount;
+            excludedTooLongCount += hydrated.excludedTooLongCount;
+            entry.tracks = hydrated.tracks;
+          }
+        }
+        entry.exhausted = true;
+        break;
+      }
+
+      entry.started = true;
+      const items = Array.isArray(response?.data?.items) ? response.data.items : [];
+      const seeds = items.map((item) => ({
+        mediaId: item?.id?.videoId,
+        title: item?.snippet?.title,
+        thumbnailUrl: youtubeThumbnailFromSnippet(item?.snippet, item?.id?.videoId),
+      }));
+      const hydrated = await hydrateYouTubeIdleTracks(seeds);
+      detailRequests += hydrated.detailRequests;
+      excludedCount += hydrated.excludedCount;
+      excludedTooLongCount += hydrated.excludedTooLongCount;
+      entry.tracks = normalizePvdIdleTracks(
+        [...entry.tracks, ...hydrated.tracks],
+        PVD_IDLE_PLAYLIST_MAX_TRACKS,
+        { requireKnownDuration: true },
+      );
+      entry.nextPageToken = String(response?.data?.nextPageToken || '');
+      entry.exhausted = !entry.nextPageToken || items.length === 0;
+    }
+
+    entry.expiresAt = Date.now() + PVD_IDLE_RECOMMENDATION_CACHE_TTL_MS;
+    setPvdIdleRecommendationCacheEntry(cacheKey, entry);
+    return {
+      topic: normalizedTopic,
+      requestedCount: safeLimit,
+      availableCount: entry.tracks.length,
+      tracks: shufflePvdIdleTracks(entry.tracks).slice(0, safeLimit),
+      cacheHit: hadFreshCache && searchRequests === 0 && detailRequests === 0,
+      excludedCount,
+      excludedTooLongCount,
+      apiRequests: { search: searchRequests, videos: detailRequests },
+    };
+  });
 }
 
 async function resolvePvdIdlePlaylistInput(input) {
@@ -2903,15 +3079,22 @@ async function resolvePvdIdlePlaylistInput(input) {
   if (!raw) return { kind: 'empty', tracks: [] };
   const playlistId = extractYouTubePlaylistId(raw);
   if (playlistId) {
-    return { kind: 'playlist', playlistId, tracks: await fetchYouTubePlaylistIdleTracks(playlistId) };
+    const result = await fetchYouTubePlaylistIdleTracks(playlistId);
+    return { kind: 'playlist', playlistId, ...result };
   }
   const videoId = extractYouTubeId(raw);
   if (videoId) {
-    const tracks = await hydrateYouTubeIdleTracks([{ mediaId: videoId }]);
-    return { kind: 'track', tracks };
+    const hydrated = await hydrateYouTubeIdleTracks([{ mediaId: videoId }]);
+    return {
+      kind: 'track',
+      tracks: hydrated.tracks,
+      excludedCount: hydrated.excludedCount,
+      excludedTooLongCount: hydrated.excludedTooLongCount,
+      apiRequests: { videos: hydrated.detailRequests },
+    };
   }
-  const tracks = await recommendYouTubeIdleTracks(raw, 1);
-  return { kind: 'search', tracks };
+  const recommendation = await recommendYouTubeIdleTracks(raw, 1);
+  return { kind: 'search', ...recommendation };
 }
 
 // Public: control by token (viewer may request sync operations)
@@ -5768,17 +5951,15 @@ function getPvdItemStartSec(item) {
   return Math.max(0, Math.floor(Number(item?.startSec || 0)));
 }
 
-function getPvdPlayDurationSec({ maxDurationSec, ytDurationSec = null, startSec = 0, playSec = null } = {}) {
-  const maxDur = Math.max(1, Math.floor(Number(maxDurationSec || 600)));
-  const start = Math.max(0, Math.floor(Number(startSec || 0)));
-  const explicitPlay = Number(playSec);
-  const play = Number.isFinite(explicitPlay) && explicitPlay > 0 ? Math.floor(explicitPlay) : null;
-  const fullDuration = Number(ytDurationSec);
-  const remainingFromStart = Number.isFinite(fullDuration) && fullDuration > 0
-    ? Math.max(1, Math.floor(fullDuration) - start)
-    : 1;
-  const requestedDuration = play != null ? play : remainingFromStart;
-  return Math.max(1, Math.min(maxDur, requestedDuration));
+function getPvdPlayDurationSec({ maxDurationSec, ytDurationSec = null, startSec = 0, endSec = null, playSec = null } = {}) {
+  const timing = resolveVideoDonationTiming({
+    maxDurationSec,
+    mediaDurationSec: ytDurationSec,
+    startSec,
+    endSec,
+    legacyPlaySec: playSec,
+  });
+  return timing.ok && timing.durationSec != null ? timing.durationSec : 1;
 }
 
 function createPvdPlaybackState(item) {
@@ -5853,13 +6034,15 @@ function updateCurrentPvdDurationFromPlayer(sid, durationSec) {
   const item = q[0] || null;
   const fullDuration = Number(durationSec);
   if (!item || !Number.isFinite(fullDuration) || fullDuration <= 0) return null;
-  const start = getPvdItemStartSec(item);
-  const remainingFromStart = Math.max(1, Math.ceil(fullDuration) - start);
-  const currentDuration = Number(item.durationSec || 0);
-  const nextDuration = currentDuration > 2
-    ? Math.min(Math.ceil(currentDuration), remainingFromStart)
-    : remainingFromStart;
-  if (!Number.isFinite(nextDuration) || nextDuration <= 0) return null;
+  const timing = resolveVideoDonationTiming({
+    maxDurationSec: item.maxDurationSec || 600,
+    mediaDurationSec: fullDuration,
+    startSec: item.startSec,
+    endSec: item.requestedEndSec,
+    legacyPlaySec: item.requestedPlaySec,
+  });
+  if (!timing.ok || timing.durationSec == null) return null;
+  const nextDuration = timing.durationSec;
   if (Math.abs(Number(item.durationSec || 0) - nextDuration) < 0.5) return item;
   item.durationSec = nextDuration;
   item.mediaDurationSec = Math.ceil(fullDuration);
@@ -5891,6 +6074,7 @@ async function refreshChzzkClipPlaybackForItem(item) {
       maxDurationSec: item.maxDurationSec || item.durationSec || clip.durationSec,
       ytDurationSec: clip.durationSec,
       startSec: item.startSec,
+      endSec: item.requestedEndSec,
       playSec: item.requestedPlaySec,
     });
     item.awaitDurationSync = false;
@@ -6190,7 +6374,9 @@ app.post('/api/video-donation/idle-playlist/resolve', rateLimiters.externalLooku
     const input = String(req.body?.input || req.body?.url || req.body?.query || '').trim();
     if (!input) return res.status(400).json({ error: '곡, 영상 또는 플레이리스트를 입력해 주세요.' });
     const result = await resolvePvdIdlePlaylistInput(input);
-    if (!result.tracks.length) return res.status(404).json({ error: '재생 가능한 YouTube 항목을 찾지 못했습니다.' });
+    if (!result.tracks.length) {
+      return res.status(404).json({ error: '10분 이하이며 재생 시간이 확인된 YouTube 영상만 추가할 수 있습니다.' });
+    }
     return res.json(result);
   } catch (error) {
     console.warn('[pvd:idle-playlist:resolve] failed', error?.message || error);
@@ -6203,10 +6389,10 @@ app.post('/api/video-donation/idle-playlist/recommend', rateLimiters.externalLoo
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: '로그인이 필요합니다.' });
     const topic = compactLogText(req.body?.topic || '로파이 집중', 80);
-    const limit = Math.max(1, Math.min(30, Math.floor(Number(req.body?.limit || PVD_IDLE_RECOMMENDATION_TRACKS))));
-    const tracks = await recommendYouTubeIdleTracks(topic, limit);
-    if (!tracks.length) return res.status(404).json({ error: '이 주제의 추천곡을 찾지 못했습니다.' });
-    return res.json({ topic, tracks });
+    const limit = normalizePvdIdleRecommendationCount(req.body?.limit);
+    const result = await recommendYouTubeIdleTracks(topic, limit);
+    if (!result.tracks.length) return res.status(404).json({ error: '이 주제에서 재생 가능한 10분 이하 추천곡을 찾지 못했습니다.' });
+    return res.json(result);
   } catch (error) {
     console.warn('[pvd:idle-playlist:recommend] failed', error?.message || error);
     return res.status(502).json({ error: '추천 플레이리스트를 만들지 못했습니다.' });
@@ -6292,7 +6478,8 @@ app.post('/api/video-donation/settings', async (req, res) => {
     const idleSource = hasIdlePlaylistInput ? body.idlePlaylist : settings.videoDonationIdlePlaylist;
     const idlePlaylist = normalizePvdIdlePlaylist(idleSource);
     if (idlePlaylist.enabled && idlePlaylist.mode === 'recommended' && idlePlaylist.recommendedTracks.length === 0) {
-      idlePlaylist.recommendedTracks = await recommendYouTubeIdleTracks(idlePlaylist.topic, PVD_IDLE_RECOMMENDATION_TRACKS);
+      const recommendation = await recommendYouTubeIdleTracks(idlePlaylist.topic, idlePlaylist.recommendationCount);
+      idlePlaylist.recommendedTracks = recommendation.tracks;
       if (!idlePlaylist.recommendedTracks.length) {
         return res.status(400).json({ error: '추천곡을 찾지 못했습니다. 다른 주제를 입력해 주세요.' });
       }
@@ -6323,7 +6510,8 @@ app.post('/api/video-donation/settings', async (req, res) => {
 });
 
 // POST request: enqueue a video donation request, deduct points
-// body: { videoUrl, title?, startSec?, playSec?, requesterUserId, requesterUsername }
+// body: { videoUrl, title?, startSec?, endSec?, requesterUserId, requesterUsername }
+// `playSec` remains accepted as a legacy relative-duration field for older clients.
 app.post('/api/video-donation/request', rateLimiters.userWrite, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
@@ -6334,7 +6522,7 @@ app.post('/api/video-donation/request', rateLimiters.userWrite, async (req, res)
     const pps = Math.max(0, Number(settings.videoDonationPointsPerSecond ?? 1));
     const maxDur = Math.max(1, Number(settings.videoDonationMaxDurationSec ?? 600));
     const perUserLimit = Math.max(0, Number(settings.videoDonationPerUserQueueLimit ?? 0));
-    let { videoUrl, title, startSec, playSec, requesterUserId, requesterUsername } = req.body || {};
+    let { videoUrl, title, startSec, endSec, playSec, requesterUserId, requesterUsername } = req.body || {};
     const input = String(videoUrl || '').trim();
     let media;
     try {
@@ -6347,10 +6535,26 @@ app.post('/api/video-donation/request', rateLimiters.userWrite, async (req, res)
       }
       return res.status(400).json({ error: 'unsupported_media', message: '지원하지 않는 링크입니다.' });
     }
-    const start = Math.max(0, Number(startSec || 0) || 0);
-    const play = Number.isFinite(Number(playSec)) && Number(playSec) > 0 ? Math.floor(Number(playSec)) : null;
-    const dur = getPvdPlayDurationSec({ maxDurationSec: maxDur, ytDurationSec: media.durationSec, startSec: start, playSec: play });
-    const awaitDurationSync = shouldAwaitPvdDurationSync(media.provider, media.durationSec, play);
+    const timing = resolveVideoDonationTiming({
+      maxDurationSec: maxDur,
+      mediaDurationSec: media.durationSec,
+      startSec,
+      endSec,
+      legacyPlaySec: playSec,
+    });
+    if (!timing.ok) return res.status(400).json({ error: timing.code, message: timing.message });
+    if (timing.durationSec == null) {
+      return res.status(400).json({
+        error: 'media_duration_unknown',
+        message: '영상 길이를 확인할 수 없습니다. 종료초를 직접 입력해 주세요.',
+      });
+    }
+    const start = timing.startSec;
+    const requestedEndSec = timing.requestedEndSec;
+    const play = timing.requestedPlaySec;
+    const dur = timing.durationSec;
+    const explicitDuration = requestedEndSec != null ? dur : play;
+    const awaitDurationSync = shouldAwaitPvdDurationSync(media.provider, media.durationSec, explicitDuration);
     const cost = Math.ceil(pps * dur);
 
     // Deduct points
@@ -6388,7 +6592,7 @@ app.post('/api/video-donation/request', rateLimiters.userWrite, async (req, res)
     } catch { }
     const requestId = String(req.get('idempotency-key') || req.body?.requestId || req.body?.request_id || '').trim();
     const fallbackIdempotencyKey = crypto.createHash('sha256')
-      .update(`${sid}|${userId}|${media.provider}|${media.mediaId}|${start}|${play || ''}|${Math.floor(Date.now() / 2000)}`)
+      .update(`${sid}|${userId}|${media.provider}|${media.mediaId}|${start}|${requestedEndSec ?? ''}|${play || ''}|${Math.floor(Date.now() / 2000)}`)
       .digest('hex');
     const runtimeJobId = crypto.randomUUID();
     const item = {
@@ -6406,6 +6610,7 @@ app.post('/api/video-donation/request', rateLimiters.userWrite, async (req, res)
       mediaDurationSec: Number.isFinite(Number(media.durationSec)) ? Math.ceil(Number(media.durationSec)) : null,
       awaitDurationSync,
       startSec: start,
+      requestedEndSec,
       requestedPlaySec: play,
       maxDurationSec: maxDur,
       cost,
@@ -6457,6 +6662,7 @@ app.post('/api/video-donation/request', rateLimiters.userWrite, async (req, res)
         mediaDurationSec: acceptedItem.mediaDurationSec,
         awaitDurationSync: acceptedItem.awaitDurationSync,
         startSec: acceptedItem.startSec,
+        requestedEndSec: acceptedItem.requestedEndSec,
         requestedPlaySec: acceptedItem.requestedPlaySec,
         maxDurationSec: acceptedItem.maxDurationSec,
         cost,
@@ -7879,7 +8085,7 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}) {
 }
 
 const PVD_PROVIDER_KEYS = ['youtube', 'tiktok', 'chzzk_clip', 'cime_clip'];
-const PVD_DURATION_SYNC_PROVIDERS = new Set(['tiktok', 'chzzk_clip', 'cime_clip']);
+const PVD_DURATION_SYNC_PROVIDERS = new Set(['youtube', 'tiktok', 'chzzk_clip', 'cime_clip']);
 
 function getDefaultPvdProviders() {
   return {
@@ -18020,7 +18226,7 @@ const BOT_VARIABLES = [
   { key: '{channel.followers}', label: '팔로워 수', description: '확인 가능한 현재 채널 팔로워 수입니다.', group: '채널', providers: ['chzzk', 'cime'], caveat: '씨미는 프로필 동기화로 저장된 공개 수치를 사용합니다.' },
   { key: '${live.title_change}', label: '방송 제목 변경', description: '명령어 뒤에 입력한 전체 문장으로 현재 플랫폼의 방송 제목을 변경합니다.', group: '특수 실행', providers: ['chzzk', 'cime'], caveat: '채팅에는 출력되지 않습니다. 명령어 인자가 없으면 실행하지 않으며, 제거 후 응답이 비어 있으면 채팅도 보내지 않습니다.' },
   { key: '${live.game_change}', label: '방송 카테고리 변경', description: '명령어 뒤에 입력한 전체 문장으로 현재 플랫폼의 카테고리를 검색해 변경합니다.', group: '특수 실행', providers: ['chzzk', 'cime'], caveat: '채팅에는 출력되지 않습니다. 명령어 인자가 없으면 실행하지 않으며, 제거 후 응답이 비어 있으면 채팅도 보내지 않습니다.' },
-  { key: '${video_donation}', label: '영상 후원 신청 실행', description: '명령어 인자로 받은 링크나 검색어를 영상 후원 대기열에 넣고 포인트를 차감합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, caveat: '명령어 응답에 넣으면 채팅에 그대로 출력되지 않고 영상 후원 신청 동작으로 실행됩니다.' },
+  { key: '${video_donation}', label: '영상 후원 신청 실행', description: '명령어 인자로 받은 주소를 영상 후원 대기열에 넣고 실제 재생 구간만큼 포인트를 차감합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, caveat: '사용법: <주소> [<시작초>] [<종료초>] · 시작초 기본값은 0초이며, 종료초를 생략하면 영상 마지막까지 재생합니다. 설정된 최대 재생 시간은 항상 적용되며, 이 변수는 채팅에 출력되지 않습니다.' },
   { key: '${roulette::룰렛이름}', label: '룰렛 실행', description: '지정한 룰렛을 즉시 실행하고 결과를 채팅/오버레이 흐름에 반영합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, caveat: '룰렛 이름 또는 ID를 :: 뒤에 입력하세요. 예: ${roulette::오늘의 벌칙}' },
   { key: '${action::액션이름}', label: '블루프린트 실행', description: '게시된 실행 액션 블루프린트를 명령어 응답 중 실행합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, caveat: '채팅으로 출력되지 않고 액션이 실행됩니다. 액션 이름, slug 또는 ID를 사용할 수 있습니다.' },
   { key: '${automation::액션이름}', label: '블루프린트 실행 별칭', description: '${action::...}과 같은 방식으로 게시된 실행 액션을 실행합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS },
@@ -18671,6 +18877,7 @@ function buildReplayVideoDonationItem(log = {}) {
   if (!mediaProvider || (!mediaId && !mediaUrl && !embedUrl)) return null;
   const durationSec = Math.max(1, Math.ceil(Number(snapshot.durationSec || metadata.durationSec || 30) || 30));
   const startSec = Math.max(0, Math.floor(Number(snapshot.startSec ?? metadata.startSec ?? 0) || 0));
+  const requestedEndSec = snapshot.requestedEndSec ?? metadata.requestedEndSec ?? null;
   const requestedPlaySec = snapshot.requestedPlaySec ?? metadata.requestedPlaySec ?? null;
   return {
     id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -18686,6 +18893,7 @@ function buildReplayVideoDonationItem(log = {}) {
     mediaDurationSec: Number.isFinite(Number(snapshot.mediaDurationSec ?? metadata.mediaDurationSec)) ? Math.ceil(Number(snapshot.mediaDurationSec ?? metadata.mediaDurationSec)) : null,
     awaitDurationSync: false,
     startSec,
+    requestedEndSec: Number.isFinite(Number(requestedEndSec)) && Number(requestedEndSec) > startSec ? Math.floor(Number(requestedEndSec)) : null,
     requestedPlaySec: Number.isFinite(Number(requestedPlaySec)) && Number(requestedPlaySec) > 0 ? Math.floor(Number(requestedPlaySec)) : null,
     maxDurationSec: Math.max(durationSec, Number(snapshot.maxDurationSec || metadata.maxDurationSec || durationSec) || durationSec),
     cost: 0,
@@ -22957,11 +23165,12 @@ async function isCimeLiveAllowed(ownerUserId, sid, channelId) {
 }
 
 async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username, args, response, vdReAll, context = {} }) {
-  const firstArg = Array.isArray(args) ? (args[0] || '') : '';
-  const startArgRaw = Array.isArray(args) ? args[1] : undefined;
-  const playArgRaw = Array.isArray(args) ? args[2] : undefined;
+  const commandArgs = Array.isArray(args) ? args : [];
+  const firstArg = commandArgs[0] || '';
   const looksLikeUrl = /^https?:\/\//i.test(firstArg) || /youtu/i.test(firstArg) || /tiktok/i.test(firstArg) || /chzzk/i.test(firstArg) || /ci\.me/i.test(firstArg) || /^[A-Za-z0-9_-]{11}$/.test(firstArg);
-  const urlArg = looksLikeUrl ? firstArg : (Array.isArray(args) ? args.join(' ') : firstArg);
+  const startArgRaw = looksLikeUrl ? commandArgs[1] : undefined;
+  const endArgRaw = looksLikeUrl ? commandArgs[2] : undefined;
+  const urlArg = looksLikeUrl ? firstArg : commandArgs.join(' ');
   const cleaned = String(response || '').replace(vdReAll, '').trim();
   if (!urlArg) return cleaned || '링크를 입력해 주세요.';
 
@@ -22983,13 +23192,20 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
     return cleaned || '올바른 링크나 검색어를 입력해 주세요.';
   }
 
-  const startNum = Number(startArgRaw);
-  const playNum = Number(playArgRaw);
-  const start = Math.max(0, Number.isFinite(startNum) ? startNum : 0);
-  const play = Number.isFinite(playNum) && playNum > 0 ? Math.floor(playNum) : null;
+  const timing = resolveVideoDonationTiming({
+    maxDurationSec: maxDur,
+    mediaDurationSec: media.durationSec,
+    startSec: startArgRaw,
+    endSec: endArgRaw,
+  });
+  if (!timing.ok) return timing.message;
+  if (timing.durationSec == null) return '영상 길이를 확인할 수 없습니다. 종료초를 직접 입력해 주세요.';
 
-  const dur = getPvdPlayDurationSec({ maxDurationSec: maxDur, ytDurationSec: media.durationSec, startSec: start, playSec: play });
-  const awaitDurationSync = shouldAwaitPvdDurationSync(media.provider, media.durationSec, play);
+  const start = timing.startSec;
+  const requestedEndSec = timing.requestedEndSec;
+  const dur = timing.durationSec;
+  const explicitDuration = requestedEndSec != null ? dur : null;
+  const awaitDurationSync = shouldAwaitPvdDurationSync(media.provider, media.durationSec, explicitDuration);
   const cost = Math.ceil(pps * dur);
   if (!channelUid) {
     const s = await getBotSettings(sid) || {};
@@ -23015,7 +23231,8 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
     mediaDurationSec: Number.isFinite(Number(media.durationSec)) ? Math.ceil(Number(media.durationSec)) : null,
     awaitDurationSync,
     startSec: start,
-    requestedPlaySec: play,
+    requestedEndSec,
+    requestedPlaySec: null,
     maxDurationSec: maxDur,
     cost,
     userId: String(userId),
@@ -23023,7 +23240,7 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
     status: 'queued'
   };
   const idempotencyKey = String(context.eventId || context.messageId || '').trim() || crypto.createHash('sha256')
-    .update(`${sid}|${userId}|${media.provider}|${media.mediaId}|${start}|${play || ''}|${context.source || ''}|${Math.floor(Date.now() / 2000)}`)
+    .update(`${sid}|${userId}|${media.provider}|${media.mediaId}|${start}|${requestedEndSec ?? ''}|${context.source || ''}|${Math.floor(Date.now() / 2000)}`)
     .digest('hex');
   const durable = await enqueuePaidDurableRuntimeJob({
     id: runtimeJobId,
@@ -23066,7 +23283,8 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
       mediaDurationSec: Number.isFinite(Number(media.durationSec)) ? Math.ceil(Number(media.durationSec)) : null,
       awaitDurationSync,
       startSec: start,
-      requestedPlaySec: play,
+      requestedEndSec,
+      requestedPlaySec: null,
       maxDurationSec: maxDur,
       cost,
       queueItemId: acceptedItem.id,
