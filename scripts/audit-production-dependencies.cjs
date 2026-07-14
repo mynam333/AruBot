@@ -10,7 +10,7 @@ const KNOWN_EXCEPTION = Object.freeze({
   'engine.io-client': { advisories: [] },
   parseuri: { advisories: [1107224] },
   'socket.io-parser': { advisories: [1089711, 1097134, 1100540, 1115156] },
-  ws: { advisories: [1118731, 1122894] },
+  ws: { advisories: [1118731, 1123262] },
   'xmlhttprequest-ssl': { advisories: [1095088, 1095090] },
 });
 

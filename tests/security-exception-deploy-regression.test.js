@@ -37,7 +37,7 @@ function knownAuditReport() {
       },
       ws: {
         severity: 'high',
-        via: [1118731, 1122894].map(advisory),
+        via: [1118731, 1123262].map(advisory),
         effects: ['engine.io-client'],
         nodes: ['node_modules/engine.io-client/node_modules/ws'],
       },
@@ -71,6 +71,11 @@ describe('production security exception and deployment gates', () => {
     changed.vulnerabilities['socket.io-parser'].via.push(advisory(9999999));
     const changedResult = audit.inspectAuditReport(changed);
     expect(changedResult.blocking.map((item) => item.name)).toContain('socket.io-parser');
+
+    const staleWsAdvisory = knownAuditReport();
+    staleWsAdvisory.vulnerabilities.ws.via[1] = advisory(1122894);
+    const staleWsResult = audit.inspectAuditReport(staleWsAdvisory);
+    expect(staleWsResult.blocking.map((item) => item.name)).toContain('ws');
   });
 
   test('an unrelated production vulnerability fails the allowlist', () => {

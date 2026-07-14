@@ -5,8 +5,8 @@
 - Status: approved, required compatibility exception
 - Package: `socket.io-client@2.0.3` (exact version; no range)
 - Scope: the authenticated server-side CHZZK session client only
-- Last reviewed: 2026-07-11
-- Next scheduled review: 2026-10-11, or immediately when npm reports a changed finding
+- Last reviewed: 2026-07-14 (reviewed the 2026-07-13 metadata update to GHSA-96hv-2xvq-fx4p; npm source `1123262`)
+- Next scheduled review: 2026-10-14, or immediately when npm reports a changed finding
 - Review trigger: any CHZZK session protocol change, any new advisory in this dependency chain, or a validated replacement client
 
 CHZZK's session endpoint currently requires the Socket.IO 2.x protocol used by `socket.io-client@2.0.3`. Upgrading this dependency to Socket.IO 3.x or 4.x breaks the production CHZZK chat session handshake. Do not upgrade, override, deduplicate, or replace this package or its locked transitive dependency chain until the replacement has passed an end-to-end CHZZK live-session compatibility test.
