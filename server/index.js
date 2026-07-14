@@ -5648,6 +5648,7 @@ app.post('/api/video-donation/reorder', async (req, res) => {
     if (!ids || !ids.length) return res.status(400).json({ error: 'ids required' });
     const q = getVideoQueue(sid);
     const beforeHead = q[0] ? String(q[0].id) : null;
+    const wasIdleDeferred = pvdPlaybackState.get(sid)?.idleDeferred === true;
     // Validate same elements
     const curIds = new Set(q.map(it => String(it.id)));
     if (ids.length !== q.length || ids.some(id => !curIds.has(String(id)))) {
@@ -5660,7 +5661,7 @@ app.post('/api/video-donation/reorder', async (req, res) => {
     const afterHead = reordered[0] ? String(reordered[0].id) : null;
     // If head changed, broadcast start (clients dedupe) and reschedule
     if (beforeHead !== afterHead) {
-      await broadcastPvdStart(sid);
+      await broadcastPvdStart(sid, { deferForIdle: wasIdleDeferred });
     } else {
       try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
       // Head same: still inform clients to update tail order
@@ -5672,6 +5673,7 @@ app.post('/api/video-donation/reorder', async (req, res) => {
           queue: reordered,
           startedAt: pvdPlaybackState.get(sid)?.baseStartMs || null,
           paused: pvdPlaybackState.get(sid)?.paused || false,
+          idleDeferred: pvdPlaybackState.get(sid)?.idleDeferred === true,
           atSec: reordered[0] ? getCurrentAtSec(sid) : 0,
           elapsedSec: reordered[0] ? getCurrentPvdElapsedSec(sid) : 0,
           serverNow: Date.now(),
@@ -5700,11 +5702,12 @@ app.post('/api/video-donation/delete', async (req, res) => {
     const idx = q.findIndex(it => String(it.id) === id);
     if (idx < 0) return res.status(404).json({ error: 'not_found' });
     const removingHead = idx === 0;
+    const wasIdleDeferred = removingHead && pvdPlaybackState.get(sid)?.idleDeferred === true;
     const [removedItem] = q.splice(idx, 1);
     await settleDurableRuntimeItem(removedItem, { status: 'deleted', refunded: false });
     if (removingHead) {
       try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
-      await broadcastPvdStart(sid);
+      await broadcastPvdStart(sid, { deferForIdle: wasIdleDeferred });
     } else {
       notifyPvdAdminSubscribers(sid, 'deleted').catch(() => null);
     }
@@ -5726,6 +5729,7 @@ app.post('/api/video-donation/delete-refund', async (req, res) => {
     if (idx < 0) return res.status(404).json({ error: 'not_found' });
     const item = q[idx];
     const removingHead = idx === 0;
+    const wasIdleDeferred = removingHead && pvdPlaybackState.get(sid)?.idleDeferred === true;
     // Refund cost to requester
     try {
       const uid = await resolveStreamerUidForSid(sid);
@@ -5762,7 +5766,7 @@ app.post('/api/video-donation/delete-refund', async (req, res) => {
     await settleDurableRuntimeItem(item, { status: 'deleted', refunded: true });
     if (removingHead) {
       try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
-      await broadcastPvdStart(sid);
+      await broadcastPvdStart(sid, { deferForIdle: wasIdleDeferred });
     } else {
       // Inform clients of tail change
       const set = pvdSidSockets.get(sid);
@@ -5773,6 +5777,7 @@ app.post('/api/video-donation/delete-refund', async (req, res) => {
           queue: q,
           startedAt: pvdPlaybackState.get(sid)?.baseStartMs || null,
           paused: pvdPlaybackState.get(sid)?.paused || false,
+          idleDeferred: pvdPlaybackState.get(sid)?.idleDeferred === true,
           atSec: q[0] ? getCurrentAtSec(sid) : 0,
           elapsedSec: q[0] ? getCurrentPvdElapsedSec(sid) : 0,
           serverNow: Date.now(),
@@ -5816,7 +5821,7 @@ async function dispatchDurableRuntimeJob(job) {
     if (!queue.some((queued) => queued?.runtimeJobId === job.id)) {
       const shouldStartPlayback = queue.length === 0;
       queue.push(runtimeItem);
-      if (shouldStartPlayback) await broadcastPvdStart(job.sid);
+      if (shouldStartPlayback) await broadcastPvdStart(job.sid, { deferForIdle: true });
       else notifyPvdAdminSubscribers(job.sid, 'queued').catch(() => null);
     }
     return { complete: false };
@@ -5965,12 +5970,15 @@ function getPvdPlayDurationSec({ maxDurationSec, ytDurationSec = null, startSec 
   return timing.ok && timing.durationSec != null ? timing.durationSec : 1;
 }
 
-function createPvdPlaybackState(item) {
+function createPvdPlaybackState(item, options = {}) {
+  const idleDeferred = options.idleDeferred === true;
   return {
     baseStartMs: Date.now(),
-    paused: false,
-    pausedAtSec: null,
-    durationWaitStartedAtMs: item?.awaitDurationSync ? Date.now() : null,
+    paused: idleDeferred,
+    pausedAtSec: idleDeferred ? getPvdItemStartSec(item) : null,
+    idleDeferred,
+    itemKey: getPvdQueueItemKey(item),
+    durationWaitStartedAtMs: item?.awaitDurationSync && !idleDeferred ? Date.now() : null,
   };
 }
 
@@ -6187,7 +6195,37 @@ function scheduleNextPvdAutoPop(sid) {
   videoDonationTimers.set(sid, timer);
 }
 
-async function broadcastPvdStart(sid) {
+async function activateDeferredPvdPlayback(sid, expectedItemId = '') {
+  const q = getVideoQueue(sid);
+  const item = q[0] || null;
+  if (!item) return { activated: false, empty: true, item: null, queue: q };
+
+  const itemKey = getPvdQueueItemKey(item);
+  const expected = String(expectedItemId || '').trim();
+  if (expected && expected !== String(item.id || '') && expected !== itemKey) {
+    return { activated: false, mismatch: true, item, queue: q };
+  }
+
+  const state = pvdPlaybackState.get(sid) || null;
+  if (!state?.idleDeferred || state.itemKey !== itemKey) {
+    return { activated: false, alreadyActive: true, item, queue: q };
+  }
+  if (state.activationPending === true) {
+    return { activated: false, activating: true, item, queue: q };
+  }
+
+  try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
+  state.activationPending = true;
+  const message = await broadcastPvdStart(sid, { activateDeferredPlayback: true });
+  const activeState = pvdPlaybackState.get(sid) || null;
+  if (!message || activeState?.idleDeferred) {
+    if (activeState?.itemKey === itemKey) activeState.activationPending = false;
+    return { activated: false, failed: true, item, queue: q };
+  }
+  return { activated: true, item, queue: q };
+}
+
+async function broadcastPvdStart(sid, options = {}) {
   try {
     const q = getVideoQueue(sid);
     const viewerSettings = await getPvdViewerSettingsForSid(sid);
@@ -6195,17 +6233,30 @@ async function broadcastPvdStart(sid) {
     // Rebase playback state when a new head starts
     if (q[0]) {
       await refreshChzzkClipPlaybackForItem(q[0]);
-      pvdPlaybackState.set(sid, createPvdPlaybackState(q[0]));
+      const currentState = pvdPlaybackState.get(sid) || null;
+      const itemKey = getPvdQueueItemKey(q[0]);
+      const activateDeferredPlayback = options.activateDeferredPlayback === true
+        && currentState?.idleDeferred === true
+        && currentState?.itemKey === itemKey;
+      const idleDeferred = options.deferForIdle === true
+        && viewerSettings.idlePlaylist?.enabled === true
+        && Array.isArray(viewerSettings.idlePlaylist?.tracks)
+        && viewerSettings.idlePlaylist.tracks.length > 0;
+      pvdPlaybackState.set(sid, createPvdPlaybackState(q[0], {
+        idleDeferred: activateDeferredPlayback ? false : idleDeferred,
+      }));
     } else {
       pvdPlaybackState.delete(sid);
     }
+    const state = q[0] ? pvdPlaybackState.get(sid) || null : null;
 
     const message = {
       type: 'start',
       item: q[0] || null,
       queue: q,
-      startedAt: q[0] ? pvdPlaybackState.get(sid)?.baseStartMs || null : null,
-      paused: q[0] ? false : null,
+      startedAt: q[0] ? state?.baseStartMs || null : null,
+      paused: q[0] ? state?.paused === true : null,
+      idleDeferred: q[0] ? state?.idleDeferred === true : false,
       atSec: q[0] ? getCurrentAtSec(sid) : 0,
       elapsedSec: q[0] ? getCurrentPvdElapsedSec(sid) : 0,
       volume: viewerSettings.volume,
@@ -6224,11 +6275,12 @@ async function broadcastPvdStart(sid) {
     }
 
     console.log(`[PVD Broadcast] Start message sent to ${result.success} connections in channel`);
-    notifyPvdAdminSubscribers(sid, 'playback_started').catch(() => null);
+    notifyPvdAdminSubscribers(sid, state?.idleDeferred ? 'waiting_for_idle_end' : 'playback_started').catch(() => null);
 
     // Reschedule timer for new head
     try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
     scheduleNextPvdAutoPop(sid);
+    return message;
 
   } catch (error) {
     console.error('[PVD Broadcast] Error in broadcastPvdStart:', error);
@@ -6237,19 +6289,23 @@ async function broadcastPvdStart(sid) {
     if (set && set.size > 0) {
       const q = getVideoQueue(sid);
       const volume = await getPvdVolumeForSid(sid).catch(() => 100);
+      const state = q[0] ? pvdPlaybackState.get(sid) || null : null;
       const msg = JSON.stringify({
         type: 'start',
         item: q[0] || null,
         queue: q,
-        startedAt: q[0] ? pvdPlaybackState.get(sid)?.baseStartMs || null : null,
-        paused: q[0] ? false : null,
+        startedAt: q[0] ? state?.baseStartMs || null : null,
+        paused: q[0] ? state?.paused === true : null,
+        idleDeferred: q[0] ? state?.idleDeferred === true : false,
         volume
       });
       for (const ws of Array.from(set)) {
         try { if (ws.readyState === 1) { ws.send(msg, { compress: false }); } } catch { }
       }
     }
-    notifyPvdAdminSubscribers(sid, 'playback_started').catch(() => null);
+    const state = pvdPlaybackState.get(sid) || null;
+    notifyPvdAdminSubscribers(sid, state?.idleDeferred ? 'waiting_for_idle_end' : 'playback_started').catch(() => null);
+    return null;
   }
 }
 
@@ -6402,6 +6458,35 @@ app.post('/api/video-donation/idle-playlist/recommend', rateLimiters.externalLoo
   }
 });
 
+// Public: activate a queued donation after the current idle track finishes.
+app.post('/api/video-donation/activate-by-token', async (req, res) => {
+  try {
+    const token = String(req.body?.token || '').trim();
+    if (!token) return res.status(400).json({ error: 'token required' });
+
+    let sid = pvdTokenToSid.get(token) || null;
+    if (!sid) {
+      try {
+        sid = await findSidByViewerToken(token);
+        if (sid) pvdTokenToSid.set(token, sid);
+      } catch { }
+    }
+    if (!sid) return res.status(404).json({ error: 'token not found' });
+
+    const settings = await getBotSettings(sid).catch(() => ({})) || {};
+    if (!settings.videoDonationViewerToken || settings.videoDonationViewerToken !== token) {
+      return res.status(404).json({ error: 'token not found' });
+    }
+
+    const expectedItemId = String(req.body?.itemId || req.body?.expectedItemId || '').trim();
+    const result = await activateDeferredPvdPlayback(sid, expectedItemId);
+    if (result.mismatch) return res.status(409).json(result);
+    return res.json(result);
+  } catch (e) {
+    return res.status(500).json({ error: 'failed to activate deferred video donation' });
+  }
+});
+
 // Public: viewer reports that current video ended/errored, pop head by token
 app.post('/api/video-donation/pop-by-token', async (req, res) => {
   try {
@@ -6501,10 +6586,14 @@ app.post('/api/video-donation/settings', async (req, res) => {
       videoDonationIdlePlaylist: idlePlaylist,
     };
     await setBotSettings(sid, next);
+    const viewerIdlePlaylist = getPvdIdlePlaylistForViewer(idlePlaylist);
     await Promise.all([
       broadcastPvdControl(sid, { op: 'volume', volume }).catch(() => null),
-      broadcastPvdControl(sid, { op: 'idle-playlist', idlePlaylist: getPvdIdlePlaylistForViewer(idlePlaylist) }).catch(() => null),
+      broadcastPvdControl(sid, { op: 'idle-playlist', idlePlaylist: viewerIdlePlaylist }).catch(() => null),
     ]);
+    if (!viewerIdlePlaylist.enabled && pvdPlaybackState.get(sid)?.idleDeferred) {
+      await activateDeferredPvdPlayback(sid);
+    }
     return res.json({ ok: true, idlePlaylist });
   } catch (e) {
     console.error('[pvd:settings:post] error', e?.message || e);
@@ -6726,6 +6815,7 @@ app.get('/api/video-donation/now-playing', async (req, res) => {
       queue: q,
       startedAt: state?.baseStartMs || null,
       paused: state?.paused === true,
+      idleDeferred: state?.idleDeferred === true,
       atSec: getCurrentAtSec(sid),
       elapsedSec: getCurrentPvdElapsedSec(sid),
       volume: normalizePvdVolume(settings.videoDonationVolume ?? 100),
@@ -19012,7 +19102,7 @@ async function replayVideoDonationLog(sid, ownerUserId, log) {
     metadata: { replayedFromLogId: log.id, replaySnapshot: item },
   });
   if (shouldStartPlayback) {
-    await broadcastPvdStart(sid);
+    await broadcastPvdStart(sid, { deferForIdle: true });
   } else {
     await notifyPvdAdminSubscribers(sid, 'replay_queued').catch(() => null);
   }
@@ -25479,6 +25569,7 @@ function registerPvdRoutes() {
           queue: q,
           startedAt: q[0] ? state?.baseStartMs || null : null,
           paused: q[0] ? state?.paused || false : null,
+          idleDeferred: q[0] ? state?.idleDeferred === true : false,
           atSec: q[0] ? getCurrentAtSec(sid) : 0,
           elapsedSec: q[0] ? getCurrentPvdElapsedSec(sid) : 0,
           volume: viewerSettings.volume,

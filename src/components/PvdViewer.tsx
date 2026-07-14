@@ -154,8 +154,11 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
   const idleCurrentMediaIdRef = useRef<string | null>(null);
   const idleResumeAtRef = useRef(0);
   const idleExhaustedRef = useRef(false);
+  const idlePlayingRef = useRef(false);
   const idleFailedMediaIdsRef = useRef<Set<string>>(new Set());
   const idleAdvanceRef = useRef<(cause: 'end' | 'error') => void>(() => {});
+  const deferredDonationRef = useRef<VideoDonationItem | null>(null);
+  const deferredActivationItemIdRef = useRef<string | null>(null);
   const playbackSyncRef = useRef<(force?: boolean) => void | Promise<void>>(() => {});
 
   // Parse token from /pvd/:token
@@ -421,6 +424,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
     currentStartRef.current = 0;
     currentItemIdRef.current = null;
     playbackModeRef.current = 'none';
+    idlePlayingRef.current = false;
     setYoutubeActive(false);
   }, [clearYouTubePlayerHost]);
 
@@ -438,6 +442,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
 
   const captureIdlePosition = useCallback(() => {
     if (playbackModeRef.current !== 'idle') return;
+    idlePlayingRef.current = false;
     try {
       const current = Number(playerRef.current?.getCurrentTime?.() || 0);
       if (Number.isFinite(current) && current >= 0) idleResumeAtRef.current = current;
@@ -616,7 +621,10 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
 
       const onError = (event: YouTubePlayerEvent) => {
         if (!isExpectedYouTubePlayerMedia(event?.target)) return;
-        if (playbackModeRef.current === 'idle') idleAdvanceRef.current('error');
+        if (playbackModeRef.current === 'idle') {
+          idlePlayingRef.current = false;
+          idleAdvanceRef.current('error');
+        }
         else report('error');
       };
       const onStateChange = (e: YouTubePlayerEvent) => {
@@ -626,6 +634,10 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
           const t = activePlayer?.getCurrentTime ? Number(activePlayer.getCurrentTime()) : 0;
           lastTimeRef.current = t;
           const now = Date.now();
+          if (playbackModeRef.current === 'idle') {
+            if (e?.data === YT.PlayerState.PLAYING) idlePlayingRef.current = true;
+            else if (e?.data === YT.PlayerState.PAUSED || e?.data === YT.PlayerState.ENDED) idlePlayingRef.current = false;
+          }
           if (e && e.data === YT.PlayerState.ENDED) {
             if (playbackModeRef.current === 'idle') idleAdvanceRef.current('end');
             else report('end');
@@ -799,6 +811,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
       return;
     }
 
+    idlePlayingRef.current = false;
     ensurePlayer(track.mediaId, 0, {
       atSec: Math.max(0, idleResumeAtRef.current),
       paused: document.hidden,
@@ -807,11 +820,30 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
     });
   }, [applyVolume, applyYouTubeCaptions, captionsEnabled, ensurePlayer, stopPlayer]);
 
+  const activateDeferredDonation = useCallback((itemOverride?: VideoDonationItem | null) => {
+    const item = itemOverride || deferredDonationRef.current;
+    const itemId = String(item?.id || '').trim();
+    if (!token || !item || !itemId || deferredActivationItemIdRef.current === itemId) return;
+
+    deferredActivationItemIdRef.current = itemId;
+    const apiBase = getViewerApiBase();
+    fetch(`${apiBase}/api/video-donation/activate-by-token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, itemId }),
+    }).catch(() => null).finally(() => {
+      if (deferredActivationItemIdRef.current === itemId) deferredActivationItemIdRef.current = null;
+      void playbackSyncRef.current(true);
+    });
+  }, [getViewerApiBase, token]);
+
   const advanceIdlePlayback = useCallback((cause: 'end' | 'error') => {
     const playlist = idlePlaylistRef.current;
     const currentMediaId = idleCurrentMediaIdRef.current;
+    const deferredItem = deferredDonationRef.current;
     if (!playlist.enabled || !idleOrderRef.current.length) {
       stopPlayer();
+      if (deferredItem) activateDeferredDonation(deferredItem);
       return;
     }
     if (cause === 'error' && currentMediaId) idleFailedMediaIdsRef.current.add(currentMediaId);
@@ -844,14 +876,20 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
       idleCurrentMediaIdRef.current = null;
       idleResumeAtRef.current = 0;
       stopPlayer();
+      if (deferredItem) activateDeferredDonation(deferredItem);
       return;
     }
     idleCursorRef.current = cursor;
     idleCurrentMediaIdRef.current = nextMediaId;
     idleResumeAtRef.current = 0;
     currentVidRef.current = null;
+    if (deferredItem) {
+      stopPlayer();
+      activateDeferredDonation(deferredItem);
+      return;
+    }
     startIdlePlayback();
-  }, [startIdlePlayback, stopPlayer]);
+  }, [activateDeferredDonation, startIdlePlayback, stopPlayer]);
 
   useEffect(() => {
     idleAdvanceRef.current = advanceIdlePlayback;
@@ -861,6 +899,8 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
   }, [advanceIdlePlayback]);
 
   const playDonationItem = useCallback((item: VideoDonationItem, payload: Record<string, unknown>, force = false) => {
+    deferredDonationRef.current = null;
+    deferredActivationItemIdRef.current = null;
     captureIdlePosition();
     playbackModeRef.current = 'donation';
     const start = Math.max(0, Math.floor(Number(item.startSec || 0) || 0));
@@ -885,12 +925,20 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
       : idlePlaylistRef.current;
     const item = payload.item as VideoDonationItem | null | undefined;
     if (item && (item.mediaProvider || item.videoId || item.embedUrl)) {
+      if (payload.idleDeferred === true) {
+        deferredDonationRef.current = item;
+        if (playlist.enabled && playbackModeRef.current === 'idle' && idlePlayingRef.current) return;
+        activateDeferredDonation(item);
+        return;
+      }
       playDonationItem(item, payload, force);
       return;
     }
+    deferredDonationRef.current = null;
+    deferredActivationItemIdRef.current = null;
     if (playlist.enabled) startIdlePlayback();
     else stopPlayer();
-  }, [applyIdlePlaylistConfig, applyVolume, playDonationItem, startIdlePlayback, stopPlayer]);
+  }, [activateDeferredDonation, applyIdlePlaylistConfig, applyVolume, playDonationItem, startIdlePlayback, stopPlayer]);
 
   const toggleCaptions = useCallback(() => {
     const next = !captionsEnabled;
@@ -1008,7 +1056,11 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
               const playlist = applyIdlePlaylistConfig(data.idlePlaylist);
               if (playbackModeRef.current !== 'donation') {
                 if (playlist.enabled) startIdlePlayback();
-                else stopPlayer();
+                else {
+                  const deferredItem = deferredDonationRef.current;
+                  stopPlayer();
+                  if (deferredItem) activateDeferredDonation(deferredItem);
+                }
               }
               return;
             }
@@ -1056,7 +1108,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
       try { playerRef.current && playerRef.current.destroy && playerRef.current.destroy(); } catch {}
       playerRef.current = null;
     };
-  }, [applyExternalPlaybackTarget, applyIdlePlaylistConfig, applyPlaybackTarget, applyServerPlaybackPayload, applyVolume, getViewerApiBase, resyncFromServer, startIdlePlayback, stopPlayer, token]);
+  }, [activateDeferredDonation, applyExternalPlaybackTarget, applyIdlePlaylistConfig, applyPlaybackTarget, applyServerPlaybackPayload, applyVolume, getViewerApiBase, resyncFromServer, startIdlePlayback, stopPlayer, token]);
 
   // Low-frequency drift guard for viewers that stay connected but whose YouTube iframe stalls.
   useEffect(() => {

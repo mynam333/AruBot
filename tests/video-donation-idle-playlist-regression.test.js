@@ -51,7 +51,35 @@ describe('영상 후원 대기 플레이리스트 회귀 방지', () => {
     expect(editor).toContain('최대 10분');
   });
 
-  test('대기곡 종료는 후원 큐를 pop하지 않고 후원 영상이 항상 우선해야 함', () => {
+  test('대기곡 재생 중 들어온 첫 후원은 곡이 끝날 때까지 정지된 대기열 head로 유지해야 함', () => {
+    expect(serverIndex).toContain('broadcastPvdStart(job.sid, { deferForIdle: true })');
+    expect(serverIndex).toContain('pausedAtSec: idleDeferred ? getPvdItemStartSec(item) : null');
+    expect(serverIndex).toContain('if (state.paused) return;');
+    expect(serverIndex).toContain("app.post('/api/video-donation/activate-by-token'");
+    expect(serverIndex).toContain('if (!state?.idleDeferred || state.itemKey !== itemKey)');
+    expect(serverIndex).toContain('await broadcastPvdStart(sid, { activateDeferredPlayback: true })');
+
+    expect(pvdViewer).toContain('if (payload.idleDeferred === true)');
+    expect(pvdViewer).toContain('deferredDonationRef.current = item;');
+    expect(pvdViewer).toContain("playbackModeRef.current === 'idle' && idlePlayingRef.current");
+    expect(pvdViewer).toContain('if (e?.data === YT.PlayerState.PLAYING) idlePlayingRef.current = true;');
+    expect(pvdViewer).toContain('activateDeferredDonation(deferredItem);');
+    const nextTrackSelection = pvdViewer.indexOf('idleCurrentMediaIdRef.current = nextMediaId;');
+    const deferredActivation = pvdViewer.indexOf('activateDeferredDonation(deferredItem);', nextTrackSelection);
+    expect(nextTrackSelection).toBeGreaterThan(-1);
+    expect(deferredActivation).toBeGreaterThan(nextTrackSelection);
+  });
+
+  test('지연 중인 head 교체와 대기 음악 비활성화도 안전하게 상태를 전환해야 함', () => {
+    expect(serverIndex).toContain('const wasIdleDeferred = pvdPlaybackState.get(sid)?.idleDeferred === true;');
+    expect(serverIndex).toContain('broadcastPvdStart(sid, { deferForIdle: wasIdleDeferred })');
+    expect(serverIndex).toContain('if (!viewerIdlePlaylist.enabled && pvdPlaybackState.get(sid)?.idleDeferred)');
+    expect(serverIndex).toContain('await activateDeferredPvdPlayback(sid);');
+    expect(serverIndex).toContain('idleDeferred: state?.idleDeferred === true');
+    expect(pvdViewer).toContain('if (deferredItem) activateDeferredDonation(deferredItem);');
+  });
+
+  test('대기곡과 후원 종료 이벤트는 서로의 큐 처리 경로를 침범하지 않아야 함', () => {
     expect(pvdViewer).toContain("playbackModeRef.current !== 'donation'");
     expect(pvdViewer).toContain("idleAdvanceRef.current('end')");
     expect(pvdViewer).toContain("idleAdvanceRef.current('error')");
