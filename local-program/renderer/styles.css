@@ -497,6 +497,44 @@ textarea:focus {
   transform: none;
 }
 
+.playback-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 1.75rem;
+}
+
+.playback-status {
+  display: inline-flex;
+  min-height: 1.75rem;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 0.25rem 0.65rem;
+  background: rgba(232, 237, 241, 0.82);
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 850;
+}
+
+.playback-status[data-state="playing"] {
+  border-color: rgba(18, 134, 111, 0.24);
+  background: rgba(191, 244, 223, 0.72);
+  color: #0e6158;
+}
+
+.playback-status[data-state="paused"] {
+  border-color: rgba(20, 81, 115, 0.22);
+  background: rgba(201, 237, 255, 0.78);
+  color: #145173;
+}
+
+.playback-status[data-state="deferred"] {
+  border-color: rgba(108, 85, 18, 0.2);
+  background: rgba(255, 240, 184, 0.86);
+  color: #6c5512;
+}
+
 .hint {
   margin-top: 0.65rem;
   color: var(--muted);

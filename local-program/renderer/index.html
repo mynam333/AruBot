@@ -181,6 +181,9 @@
               </div>
               <div class="remote-section">
                 <h3>포인트 영상후원</h3>
+                <div class="playback-status-row">
+                  <span class="playback-status" id="remotePvdPlaybackStatus" data-state="empty">비어 있음</span>
+                </div>
                 <div class="folder-path" id="remotePvdNow">현재 재생 항목 없음</div>
                 <label class="range-row">
                   <span>소리 크기</span>
@@ -188,8 +191,8 @@
                   <strong id="remotePvdVolumeText">100%</strong>
                 </label>
                 <div class="actions">
-                  <button class="button secondary" id="remotePvdPlayButton">재생</button>
-                  <button class="button secondary" id="remotePvdPauseButton">일시정지</button>
+                  <button class="button secondary playback-control" id="remotePvdPlayButton" aria-label="영상 후원 재생" disabled>재생</button>
+                  <button class="button secondary playback-control" id="remotePvdPauseButton" aria-label="영상 후원 일시정지" disabled>일시정지</button>
                   <button class="button secondary" id="remotePvdVolumeButton">소리 적용</button>
                   <button class="button primary" id="remotePvdNextButton">다음 영상</button>
                 </div>

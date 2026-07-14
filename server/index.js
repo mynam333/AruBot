@@ -3124,35 +3124,17 @@ app.post('/api/video-donation/control-by-token', async (req, res) => {
       return res.json({ ok: true, message });
     }
     const q = getVideoQueue(sid);
-    if (!q[0]) return res.json({ ok: true });
+    if (!q[0]) return res.json({ ok: true, empty: true, paused: null, idleDeferred: false, atSec: 0 });
     if (op === 'duration' || op === 'duration_sync') {
       const durationSec = Number(req.body?.durationSec ?? req.body?.duration ?? req.body?.value);
       const item = updateCurrentPvdDurationFromPlayer(sid, durationSec);
       if (!item) return res.status(400).json({ error: 'invalid duration' });
       return res.json({ ok: true, item });
     }
-    let atSec = Number(req.body?.atSec);
-    if (!Number.isFinite(atSec) || atSec < 0) atSec = getCurrentAtSec(sid);
-    let state = pvdPlaybackState.get(sid);
-    if (!state) { state = createPvdPlaybackState(q[0]); pvdPlaybackState.set(sid, state); }
-    if (op === 'pause') {
-      state.paused = true; state.pausedAtSec = Math.floor(atSec);
-    } else if (op === 'play') {
-      state.paused = false; setPvdPlaybackBaseFromAtSec(state, q[0], atSec); state.pausedAtSec = null;
-    } else if (op === 'seek') {
-      if (state.paused) { state.pausedAtSec = Math.floor(atSec); }
-      else { setPvdPlaybackBaseFromAtSec(state, q[0], atSec); }
-    } else {
-      return res.status(400).json({ error: 'invalid op' });
-    }
-    // Reschedule auto-pop based on new state/time
-    try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
-    scheduleNextPvdAutoPop(sid);
-
-    const message = await broadcastPvdControl(sid, { op, atSec: Math.floor(atSec), paused: state.paused === true });
-    return res.json({ ok: true, message });
+    if (!['pause', 'play', 'seek'].includes(op)) return res.status(400).json({ error: 'invalid op' });
+    return res.json(await controlPvdPlaybackForSid(sid, op, req.body?.atSec));
   } catch (e) {
-    return res.status(500).json({ error: 'failed' });
+    return res.status(Number(e?.statusCode) || 500).json({ error: 'failed' });
   }
 });
 
@@ -5897,6 +5879,7 @@ async function getPvdQueueSnapshot(sid, reason = 'sync') {
     waitingSize: Math.max(0, q.length - 1),
     startedAt: current ? state?.baseStartMs || null : null,
     paused: current ? state?.paused === true : null,
+    idleDeferred: current ? state?.idleDeferred === true : false,
     atSec: current ? getCurrentAtSec(sid) : 0,
     elapsedSec: current ? getCurrentPvdElapsedSec(sid) : 0,
     volume,
@@ -6223,6 +6206,69 @@ async function activateDeferredPvdPlayback(sid, expectedItemId = '') {
     return { activated: false, failed: true, item, queue: q };
   }
   return { activated: true, item, queue: q };
+}
+
+async function controlPvdPlaybackForSid(sid, op, requestedAtSec) {
+  const q = getVideoQueue(sid);
+  const item = q[0] || null;
+  if (!item) {
+    return { ok: true, empty: true, paused: null, idleDeferred: false, atSec: 0 };
+  }
+
+  let state = pvdPlaybackState.get(sid);
+  if (!state || state.itemKey !== getPvdQueueItemKey(item)) {
+    state = createPvdPlaybackState(item);
+    pvdPlaybackState.set(sid, state);
+  }
+
+  if (op === 'play' && state.idleDeferred === true) {
+    const activation = await activateDeferredPvdPlayback(sid, getPvdQueueItemKey(item));
+    if (activation.failed || activation.mismatch) {
+      const error = new Error('failed to activate deferred video donation');
+      error.statusCode = activation.mismatch ? 409 : 500;
+      throw error;
+    }
+    const activeState = pvdPlaybackState.get(sid) || null;
+    return {
+      ok: true,
+      activatedDeferred: activation.activated === true,
+      paused: activeState?.paused === true,
+      idleDeferred: activeState?.idleDeferred === true,
+      atSec: getCurrentAtSec(sid),
+    };
+  }
+
+  let atSec = Number(requestedAtSec);
+  if (!Number.isFinite(atSec) || atSec < 0) atSec = getCurrentAtSec(sid);
+  const safeAtSec = Math.max(0, Math.floor(atSec));
+
+  if (op === 'pause') {
+    state.paused = true;
+    state.pausedAtSec = safeAtSec;
+  } else if (op === 'play') {
+    state.paused = false;
+    setPvdPlaybackBaseFromAtSec(state, item, safeAtSec);
+    state.pausedAtSec = null;
+  } else if (op === 'seek') {
+    if (state.paused) state.pausedAtSec = safeAtSec;
+    else setPvdPlaybackBaseFromAtSec(state, item, safeAtSec);
+  }
+
+  try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
+  scheduleNextPvdAutoPop(sid);
+
+  const message = await broadcastPvdControl(sid, {
+    op,
+    atSec: safeAtSec,
+    paused: state.paused === true,
+  });
+  return {
+    ok: true,
+    message,
+    paused: state.paused === true,
+    idleDeferred: state.idleDeferred === true,
+    atSec: getCurrentAtSec(sid),
+  };
 }
 
 async function broadcastPvdStart(sid, options = {}) {
@@ -6775,8 +6821,7 @@ app.get('/api/video-donation/queue', async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
-    const q = getVideoQueue(sid);
-    return res.json({ items: q });
+    return res.json(await getPvdQueueSnapshot(sid, 'http_sync'));
   } catch (e) {
     return res.status(500).json({ error: 'Failed to get queue' });
   }
@@ -10006,38 +10051,17 @@ app.post('/api/video-donation/control', async (req, res) => {
       const message = await broadcastPvdControl(sid, { op, volume });
       return res.json({ ok: true, message });
     }
-    if (!q[0]) return res.json({ ok: true });
+    if (!q[0]) return res.json({ ok: true, empty: true, paused: null, idleDeferred: false, atSec: 0 });
     if (op === 'duration' || op === 'duration_sync') {
       const durationSec = Number(req.body?.durationSec ?? req.body?.duration ?? req.body?.value);
       const item = updateCurrentPvdDurationFromPlayer(sid, durationSec);
       if (!item) return res.status(400).json({ error: 'invalid duration' });
       return res.json({ ok: true, item });
     }
-    let atSec = Number(req.body?.atSec);
-    if (!Number.isFinite(atSec) || atSec < 0) atSec = getCurrentAtSec(sid);
-    let state = pvdPlaybackState.get(sid);
-    if (!state) { state = createPvdPlaybackState(q[0]); pvdPlaybackState.set(sid, state); }
-    if (op === 'pause') {
-      state.paused = true; state.pausedAtSec = Math.floor(atSec);
-    } else if (op === 'play') {
-      state.paused = false; setPvdPlaybackBaseFromAtSec(state, q[0], atSec); state.pausedAtSec = null;
-    } else if (op === 'seek') {
-      // keep paused state; only move time anchor
-      if (state.paused) { state.pausedAtSec = Math.floor(atSec); }
-      else { setPvdPlaybackBaseFromAtSec(state, q[0], atSec); }
-    } else {
-      return res.status(400).json({ error: 'invalid op' });
-    }
-
-    // Reschedule auto-pop based on the admin-controlled playback state.
-    try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
-    scheduleNextPvdAutoPop(sid);
-
-    const message = await broadcastPvdControl(sid, { op, atSec: Math.floor(atSec), paused: state.paused === true });
-
-    return res.json({ ok: true });
+    if (!['pause', 'play', 'seek'].includes(op)) return res.status(400).json({ error: 'invalid op' });
+    return res.json(await controlPvdPlaybackForSid(sid, op, req.body?.atSec));
   } catch (e) {
-    return res.status(500).json({ error: 'failed' });
+    return res.status(Number(e?.statusCode) || 500).json({ error: 'failed' });
   }
 });
 
@@ -17483,11 +17507,17 @@ app.get('/api/local-remote/overview', requireAutomationLocalAgent, async (req, r
     const rules = await getBotRulesWithDefaults(sid).catch(() => []);
     const rouletteDefs = getRouletteDefsFromSettings(settings);
     const videoQueue = getVideoQueue(sid);
+    const videoPlaybackState = pvdPlaybackState.get(sid) || null;
     const drawingQueue = await listDrawingQueueForSid(sid).catch(() => []);
     return res.json({
       rules,
       rouletteDefs,
       videoQueue,
+      videoPlayback: {
+        paused: videoQueue[0] ? videoPlaybackState?.paused === true : null,
+        idleDeferred: videoQueue[0] ? videoPlaybackState?.idleDeferred === true : false,
+        atSec: videoQueue[0] ? getCurrentAtSec(sid) : 0,
+      },
       drawingQueue,
       settings: {
         botEnabled: settings.botEnabled !== false,
@@ -17601,33 +17631,17 @@ app.post('/api/local-remote/video-donation/control', requireAutomationLocalAgent
       const message = await broadcastPvdControl(sid, { op, volume });
       return res.json({ ok: true, message });
     }
-    if (!q[0]) return res.json({ ok: true, empty: true });
+    if (!q[0]) return res.json({ ok: true, empty: true, paused: null, idleDeferred: false, atSec: 0 });
     if (op === 'duration' || op === 'duration_sync') {
       const durationSec = Number(req.body?.durationSec ?? req.body?.duration ?? req.body?.value);
       const item = updateCurrentPvdDurationFromPlayer(sid, durationSec);
       if (!item) return res.status(400).json({ error: 'invalid duration' });
       return res.json({ ok: true, item });
     }
-    let atSec = Number(req.body?.atSec);
-    if (!Number.isFinite(atSec) || atSec < 0) atSec = getCurrentAtSec(sid);
-    let state = pvdPlaybackState.get(sid);
-    if (!state) { state = createPvdPlaybackState(q[0]); pvdPlaybackState.set(sid, state); }
-    if (op === 'pause') {
-      state.paused = true; state.pausedAtSec = Math.floor(atSec);
-    } else if (op === 'play') {
-      state.paused = false; setPvdPlaybackBaseFromAtSec(state, q[0], atSec); state.pausedAtSec = null;
-    } else if (op === 'seek') {
-      if (state.paused) state.pausedAtSec = Math.floor(atSec);
-      else setPvdPlaybackBaseFromAtSec(state, q[0], atSec);
-    } else {
-      return res.status(400).json({ error: 'invalid op' });
-    }
-    try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
-    scheduleNextPvdAutoPop(sid);
-    const message = await broadcastPvdControl(sid, { op, atSec: Math.floor(atSec), paused: state.paused === true });
-    return res.json({ ok: true, message });
+    if (!['pause', 'play', 'seek'].includes(op)) return res.status(400).json({ error: 'invalid op' });
+    return res.json(await controlPvdPlaybackForSid(sid, op, req.body?.atSec));
   } catch (e) {
-    return res.status(500).json({ error: 'Failed to control video donation playback' });
+    return res.status(Number(e?.statusCode) || 500).json({ error: 'Failed to control video donation playback' });
   }
 });
 

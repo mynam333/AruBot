@@ -63,7 +63,7 @@ const pageMeta = {
 
 let latestState = null;
 let latestUpdate = null;
-let remoteState = { rules: [], rouletteDefs: [], videoQueue: [], drawingQueue: [] };
+let remoteState = { rules: [], rouletteDefs: [], videoQueue: [], videoPlayback: {}, drawingQueue: [] };
 let vtubeDiscovery = { models: [], hotkeys: [] };
 let obsDiscovery = { scenes: [], sources: [], filters: [] };
 const localTaskLogs = [];
@@ -272,6 +272,7 @@ function renderRemote(data) {
     rules: Array.isArray(data?.rules) ? data.rules : [],
     rouletteDefs: Array.isArray(data?.rouletteDefs) ? data.rouletteDefs : [],
     videoQueue: Array.isArray(data?.videoQueue) ? data.videoQueue : [],
+    videoPlayback: data?.videoPlayback && typeof data.videoPlayback === 'object' ? data.videoPlayback : {},
     drawingQueue: Array.isArray(data?.drawingQueue) ? data.drawingQueue : [],
   };
   $('#remoteCommandCount').textContent = String(remoteState.rules.length);
@@ -284,7 +285,16 @@ function renderRemote(data) {
     : '<option value="">룰렛 없음</option>';
   fillCommandForm(remoteState.rules[0] || null);
   const current = remoteState.videoQueue[0];
+  const paused = current ? remoteState.videoPlayback.paused === true : false;
+  const idleDeferred = current ? remoteState.videoPlayback.idleDeferred === true : false;
+  const playbackStatus = $('#remotePvdPlaybackStatus');
   $('#remotePvdNow').textContent = current ? `${current.title || current.videoId || '영상'} · ${current.username || '시청자'}` : '현재 재생 항목 없음';
+  playbackStatus.textContent = !current ? '비어 있음' : idleDeferred ? '대기 음악 종료 대기' : paused ? '일시정지' : '재생 중';
+  playbackStatus.dataset.state = !current ? 'empty' : idleDeferred ? 'deferred' : paused ? 'paused' : 'playing';
+  $('#remotePvdPlayButton').disabled = !current || !paused;
+  $('#remotePvdPauseButton').disabled = !current || paused;
+  $('#remotePvdPlayButton').setAttribute('aria-pressed', String(Boolean(current && !paused)));
+  $('#remotePvdPauseButton').setAttribute('aria-pressed', String(Boolean(current && paused)));
   fields.remotePvdVolume.value = String(nextVolume);
   $('#remotePvdVolumeText').textContent = `${nextVolume}%`;
   renderDrawingQueue(remoteState.drawingQueue);
@@ -616,11 +626,13 @@ $('#remotePvdNextButton').addEventListener('click', () => run(async () => {
 
 $('#remotePvdPlayButton').addEventListener('click', () => run(async () => {
   await window.aruLocal.remoteControlVideoDonation({ op: 'play' });
+  await loadRemote();
   pushLocalLog('success', '영상후원 재생 명령을 보냈습니다.');
 }));
 
 $('#remotePvdPauseButton').addEventListener('click', () => run(async () => {
   await window.aruLocal.remoteControlVideoDonation({ op: 'pause' });
+  await loadRemote();
   pushLocalLog('success', '영상후원 일시정지 명령을 보냈습니다.');
 }));
 

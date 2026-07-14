@@ -1,6 +1,6 @@
 'use client';
 
-import { Clapperboard, GripVertical, Loader2, RefreshCw, RotateCcw, Trash2, UserRound, Volume2, VolumeX } from 'lucide-react';
+import { Clapperboard, GripVertical, Loader2, Pause, Play, RefreshCw, RotateCcw, Trash2, UserRound, Volume2, VolumeX } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { toast } from 'sonner';
 import { VideoDonationSettingsDialog } from '@/features/admin/admin-action-dialogs';
@@ -32,6 +32,10 @@ type VideoDonationQueueResponse = {
   items?: VideoDonationItem[];
   currentItem?: VideoDonationItem | null;
   volume?: number;
+  paused?: boolean | null;
+  idleDeferred?: boolean;
+  atSec?: number;
+  empty?: boolean;
   type?: string;
   reason?: string;
   serverNow?: number;
@@ -98,6 +102,8 @@ function VideoDonationItemCard({
   item,
   index,
   current = false,
+  paused = false,
+  idleDeferred = false,
   draggable = false,
   dragging = false,
   busy = false,
@@ -111,6 +117,8 @@ function VideoDonationItemCard({
   item: VideoDonationItem;
   index?: number;
   current?: boolean;
+  paused?: boolean;
+  idleDeferred?: boolean;
   draggable?: boolean;
   dragging?: boolean;
   busy?: boolean;
@@ -158,7 +166,11 @@ function VideoDonationItemCard({
               <Clapperboard className="h-[2rem] w-[2rem]" />
             </div>
           )}
-          {current ? <Badge tone="mint" className="absolute left-2 top-2">재생 중</Badge> : null}
+          {current ? (
+            <Badge tone={idleDeferred ? 'lemon' : paused ? 'sky' : 'mint'} className="absolute left-2 top-2">
+              {idleDeferred ? '재생 대기' : paused ? '일시정지' : '재생 중'}
+            </Badge>
+          ) : null}
           {!current && index != null ? <Badge tone="neutral" className="absolute left-2 top-2">대기 {index + 1}</Badge> : null}
           <Badge tone="sky" className="absolute bottom-2 left-2">{providerLabel(item.mediaProvider)}</Badge>
         </div>
@@ -222,6 +234,9 @@ export function VideoDonationQueuePage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [volume, setVolume] = useState(100);
   const [volumePending, setVolumePending] = useState(false);
+  const [paused, setPaused] = useState(false);
+  const [idleDeferred, setIdleDeferred] = useState(false);
+  const [playbackPending, setPlaybackPending] = useState<'pause' | 'play' | null>(null);
   const [realtimeState, setRealtimeState] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const [isPending, startTransition] = useTransition();
   const wsRef = useRef<WebSocket | null>(null);
@@ -232,9 +247,19 @@ export function VideoDonationQueuePage() {
   const waitingItems = useMemo(() => items.slice(1), [items]);
   const totalCost = useMemo(() => items.reduce((sum, item) => sum + Number(item.cost || 0), 0), [items]);
   const totalDuration = useMemo(() => items.reduce((sum, item) => sum + Number(item.durationSec || 0), 0), [items]);
+  const playbackStatus = !currentItem
+    ? '비어 있음'
+    : idleDeferred
+      ? '대기 음악 종료 대기'
+      : paused
+        ? '일시정지'
+        : '재생 중';
 
   const applyQueuePayload = useCallback((data: VideoDonationQueueResponse | null) => {
-    setItems(Array.isArray(data?.items) ? data.items : []);
+    const nextItems = Array.isArray(data?.items) ? data.items : [];
+    setItems(nextItems);
+    setPaused(nextItems.length > 0 && data?.paused === true);
+    setIdleDeferred(nextItems.length > 0 && data?.idleDeferred === true);
     if (data?.volume != null) {
       setVolume(Math.max(0, Math.min(100, Math.round(Number(data.volume)))));
     }
@@ -384,6 +409,21 @@ export function VideoDonationQueuePage() {
     }
   };
 
+  const controlPlayback = async (op: 'pause' | 'play') => {
+    if (!currentItem || playbackPending) return;
+    setPlaybackPending(op);
+    try {
+      const result = await postJson<VideoDonationQueueResponse>('/api/video-donation/control', { op });
+      setPaused(result.paused === true);
+      setIdleDeferred(result.idleDeferred === true);
+      toast.success(op === 'pause' ? '영상 후원을 일시정지했어요.' : '영상 후원을 재생했어요.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '영상 재생 상태를 바꾸지 못했어요.');
+    } finally {
+      setPlaybackPending(null);
+    }
+  };
+
   return (
     <div className="grid gap-[clamp(1rem,2vw,1.5rem)]">
       <section className="border-b pb-5">
@@ -406,6 +446,30 @@ export function VideoDonationQueuePage() {
             </p>
           </div>
           <div className="flex max-w-full flex-wrap items-center gap-2">
+            <div className="inline-flex items-center gap-1 rounded-[var(--radius-control)] border bg-card/74 p-1 shadow-subtle backdrop-blur" role="group" aria-label="영상 후원 재생 제어">
+              <Button
+                type="button"
+                size="icon"
+                variant={!paused && currentItem ? 'soft' : 'ghost'}
+                onClick={() => void controlPlayback('play')}
+                disabled={!currentItem || !paused || playbackPending !== null}
+                aria-label="영상 후원 재생"
+                title="영상 후원 재생"
+              >
+                {playbackPending === 'play' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+              </Button>
+              <Button
+                type="button"
+                size="icon"
+                variant={paused && currentItem ? 'soft' : 'ghost'}
+                onClick={() => void controlPlayback('pause')}
+                disabled={!currentItem || paused || playbackPending !== null}
+                aria-label="영상 후원 일시정지"
+                title="영상 후원 일시정지"
+              >
+                {playbackPending === 'pause' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Pause className="h-4 w-4" />}
+              </Button>
+            </div>
             <div className="flex min-h-[var(--control-height)] min-w-[min(100%,18rem)] items-center gap-2 rounded-[var(--radius-control)] border bg-card/74 px-[clamp(0.8rem,1.4vw,1rem)] shadow-subtle backdrop-blur">
               {volume <= 0 ? <VolumeX className="h-[1em] w-[1em] text-muted-foreground" /> : <Volume2 className="h-[1em] w-[1em] text-primary" />}
               <input
@@ -473,7 +537,7 @@ export function VideoDonationQueuePage() {
               <CardTitle>현재 재생 중</CardTitle>
               <CardDescription>지금 방송 화면에 나가는 영상입니다. 넘기면 다음 신청 영상으로 이어집니다.</CardDescription>
             </div>
-            <Badge tone={currentItem ? 'mint' : 'neutral'}>{currentItem ? '재생 중' : '비어 있음'}</Badge>
+            <Badge tone={!currentItem ? 'neutral' : idleDeferred ? 'lemon' : paused ? 'sky' : 'mint'}>{playbackStatus}</Badge>
           </div>
         </CardHeader>
         <CardContent>
@@ -481,6 +545,8 @@ export function VideoDonationQueuePage() {
             <VideoDonationItemCard
               item={currentItem}
               current
+              paused={paused}
+              idleDeferred={idleDeferred}
               busy={busyId === currentItem.id}
               onDelete={() => void removeItem(currentItem, false)}
               onRefundDelete={() => void removeItem(currentItem, true)}
