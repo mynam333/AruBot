@@ -478,7 +478,7 @@ describe('룰렛 채널 격리 - 실제 서버 코드 호환성 검증', () => {
           { name: 'token', type: 'text', nullable: false },
           { name: 'roulette_name', type: 'text', nullable: true },
           { name: 'username', type: 'text', nullable: true },
-          { name: 'result_value', type: 'integer', nullable: true },
+          { name: 'result_value', type: 'text', nullable: true },
           { name: 'result_label', type: 'text', nullable: true },
           { name: 'created_at', type: 'timestamptz', nullable: false }
         ],

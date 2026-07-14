@@ -60,7 +60,17 @@ describe('영상 후원 대기 플레이리스트 회귀 방지', () => {
     expect(pvdViewer).toContain('if (playlist.enabled) startIdlePlayback();');
     expect(pvdViewer).toContain('expectedYouTubeMediaIdRef');
     expect(pvdViewer).toContain('getVideoData');
-    expect(pvdViewer).toContain('if (!isExpectedYouTubePlayerMedia()) return;');
+    expect(pvdViewer).toContain('if (!isExpectedYouTubePlayerMedia(e?.target)) return;');
+    expect(pvdViewer).toContain('if (sourcePlayer && sourcePlayer !== playerRef.current) return false;');
+  });
+
+  test('후원 종료 뒤에는 분리된 YouTube 대상 노드를 재사용하지 않고 서버 상태를 다시 확인해야 함', () => {
+    expect(pvdViewer).toContain('const createYouTubePlayerMount = useCallback');
+    expect(pvdViewer).toContain('host.appendChild(mount);');
+    expect(pvdViewer).toContain('new YT.Player(mount, {');
+    expect(pvdViewer).not.toContain('new YT.Player(playerDivRef.current, {');
+    expect(pvdViewer).toContain('void playbackSyncRef.current(true);');
+    expect(pvdViewer).toContain('playbackSyncRef.current = resyncFromServer;');
   });
 
   test('반복과 셔플을 지원하고 반복 비활성화 시 한 바퀴 뒤 종료해야 함', () => {

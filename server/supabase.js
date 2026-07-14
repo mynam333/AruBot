@@ -4128,7 +4128,7 @@ export async function ensureSchema() {
         user_id text,
         username text,
         result_label text,
-        result_value numeric,
+        result_value text,
         created_at timestamptz default now()
       );
       
@@ -6649,7 +6649,7 @@ export async function ensureRouletteSessionsPg() {
         user_id text,
         username text,
         result_label text,
-        result_value numeric,
+        result_value text,
         created_at timestamptz default now()
       );
       
@@ -6662,6 +6662,24 @@ export async function ensureRouletteSessionsPg() {
           and column_name = 'channel_id'
         ) then
           alter table roulette_sessions add column channel_id text;
+        end if;
+      end $$;
+
+      -- Roulette values may contain executable action/command tokens, not only numbers.
+      -- Preserve existing numeric values losslessly while upgrading the legacy schema.
+      do $$
+      begin
+        if exists (
+          select 1
+            from information_schema.columns
+           where table_schema = 'public'
+             and table_name = 'roulette_sessions'
+             and column_name = 'result_value'
+             and data_type <> 'text'
+        ) then
+          alter table public.roulette_sessions
+            alter column result_value type text
+            using result_value::text;
         end if;
       end $$;
       

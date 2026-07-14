@@ -60,6 +60,11 @@ type YouTubeApi = {
   PlayerState: { ENDED: number; PAUSED: number; PLAYING: number };
 };
 
+type YouTubePlayerEvent = {
+  data?: number;
+  target?: YouTubePlayer;
+};
+
 type YouTubeWindow = Window & {
   YT?: YouTubeApi;
   onYouTubeIframeAPIReady?: () => void;
@@ -151,6 +156,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
   const idleExhaustedRef = useRef(false);
   const idleFailedMediaIdsRef = useRef<Set<string>>(new Set());
   const idleAdvanceRef = useRef<(cause: 'end' | 'error') => void>(() => {});
+  const playbackSyncRef = useRef<(force?: boolean) => void | Promise<void>>(() => {});
 
   // Parse token from /pvd/:token
   useEffect(() => {
@@ -375,12 +381,29 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
     }
   }, [postToExternalPlayer]);
 
+  const clearYouTubePlayerHost = useCallback(() => {
+    try { playerDivRef.current?.replaceChildren(); } catch {}
+  }, []);
+
+  const createYouTubePlayerMount = useCallback(() => {
+    const host = playerDivRef.current;
+    if (!host) return null;
+    clearYouTubePlayerHost();
+    const mount = document.createElement('div');
+    mount.style.width = '100%';
+    mount.style.height = '100%';
+    mount.dataset.youtubePlayerMount = 'true';
+    host.appendChild(mount);
+    return mount;
+  }, [clearYouTubePlayerHost]);
+
   const stopPlayer = useCallback(() => {
     ensureSeqRef.current += 1;
     expectedYouTubeMediaIdRef.current = null;
     try { playerRef.current && playerRef.current.stopVideo && playerRef.current.stopVideo(); } catch {}
     try { playerRef.current && playerRef.current.destroy && playerRef.current.destroy(); } catch {}
     playerRef.current = null;
+    clearYouTubePlayerHost();
     setExternalItem(null);
     externalFrameRef.current = null;
     externalVideoRef.current = null;
@@ -399,13 +422,14 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
     currentItemIdRef.current = null;
     playbackModeRef.current = 'none';
     setYoutubeActive(false);
-  }, []);
+  }, [clearYouTubePlayerHost]);
 
-  const isExpectedYouTubePlayerMedia = useCallback(() => {
+  const isExpectedYouTubePlayerMedia = useCallback((sourcePlayer?: YouTubePlayer | null) => {
+    if (sourcePlayer && sourcePlayer !== playerRef.current) return false;
     const expected = expectedYouTubeMediaIdRef.current;
     if (!expected || expected === '__external__') return expected !== '__external__';
     try {
-      const actual = String(playerRef.current?.getVideoData?.()?.video_id || '').trim();
+      const actual = String((sourcePlayer || playerRef.current)?.getVideoData?.()?.video_id || '').trim();
       return !actual || actual === expected;
     } catch {
       return true;
@@ -433,7 +457,9 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token, cause, itemId })
-    }).catch(() => {});
+    }).catch(() => null).finally(() => {
+      void playbackSyncRef.current(true);
+    });
     stopPlayer();
   }, [getViewerApiBase, stopPlayer, token]);
 
@@ -588,15 +614,16 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
         origin: window.location.origin
       };
 
-      const onError = () => {
-        if (!isExpectedYouTubePlayerMedia()) return;
+      const onError = (event: YouTubePlayerEvent) => {
+        if (!isExpectedYouTubePlayerMedia(event?.target)) return;
         if (playbackModeRef.current === 'idle') idleAdvanceRef.current('error');
         else report('error');
       };
-      const onStateChange = (e: { data?: number }) => {
+      const onStateChange = (e: YouTubePlayerEvent) => {
         try {
-          if (!isExpectedYouTubePlayerMedia()) return;
-          const t = playerRef.current && playerRef.current.getCurrentTime ? Number(playerRef.current.getCurrentTime()) : 0;
+          if (!isExpectedYouTubePlayerMedia(e?.target)) return;
+          const activePlayer = e?.target || playerRef.current;
+          const t = activePlayer?.getCurrentTime ? Number(activePlayer.getCurrentTime()) : 0;
           lastTimeRef.current = t;
           const now = Date.now();
           if (e && e.data === YT.PlayerState.ENDED) {
@@ -612,7 +639,8 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
           }
         } catch {}
       };
-      const onReady = () => {
+      const onReady = (event: YouTubePlayerEvent) => {
+        if (!isExpectedYouTubePlayerMedia(event?.target)) return;
         applyYouTubeCaptions(captionsEnabled);
         applyVolume(volumeRef.current);
         applyPlaybackTarget(target, opts?.paused, true);
@@ -620,7 +648,9 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
       };
 
       if (!playerRef.current) {
-        playerRef.current = new YT.Player(playerDivRef.current, {
+        const mount = createYouTubePlayerMount();
+        if (!mount) return;
+        playerRef.current = new YT.Player(mount, {
           width: '100%', height: '100%', videoId,
           playerVars,
           events: { onError, onReady, onStateChange }
@@ -632,7 +662,10 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
           setTimeout(() => applyYouTubeCaptions(captionsEnabled), 200);
         } catch {
           try { playerRef.current.destroy?.(); } catch {}
-          playerRef.current = new YT.Player(playerDivRef.current, {
+          playerRef.current = null;
+          const mount = createYouTubePlayerMount();
+          if (!mount) return;
+          playerRef.current = new YT.Player(mount, {
             width: '100%', height: '100%', videoId,
             playerVars,
             events: { onError, onReady, onStateChange }
@@ -650,7 +683,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
         applyPlaybackTarget(target, opts?.paused, true);
       }, 250);
     }).catch(() => {});
-  }, [applyPlaybackTarget, applyVolume, applyYouTubeCaptions, captionsEnabled, emitControl, getYouTubeApi, isExpectedYouTubePlayerMedia, report, reportYouTubeDuration]);
+  }, [applyPlaybackTarget, applyVolume, applyYouTubeCaptions, captionsEnabled, createYouTubePlayerMount, emitControl, getYouTubeApi, isExpectedYouTubePlayerMedia, report, reportYouTubeDuration]);
 
   const ensureExternalPlayer = useCallback((item: VideoDonationItem, opts?: PlaybackTarget) => {
     expectedYouTubeMediaIdRef.current = '__external__';
@@ -678,6 +711,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
     try { playerRef.current && playerRef.current.stopVideo && playerRef.current.stopVideo(); } catch {}
     try { playerRef.current && playerRef.current.destroy && playerRef.current.destroy(); } catch {}
     playerRef.current = null;
+    clearYouTubePlayerHost();
     setYoutubeActive(false);
     currentVidRef.current = null;
     currentStartRef.current = 0;
@@ -704,7 +738,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
       applyVolume(volumeRef.current);
       applyExternalPlaybackTarget(target, opts?.paused);
     }, 450);
-  }, [applyExternalPlaybackTarget, applyVolume, buildExternalSrc, getItemProvider, getMediaKey]);
+  }, [applyExternalPlaybackTarget, applyVolume, buildExternalSrc, clearYouTubePlayerHost, getItemProvider, getMediaKey]);
 
   const applyIdlePlaylistConfig = useCallback((value: unknown) => {
     const next = normalizePvdIdlePlaylist(value);
@@ -878,6 +912,13 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
       applyServerPlaybackPayload(data, force);
     } catch {}
   }, [applyServerPlaybackPayload, getViewerApiBase, token]);
+
+  useEffect(() => {
+    playbackSyncRef.current = resyncFromServer;
+    return () => {
+      playbackSyncRef.current = () => {};
+    };
+  }, [resyncFromServer]);
 
   // Page lifecycle handling: pause locally while hidden, then force-align to server on return.
   useEffect(() => {

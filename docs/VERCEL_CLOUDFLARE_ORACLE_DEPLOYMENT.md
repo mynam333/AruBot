@@ -182,18 +182,18 @@ Secrets:
 
 Variables:
 
-- `BACKEND_APP_DIR`: 배포 경로, 기본값은 `/opt/arubot`
+- 백엔드 배포 경로는 `/home/ubuntu/AruBot`으로 고정된다.
 - `REMOTE_NODE_BIN_DIR`: 선택값. 원격 SSH 세션에서 `npm`을 찾지 못할 때 `node`와 `npm`이 들어 있는 bin 디렉터리. 예: `/home/ubuntu/.nvm/versions/node/v22.23.0/bin`
 
 Oracle VM 최초 1회 준비:
 
 ```bash
-sudo mkdir -p /opt/arubot/shared/logs
-sudo chown -R "$USER":"$USER" /opt/arubot
-nano /opt/arubot/shared/.env
+sudo mkdir -p /home/ubuntu/AruBot/shared/logs
+sudo chown -R "$USER":"$USER" /home/ubuntu/AruBot
+nano /home/ubuntu/AruBot/shared/.env
 ```
 
-`BACKEND_APP_DIR`를 `/home/<user>/AruBot`처럼 다른 경로로 바꿨다면 위 명령의 `/opt/arubot`도 같은 경로로 바꾼다. 배포 워크플로는 SSH 사용자에게 배포 디렉터리 쓰기 권한이 없을 때 passwordless sudo가 가능하면 자동으로 `mkdir`와 `chown`을 시도한다. passwordless sudo가 불가능하면 워크플로 로그에 표시되는 `sudo mkdir -p ...`와 `sudo chown -R ...` 명령을 Oracle VM에서 한 번 실행한 뒤 다시 배포한다.
+배포 워크플로는 SSH 사용자에게 배포 디렉터리 또는 기존 로그 파일 쓰기 권한이 없을 때 passwordless sudo가 가능하면 자동으로 `mkdir`와 `chown`을 시도한다. passwordless sudo가 불가능하면 워크플로 로그에 표시되는 `sudo mkdir -p ...`와 `sudo chown -R ...` 명령을 Oracle VM에서 한 번 실행한 뒤 다시 배포한다.
 
 `npm: command not found`가 계속 나면 Node/npm이 설치되지 않은 것이 아니라 배포 SSH 사용자의 비대화형 셸 PATH에 없는 경우가 많다. Oracle VM에서 배포 사용자로 아래를 확인한다.
 
@@ -206,9 +206,16 @@ find "$HOME" /usr/local /usr /opt -path '*/bin/npm' -type f 2>/dev/null | head -
 
 예를 들어 `npm`이 `/home/ubuntu/.nvm/versions/node/v22.23.0/bin/npm`에 있다면 GitHub Actions Variables에 `REMOTE_NODE_BIN_DIR=/home/ubuntu/.nvm/versions/node/v22.23.0/bin`을 추가한다. 가능하면 Node는 `root`가 아니라 `ORACLE_USER`로 접속하는 배포 사용자 홈에 설치한다.
 
-`/opt/arubot/shared/.env`에는 백엔드 운영 환경변수를 넣는다. 이 파일은 GitHub Actions artifact에 포함되지 않으며, 각 릴리스의 `.env`로 symlink된다.
+`/home/ubuntu/AruBot/shared/.env`에는 백엔드 운영 환경변수를 넣는다. 이 파일은 GitHub Actions artifact에 포함되지 않으며, 각 릴리스의 `.env`로 symlink된다.
 
-배포 후 현재 릴리스는 `/opt/arubot/current`를 가리키고, 이전 릴리스는 `/opt/arubot/releases` 아래에 최대 5개까지 남는다. 만약 기존 `/opt/arubot/current`가 symlink가 아니라 일반 디렉터리라면 `releases/legacy-current-*`로 한 번 이동한 뒤 symlink로 교체한다. PM2는 같은 앱 이름의 기존 cwd를 계속 물고 있지 않도록 `arubot-api` 프로세스를 삭제한 뒤 새 `current` 기준으로 다시 시작한다. 업로드된 `/tmp` 압축파일, Actions 러너의 로컬 압축파일, 임시 릴리스 디렉터리, 배포용 SSH 키 파일은 배포 성공/실패와 관계없이 정리한다.
+배포 후 현재 릴리스는 `/home/ubuntu/AruBot/current`를 가리키고, 이전 릴리스는 `/home/ubuntu/AruBot/releases` 아래에 남는다. 만약 기존 `current`가 symlink가 아니라 일반 디렉터리라면 `releases/legacy-current-*`로 한 번 이동한 뒤 symlink로 교체한다. PM2는 같은 앱 이름의 기존 cwd를 계속 물고 있지 않도록 `arubot-api` 프로세스를 삭제한 뒤 새 `current` 기준으로 다시 시작한다. 업로드된 `/tmp` 압축파일, Actions 러너의 로컬 압축파일, 임시 릴리스 디렉터리, 배포용 SSH 키 파일은 배포 성공/실패와 관계없이 정리한다.
+
+운영 로그는 프로젝트 경로 아래에서 바로 확인할 수 있다. `current/logs`는 릴리스가 교체되어도 유지되는 `shared/logs`를 가리킨다. 별도의 `ARUBOT_LOG_DIR` 설정은 사용하지 않는다.
+
+```bash
+tail -F /home/ubuntu/AruBot/current/logs/api.out.log
+tail -F /home/ubuntu/AruBot/current/logs/api.err.log
+```
 
 ## 배포 후 점검
 

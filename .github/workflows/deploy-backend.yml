@@ -118,8 +118,23 @@ jobs:
           }
           trap cleanup EXIT
 
+          verify_log_dir_writable() {
+            local probe="$SHARED_DIR/logs/.arubot-write-probe-$$"
+            if ! (umask 077 && : > "$probe"); then
+              return 1
+            fi
+            rm -f "$probe"
+            for log_file in "$SHARED_DIR/logs/api.out.log" "$SHARED_DIR/logs/api.err.log"; do
+              if [ -e "$log_file" ] && [ ! -w "$log_file" ]; then
+                echo "Existing log file is not writable by $REMOTE_USER: $log_file" >&2
+                return 1
+              fi
+            done
+            return 0
+          }
+
           ensure_deploy_dirs() {
-            if mkdir -p "$RELEASES_DIR" "$SHARED_DIR/logs"; then
+            if mkdir -p "$RELEASES_DIR" "$SHARED_DIR/logs" && verify_log_dir_writable; then
               return 0
             fi
 
@@ -130,7 +145,8 @@ jobs:
               sudo mkdir -p "$RELEASES_DIR" "$SHARED_DIR/logs"
               sudo chown -R "$REMOTE_USER:$REMOTE_GROUP" "$APP_DIR"
               mkdir -p "$RELEASES_DIR" "$SHARED_DIR/logs"
-              return 0
+              verify_log_dir_writable
+              return
             fi
 
             {
@@ -299,6 +315,15 @@ jobs:
             release_real="$(readlink -f "$release_dir" || true)"
             if [ -z "$current_real" ] || [ "$current_real" != "$release_real" ]; then
               echo "Refusing to start PM2 from an unexpected release: current=$current_real expected=$release_real" >&2
+              return 1
+            fi
+
+            local logs_real
+            local expected_logs_real
+            logs_real="$(readlink -f "$stable_cwd/logs" || true)"
+            expected_logs_real="$(readlink -f "$APP_DIR/shared/logs" || true)"
+            if [ -z "$logs_real" ] || [ "$logs_real" != "$expected_logs_real" ]; then
+              echo "Refusing to start PM2 with an unexpected log directory: actual=$logs_real expected=$expected_logs_real" >&2
               return 1
             fi
 

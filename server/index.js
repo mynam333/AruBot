@@ -15,6 +15,7 @@ import { createPlatformProfileService } from './platform-profiles.js';
 import { executeAndStripLiveChangeTokens, filterLiveInfoByProvider, selectCategorySearchResult } from './live-command-actions.js';
 import { buildYoutubeLiveInfoFallback, buildYoutubeLiveLookupContext } from './youtube-live-info.js';
 import { extractYouTubeWatchDurationSec, resolveVideoDonationTiming } from './video-donation-timing.js';
+import { getChannelIdFromUserId, selectPlatformChannelId, validateChannelId } from './channel-identity.js';
 import { WebSocketServer, WebSocket } from 'ws';
 
 dotenv.config();
@@ -50,6 +51,7 @@ const SERVER_STARTED_AT = new Date().toISOString();
 const RELEASE_SHA = process.env.ARUBOT_RELEASE_SHA || process.env.RELEASE_SHA || 'local';
 const DB_PROVIDER = String(process.env.ARUBOT_DB_PROVIDER || 'supabase').trim().toLowerCase() === 'postgres' ? 'postgres' : 'supabase';
 const USE_POSTGRES_PROVIDER = DB_PROVIDER === 'postgres';
+const USE_LEGACY_SQLITE = String(process.env.ARUBOT_ENABLE_LEGACY_SQLITE || '').trim().toLowerCase() === 'true';
 const ALLOW_SUPABASE_ENV_WITH_POSTGRES = String(process.env.ARUBOT_ALLOW_SUPABASE_ENV_WITH_POSTGRES || '').trim().toLowerCase() === 'true';
 function hasDirectDatabaseUrl() {
   return USE_POSTGRES_PROVIDER ? !!(process.env.POSTGRES_RUNTIME_URL || process.env.POSTGRES_URL) : !!process.env.SUPABASE_DB_URL;
@@ -11960,21 +11962,20 @@ try {
     console.log('[Server] Channel ID integrity check:', integrityResult);
   }
 
-  const { migrateChannelIdDataSQLite, startTokenCleanupScheduler, startPerformanceMonitoringScheduler, optimizeDatabase } = await import('./sqlite.js');
-  migrateChannelIdDataSQLite();
-
-  startTokenCleanupScheduler();
-
-  startPerformanceMonitoringScheduler();
+  if (USE_LEGACY_SQLITE) {
+    const { migrateChannelIdDataSQLite, startTokenCleanupScheduler, startPerformanceMonitoringScheduler, optimizeDatabase } = await import('./sqlite.js');
+    migrateChannelIdDataSQLite();
+    startTokenCleanupScheduler();
+    startPerformanceMonitoringScheduler();
+    const optimizationResult = optimizeDatabase();
+    if (optimizationResult.success) {
+      console.log(`[Server] SQLite optimization completed in ${optimizationResult.executionTime}ms`);
+    }
+  }
 
   if (shouldRunDatabaseMaintenance()) {
     const { startPerformanceMonitoringSchedulerSupabase } = await import('./supabase.js');
     await startPerformanceMonitoringSchedulerSupabase();
-  }
-
-  const optimizationResult = optimizeDatabase();
-  if (optimizationResult.success) {
-    console.log(`[Server] Database optimization completed in ${optimizationResult.executionTime}ms`);
   }
 
   console.log('[Server] Channel ID migration and performance optimization completed successfully');
@@ -12255,7 +12256,7 @@ async function getChannelContext(sid) {
       userId = sid;
     }
 
-    const channelId = await resolveChannelIdForOwnerUserId(userId, { provider: 'chzzk' });
+    const channelId = await resolveChannelIdForOwnerUserId(userId);
     if (!channelId) return null;
 
     const cacheKey = `context:${sid}`;
@@ -12288,17 +12289,6 @@ async function getChannelContext(sid) {
   }
 }
 
-function getChannelIdFromUserId(userId) {
-  const rawUserId = String(userId || '').trim();
-  const channelId = rawUserId.startsWith('cime:') ? rawUserId.slice(5) : rawUserId;
-
-  if (!channelId || channelId.length < 3) {
-    return null;
-  }
-
-  return channelId;
-}
-
 async function resolveChannelIdForOwnerUserId(userId, options = {}) {
   const ownerUserId = String(userId || '').replace(/^user:/, '').trim();
   if (!ownerUserId) return null;
@@ -12307,25 +12297,7 @@ async function resolveChannelIdForOwnerUserId(userId, options = {}) {
 
   try {
     const accounts = await listPlatformAccounts(ownerUserId);
-    const providerAccounts = providerHint
-      ? (accounts || []).filter((account) => String(account?.provider || '').toLowerCase() === providerHint)
-      : [
-          ...(accounts || []).filter((account) => String(account?.provider || '').toLowerCase() === 'chzzk'),
-          ...(accounts || []).filter((account) => String(account?.provider || '').toLowerCase() !== 'chzzk'),
-        ];
-    const preferred = providerAccounts.find((account) => (
-      validateChannelId(String(account?.channel_id || account?.channelId || account?.platform_user_id || account?.platformUserId || ''))
-    )) || (!providerHint ? (accounts || []).find((account) => (
-      validateChannelId(String(account?.channel_id || account?.channelId || account?.platform_user_id || account?.platformUserId || ''))
-    )) : null);
-
-    const accountChannelId = String(
-      preferred?.channel_id ||
-      preferred?.channelId ||
-      preferred?.platform_user_id ||
-      preferred?.platformUserId ||
-      ''
-    ).trim();
+    const accountChannelId = selectPlatformChannelId(accounts, providerHint);
     if (validateChannelId(accountChannelId)) return accountChannelId;
   } catch (error) {
     console.warn('[ChannelContext] Failed to resolve platform account channel ID:', error?.message || error);
@@ -12334,24 +12306,6 @@ async function resolveChannelIdForOwnerUserId(userId, options = {}) {
   if (!allowFallback) return null;
   const fallback = getChannelIdFromUserId(ownerUserId);
   return validateChannelId(fallback) ? fallback : null;
-}
-
-function validateChannelId(channelId) {
-  if (!channelId || typeof channelId !== 'string') {
-    return false;
-  }
-
-  const trimmed = channelId.trim();
-
-  if (trimmed.length < 3 || trimmed.length > 100) {
-    return false;
-  }
-
-  if (!/^[a-zA-Z0-9_-]+$/.test(trimmed)) {
-    return false;
-  }
-
-  return true;
 }
 
 /**
@@ -14126,7 +14080,7 @@ async function getPartitionId(req, res) {
   if (byKey) {
     try {
       const userId = byKey.startsWith('user:') ? byKey.slice(5) : byKey;
-      const channelId = await resolveChannelIdForOwnerUserId(userId, { provider: 'chzzk' });
+      const channelId = await resolveChannelIdForOwnerUserId(userId);
 
       if (channelId) {
         const cacheKey = `api:${byKey}`;
@@ -14166,26 +14120,23 @@ async function getPartitionId(req, res) {
   try {
     const userId = await getSessionUserId(sidToken);
     if (userId) {
-      const channelId = await resolveChannelIdForOwnerUserId(userId, { provider: 'chzzk' });
+      const channelId = await resolveChannelIdForOwnerUserId(userId);
       const sid = `user:${String(userId)}`;
 
-      if (!channelId) {
-        console.warn('[Session] Channel ID validation failed for userId:', userId);
-        return null;
+      if (channelId) {
+        const sessionContext = {
+          sid,
+          channelId,
+          userId: String(userId),
+          lastActivity: Date.now(),
+          sessionKey: null,
+          isolationLevel: 'strict',
+          connectionId: `session_${Date.now()}_${Math.random().toString(36).slice(2)}`
+        };
+
+        const cacheKey = `session:${sidToken}`;
+        channelCache.set(channelId, cacheKey, sessionContext, CACHE_TTL);
       }
-
-      const sessionContext = {
-        sid,
-        channelId,
-        userId: String(userId),
-        lastActivity: Date.now(),
-        sessionKey: null,
-        isolationLevel: 'strict',
-        connectionId: `session_${Date.now()}_${Math.random().toString(36).slice(2)}`
-      };
-
-      const cacheKey = `session:${sidToken}`;
-      channelCache.set(channelId, cacheKey, sessionContext, CACHE_TTL);
 
       return sid;
     }
