@@ -131,9 +131,7 @@ function getApiErrorMessage(error: unknown, fallback: string) {
 }
 
 function normalizeCommand(value: string) {
-  const text = value.trim().replace(/\s+/g, '');
-  if (!text) return '';
-  return text.startsWith('!') ? text : `!${text}`;
+  return value.trim();
 }
 
 function ActionDialogFrame({

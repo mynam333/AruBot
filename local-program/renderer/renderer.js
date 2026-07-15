@@ -585,12 +585,12 @@ fields.remoteDrawingSelect.addEventListener('change', () => renderDrawingDetail(
 $('#remoteSaveCommandButton').addEventListener('click', () => run(async () => {
   const current = selectedCommand();
   const keyword = String(fields.remoteCommandKeyword.value || '').trim();
-  const normalizedKeyword = keyword.startsWith('!') ? keyword : `!${keyword}`;
+  if (!keyword || keyword === '!') throw new Error('명령어를 입력해 주세요.');
   await window.aruLocal.remoteSaveCommand({
     ...(current || {}),
     id: current?.id || `cmd_local_${Date.now().toString(36)}`,
-    name: fields.remoteCommandName.value.trim() || normalizedKeyword,
-    keywords: [normalizedKeyword],
+    name: fields.remoteCommandName.value.trim() || keyword,
+    keywords: [keyword],
     responses: fields.remoteCommandResponse.value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean),
     pointsCost: Number(fields.remoteCommandPoints.value || 0),
     cooldown: Math.max(1, Number(fields.remoteCommandCooldown.value || 1)) * 1000,

@@ -7,6 +7,10 @@ describe('atomic runtime durability regression', () => {
     path.join(__dirname, '..', 'server', 'migrations', '013_atomic_runtime_durability.sql'),
     'utf8'
   );
+  const queueCountMigration = fs.readFileSync(
+    path.join(__dirname, '..', 'server', 'migrations', '020_video_donation_active_queue_count_index.sql'),
+    'utf8'
+  );
 
   test('conditionally deducts points under a transaction-scoped identity lock', () => {
     const start = supabaseSource.indexOf('async function deductChannelPointsIfEnoughWithClient');
@@ -70,5 +74,20 @@ describe('atomic runtime durability regression', () => {
     expect(migration).toContain('create or replace function public.arubot_claim_durable_runtime_jobs');
     expect(migration).toContain('for update skip locked');
     expect(migration).toContain('create or replace function public.arubot_fail_durable_runtime_job');
+  });
+
+  test('counts active video donations by sid and job type using a matching partial index', () => {
+    const start = supabaseSource.indexOf('export async function countActiveDurableRuntimeJobs');
+    const end = supabaseSource.indexOf('export async function claimDurableRuntimeJobs', start);
+    const body = supabaseSource.slice(start, end);
+
+    expect(start).toBeGreaterThan(-1);
+    expect(body).toContain("status in ('queued', 'processing')");
+    expect(body).toContain(".in('status', ['queued', 'processing'])");
+    expect(body).toContain(".eq('sid', normalizedSid)");
+    expect(body).toContain(".eq('job_type', normalizedJobType)");
+    expect(queueCountMigration).toContain('on public.durable_runtime_jobs (sid, job_type)');
+    expect(queueCountMigration).toContain("where status in ('queued', 'processing')");
+    expect(supabaseSource).toContain('idx_durable_runtime_jobs_sid_type_active');
   });
 });

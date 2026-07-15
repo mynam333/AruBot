@@ -4559,7 +4559,7 @@ export async function getArubotAdminConsoleSnapshot(options = {}) {
                   when lower(pa.provider) = 'chzzk' and nullif(lt.access_token, '') is not null then 'valid'
                   when lower(pa.provider) = 'youtube' and ysc.owner_user_id is not null then 'configured'
                   else 'unknown'
-                end as authorization,
+                end as authorization_status,
                 coalesce(
                   to_char(pt.expires_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
                   case when lower(pa.provider) = 'chzzk' then nullif(lt.expires_at, '') end
@@ -4635,7 +4635,7 @@ export async function getArubotAdminConsoleSnapshot(options = {}) {
                     'avatarUrl', avatar_url,
                     'connectedAt', connected_at,
                     'lastActivityAt', last_activity_at,
-                    'authorization', authorization,
+                    'authorization', authorization_status,
                     'authorizationExpiresAt', authorization_expires_at,
                     'lastValidatedAt', last_validated_at,
                     'moderatorRegistered', moderator_registered,
@@ -7967,6 +7967,9 @@ async function ensureDurableRuntimeJobsWithClient(pg) {
       where status in ('queued', 'processing');
     create index if not exists idx_durable_runtime_jobs_sid_created
       on durable_runtime_jobs (sid, created_at desc);
+    create index if not exists idx_durable_runtime_jobs_sid_type_active
+      on durable_runtime_jobs (sid, job_type)
+      where status in ('queued', 'processing');
   `);
   durableRuntimeJobsReady = true;
 }
@@ -8165,6 +8168,41 @@ export async function enqueuePaidDurableRuntimeJob(input) {
       throw error;
     }
   });
+}
+
+export async function countActiveDurableRuntimeJobs(sid, jobType) {
+  const normalizedSid = String(sid || '').trim();
+  const normalizedJobType = String(jobType || '').trim().toLowerCase();
+  if (!normalizedSid || !/^[a-z0-9][a-z0-9._:-]{0,63}$/.test(normalizedJobType)) {
+    const error = new Error('sid and a valid jobType are required');
+    error.code = 'invalid_durable_runtime_job_count';
+    throw error;
+  }
+
+  if (getDbUrl()) {
+    return withPgClient(async (pg) => {
+      await ensureDurableRuntimeJobsWithClient(pg);
+      const result = await pg.query(
+        `select count(*)::integer as total
+           from public.durable_runtime_jobs
+          where sid = $1
+            and job_type = $2
+            and status in ('queued', 'processing')`,
+        [normalizedSid, normalizedJobType]
+      );
+      return Math.max(0, Number(result.rows?.[0]?.total || 0));
+    });
+  }
+
+  ensure();
+  const result = await supabase
+    .from('durable_runtime_jobs')
+    .select('id', { count: 'exact', head: true })
+    .eq('sid', normalizedSid)
+    .eq('job_type', normalizedJobType)
+    .in('status', ['queued', 'processing']);
+  if (result.error) throw result.error;
+  return Math.max(0, Number(result.count || 0));
 }
 
 export async function claimDurableRuntimeJobs(options = {}) {

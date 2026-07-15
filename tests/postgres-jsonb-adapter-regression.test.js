@@ -26,6 +26,7 @@ describe('PostgreSQL JSONB adapter regression', () => {
         known: isPgJsonColumn('bot_rules', 'keywords'),
         unknown: isPgJsonColumn('bot_rules', 'name'),
         keywords: normalizePgJsonColumnValue('bot_rules', 'keywords', ['!룰렛', '!roulette']),
+        optionalPrefixKeywords: normalizePgJsonColumnValue('bot_rules', 'keywords', ['출석', '!출석', 'Help']),
         settings: normalizePgJsonColumnValue('bot_settings', 'settings', { enabled: true }),
         jsonString: normalizePgJsonColumnValue('bot_rules', 'responses', '["당첨"]'),
         plainString: normalizePgJsonColumnValue('bot_rules', 'responses', '당첨'),
@@ -41,6 +42,7 @@ describe('PostgreSQL JSONB adapter regression', () => {
     expect(result.known).toBe(true);
     expect(result.unknown).toBe(false);
     expect(JSON.parse(result.keywords)).toEqual(['!룰렛', '!roulette']);
+    expect(JSON.parse(result.optionalPrefixKeywords)).toEqual(['출석', '!출석', 'Help']);
     expect(JSON.parse(result.settings)).toEqual({ enabled: true });
     expect(result.jsonString).toBe('["당첨"]');
     expect(result.plainString).toBe('"당첨"');

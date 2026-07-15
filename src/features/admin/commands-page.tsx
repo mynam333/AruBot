@@ -72,9 +72,7 @@ function getApiErrorMessage(error: unknown, fallback: string) {
 }
 
 function normalizeCommand(value: string) {
-  const text = value.trim();
-  if (!text) return '';
-  return text.startsWith('!') ? text : `!${text}`;
+  return value.trim();
 }
 
 function toForm(rule: BotRule): CommandForm {

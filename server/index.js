@@ -10,12 +10,14 @@ import cookieParser from 'cookie-parser';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
 import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, revokeSession, getSessionUserId, listChannelPoints, listChannelPointsPage, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, deductChannelPointsIfEnough, getChannelPoints, getChannelPointBalanceSummary, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, issueApiWebSocketTicket, consumeApiWebSocketTicket, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, findSidByChannelViewerTokenSupabase, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, findAppUserIdByChannelUid, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, markPlatformTokenValidated, deletePlatformTokens, deletePlatformAccount, getAppUserAdminStatus, getArubotAdminConsoleSnapshot, getArubotAdminStreamerFeatureDetails, getYoutubeBotProfile, upsertYoutubeBotProfile, updateYoutubeBotProfileTokens, markYoutubeBotProfileStatus, deleteYoutubeBotProfile, getYoutubeStreamerChannel, upsertYoutubeStreamerChannel, markYoutubeStreamerChannelModeratorRegistered, deleteYoutubeStreamerChannel, listYoutubeStreamerChannelsByYoutubeChannelId, updateYoutubeStreamerChannelLive, updateYoutubeStreamerChannelWebsub, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, claimBotRuleCooldown, enqueueDurableRuntimeJob, enqueuePaidDurableRuntimeJob, claimDurableRuntimeJobs, completeDurableRuntimeJob, failDurableRuntimeJob, claimRuntimeLease, releaseRuntimeLease, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps, recordBotEventLog, listBotEventLogs, getBotEventLog, insertDrawingDonationItem, listDrawingDonationItems, getDrawingDonationItem, getCurrentDrawingDonationItem, updateDrawingDonationItemStatus, deleteDrawingDonationItem, reorderDrawingDonationItems, uploadDrawingDonationObject, deleteDrawingDonationObjectKeys, deleteAccountData, cleanupPrivacyRetentionData, validateSecretEncryptionConfig, getPgPoolStatus, checkDatabaseReady, closeDatabaseConnections } from './supabase.js';
-import { confirmPlatformTokenConsent, confirmYoutubeBotProfileConsent, touchPlatformTokenUsed, touchYoutubeBotProfileUsed } from './supabase.js';
+import { confirmPlatformTokenConsent, confirmYoutubeBotProfileConsent, countActiveDurableRuntimeJobs, touchPlatformTokenUsed, touchYoutubeBotProfileUsed } from './supabase.js';
 import { createPlatformProfileService } from './platform-profiles.js';
 import { executeAndStripLiveChangeTokens, filterLiveInfoByProvider, selectCategorySearchResult } from './live-command-actions.js';
 import { buildYoutubeLiveInfoFallback, buildYoutubeLiveLookupContext } from './youtube-live-info.js';
 import { extractYouTubeWatchDurationSec, resolveVideoDonationTiming } from './video-donation-timing.js';
+import { appendVideoDonationQueueCount, countNonDurableVideoDonationItems, countVideoDonationQueueIncludingItem } from './video-donation-queue.js';
 import { getChannelIdFromUserId, selectPlatformChannelId, validateChannelId } from './channel-identity.js';
+import { findCommandKeywordMatch, getCommandRuleMatches } from './command-keyword.js';
 import youtubeLiveChatReceiver from './youtube-live-chat-receiver.cjs';
 import { WebSocketServer, WebSocket } from 'ws';
 
@@ -5979,6 +5981,18 @@ function getVideoQueue(sid) {
   return q;
 }
 
+async function getVideoDonationReceiptQueueSize(sid, acceptedItem, durableStatus) {
+  const queue = getVideoQueue(sid);
+  const fallbackSize = countVideoDonationQueueIncludingItem(queue, acceptedItem, durableStatus);
+  try {
+    const activeDurableCount = await countActiveDurableRuntimeJobs(sid, 'video-donation');
+    return activeDurableCount + countNonDurableVideoDonationItems(queue);
+  } catch (error) {
+    console.warn('[video-donation] Failed to count active durable queue; using memory fallback', error?.message || error);
+    return fallbackSize;
+  }
+}
+
 async function settleDurableRuntimeItem(item, result = {}) {
   const jobId = String(item?.runtimeJobId || '').trim();
   if (!jobId) return false;
@@ -6973,6 +6987,7 @@ app.post('/api/video-donation/request', rateLimiters.userWrite, async (req, res)
       });
     }
     const acceptedItem = durable.job?.payload?.item || item;
+    const queueSize = await getVideoDonationReceiptQueueSize(sid, acceptedItem, durable.job?.status);
     await runDurableRuntimeWorker();
     await recordBotEventLogSafe(sid, {
       category: 'video_donation',
@@ -7006,7 +7021,16 @@ app.post('/api/video-donation/request', rateLimiters.userWrite, async (req, res)
         replaySnapshot: acceptedItem,
       },
     });
-    return res.json({ ok: true, item: acceptedItem, deduplicated: durable.created === false });
+    const rawReceiptTitle = String(acceptedItem.title || '').trim();
+    const receiptTitle = rawReceiptTitle.length > 20 ? `${rawReceiptTitle.slice(0, 20)}...` : rawReceiptTitle;
+    const receiptBase = receiptTitle ? `요청을 접수했습니다. ${receiptTitle}` : '요청을 접수했습니다.';
+    return res.json({
+      ok: true,
+      item: acceptedItem,
+      deduplicated: durable.created === false,
+      queueSize,
+      message: appendVideoDonationQueueCount(receiptBase, queueSize),
+    });
   } catch (e) {
     console.error('[pvd:request] error', e?.message || e);
     return res.status(500).json({ error: 'Failed to enqueue request' });
@@ -10103,24 +10127,14 @@ async function executeRouletteResultCommand(sid, commandText, userId, username, 
     const settings = await getBotSettings(sid) || {};
     const rules = Array.isArray(settings.rules) ? settings.rules : [];
     const text = String(commandText || '').trim();
-    const lower = text.toLowerCase();
     const now = Date.now();
 
-    for (const r of rules) {
+    for (const { rule: r, match: commandMatch } of getCommandRuleMatches(text, rules)) {
       if (!r || r.enabled === false) continue;
 
       const keywords = Array.isArray(r.keywords) ? r.keywords.filter(Boolean) : [];
       if (!keywords.length) continue;
-
-      let matchedKeyword = null;
-      const matched = keywords.some(kw => {
-        if (!kw) return false;
-        const ok = lower.startsWith(String(kw).toLowerCase());
-        if (ok && matchedKeyword == null) matchedKeyword = String(kw);
-        return ok;
-      });
-
-      if (!matched) continue;
+      const matchedKeyword = commandMatch.matchedText;
 
       if (!r.id) continue;
       const cooldownClaim = await claimBotRuleCooldown(sid, r.id, { cooldownMs: Math.max(1000, Number(r.cooldown || 0)) }).catch(() => null);
@@ -10147,7 +10161,7 @@ async function executeRouletteResultCommand(sid, commandText, userId, username, 
 
       let responseToSend = response;
       let ruleUsed = false;
-      const argsText = text.slice((matchedKeyword || '').length).trim();
+      const argsText = commandMatch.argsText;
 
       if (allowExecute && typeof responseToSend === 'string') {
         const liveChangeResult = await executeCommandLiveChangeTokens(sid, responseToSend, {
@@ -10208,7 +10222,7 @@ async function executeRouletteResultCommand(sid, commandText, userId, username, 
       if (allowExecute) {
         try {
           const cmd = matchedKeyword || '';
-          const rest = text.slice(cmd.length).trim();
+          const rest = commandMatch.argsText;
           const args = rest.length ? rest.split(/\s+/).map(String) : [];
 
           let ownerPid = null;
@@ -11655,9 +11669,7 @@ const attendanceDedupe = new Set();
 const DEFAULT_ATTENDANCE_MESSAGE = '{user.name}님 출석체크 완료! (연속 {attendance.streak}일, 누적 {attendance.totalDays}일)';
 
 function normalizeAttendanceCommandKeyword(settings = {}) {
-  const value = String(settings.attendanceCommandKeyword || '!출석').trim();
-  if (!value) return '!출석';
-  return value.startsWith('!') ? value : `!${value}`;
+  return String(settings.attendanceCommandKeyword || '!출석').trim() || '!출석';
 }
 
 function attendanceFeatureEnabled(settings = {}) {
@@ -11670,9 +11682,7 @@ function shouldRecordAttendanceAutomatically(settings = {}) {
 
 function isAttendanceCommandText(text = '', settings = {}) {
   if (!attendanceFeatureEnabled(settings)) return false;
-  const command = normalizeAttendanceCommandKeyword(settings).toLowerCase();
-  const value = String(text || '').trim().toLowerCase();
-  return value === command || value.startsWith(`${command} `);
+  return Boolean(findCommandKeywordMatch(text, [normalizeAttendanceCommandKeyword(settings)]));
 }
 
 function renderAttendanceMessage(template, context = {}) {
@@ -22003,8 +22013,7 @@ async function ensureSession(sid, channelId) {
           if (!Array.isArray(rules)) {
             throw new Error('rules is not iterable');
           }
-          const lower = text.toLowerCase();
-          // Find first matching rule by startsWith
+          // Prefer the longest safe command boundary, then the exact configured spelling.
           const now = Date.now();
           const code = (msg && (msg.userRoleCode ?? msg?.profile?.userRoleCode)) ?? 0;
           const roleLevel = (() => {
@@ -22015,7 +22024,7 @@ async function ensureSession(sid, channelId) {
             if (c === 2 || c === 'streaming_chat_manager') return 2;
             return 1; // default ?쇰컲?좎?
           })();
-          for (const r of rules) {
+          for (const { rule: r, match: commandMatch } of getCommandRuleMatches(text, rules)) {
             if (!r.enabled) continue;
             // Role permission check
             const required = Number(r.requiredRoleLevel || (r.adminOnly ? 3 : 1));
@@ -22029,14 +22038,7 @@ async function ensureSession(sid, channelId) {
                 if (!live) continue;
               } catch { /* ignore and treat as not live */ continue; }
             }
-            let matchedKeyword = null;
-            const matched = (r.keywords || []).some(kw => {
-              if (!kw) return false;
-              const ok = lower.startsWith(String(kw).toLowerCase());
-              if (ok && matchedKeyword == null) matchedKeyword = String(kw);
-              return ok;
-            });
-            if (!matched) continue;
+            const matchedKeyword = commandMatch.matchedText;
 
             if (!r.id) continue;
             const cooldownClaim = await claimBotRuleCooldown(sid, r.id, { cooldownMs: cooldown }).catch(() => null);
@@ -22104,7 +22106,7 @@ async function ensureSession(sid, channelId) {
             }
 
             // Prepare args for trigger handling (remove matched keyword from start)
-            const restForVd = text.slice((matchedKeyword || '').length).trim();
+            const restForVd = commandMatch.argsText;
             const argsVd = restForVd.length ? restForVd.split(/\s+/).map(String) : [];
 
             let responseToSend = response;
@@ -22176,7 +22178,7 @@ async function ensureSession(sid, channelId) {
                 // Parse count from args: after command keyword, first numeric token; clamp to [1,10]; default 1
                 let count = 1;
                 try {
-                  const rest = text.slice((matchedKeyword || '').length).trim();
+                  const rest = commandMatch.argsText;
                   const t = rest.split(/\s+/).map(String).filter(Boolean);
                   if (t.length >= 1) {
                     const n = parseInt(t[0], 10);
@@ -22316,7 +22318,7 @@ async function ensureSession(sid, channelId) {
               try {
                 const cmd = matchedKeyword || '';
                 // parse args: remove the matched keyword from the start and split by whitespace
-                const rest = text.slice(cmd.length).trim();
+                const rest = commandMatch.argsText;
                 const args = rest.length ? rest.split(/\s+/).map(String) : [];
                 let ownerPid = null;
                 try { const owner = await getOwnerInfoForSid(sid); if (owner?.channelId) ownerPid = `user:${String(owner.channelId)}`; } catch { }
@@ -23509,10 +23511,9 @@ async function processYoutubeChatAutomation(entry, ev) {
 
     const rules = await getRuntimeBotRulesWithDefaults(sid);
     if (!Array.isArray(rules)) return;
-    const lower = text.toLowerCase();
     const now = Date.now();
     const roleLevel = isOwner ? 4 : (ev.role?.moderator ? 3 : (ev.role?.sponsor ? 2 : 1));
-    for (const r of rules) {
+    for (const { rule: r, match: commandMatch } of getCommandRuleMatches(text, rules)) {
       if (!r || r.enabled === false) continue;
       const required = Number(r.requiredRoleLevel || (r.adminOnly ? 3 : 1));
       if (roleLevel < required) continue;
@@ -23523,14 +23524,7 @@ async function processYoutubeChatAutomation(entry, ev) {
         if (!live.live) continue;
       }
 
-      let matchedKeyword = null;
-      const matched = (r.keywords || []).some((kw) => {
-        if (!kw) return false;
-        const ok = lower.startsWith(String(kw).toLowerCase());
-        if (ok && matchedKeyword == null) matchedKeyword = String(kw);
-        return ok;
-      });
-      if (!matched) continue;
+      const matchedKeyword = commandMatch.matchedText;
 
       if (!r.id) continue;
       const cooldownClaim = await claimBotRuleCooldown(sid, r.id, { cooldownMs: cooldown }).catch(() => null);
@@ -23581,7 +23575,7 @@ async function processYoutubeChatAutomation(entry, ev) {
       }
 
       const cmd = matchedKeyword || '';
-      const argsText = text.slice(cmd.length).trim();
+      const argsText = commandMatch.argsText;
       const args = argsText.split(/\s+/).map(String).filter(Boolean);
       let cleaned = String(response || '');
       if (allowExecute) {
@@ -24371,6 +24365,7 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
     return `포인트가 부족합니다. 필요: ${cost}, 보유: ${durable.deduction.balanceBefore}`;
   }
   const acceptedItem = durable.job?.payload?.item || queueItem;
+  const queueSize = await getVideoDonationReceiptQueueSize(sid, acceptedItem, durable.job?.status);
   await runDurableRuntimeWorker();
   await recordBotEventLogSafe(sid, {
     category: 'video_donation',
@@ -24409,7 +24404,8 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
   });
   const title = media.title ? (media.title.length > 20 ? media.title.slice(0, 20) + '...' : media.title) : null;
   const baseMsg = title ? `요청을 접수했습니다. ${title}` : '요청을 접수했습니다.';
-  return cleaned ? `${cleaned} ${baseMsg}`.trim() : baseMsg;
+  const receipt = cleaned ? `${cleaned} ${baseMsg}`.trim() : baseMsg;
+  return appendVideoDonationQueueCount(receipt, queueSize);
 }
 
 async function processCimeChatAutomation(entry, ev) {
@@ -24526,10 +24522,9 @@ async function processCimeChatAutomation(entry, ev) {
     const rules = await getRuntimeBotRulesWithDefaults(sid);
     if (!Array.isArray(rules)) return;
 
-    const lower = text.toLowerCase();
     const now = Date.now();
     const roleLevel = isOwner ? 4 : 1;
-    for (const r of rules) {
+    for (const { rule: r, match: commandMatch } of getCommandRuleMatches(text, rules)) {
       if (!r || r.enabled === false) continue;
       const required = Number(r.requiredRoleLevel || (r.adminOnly ? 3 : 1));
       if (roleLevel < required) continue;
@@ -24540,14 +24535,7 @@ async function processCimeChatAutomation(entry, ev) {
         if (!live) continue;
       }
 
-      let matchedKeyword = null;
-      const matched = (r.keywords || []).some((kw) => {
-        if (!kw) return false;
-        const ok = lower.startsWith(String(kw).toLowerCase());
-        if (ok && matchedKeyword == null) matchedKeyword = String(kw);
-        return ok;
-      });
-      if (!matched) continue;
+      const matchedKeyword = commandMatch.matchedText;
 
       if (!r.id) continue;
       const cooldownClaim = await claimBotRuleCooldown(sid, r.id, { cooldownMs: cooldown }).catch(() => null);
@@ -24598,7 +24586,7 @@ async function processCimeChatAutomation(entry, ev) {
       }
 
       const cmd = matchedKeyword || '';
-      const argsText = text.slice(cmd.length).trim();
+      const argsText = commandMatch.argsText;
       const args = argsText.split(/\s+/).map(String).filter(Boolean);
       let cleaned = String(response || '');
       if (allowExecute) {

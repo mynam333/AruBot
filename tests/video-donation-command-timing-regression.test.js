@@ -12,6 +12,16 @@ describe('video donation command timing integration regression', () => {
     expect(serverIndex).toContain("source: 'cime-chat-command'");
   });
 
+  test('successful receipts end with the active queue total including the accepted request', () => {
+    const helperStart = serverIndex.indexOf('async function enqueueVideoDonationFromArgs');
+    const helperEnd = serverIndex.indexOf('async function processCimeChatAutomation', helperStart);
+    const helper = serverIndex.slice(helperStart, helperEnd);
+
+    expect(helper).toContain('getVideoDonationReceiptQueueSize(sid, acceptedItem, durable.job?.status)');
+    expect(helper.indexOf('getVideoDonationReceiptQueueSize')).toBeLessThan(helper.indexOf('runDurableRuntimeWorker'));
+    expect(helper).toContain('appendVideoDonationQueueCount(receipt, queueSize)');
+  });
+
   test('command argument three is parsed as endSec and preserved in queue metadata', () => {
     const helperStart = serverIndex.indexOf('async function enqueueVideoDonationFromArgs');
     const helperEnd = serverIndex.indexOf('async function processCimeChatAutomation', helperStart);

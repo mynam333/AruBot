@@ -64,6 +64,10 @@ describe('AruBot service admin console regression', () => {
     expect(helper).toContain('from action_blueprints ab');
     expect(helper).toContain('from bot_rules');
     expect(helper).toContain('from app_users u');
+    expect(helper).toContain('end as authorization_status');
+    expect(helper).toContain("'authorization', authorization_status");
+    expect(helper).not.toMatch(/\bend as authorization\s*,/);
+    expect(helper).not.toMatch(/'authorization'\s*,\s*authorization\s*,/);
     expect(helper).toContain('limit ${pageLimitSlot}');
     expect(helper).toContain('(p.created_at, p.user_id) <');
     expect(helper).not.toContain('macro_schedules');

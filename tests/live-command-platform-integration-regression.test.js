@@ -33,9 +33,9 @@ describe('platform-specific live command integration regression', () => {
   test('executes or strips live action tokens in every command ingress path', () => {
     expect(server).toContain('async function executeCommandLiveChangeTokens');
     expect(server).toContain("provider: chatPostProvider || 'chzzk'");
-    expect(server).toContain("provider: 'chzzk',\n                argsText: restForVd");
-    expect(server).toContain("provider: 'cime',\n          argsText");
-    expect(server).toContain("provider: 'youtube',\n          argsText");
+    expect(server).toMatch(/provider:\s*'chzzk',\s*argsText:\s*restForVd/);
+    expect(server).toMatch(/provider:\s*'cime',\s*argsText/);
+    expect(server).toMatch(/provider:\s*'youtube',\s*argsText/);
     expect(server).toContain("'live_title_change'");
     expect(server).toContain("'live_game_change'");
   });
@@ -46,8 +46,8 @@ describe('platform-specific live command integration regression', () => {
     expect(server).toContain("substituteAllPlaceholders(cleaned, sid, resolvedUserId, resolvedUsername, { provider: 'cime' })");
     expect(server).toContain("substituteAllPlaceholders(cleaned, sid, resolvedUserId, resolvedUsername, { provider: 'youtube' })");
     expect(server).toContain("const chatPostPlatform = String(chatPost?.provider || chatPost?.platform || '').toLowerCase()");
-    expect(server).toContain("if (!uids.length) {\n    if (normalizedProvider === 'chzzk') return null;");
-    expect(server).toContain("if (normalizedProvider === 'chzzk') return null;\n  const cimeCached = userSubMonthsCache");
+    expect(server).toMatch(/if \(!uids\.length\) \{\s*if \(normalizedProvider === 'chzzk'\) return null;/);
+    expect(server).toMatch(/if \(normalizedProvider === 'chzzk'\) return null;\s*const cimeCached = userSubMonthsCache/);
     expect(server).toContain("entry.channelId || await resolveStreamerUidForSid(sid, 'cime')");
     expect(server).toContain('const cachedMatchesProvider = !supportedProvider || cachedProvider === supportedProvider');
     expect(server).toContain('filterLiveInfoByProvider(liveInfo, provider)');
