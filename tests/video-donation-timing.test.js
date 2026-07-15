@@ -14,8 +14,11 @@ describe('video donation start/end timing', () => {
         startOnly: resolve({ startSec: 30, mediaDurationSec: 120, maxDurationSec: 600 }),
         endOnly: resolve({ endSec: 45, mediaDurationSec: 120, maxDurationSec: 600 }),
         range: resolve({ startSec: 30, endSec: 45, mediaDurationSec: 120, maxDurationSec: 600 }),
+        minuteSecondRange: resolve({ startSec: '1:23', endSec: '2:05', mediaDurationSec: 180, maxDurationSec: 600 }),
+        zeroPaddedRange: resolve({ startSec: '00:30', endSec: '01:00', mediaDurationSec: 120, maxDurationSec: 600 }),
         invalidRange: resolve({ startSec: 30, endSec: 30, mediaDurationSec: 120 }),
         invalidStart: resolve({ startSec: 'abc', mediaDurationSec: 120 }),
+        invalidMinuteSecond: resolve({ startSec: '1:60', endSec: '2:00', mediaDurationSec: 180 }),
         pastEnd: resolve({ startSec: 120, mediaDurationSec: 120 }),
         mediaClamp: resolve({ startSec: 30, endSec: 200, mediaDurationSec: 120, maxDurationSec: 600 }),
         maxClamp: resolve({ startSec: 30, endSec: 200, mediaDurationSec: 300, maxDurationSec: 60 }),
@@ -42,6 +45,12 @@ describe('video donation start/end timing', () => {
   test('treats the third argument as an absolute end second', () => {
     expect(result.endOnly).toMatchObject({ ok: true, startSec: 0, requestedEndSec: 45, durationSec: 45, actualEndSec: 45 });
     expect(result.range).toMatchObject({ ok: true, startSec: 30, requestedEndSec: 45, durationSec: 15, actualEndSec: 45 });
+  });
+
+  test('accepts minute:second values for both start and end', () => {
+    expect(result.minuteSecondRange).toMatchObject({ ok: true, startSec: 83, requestedEndSec: 125, durationSec: 42, actualEndSec: 125 });
+    expect(result.zeroPaddedRange).toMatchObject({ ok: true, startSec: 30, requestedEndSec: 60, durationSec: 30, actualEndSec: 60 });
+    expect(result.invalidMinuteSecond).toMatchObject({ ok: false, code: 'invalid_start_sec' });
   });
 
   test('rejects invalid ranges and starts beyond a known video end', () => {

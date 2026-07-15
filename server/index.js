@@ -6881,7 +6881,7 @@ app.post('/api/video-donation/request', rateLimiters.userWrite, async (req, res)
     if (timing.durationSec == null) {
       return res.status(400).json({
         error: 'media_duration_unknown',
-        message: '영상 길이를 확인할 수 없습니다. 종료초를 직접 입력해 주세요.',
+        message: '영상 후원 길이를 확인할 수 없습니다. 시작초와 종료초를 입력해 주세요.',
       });
     }
     const start = timing.startSec;
@@ -19200,7 +19200,7 @@ const BOT_VARIABLES = [
   { key: '{channel.followers}', label: '팔로워 수', description: '확인 가능한 현재 채널 팔로워 수입니다.', group: '채널', providers: ['chzzk', 'cime'], caveat: '씨미는 프로필 동기화로 저장된 공개 수치를 사용합니다.' },
   { key: '${live.title_change}', label: '방송 제목 변경', description: '명령어 뒤에 입력한 전체 문장으로 현재 플랫폼의 방송 제목을 변경합니다.', group: '특수 실행', providers: ['chzzk', 'cime'], caveat: '채팅에는 출력되지 않습니다. 명령어 인자가 없으면 실행하지 않으며, 제거 후 응답이 비어 있으면 채팅도 보내지 않습니다.' },
   { key: '${live.game_change}', label: '방송 카테고리 변경', description: '명령어 뒤에 입력한 전체 문장으로 현재 플랫폼의 카테고리를 검색해 변경합니다.', group: '특수 실행', providers: ['chzzk', 'cime'], caveat: '채팅에는 출력되지 않습니다. 명령어 인자가 없으면 실행하지 않으며, 제거 후 응답이 비어 있으면 채팅도 보내지 않습니다.' },
-  { key: '${video_donation}', label: '영상 후원 신청 실행', description: '명령어 인자로 받은 주소를 영상 후원 대기열에 넣고 실제 재생 구간만큼 포인트를 차감합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, caveat: '사용법: <주소> [<시작초>] [<종료초>] · 시작초 기본값은 0초이며, 종료초를 생략하면 영상 마지막까지 재생합니다. 설정된 최대 재생 시간은 항상 적용되며, 이 변수는 채팅에 출력되지 않습니다.' },
+  { key: '${video_donation}', label: '영상 후원 신청 실행', description: '명령어 인자로 받은 주소를 영상 후원 대기열에 넣고 실제 재생 구간만큼 포인트를 차감합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, caveat: '사용법: <주소> [<시작초>] [<종료초>] · 시작초와 종료초는 초 또는 분:초(예: 1:23 = 83초) 형식으로 입력합니다. 시작초 기본값은 0초이며, 종료초를 생략하면 영상 마지막까지 재생합니다. 설정된 최대 재생 시간은 항상 적용되며, 이 변수는 채팅에 출력되지 않습니다.' },
   { key: '${roulette::룰렛이름}', label: '룰렛 실행', description: '지정한 룰렛을 즉시 실행하고 결과를 채팅/오버레이 흐름에 반영합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, caveat: '룰렛 이름 또는 ID를 :: 뒤에 입력하세요. 예: ${roulette::오늘의 벌칙}' },
   { key: '${action::액션이름}', label: '블루프린트 실행', description: '게시된 실행 액션 블루프린트를 명령어 응답 중 실행합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, caveat: '채팅으로 출력되지 않고 액션이 실행됩니다. 액션 이름, slug 또는 ID를 사용할 수 있습니다.' },
   { key: '${automation::액션이름}', label: '블루프린트 실행 별칭', description: '${action::...}과 같은 방식으로 게시된 실행 액션을 실행합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS },
@@ -24312,7 +24312,7 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
     endSec: endArgRaw,
   });
   if (!timing.ok) return timing.message;
-  if (timing.durationSec == null) return '영상 길이를 확인할 수 없습니다. 종료초를 직접 입력해 주세요.';
+  if (timing.durationSec == null) return '영상 후원 길이를 확인할 수 없습니다. 시작초와 종료초를 입력해 주세요.';
 
   const start = timing.startSec;
   const requestedEndSec = timing.requestedEndSec;

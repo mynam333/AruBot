@@ -3,7 +3,16 @@ function hasValue(value) {
 }
 
 function parseNonNegativeSecond(value) {
-  const parsed = Number(value);
+  const normalized = String(value ?? '').trim();
+  const minuteSecond = normalized.match(/^(\d+):([0-5]?\d)$/);
+  if (minuteSecond) {
+    const minutes = Number(minuteSecond[1]);
+    const seconds = Number(minuteSecond[2]);
+    const parsed = minutes * 60 + seconds;
+    return Number.isSafeInteger(parsed) ? parsed : null;
+  }
+
+  const parsed = Number(normalized);
   if (!Number.isFinite(parsed) || parsed < 0) return null;
   return Math.floor(parsed);
 }
@@ -28,7 +37,7 @@ export function resolveVideoDonationTiming({
     return {
       ok: false,
       code: 'invalid_start_sec',
-      message: '시작초는 0 이상의 숫자여야 합니다.',
+      message: '시작초는 0 이상의 숫자 또는 분:초 형식이어야 합니다.',
     };
   }
 
@@ -38,7 +47,7 @@ export function resolveVideoDonationTiming({
     return {
       ok: false,
       code: 'invalid_end_sec',
-      message: '종료초는 0 이상의 숫자여야 합니다.',
+      message: '종료초는 0 이상의 숫자 또는 분:초 형식이어야 합니다.',
     };
   }
   if (parsedEnd != null && parsedEnd <= parsedStart) {
