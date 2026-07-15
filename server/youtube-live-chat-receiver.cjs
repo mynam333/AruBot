@@ -45,6 +45,87 @@ function parseAssignedJsonObject(data, assignment) {
   throw new Error('Live chat page data was incomplete');
 }
 
+function parseYoutubeInitialData(data) {
+  const assignments = [
+    'window["ytInitialData"]',
+    'var ytInitialData =',
+    'ytInitialData =',
+  ];
+  for (const assignment of assignments) {
+    try {
+      return parseAssignedJsonObject(data, assignment);
+    } catch (error) {
+      if (!String(error?.message || error).includes('was not found')) throw error;
+    }
+  }
+  throw new Error('YouTube initial page data was not found');
+}
+
+function hasLiveBadge(value) {
+  const pending = [value];
+  while (pending.length) {
+    const current = pending.pop();
+    if (!current || typeof current !== 'object') continue;
+    const style = String(
+      current.style
+      || current.badgeStyle
+      || current.metadataBadgeRenderer?.style
+      || current.thumbnailOverlayTimeStatusRenderer?.style
+      || current.thumbnailBadgeViewModel?.badgeStyle
+      || '',
+    ).toUpperCase();
+    if (style === 'LIVE' || style === 'BADGE_STYLE_TYPE_LIVE_NOW' || style === 'THUMBNAIL_OVERLAY_BADGE_STYLE_LIVE') {
+      return true;
+    }
+    for (const child of Object.values(current)) {
+      if (child && typeof child === 'object') pending.push(child);
+    }
+  }
+  return false;
+}
+
+function liveVideoIdFromRenderer(renderer) {
+  if (!renderer || typeof renderer !== 'object') return '';
+  const indicators = [renderer.badges, renderer.thumbnailOverlays];
+  if (!indicators.some(hasLiveBadge)) return '';
+  return String(renderer.videoId || '').trim();
+}
+
+function liveVideoIdFromLockup(model) {
+  if (!model || typeof model !== 'object') return '';
+  const overlays = model.contentImage?.thumbnailViewModel?.overlays;
+  if (!hasLiveBadge(overlays)) return '';
+  return String(
+    model.contentId
+    || model.rendererContext?.commandContext?.onTap?.innertubeCommand?.watchEndpoint?.videoId
+    || '',
+  ).trim();
+}
+
+function liveIdsFromChannelPage(data) {
+  let initialData = null;
+  try {
+    initialData = parseYoutubeInitialData(data);
+  } catch {
+    return [];
+  }
+
+  const liveIds = [];
+  const seen = new Set();
+  const visit = (value) => {
+    if (!value || typeof value !== 'object') return;
+    const candidate = liveVideoIdFromRenderer(value.videoRenderer)
+      || liveVideoIdFromLockup(value.lockupViewModel);
+    if (candidate && !seen.has(candidate)) {
+      seen.add(candidate);
+      liveIds.push(candidate);
+    }
+    for (const child of Object.values(value)) visit(child);
+  };
+  visit(initialData);
+  return liveIds;
+}
+
 function continuationFromRenderer(renderer) {
   for (const item of Array.isArray(renderer?.continuations) ? renderer.continuations : []) {
     const continuation = item?.invalidationContinuationData?.continuation
@@ -70,7 +151,7 @@ function getOptionsFromLivePageCompat(data, knownLiveId = '') {
   const source = String(data || '');
   if (/["']isReplay["']:\s*true/.test(source)) throw new Error('Live stream is already finished');
 
-  const initialData = parseAssignedJsonObject(source, 'window["ytInitialData"]');
+  const initialData = parseYoutubeInitialData(source);
   const renderer = initialData?.contents?.liveChatRenderer;
   if (!renderer) {
     const message = liveChatPageMessage(initialData);
@@ -117,7 +198,8 @@ async function resolveReceiverLiveId(id) {
   });
   const resolvedUrl = String(response?.request?.res?.responseUrl || '');
   const redirectedLiveId = resolvedUrl ? new URL(resolvedUrl).searchParams.get('v') : '';
-  const resolvedLiveId = redirectedLiveId || liveIdFromPage(response.data);
+  const channelPageLiveIds = liveIdsFromChannelPage(response.data);
+  const resolvedLiveId = redirectedLiveId || liveIdFromPage(response.data) || channelPageLiveIds[0];
   if (!resolvedLiveId) throw new Error('Live Stream was not found');
   return resolvedLiveId;
 }
@@ -229,6 +311,7 @@ module.exports = {
   createYoutubeLiveChatReceiver,
   fetchLivePageCompat,
   getOptionsFromLivePageCompat,
+  liveIdsFromChannelPage,
   receiverMessageText,
   toYoutubeLiveChatItem,
 };

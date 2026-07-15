@@ -1,6 +1,7 @@
 const {
   createYoutubeLiveChatReceiver,
   getOptionsFromLivePageCompat,
+  liveIdsFromChannelPage,
   receiverMessageText,
   toYoutubeLiveChatItem,
 } = require('../server/youtube-live-chat-receiver.cjs');
@@ -38,6 +39,77 @@ describe('YouTube live chat receiver adapter', () => {
       })};</script>
       {"INNERTUBE_API_KEY":"api-key","clientVersion":"2.20260715.00.00","continuationCommand":{"token":"comments-token"}}
     `, 'video123')).toThrow('Chat is disabled for this live stream.');
+  });
+
+  test('finds a live video in the current channel lockup page shape', () => {
+    const page = `
+      <script>var ytInitialData = ${JSON.stringify({
+        contents: {
+          richGridRenderer: {
+            contents: [
+              {
+                richItemRenderer: {
+                  content: {
+                    lockupViewModel: {
+                      contentId: 'liveVideo01',
+                      contentImage: {
+                        thumbnailViewModel: {
+                          overlays: [{
+                            thumbnailBottomOverlayViewModel: {
+                              badges: [{
+                                thumbnailBadgeViewModel: {
+                                  badgeStyle: 'THUMBNAIL_OVERLAY_BADGE_STYLE_LIVE',
+                                  text: 'LIVE',
+                                },
+                              }],
+                            },
+                          }],
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+              {
+                richItemRenderer: {
+                  content: {
+                    lockupViewModel: {
+                      contentId: 'recorded001',
+                      contentImage: {
+                        thumbnailViewModel: {
+                          overlays: [{
+                            thumbnailBottomOverlayViewModel: {
+                              badges: [{ thumbnailBadgeViewModel: { badgeStyle: 'THUMBNAIL_OVERLAY_BADGE_STYLE_DEFAULT' } }],
+                            },
+                          }],
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      })};</script>
+    `;
+
+    expect(liveIdsFromChannelPage(page)).toEqual(['liveVideo01']);
+  });
+
+  test('keeps the legacy live video renderer compatible', () => {
+    const page = `
+      <script>var ytInitialData = ${JSON.stringify({
+        contents: {
+          videoRenderer: {
+            videoId: 'legacyLive1',
+            thumbnailOverlays: [{ thumbnailOverlayTimeStatusRenderer: { style: 'LIVE' } }],
+          },
+        },
+      })};</script>
+    `;
+
+    expect(liveIdsFromChannelPage(page)).toEqual(['legacyLive1']);
   });
 
   test('creates an event receiver for a known broadcast without starting network work', () => {
