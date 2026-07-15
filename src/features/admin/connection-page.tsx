@@ -92,6 +92,8 @@ type YoutubeModeratorVerification = {
   botChannelId?: string | null;
   observedChannelId?: string | null;
   moderatorListError?: string | null;
+  moderationCapabilityReason?: string | null;
+  moderationCapabilityError?: string | null;
   authorDetails?: {
     displayName?: string | null;
     channelId?: string | null;
@@ -143,6 +145,7 @@ function formatYoutubeModeratorError(verification?: YoutubeModeratorVerification
   if (verification.reason) parts.push(`원인: ${verification.reason}`);
   if (verification.checkedBy) parts.push(`확인: ${verification.checkedBy}`);
   if (verification.moderatorListError) parts.push(`목록 조회: ${verification.moderatorListError}`);
+  if (verification.moderationCapabilityError) parts.push(`운영 권한 검사: ${verification.moderationCapabilityError}`);
   if (verification.botChannelId && verification.observedChannelId && verification.botChannelId !== verification.observedChannelId) {
     parts.push('AruBot에 저장된 봇 채널과 실제 채팅 작성 채널이 다릅니다.');
   }

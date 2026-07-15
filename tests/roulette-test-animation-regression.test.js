@@ -5,6 +5,9 @@ describe('룰렛 실제 회전 테스트 회귀 방지', () => {
   const serverIndex = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
   const rouletteViewer = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'RouletteViewer.tsx'), 'utf8');
   const roulettePage = fs.readFileSync(path.join(__dirname, '..', 'src', 'features', 'admin', 'roulette-page.tsx'), 'utf8');
+  const popupControllerStart = roulettePage.indexOf('function RouletteTestPopupController');
+  const popupControllerEnd = roulettePage.indexOf('export function RoulettePage', popupControllerStart);
+  const popupController = roulettePage.slice(popupControllerStart, popupControllerEnd);
 
   test('관리자와 로컬 리모컨 테스트는 즉시 결과가 아닌 실제 회전 이벤트를 전송해야 함', () => {
     const adminStart = serverIndex.indexOf("app.post('/api/roulette/test'");
@@ -34,7 +37,7 @@ describe('룰렛 실제 회전 테스트 회귀 방지', () => {
     expect(serverIndex).toContain("type: 'roulette:test-ready'");
     expect(serverIndex).toContain('if (opts?.testMode !== true) {');
     expect(serverIndex).toContain("opts?.testMode !== true && opts?.executeResultActions !== false");
-    expect(roulettePage).toContain("url.searchParams.set('testConnectionId', testConnectionId)");
+    expect(roulettePage).toContain("viewerUrl.searchParams.set('testConnectionId', testConnectionId)");
     expect(rouletteViewer).toContain("url.searchParams.set('testConnectionId', testConnectionId)");
     expect(rouletteViewer).toContain("data?.type === 'roulette:test-ready'");
   });
@@ -61,23 +64,47 @@ describe('룰렛 실제 회전 테스트 회귀 방지', () => {
     expect(rouletteViewer).toContain('tryFinishSpinBarrier(barrier)');
     expect(rouletteViewer).toContain("wheel.addEventListener('transitionend', onTransitionEnd)");
     expect(rouletteViewer).toContain('startSpinAnimation(final, Array.isArray(payload.items) ? payload.items : null, payload)');
-    expect(rouletteViewer).toContain("q.get('embeddedTest') === '1'");
-    expect(rouletteViewer).toContain('if (embeddedTestMode)');
   });
 
-  test('관리 페이지는 실제 오버레이 정지 신호 전까지 테스트 결과를 공개하지 않아야 함', () => {
-    expect(roulettePage).toContain('<iframe');
-    expect(roulettePage).toContain("message.type === 'arubot:roulette-ready'");
-    expect(roulettePage).toContain("message.type !== 'arubot:roulette-settled'");
-    expect(roulettePage).toContain('event.source !== iframeRef.current?.contentWindow');
-    expect(roulettePage).toContain('message.spinId !== expected.spinId');
-    expect(roulettePage).toContain('Number(message.itemCount) !== itemCount');
-    expect(roulettePage).toContain('포인터가 멈출 때까지 결과를 공개하지 않습니다.');
-    expect(roulettePage).toContain('setResultLabel(stoppedLabel)');
-    expect(roulettePage).toContain('onSettled(definition, stoppedLabel)');
-    expect(roulettePage).toContain('pendingSettledRef.current.set(spinId, message)');
-    expect(roulettePage).toContain('settleFromMessage(pending)');
-    expect(roulettePage).toContain('const requestController = new AbortController()');
+  test('테스트 회전은 홈페이지 iframe이 아니라 실제 오버레이 팝업에서 실행되어야 함', () => {
+    expect(roulettePage).toContain("'about:blank'");
+    expect(roulettePage).toContain('const popupWindow = openRouletteTestPopup(definition, testConnectionId)');
+    expect(roulettePage).toContain('if (!popupWindow)');
+    expect(roulettePage).toContain('popupWindow.location.replace(viewerUrl.toString())');
+    expect(roulettePage).not.toContain('<iframe');
+    expect(roulettePage).not.toContain('iframeRef');
+    expect(roulettePage).not.toContain('embeddedTest');
+    expect(rouletteViewer).toContain('if (window.opener && !window.opener.closed)');
+    expect(rouletteViewer).toContain('window.opener.postMessage(message, window.location.origin)');
+  });
+
+  test('관리 페이지는 검증된 팝업의 실제 정지 신호 전까지 테스트 결과를 공개하지 않아야 함', () => {
+    expect(popupController).toContain("message.type === 'arubot:roulette-ready'");
+    expect(popupController).toContain("message.type !== 'arubot:roulette-settled'");
+    expect(popupController).toContain('event.origin !== window.location.origin');
+    expect(popupController).toContain('event.source !== popupWindow');
+    expect(popupController).toContain('message.token !== viewerRef.current?.token');
+    expect(popupController).toContain('message.testConnectionId !== testConnectionId');
+    expect(popupController).toContain('message.spinId !== expected.spinId');
+    expect(popupController).toContain('Number(message.itemCount) !== itemCount');
+    expect(popupController).toContain('callbacksRef.current.onSettled(definition, stoppedLabel)');
+    expect(popupController).toContain('pendingSettledRef.current.set(spinId, message)');
+    expect(popupController).toContain('settleFromMessage(pending)');
+    expect(popupController).toContain('const requestController = new AbortController()');
+  });
+
+  test('팝업 수명주기와 준비 순서는 차단·조기 종료·고아 창을 안전하게 처리해야 함', () => {
+    expect(roulettePage.indexOf('openRouletteTestPopup(definition, testConnectionId)'))
+      .toBeLessThan(roulettePage.indexOf('setActiveTest({ key, definition, testConnectionId, popupWindow })'));
+    expect(popupController.indexOf("window.addEventListener('message', onMessage)"))
+      .toBeLessThan(popupController.indexOf('/api/roulette/viewer-url?testConnectionId='));
+    expect(popupController).toContain('popupWindow.closed');
+    expect(popupController).toContain('룰렛 테스트 오버레이 창이 회전 완료 전에 닫혔습니다.');
+    expect(popupController).toContain('viewerController.abort()');
+    expect(popupController).toContain("window.removeEventListener('message', onMessage)");
+    expect(popupController).toContain('window.clearInterval(closePoll)');
+    expect(popupController).toContain('popupWindow.close()');
+    expect(popupController).toContain('ROULETTE_TEST_POPUP_CLOSE_DELAY_MS');
   });
 
   test('자동재생이 막혀도 처리되지 않은 오디오 Promise 오류를 남기면 안 됨', () => {

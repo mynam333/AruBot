@@ -696,8 +696,17 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     } catch { return ''; }
   }, []);
   const postEmbeddedMessage = React.useCallback((payload: Record<string, unknown>) => {
-    if (typeof window === 'undefined' || window.parent === window) return;
-    window.parent.postMessage({ ...payload, token, testConnectionId }, window.location.origin);
+    if (typeof window === 'undefined') return;
+    const message = { ...payload, token, testConnectionId };
+    try {
+      if (window.opener && !window.opener.closed) {
+        window.opener.postMessage(message, window.location.origin);
+        return;
+      }
+    } catch { }
+    try {
+      if (window.parent !== window) window.parent.postMessage(message, window.location.origin);
+    } catch { }
   }, [testConnectionId, token]);
 
   // 메시지 채널 ID 검증 함수

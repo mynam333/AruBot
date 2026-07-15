@@ -7430,7 +7430,18 @@ app.get('/api/drawing-donation/viewer-url', async (req, res) => {
       await setBotSettings(sid, { ...settings, drawingDonationViewerToken: token });
     }
     drawingTokenToSid.set(token, sid);
-    return res.json({ token, path: `/drawing-overlay/${encodeURIComponent(token)}` });
+    const ownerUserId = ownerUserIdFromSid(sid);
+    const drawingEditorPath = ownerUserId
+      ? `/viewer/drawing/${encodeURIComponent(ownerUserId)}`
+      : null;
+    const donationPath = drawingEditorPath
+      ? `/viewer/login?returnTo=${encodeURIComponent(drawingEditorPath)}`
+      : null;
+    return res.json({
+      token,
+      path: `/drawing-overlay/${encodeURIComponent(token)}`,
+      donationPath
+    });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to get drawing overlay URL' });
   }
@@ -15641,6 +15652,19 @@ async function youtubeBotApiPost(pathname, params = {}, body = {}, options = {})
   return response;
 }
 
+async function youtubeBotApiDelete(pathname, params = {}, options = {}) {
+  const accessToken = await getValidYoutubeBotAccessToken();
+  const relativePath = String(pathname || '').replace(/^\/+/, '');
+  const url = new URL(relativePath, YOUTUBE_API_BASE.endsWith('/') ? YOUTUBE_API_BASE : `${YOUTUBE_API_BASE}/`);
+  for (const [key, value] of Object.entries(params || {})) {
+    if (value != null && value !== '') url.searchParams.set(key, String(value));
+  }
+  return axios.delete(url.toString(), {
+    headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
+    timeout: options.timeout || DEFAULT_TIMEOUT
+  });
+}
+
 async function fetchYoutubeMyChannelWithAccessToken(accessToken) {
   const url = new URL('channels', YOUTUBE_API_BASE.endsWith('/') ? YOUTUBE_API_BASE : `${YOUTUBE_API_BASE}/`);
   url.searchParams.set('part', 'snippet');
@@ -23046,6 +23070,32 @@ async function waitForYoutubeModeratorVerificationMessage(liveChatId, accessToke
   return { match: lastMarkerMatch, attempts, lastError };
 }
 
+function getYoutubeApiErrorReason(error) {
+  const apiError = error?.response?.data?.error || {};
+  return apiError?.errors?.[0]?.reason || apiError?.status || null;
+}
+
+async function probeYoutubeModeratorMessageCapability(messageId) {
+  if (!messageId) {
+    return { verified: false, deleted: false, reason: 'verification_message_id_missing', error: null, status: null };
+  }
+  try {
+    await youtubeBotApiDelete('liveChat/messages', { id: messageId }, { timeout: 7000 });
+    return { verified: true, deleted: true, reason: 'message_deleted', error: null, status: 204 };
+  } catch (error) {
+    const status = error?.response?.status || null;
+    const reason = getYoutubeApiErrorReason(error);
+    const protectedModeratorMessage = status === 403 && reason === 'modificationNotAllowed';
+    return {
+      verified: protectedModeratorMessage,
+      deleted: false,
+      reason,
+      error: error?.response?.data?.error?.message || error?.message || 'moderation_capability_check_failed',
+      status
+    };
+  }
+}
+
 async function verifyYoutubeBotModeratorRegistration(ownerUserId) {
   const botProfile = await getValidYoutubeBotProfile();
   const streamerChannel = await getYoutubeStreamerChannel(ownerUserId);
@@ -23079,7 +23129,7 @@ async function verifyYoutubeBotModeratorRegistration(ownerUserId) {
       return {
         verified: true,
         reason: 'moderator_list_verified',
-        message: 'AruBot 중앙 봇이 이 라이브 채팅의 운영자로 확인되었습니다.',
+        message: 'AruBot 중앙 봇이 이 라이브 채팅의 표준 또는 관리 운영자로 확인되었습니다.',
         liveChatId,
         botChannelId: botProfile.selectedChannelId,
         checkedBy: 'liveChatModerators.list',
@@ -23142,15 +23192,23 @@ async function verifyYoutubeBotModeratorRegistration(ownerUserId) {
 
   const author = observed.match.author || {};
   const authorDetails = serializeYoutubeAuthorDetails(author);
-  const verified = observed.match.matchesBotChannel && isYoutubeAuthorPrivilegedForModeration(author);
+  const authorRoleVerified = isYoutubeAuthorPrivilegedForModeration(author);
+  const capability = observed.match.matchesBotChannel
+    ? await probeYoutubeModeratorMessageCapability(observed.match.item?.id || sentMessageId)
+    : { verified: false, deleted: false, reason: null, error: null, status: null };
+  const capabilityVerified = observed.match.matchesBotChannel && capability.verified;
+  const verified = observed.match.matchesBotChannel && (authorRoleVerified || capabilityVerified);
   let reason = 'moderator_verified';
-  let message = 'AruBot 중앙 봇이 이 라이브 채팅의 운영자로 확인되었습니다.';
+  let message = 'AruBot 중앙 봇이 이 라이브 채팅의 표준 또는 관리 운영자로 확인되었습니다.';
   if (!observed.match.matchesBotChannel) {
     reason = 'verification_channel_mismatch';
     message = '검증 메시지는 확인했지만 AruBot에 등록된 중앙 봇 채널과 작성자 채널이 다릅니다.';
+  } else if (!authorRoleVerified && capabilityVerified) {
+    reason = 'moderator_capability_verified';
+    message = 'AruBot 중앙 봇의 표준 또는 관리 운영자 권한을 실제 채팅 관리 기능으로 확인했습니다.';
   } else if (!verified) {
     reason = 'bot_is_not_moderator';
-    message = 'AruBot 중앙 봇 메시지는 확인했지만 YouTube API에서 운영자 또는 채널 소유자 권한이 확인되지 않았습니다.';
+    message = 'AruBot 중앙 봇 메시지는 확인했지만 YouTube API에서 표준 또는 관리 운영자 권한이 확인되지 않았습니다.';
   }
 
   const result = {
@@ -23161,9 +23219,13 @@ async function verifyYoutubeBotModeratorRegistration(ownerUserId) {
     messageId: observed.match.item?.id || sentMessageId,
     botChannelId: botProfile.selectedChannelId,
     observedChannelId: author.channelId || null,
-    checkedBy: 'liveChatMessages.list',
+    checkedBy: capabilityVerified ? 'liveChatMessages.delete' : 'liveChatMessages.list',
     attempts: observed.attempts,
-    authorDetails
+    authorDetails,
+    verificationMessageDeleted: capability.deleted,
+    moderationCapabilityReason: capability.reason,
+    moderationCapabilityError: capability.verified ? null : capability.error,
+    moderationCapabilityStatus: capability.status
   };
   if (!verified || moderatorListError) {
     result.moderatorListError = moderatorListError

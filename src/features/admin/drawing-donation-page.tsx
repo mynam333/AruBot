@@ -88,6 +88,28 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   return response.json();
 }
 
+async function writeClipboardText(value: string) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return;
+    }
+  } catch {
+    // Fall through for browsers that expose Clipboard API without granting access.
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = value;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand('copy');
+  textarea.remove();
+  if (!copied) throw new Error('clipboard unavailable');
+}
+
 function adminCrayonNoise(seed: number) {
   const value = Math.sin(seed * 12.9898) * 43758.5453;
   return value - Math.floor(value);
@@ -349,7 +371,8 @@ export function DrawingDonationPage() {
   const [settings, setSettings] = useState<DrawingSettings>(defaultSettings);
   const [items, setItems] = useState<DrawingItem[]>([]);
   const [blockedUsers, setBlockedUsers] = useState<BlockedUser[]>([]);
-  const [viewerPath, setViewerPath] = useState('');
+  const [overlayPath, setOverlayPath] = useState('');
+  const [viewerDonationPath, setViewerDonationPath] = useState('');
   const [blockForm, setBlockForm] = useState({ userId: '', username: '', reason: '' });
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -361,9 +384,14 @@ export function DrawingDonationPage() {
   const [isPending, startTransition] = useTransition();
 
   const overlayUrl = useMemo(() => {
-    if (!viewerPath || typeof window === 'undefined') return viewerPath;
-    return `${window.location.origin}${viewerPath}`;
-  }, [viewerPath]);
+    if (!overlayPath || typeof window === 'undefined') return overlayPath;
+    return `${window.location.origin}${overlayPath}`;
+  }, [overlayPath]);
+
+  const viewerDonationUrl = useMemo(() => {
+    if (!viewerDonationPath || typeof window === 'undefined') return viewerDonationPath;
+    return `${window.location.origin}${viewerDonationPath}`;
+  }, [viewerDonationPath]);
 
   const applyQueuePayload = useCallback((payload: QueuePayload | null) => {
     if (payload?.items) setItems(payload.items);
@@ -374,12 +402,13 @@ export function DrawingDonationPage() {
       readJson<{ settings: DrawingSettings }>('/api/drawing-donation/settings'),
       readJson<{ items: DrawingItem[] }>('/api/drawing-donation/queue'),
       readJson<{ items: BlockedUser[] }>('/api/bot/blocked-users'),
-      readJson<{ path: string }>('/api/drawing-donation/viewer-url'),
+      readJson<{ path: string; donationPath?: string | null }>('/api/drawing-donation/viewer-url'),
     ]);
     setSettings({ ...defaultSettings, ...settingsPayload.settings, canvas: { ...defaultSettings.canvas, ...settingsPayload.settings?.canvas } });
     setItems(queuePayload.items || []);
     setBlockedUsers(blockPayload.items || []);
-    setViewerPath(viewerPayload.path || '');
+    setOverlayPath(viewerPayload.path || '');
+    setViewerDonationPath(viewerPayload.donationPath || '');
   }, []);
 
   useEffect(() => {
@@ -439,6 +468,16 @@ export function DrawingDonationPage() {
     });
   };
 
+  const copyAddress = useCallback(async (address: string, successMessage: string) => {
+    if (!address) return;
+    try {
+      await writeClipboardText(address);
+      toast.success(successMessage);
+    } catch {
+      toast.error('주소를 복사하지 못했어요.');
+    }
+  }, []);
+
   const runItemAction = (path: string, id: string, message: string) => {
     startTransition(async () => {
       try {
@@ -495,7 +534,7 @@ export function DrawingDonationPage() {
     startTransition(async () => {
       try {
         const payload = await postJson<{ path: string }>('/api/drawing-donation/rotate-viewer-token', {});
-        setViewerPath(payload.path || '');
+        setOverlayPath(payload.path || '');
         toast.success('오버레이 주소를 새로 만들었어요.');
       } catch {
         toast.error('오버레이 주소를 새로 만들지 못했어요.');
@@ -623,6 +662,14 @@ export function DrawingDonationPage() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => copyAddress(viewerDonationUrl, '시청자 그림 후원 링크를 복사했어요.')}
+              disabled={!viewerDonationUrl}
+            >
+              <Copy className="h-[1em] w-[1em]" /> 시청자 링크 복사
+            </Button>
             <Button type="button" variant="secondary" onClick={() => refresh().catch(() => undefined)}>
               <RefreshCw className="h-[1em] w-[1em]" /> 새로고침
             </Button>
@@ -719,12 +766,12 @@ export function DrawingDonationPage() {
           <CardContent className="space-y-3">
             <button
               type="button"
-              onClick={() => overlayUrl && navigator.clipboard?.writeText(overlayUrl).then(() => toast.success('오버레이 주소를 복사했어요.')).catch(() => undefined)}
+              onClick={() => copyAddress(overlayUrl, '오버레이 주소를 복사했어요.')}
               className="group w-full rounded-[var(--radius-control)] border bg-background/70 p-3 text-left text-sm blur-[0.08rem] transition hover:blur-0"
             >
               {overlayUrl || '오버레이 주소를 준비하는 중'}
             </button>
-            <Button type="button" variant="secondary" className="w-full" onClick={() => overlayUrl && navigator.clipboard?.writeText(overlayUrl)}>
+            <Button type="button" variant="secondary" className="w-full" onClick={() => copyAddress(overlayUrl, '오버레이 주소를 복사했어요.')} disabled={!overlayUrl}>
               <Copy className="h-[1em] w-[1em]" /> 주소 복사
             </Button>
             <Button type="button" variant="outline" className="w-full" onClick={rotateOverlayToken} disabled={isPending}>

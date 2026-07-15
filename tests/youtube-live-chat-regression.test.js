@@ -129,6 +129,24 @@ describe('YouTube live chat integration regression', () => {
     expect(connectionPage).toContain("searchParams.get('platform') !== 'youtube'");
   });
 
+  test('accepts managing moderators through an API moderation capability check', () => {
+    const verifyStart = serverIndex.indexOf('async function verifyYoutubeBotModeratorRegistration');
+    const verifyEnd = serverIndex.indexOf('async function sendYoutubeChat', verifyStart);
+    const verifyBody = serverIndex.slice(verifyStart, verifyEnd);
+
+    expect(serverIndex).toContain('async function youtubeBotApiDelete');
+    expect(serverIndex).toContain("youtubeBotApiDelete('liveChat/messages', { id: messageId }");
+    expect(serverIndex).toContain("reason === 'modificationNotAllowed'");
+    expect(serverIndex).toContain('verified: protectedModeratorMessage');
+    expect(verifyBody).toContain('authorRoleVerified || capabilityVerified');
+    expect(verifyBody).toContain("reason = 'moderator_capability_verified'");
+    expect(verifyBody).toContain("checkedBy: capabilityVerified ? 'liveChatMessages.delete' : 'liveChatMessages.list'");
+    expect(verifyBody).toContain('verificationMessageDeleted: capability.deleted');
+    expect(verifyBody).toContain('moderationCapabilityReason: capability.reason');
+    expect(verifyBody).toContain('표준 또는 관리 운영자');
+    expect(connectionPage).toContain('moderationCapabilityError?: string | null');
+  });
+
   test('central YouTube bot deletion enforces server confirmation and records an admin audit result', () => {
     const helperStart = serverIndex.indexOf('async function recordYoutubeCentralBotAdminAudit');
     const routeStart = serverIndex.indexOf("app.delete('/api/youtube/bot'", helperStart);

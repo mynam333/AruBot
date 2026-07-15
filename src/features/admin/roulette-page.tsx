@@ -71,9 +71,15 @@ type RouletteEmbeddedMessage = {
   itemCount?: number;
 };
 
-type RouletteTestPhase = 'preparing' | 'connecting' | 'spinning' | 'settled' | 'error';
-
 const ROULETTE_PAGE_SIZE = 8;
+const ROULETTE_TEST_POPUP_CLOSE_DELAY_MS = 1500;
+
+type ActiveRouletteTest = {
+  key: string;
+  definition: RouletteDefinition;
+  testConnectionId: string;
+  popupWindow: Window;
+};
 
 function createRouletteTestConnectionId() {
   if (typeof window !== 'undefined' && typeof window.crypto?.randomUUID === 'function') {
@@ -84,6 +90,33 @@ function createRouletteTestConnectionId() {
 
 function normalizeRouletteResultLabel(value: unknown) {
   return String(value || '').trim().normalize('NFC');
+}
+
+function openRouletteTestPopup(definition: RouletteDefinition, testConnectionId: string) {
+  const look = parseRouletteTheme(definition.theme);
+  const width = look.layout === 'wheel' ? 760 : 1040;
+  const height = look.layout === 'wheel' ? 800 : 660;
+  const left = Math.max(0, Math.round(window.screenX + (window.outerWidth - width) / 2));
+  const top = Math.max(0, Math.round(window.screenY + (window.outerHeight - height) / 2));
+  const popup = window.open(
+    'about:blank',
+    `arubot-roulette-test-${testConnectionId}`,
+    `popup=yes,width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=no`,
+  );
+  if (!popup) return null;
+
+  try {
+    const doc = popup.document;
+    doc.title = `${definition.name} 룰렛 오버레이 테스트`;
+    doc.documentElement.lang = 'ko';
+    doc.documentElement.style.background = '#020617';
+    doc.body.style.cssText = 'margin:0;min-height:100vh;display:grid;place-items:center;background:#020617;color:#cbd5e1;font:600 14px/1.6 system-ui,sans-serif;';
+    const status = doc.createElement('div');
+    status.textContent = '실제 룰렛 오버레이에 연결하고 있습니다…';
+    doc.body.replaceChildren(status);
+  } catch { /* The real same-origin overlay replaces this transient loading surface. */ }
+  popup.focus();
+  return popup;
 }
 
 const ROULETTE_LAYOUT_OPTIONS = [
@@ -321,33 +354,37 @@ function RouletteEditDialog({
   );
 }
 
-function RouletteTestDialog({
+function RouletteTestPopupController({
   definition,
   testConnectionId,
-  onClose,
+  popupWindow,
   onSettled,
   onFailed,
+  onFinished,
 }: {
   definition: RouletteDefinition;
   testConnectionId: string;
-  onClose: () => void;
+  popupWindow: Window;
   onSettled: (definition: RouletteDefinition, label: string) => void;
   onFailed: (message: string) => void;
+  onFinished: () => void;
 }) {
-  const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const requestStartedRef = useRef(false);
   const finishedRef = useRef(false);
+  const lifecycleFinishedRef = useRef(false);
+  const viewerRef = useRef<RouletteViewerUrlResponse | null>(null);
   const expectedSpinRef = useRef<{ spinId: string; label: string } | null>(null);
   const pendingSettledRef = useRef<Map<string, RouletteEmbeddedMessage>>(new Map());
   const timeoutRef = useRef<number | null>(null);
+  const popupCloseTimeoutRef = useRef<number | null>(null);
   const requestAbortRef = useRef<AbortController | null>(null);
-  const [viewer, setViewer] = useState<RouletteViewerUrlResponse | null>(null);
-  const [phase, setPhase] = useState<RouletteTestPhase>('preparing');
-  const [resultLabel, setResultLabel] = useState('');
-  const [errorMessage, setErrorMessage] = useState('');
-  const look = useMemo(() => parseRouletteTheme(definition.theme), [definition.theme]);
-  const itemCount = definition.items?.length || 0;
-  const canClose = phase === 'settled' || phase === 'error';
+  const viewerAbortRef = useRef<AbortController | null>(null);
+  const callbacksRef = useRef({ onSettled, onFailed, onFinished });
+  const itemCount = (definition.items || []).filter((item) => String(item?.label || '').trim()).length;
+
+  useEffect(() => {
+    callbacksRef.current = { onSettled, onFailed, onFinished };
+  }, [onFailed, onFinished, onSettled]);
 
   const clearDeadline = useCallback(() => {
     if (timeoutRef.current != null) {
@@ -356,17 +393,34 @@ function RouletteTestDialog({
     }
   }, []);
 
+  const clearPopupCloseTimeout = useCallback(() => {
+    if (popupCloseTimeoutRef.current != null) {
+      window.clearTimeout(popupCloseTimeoutRef.current);
+      popupCloseTimeoutRef.current = null;
+    }
+  }, []);
+
+  const finishLifecycle = useCallback(() => {
+    if (lifecycleFinishedRef.current) return;
+    lifecycleFinishedRef.current = true;
+    clearPopupCloseTimeout();
+    try { if (!popupWindow.closed) popupWindow.close(); } catch { }
+    callbacksRef.current.onFinished();
+  }, [clearPopupCloseTimeout, popupWindow]);
+
   const fail = useCallback((message: string) => {
     if (finishedRef.current) return;
     finishedRef.current = true;
     requestAbortRef.current?.abort();
     requestAbortRef.current = null;
+    viewerAbortRef.current?.abort();
+    viewerAbortRef.current = null;
     pendingSettledRef.current.clear();
     clearDeadline();
-    setErrorMessage(message);
-    setPhase('error');
-    onFailed(message);
-  }, [clearDeadline, onFailed]);
+    clearPopupCloseTimeout();
+    try { if (!popupWindow.closed) popupWindow.close(); } catch { }
+    callbacksRef.current.onFailed(message);
+  }, [clearDeadline, clearPopupCloseTimeout, popupWindow]);
 
   const settleFromMessage = useCallback((message: RouletteEmbeddedMessage) => {
     if (finishedRef.current) return;
@@ -387,15 +441,13 @@ function RouletteTestDialog({
     finishedRef.current = true;
     pendingSettledRef.current.clear();
     clearDeadline();
-    setResultLabel(stoppedLabel);
-    setPhase('settled');
-    onSettled(definition, stoppedLabel);
-  }, [clearDeadline, definition, fail, itemCount, onSettled]);
+    callbacksRef.current.onSettled(definition, stoppedLabel);
+    popupCloseTimeoutRef.current = window.setTimeout(finishLifecycle, ROULETTE_TEST_POPUP_CLOSE_DELAY_MS);
+  }, [clearDeadline, definition, fail, finishLifecycle, itemCount]);
 
   const runTest = useCallback(async () => {
     if (requestStartedRef.current || finishedRef.current) return;
     requestStartedRef.current = true;
-    setPhase('spinning');
     clearDeadline();
     const requestController = new AbortController();
     requestAbortRef.current = requestController;
@@ -438,47 +490,12 @@ function RouletteTestDialog({
   }, [clearDeadline, definition.id, definition.name, fail, settleFromMessage, testConnectionId]);
 
   useEffect(() => {
-    let cancelled = false;
     const pendingSettled = pendingSettledRef.current;
-    setPhase('preparing');
-    timeoutRef.current = window.setTimeout(() => {
-      fail('룰렛 테스트 화면 연결 시간이 초과되었습니다.');
-    }, 15000);
-
-    void (async () => {
-      try {
-        const nextViewer = await readJson<RouletteViewerUrlResponse>(
-          `/api/roulette/viewer-url?testConnectionId=${encodeURIComponent(testConnectionId)}`,
-        );
-        if (cancelled || finishedRef.current) return;
-        if (!nextViewer?.token || !nextViewer.path) {
-          fail('룰렛 오버레이 주소를 준비하지 못했습니다.');
-          return;
-        }
-        setViewer(nextViewer);
-        setPhase('connecting');
-      } catch (error) {
-        if (!cancelled) {
-          fail(error instanceof Error ? error.message : '룰렛 오버레이 주소를 준비하지 못했습니다.');
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-      requestAbortRef.current?.abort();
-      requestAbortRef.current = null;
-      pendingSettled.clear();
-      clearDeadline();
-    };
-  }, [clearDeadline, fail, testConnectionId]);
-
-  useEffect(() => {
     const onMessage = (event: MessageEvent<RouletteEmbeddedMessage>) => {
       if (event.origin !== window.location.origin) return;
-      if (event.source !== iframeRef.current?.contentWindow) return;
+      if (event.source !== popupWindow) return;
       const message = event.data;
-      if (!message || message.token !== viewer?.token || message.testConnectionId !== testConnectionId) return;
+      if (!message || message.token !== viewerRef.current?.token || message.testConnectionId !== testConnectionId) return;
 
       if (message.type === 'arubot:roulette-ready') {
         void runTest();
@@ -495,94 +512,72 @@ function RouletteTestDialog({
     };
 
     window.addEventListener('message', onMessage);
-    return () => window.removeEventListener('message', onMessage);
-  }, [runTest, settleFromMessage, testConnectionId, viewer?.token]);
+    const closePoll = window.setInterval(() => {
+      let closed = false;
+      try { closed = popupWindow.closed; } catch { closed = true; }
+      if (!closed) return;
+      if (finishedRef.current) finishLifecycle();
+      else fail('룰렛 테스트 오버레이 창이 회전 완료 전에 닫혔습니다.');
+    }, 250);
 
-  const viewerUrl = useMemo(() => {
-    if (!viewer?.path || typeof window === 'undefined') return '';
-    const url = new URL(viewer.path, window.location.origin);
-    url.searchParams.set('embeddedTest', '1');
-    url.searchParams.set('testConnectionId', testConnectionId);
-    return url.toString();
-  }, [testConnectionId, viewer?.path]);
+    const viewerController = new AbortController();
+    viewerAbortRef.current = viewerController;
+    clearDeadline();
+    timeoutRef.current = window.setTimeout(() => {
+      viewerController.abort();
+      fail('룰렛 테스트 오버레이 연결 시간이 초과되었습니다.');
+    }, 15000);
 
-  const phaseLabel = {
-    preparing: '화면 준비 중',
-    connecting: '오버레이 연결 중',
-    spinning: '실제 회전 중',
-    settled: '정지 완료',
-    error: '연결 점검 필요',
-  }[phase];
+    let active = true;
+    void (async () => {
+      const nextViewer = await readJson<RouletteViewerUrlResponse>(
+        `/api/roulette/viewer-url?testConnectionId=${encodeURIComponent(testConnectionId)}`,
+        { signal: viewerController.signal },
+      );
+      if (!active || finishedRef.current) return;
+      if (!nextViewer?.token || !nextViewer.path) {
+        fail('룰렛 오버레이 주소를 준비하지 못했습니다.');
+        return;
+      }
+      let popupClosed = false;
+      try { popupClosed = popupWindow.closed; } catch { popupClosed = true; }
+      if (popupClosed) {
+        fail('룰렛 테스트 오버레이 창이 연결 전에 닫혔습니다.');
+        return;
+      }
+      viewerRef.current = nextViewer;
+      const viewerUrl = new URL(nextViewer.path, window.location.origin);
+      viewerUrl.searchParams.set('testConnectionId', testConnectionId);
+      popupWindow.location.replace(viewerUrl.toString());
+      popupWindow.focus();
+    })().catch((error) => {
+      if (active && !finishedRef.current) {
+        fail(error instanceof Error ? error.message : '룰렛 오버레이 주소를 준비하지 못했습니다.');
+      }
+    });
 
-  return (
-    <Dialog.Root open onOpenChange={(nextOpen) => { if (!nextOpen && canClose) onClose(); }}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-slate-950/72 backdrop-blur-xl data-[state=open]:animate-fade-in" />
-        <Dialog.Content
-          className="fixed left-1/2 top-1/2 z-50 grid max-h-[96svh] w-[min(96vw,72rem)] -translate-x-1/2 -translate-y-1/2 grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-[var(--radius-panel)] border border-white/12 bg-slate-950 text-white shadow-lift outline-none data-[state=open]:animate-modal-in"
-          onOpenAutoFocus={(event) => event.preventDefault()}
-          onEscapeKeyDown={(event) => { if (!canClose) event.preventDefault(); }}
-          onPointerDownOutside={(event) => { if (!canClose) event.preventDefault(); }}
-        >
-          <header className="flex items-start justify-between gap-4 border-b border-white/10 px-[clamp(1rem,3vw,1.75rem)] py-[clamp(1rem,2.4vw,1.5rem)]">
-            <div className="min-w-0">
-              <div className="mb-2 flex flex-wrap items-center gap-2">
-                <Badge tone={phase === 'settled' ? 'mint' : phase === 'error' ? 'amber' : 'cyan'}>{phaseLabel}</Badge>
-                <Badge tone="neutral">전체 {itemCount}개 항목</Badge>
-              </div>
-              <Dialog.Title className="truncate text-xl font-bold tracking-tight sm:text-2xl">{definition.name} 테스트</Dialog.Title>
-              <Dialog.Description className="mt-2 text-sm leading-6 text-slate-300">
-                실제 OBS 오버레이와 동일한 데이터와 회전 엔진으로 테스트합니다.
-              </Dialog.Description>
-            </div>
-            <Button type="button" variant="ghost" size="icon" aria-label="테스트 화면 닫기" disabled={!canClose} onClick={onClose} className="shrink-0 text-white hover:bg-white/10 hover:text-white">
-              <X className="h-4 w-4" />
-            </Button>
-          </header>
+    return () => {
+      active = false;
+      window.removeEventListener('message', onMessage);
+      window.clearInterval(closePoll);
+      viewerController.abort();
+      viewerAbortRef.current = null;
+      requestAbortRef.current?.abort();
+      requestAbortRef.current = null;
+      pendingSettled.clear();
+      clearDeadline();
+      clearPopupCloseTimeout();
+      try { if (!popupWindow.closed) popupWindow.close(); } catch { }
+    };
+  }, [clearDeadline, clearPopupCloseTimeout, fail, finishLifecycle, popupWindow, runTest, settleFromMessage, testConnectionId]);
 
-          <div className="arubot-modal-scroll min-h-0 overflow-y-auto p-[clamp(0.75rem,2vw,1.5rem)]">
-            <div className={`relative mx-auto overflow-hidden rounded-[calc(var(--radius-panel)*.78)] border border-white/12 bg-[radial-gradient(circle_at_center,#172033_0%,#020617_70%)] shadow-2xl ${look.layout === 'wheel' ? 'aspect-square w-[min(68svh,100%)]' : 'aspect-video w-full'}`}>
-              {viewerUrl ? (
-                <iframe
-                  ref={iframeRef}
-                  src={viewerUrl}
-                  title={`${definition.name} 룰렛 실제 테스트`}
-                  allow="autoplay"
-                  referrerPolicy="same-origin"
-                  className="h-full w-full border-0"
-                />
-              ) : (
-                <div className="grid h-full min-h-72 place-items-center text-center text-slate-300">
-                  <div className="grid justify-items-center gap-3">
-                    <Loader2 className="h-7 w-7 animate-spin text-teal-300" />
-                    <span className="text-sm font-semibold">실제 룰렛 화면을 준비하고 있습니다.</span>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          <footer className="flex flex-col gap-3 border-t border-white/10 bg-white/[0.035] px-[clamp(1rem,3vw,1.75rem)] py-[clamp(1rem,2.4vw,1.35rem)] sm:flex-row sm:items-center sm:justify-between">
-            <div className="min-w-0 text-sm font-semibold">
-              {phase === 'settled' ? <span className="text-teal-200">테스트 당첨: {resultLabel}</span> : null}
-              {phase === 'error' ? <span className="text-amber-200">{errorMessage}</span> : null}
-              {phase !== 'settled' && phase !== 'error' ? <span className="text-slate-300">포인터가 멈출 때까지 결과를 공개하지 않습니다.</span> : null}
-            </div>
-            <Button type="button" disabled={!canClose} onClick={onClose} className="shrink-0">
-              {canClose ? '완료' : <><Loader2 className="h-4 w-4 animate-spin" /> 회전 완료 대기</>}
-            </Button>
-          </footer>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
-  );
+  return null;
 }
 
 export function RoulettePage() {
   const [definitions, setDefinitions] = useState<RouletteDefinition[]>([]);
   const [testingId, setTestingId] = useState<string | null>(null);
-  const [testDefinition, setTestDefinition] = useState<RouletteDefinition | null>(null);
-  const [testConnectionId, setTestConnectionId] = useState('');
+  const [activeTest, setActiveTest] = useState<ActiveRouletteTest | null>(null);
   const [testResults, setTestResults] = useState<Record<string, string>>({});
   const [page, setPage] = useState(1);
   const [isPending, startTransition] = useTransition();
@@ -620,7 +615,14 @@ export function RoulettePage() {
   }, [page, totalPages]);
 
   const testRoulette = (definition: RouletteDefinition) => {
+    if (activeTest) return;
     const key = definition.id || definition.name;
+    const testConnectionId = createRouletteTestConnectionId();
+    const popupWindow = openRouletteTestPopup(definition, testConnectionId);
+    if (!popupWindow) {
+      toast.error('룰렛 테스트 오버레이 창을 열지 못했습니다. 이 사이트의 팝업을 허용해 주세요.');
+      return;
+    }
     setTestResults((current) => {
       if (!(key in current)) return current;
       const next = { ...current };
@@ -628,8 +630,7 @@ export function RoulettePage() {
       return next;
     });
     setTestingId(key);
-    setTestConnectionId(createRouletteTestConnectionId());
-    setTestDefinition(definition);
+    setActiveTest({ key, definition, testConnectionId, popupWindow });
   };
 
   const handleTestSettled = useCallback((definition: RouletteDefinition, label: string) => {
@@ -641,13 +642,12 @@ export function RoulettePage() {
 
   const handleTestFailed = useCallback((message: string) => {
     setTestingId(null);
+    setActiveTest(null);
     toast.error(message);
   }, []);
 
-  const closeTest = useCallback(() => {
-    setTestingId(null);
-    setTestDefinition(null);
-    setTestConnectionId('');
+  const finishTest = useCallback(() => {
+    setActiveTest(null);
   }, []);
 
   return (
@@ -692,6 +692,7 @@ export function RoulettePage() {
       <div className="grid gap-4 lg:grid-cols-2">
         {visibleDefinitions.map((definition) => {
           const key = definition.id || definition.name;
+          const testActive = activeTest?.key === key;
           const items = definition.items || [];
           const look = parseRouletteTheme(definition.theme);
           const layoutLabel = look.layout === 'wheel' ? '휠 형태' : '릴 형태';
@@ -732,9 +733,9 @@ export function RoulettePage() {
                   </div>
                 ) : null}
                 <div className="flex flex-wrap justify-end gap-2">
-                  <Button type="button" variant="soft" onClick={() => testRoulette(definition)} disabled={testingId !== null || testDefinition !== null}>
-                    {testingId === key ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-                    {testingId === key ? '회전 중' : '테스트 실행'}
+                  <Button type="button" variant="soft" onClick={() => testRoulette(definition)} disabled={activeTest !== null}>
+                    {testActive ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                    {testingId === key ? '오버레이 회전 중' : testActive ? '오버레이 종료 중' : '테스트 실행'}
                   </Button>
                   <RouletteEditDialog definition={definition} onSaved={load} />
                 </div>
@@ -745,13 +746,14 @@ export function RoulettePage() {
         {!definitions.length ? <EmptyState className="lg:col-span-2" icon={Sparkles} title={isPending ? '룰렛을 불러오는 중입니다' : '만든 룰렛이 없습니다'} description={isPending ? '잠시만 기다려 주세요.' : '실제 방송에 사용할 첫 룰렛을 만들어 주세요.'} action={isPending ? undefined : <RouletteCreateDialog />} /> : null}
       </div>
       <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
-      {testDefinition && testConnectionId ? (
-        <RouletteTestDialog
-          definition={testDefinition}
-          testConnectionId={testConnectionId}
-          onClose={closeTest}
+      {activeTest ? (
+        <RouletteTestPopupController
+          definition={activeTest.definition}
+          testConnectionId={activeTest.testConnectionId}
+          popupWindow={activeTest.popupWindow}
           onSettled={handleTestSettled}
           onFailed={handleTestFailed}
+          onFinished={finishTest}
         />
       ) : null}
     </div>
