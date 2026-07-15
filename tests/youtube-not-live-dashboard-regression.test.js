@@ -15,7 +15,7 @@ describe('YouTube not_live dashboard regression', () => {
     expect(helper.indexOf("normalizedError === 'not_live'")).toBeLessThan(helper.indexOf("item?.live === false"));
   });
 
-  test('does not store or expose not_live as a YouTube runtime error', () => {
+  test('uses receiver connection state without requiring API live metadata', () => {
     const ensureStart = server.indexOf('async function ensureYoutubeSession');
     const ensureEnd = server.indexOf('function firstNonEmptyText', ensureStart);
     const ensure = server.slice(ensureStart, ensureEnd);
@@ -23,7 +23,10 @@ describe('YouTube not_live dashboard regression', () => {
     const statusEnd = server.indexOf("app.post('/api/cime/reset'", statusStart);
     const status = server.slice(statusStart, statusEnd);
 
-    expect(ensure).toContain("entry.lastError = liveState.live ? 'live_chat_unavailable' : null");
+    expect(ensure).toContain('await openYoutubeChatStream(entry)');
+    expect(ensure).toContain('cacheYoutubeReceiverLiveState(entry)');
+    expect(ensure).not.toContain('if (!liveState.live || !liveState.liveChatId)');
+    expect(server).toContain('live: !!entry.connected || !!entry.liveChatId');
     expect(status).toContain("String(youtubeLastError || '').trim().toLowerCase() === 'not_live'");
     expect(status).toContain('lastError: visibleYoutubeLastError');
   });

@@ -31,7 +31,7 @@ describe('startup live status refresh regression', () => {
     expect(startupBody).not.toContain('bootstrapEnsureYoutubeSessions().catch');
   });
 
-  test('CIME and YouTube startup bootstraps force one live status refresh per registered account', () => {
+  test('CIME and YouTube bootstraps acquire ownership before external work and retry takeover', () => {
     const cimeStart = serverIndex.indexOf('async function bootstrapEnsureCimeSessions');
     const cimeEnd = serverIndex.indexOf('async function bootstrapEnsureYoutubeSessions', cimeStart);
     const cimeBody = serverIndex.slice(cimeStart, cimeEnd);
@@ -40,11 +40,17 @@ describe('startup live status refresh regression', () => {
     const youtubeBody = serverIndex.slice(youtubeStart, youtubeEnd);
 
     expect(cimeBody).toContain("listPlatformTokenUsers('cime')");
+    expect(cimeBody).toContain("await ensureProviderRuntimeLease('cime', ownerUserId)");
     expect(cimeBody).toContain('await refreshCimeLiveStatus(ownerUserId, sid, channelId)');
     expect(cimeBody).toContain('await ensureCimeSession(ownerUserId)');
+    expect(cimeBody.indexOf("await ensureProviderRuntimeLease('cime', ownerUserId)")).toBeLessThan(cimeBody.indexOf('await refreshCimeLiveStatus(ownerUserId, sid, channelId)'));
+    expect(cimeBody).toContain("scheduleProviderRuntimeBootstrapRetry('cime')");
     expect(youtubeBody).toContain("listPlatformTokenUsers('youtube')");
-    expect(youtubeBody).toContain('await refreshYoutubeLiveStatus(ownerUserId, sid, { force: true, allowSearch: true })');
+    expect(youtubeBody).toContain("await ensureProviderRuntimeLease('youtube', ownerUserId)");
     expect(youtubeBody).toContain('await ensureYoutubeSession(ownerUserId)');
+    expect(youtubeBody.indexOf("await ensureProviderRuntimeLease('youtube', ownerUserId)")).toBeLessThan(youtubeBody.indexOf('await ensureYoutubeSession(ownerUserId)'));
+    expect(youtubeBody).not.toContain('allowSearch: true');
+    expect(youtubeBody).toContain("scheduleProviderRuntimeBootstrapRetry('youtube')");
   });
 
   test('CHZZK monitor resolves registered channels without depending on an open dashboard session', () => {

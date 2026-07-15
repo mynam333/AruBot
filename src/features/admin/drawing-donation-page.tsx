@@ -2,7 +2,7 @@
 
 import * as Switch from '@radix-ui/react-switch';
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
-import { Ban, Check, Copy, Eraser, Eye, GripVertical, ImagePlus, Play, RefreshCw, RotateCw, Settings, ShieldAlert, Trash2, Undo2, Wifi, X } from 'lucide-react';
+import { Ban, Check, Copy, Eraser, Eye, GripVertical, ImagePlus, Loader2, Play, RefreshCw, RotateCw, Settings, ShieldAlert, Trash2, Undo2, Wifi, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -108,6 +108,13 @@ async function writeClipboardText(value: string) {
   const copied = document.execCommand('copy');
   textarea.remove();
   if (!copied) throw new Error('clipboard unavailable');
+}
+
+function buildViewerDonationPath(ownerUserId: string | null | undefined) {
+  const normalizedOwnerUserId = String(ownerUserId || '').replace(/^user:/i, '').trim();
+  if (!normalizedOwnerUserId) return '';
+  const drawingEditorPath = `/viewer/drawing/${encodeURIComponent(normalizedOwnerUserId)}`;
+  return `/viewer/login?returnTo=${encodeURIComponent(drawingEditorPath)}`;
 }
 
 function adminCrayonNoise(seed: number) {
@@ -373,6 +380,7 @@ export function DrawingDonationPage() {
   const [blockedUsers, setBlockedUsers] = useState<BlockedUser[]>([]);
   const [overlayPath, setOverlayPath] = useState('');
   const [viewerDonationPath, setViewerDonationPath] = useState('');
+  const [viewerLinkPending, setViewerLinkPending] = useState(false);
   const [blockForm, setBlockForm] = useState({ userId: '', username: '', reason: '' });
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -398,17 +406,21 @@ export function DrawingDonationPage() {
   }, []);
 
   const refresh = useCallback(async () => {
-    const [settingsPayload, queuePayload, blockPayload, viewerPayload] = await Promise.all([
+    const [settingsPayload, queuePayload, blockPayload, viewerPayload, accountPayload] = await Promise.all([
       readJson<{ settings: DrawingSettings }>('/api/drawing-donation/settings'),
       readJson<{ items: DrawingItem[] }>('/api/drawing-donation/queue'),
       readJson<{ items: BlockedUser[] }>('/api/bot/blocked-users'),
-      readJson<{ path: string; donationPath?: string | null }>('/api/drawing-donation/viewer-url'),
+      readJson<{ path: string; donationPath?: string | null; ownerUserId?: string | null }>('/api/drawing-donation/viewer-url'),
+      readJson<{ userId?: string | null }>('/api/account/platforms').catch(() => ({ userId: null })),
     ]);
     setSettings({ ...defaultSettings, ...settingsPayload.settings, canvas: { ...defaultSettings.canvas, ...settingsPayload.settings?.canvas } });
     setItems(queuePayload.items || []);
     setBlockedUsers(blockPayload.items || []);
     setOverlayPath(viewerPayload.path || '');
-    setViewerDonationPath(viewerPayload.donationPath || '');
+    setViewerDonationPath(
+      viewerPayload.donationPath
+      || buildViewerDonationPath(viewerPayload.ownerUserId || accountPayload.userId),
+    );
   }, []);
 
   useEffect(() => {
@@ -477,6 +489,34 @@ export function DrawingDonationPage() {
       toast.error('주소를 복사하지 못했어요.');
     }
   }, []);
+
+  const copyViewerDonationLink = useCallback(async () => {
+    if (viewerLinkPending) return;
+    setViewerLinkPending(true);
+    try {
+      let address = viewerDonationUrl;
+      if (!address) {
+        const [viewerResult, accountResult] = await Promise.allSettled([
+          readJson<{ path?: string; donationPath?: string | null; ownerUserId?: string | null }>('/api/drawing-donation/viewer-url'),
+          readJson<{ userId?: string | null }>('/api/account/platforms'),
+        ]);
+        const viewerPayload = viewerResult.status === 'fulfilled' ? viewerResult.value : null;
+        const accountPayload = accountResult.status === 'fulfilled' ? accountResult.value : null;
+        const donationPath = viewerPayload?.donationPath
+          || buildViewerDonationPath(viewerPayload?.ownerUserId || accountPayload?.userId);
+        if (!donationPath) throw new Error('viewer donation URL unavailable');
+        if (viewerPayload?.path) setOverlayPath(viewerPayload.path);
+        setViewerDonationPath(donationPath);
+        address = `${window.location.origin}${donationPath}`;
+      }
+      await writeClipboardText(address);
+      toast.success('시청자 그림 후원 링크를 복사했어요.');
+    } catch {
+      toast.error('시청자 링크를 준비하지 못했어요. 로그인 상태를 확인해 주세요.');
+    } finally {
+      setViewerLinkPending(false);
+    }
+  }, [viewerDonationUrl, viewerLinkPending]);
 
   const runItemAction = (path: string, id: string, message: string) => {
     startTransition(async () => {
@@ -665,10 +705,11 @@ export function DrawingDonationPage() {
             <Button
               type="button"
               variant="secondary"
-              onClick={() => copyAddress(viewerDonationUrl, '시청자 그림 후원 링크를 복사했어요.')}
-              disabled={!viewerDonationUrl}
+              onClick={copyViewerDonationLink}
+              disabled={viewerLinkPending}
             >
-              <Copy className="h-[1em] w-[1em]" /> 시청자 링크 복사
+              {viewerLinkPending ? <Loader2 className="h-[1em] w-[1em] animate-spin" /> : <Copy className="h-[1em] w-[1em]" />}
+              시청자 링크 복사
             </Button>
             <Button type="button" variant="secondary" onClick={() => refresh().catch(() => undefined)}>
               <RefreshCw className="h-[1em] w-[1em]" /> 새로고침

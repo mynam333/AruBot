@@ -15,15 +15,20 @@ describe('YouTube live chat integration regression', () => {
   const navigation = fs.readFileSync(path.join(__dirname, '..', 'src', 'shared', 'config', 'navigation.ts'), 'utf8');
   const realtimeDiagnosticsPage = fs.readFileSync(path.join(__dirname, '..', 'src', 'app', '(admin)', 'diagnostics', 'realtime', 'page.tsx'), 'utf8');
 
-  test('retains the optional chat dependency while receiving through the official API', () => {
+  test('receives live chat through the event client without Data API polling', () => {
+    const receiverStart = serverIndex.indexOf('async function openYoutubeChatStream');
+    const receiverEnd = serverIndex.indexOf('async function ensureYoutubeSession', receiverStart);
+    const receiverBody = serverIndex.slice(receiverStart, receiverEnd);
+
     expect(packageJson.dependencies['youtube-chat']).toBe('^2.2.0');
     expect(serverIndex).toContain('openYoutubeChatStream(entry)');
-    expect(serverIndex).toContain('scheduleYoutubeReconnect(entry.ownerUserId,');
-    expect(serverIndex).toContain("youtubeApiGetWithAccessToken('liveChat/messages'");
-    expect(serverIndex).toContain('payload.pollingIntervalMillis');
-    expect(serverIndex).toContain('pageToken: entry.nextPageToken || null');
-    expect(serverIndex).not.toContain('new YoutubeLiveChat(');
-    expect(serverIndex).not.toContain("'/liveChat/messages/stream'");
+    expect(serverIndex).toContain("import youtubeLiveChatReceiver from './youtube-live-chat-receiver.cjs'");
+    expect(receiverBody).toContain('createYoutubeLiveChatReceiver({');
+    expect(receiverBody).toContain("chatClient.on('chat'");
+    expect(receiverBody).toContain('toYoutubeLiveChatItem(chatItem)');
+    expect(receiverBody).toContain('scheduleYoutubeReconnect(entry.ownerUserId)');
+    expect(receiverBody).not.toContain("youtubeApiGetWithAccessToken('liveChat/messages'");
+    expect(receiverBody).not.toContain('pollingIntervalMillis');
   });
 
   test('only KRW Super Chat becomes a donation event', () => {
@@ -57,6 +62,23 @@ describe('YouTube live chat integration regression', () => {
     expect(sendBody).toContain('return sendYoutubeChat(ownerUserId, chatPost?.liveChatId || null, text)');
   });
 
+  test('starts channel-based receiving before optional API metadata enrichment', () => {
+    const reconnectStart = serverIndex.indexOf('function getYoutubeReconnectDelayForError');
+    const reconnectEnd = serverIndex.indexOf('function closeYoutubeSession', reconnectStart);
+    const reconnectBody = serverIndex.slice(reconnectStart, reconnectEnd);
+    const ensureStart = serverIndex.indexOf('async function ensureYoutubeSession');
+    const ensureEnd = serverIndex.indexOf('function firstNonEmptyText', ensureStart);
+    const ensureBody = serverIndex.slice(ensureStart, ensureEnd);
+
+    expect(serverIndex).toContain('const YOUTUBE_QUOTA_RETRY_MS =');
+    expect(serverIndex).toContain('function isYoutubeQuotaExceededError');
+    expect(reconnectBody).toContain('if (isYoutubeQuotaExceededError(error)) return YOUTUBE_QUOTA_RETRY_MS');
+    expect(ensureBody).toContain('await openYoutubeChatStream(entry)');
+    expect(ensureBody).toContain('await hydrateYoutubeReceiverApiMetadata(entry)');
+    expect(ensureBody.indexOf('await openYoutubeChatStream(entry)')).toBeLessThan(ensureBody.indexOf('await hydrateYoutubeReceiverApiMetadata(entry)'));
+    expect(ensureBody).not.toContain('await refreshYoutubeLiveStatus(ownerUserId, sid, { force: true })');
+  });
+
   test('resolves live-title placeholders only from the active YouTube broadcast', () => {
     const liveInfoStart = serverIndex.indexOf('async function fetchYoutubeLiveInfoForSid');
     const liveInfoEnd = serverIndex.indexOf('async function getChannelUidsForSid', liveInfoStart);
@@ -72,6 +94,8 @@ describe('YouTube live chat integration regression', () => {
     expect(liveInfoBody).toContain('buildYoutubeLiveInfoFallback(lookup)');
     expect(refreshBody).toContain('broadcastId: cached.broadcastId || null');
     expect(refreshBody).toContain("title: cached.title || ''");
+    expect(refreshBody).toContain('allowSearch: options.allowSearch === true');
+    expect(refreshBody).not.toContain('allowSearch: options.force === true || options.allowSearch === true');
   });
 
   test('normalizes non-local YouTube OAuth callback URLs to HTTPS', () => {

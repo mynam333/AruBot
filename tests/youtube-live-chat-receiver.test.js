@@ -1,0 +1,111 @@
+const {
+  createYoutubeLiveChatReceiver,
+  getOptionsFromLivePageCompat,
+  receiverMessageText,
+  toYoutubeLiveChatItem,
+} = require('../server/youtube-live-chat-receiver.cjs');
+
+describe('YouTube live chat receiver adapter', () => {
+  test('reads the live-chat continuation instead of unrelated page continuations', () => {
+    const options = getOptionsFromLivePageCompat(`
+      <script>var ytcfg = {"INNERTUBE_API_KEY":"api-key","clientVersion":"2.20260715.00.00"};</script>
+      <script>window["ytInitialData"] = ${JSON.stringify({
+        contents: {
+          liveChatRenderer: {
+            continuations: [{ invalidationContinuationData: { continuation: 'live-chat-token' } }],
+            header: {
+              continuationCommand: { token: 'unrelated-token' },
+            },
+          },
+        },
+      })};</script>
+    `, 'video123');
+
+    expect(options).toEqual({
+      liveId: 'video123',
+      apiKey: 'api-key',
+      clientVersion: '2.20260715.00.00',
+      continuation: 'live-chat-token',
+    });
+  });
+
+  test('reports a disabled live chat without selecting another continuation', () => {
+    expect(() => getOptionsFromLivePageCompat(`
+      <script>window["ytInitialData"] = ${JSON.stringify({
+        contents: {
+          messageRenderer: { text: { runs: [{ text: 'Chat is disabled for this live stream.' }] } },
+        },
+      })};</script>
+      {"INNERTUBE_API_KEY":"api-key","clientVersion":"2.20260715.00.00","continuationCommand":{"token":"comments-token"}}
+    `, 'video123')).toThrow('Chat is disabled for this live stream.');
+  });
+
+  test('creates an event receiver for a known broadcast without starting network work', () => {
+    const receiver = createYoutubeLiveChatReceiver({ broadcastId: 'video123', intervalMs: 5000 });
+
+    expect(receiver.liveId).toBe('video123');
+    expect(typeof receiver.start).toBe('function');
+    expect(typeof receiver.stop).toBe('function');
+  });
+
+  test('joins text and emoji message segments', () => {
+    expect(receiverMessageText([
+      { text: 'hello ' },
+      { emojiText: ':wave:', alt: 'wave' },
+      { text: ' world' },
+    ])).toBe('hello :wave: world');
+  });
+
+  test('maps chat identity and roles into the existing event shape', () => {
+    const item = toYoutubeLiveChatItem({
+      id: 'chat-1',
+      author: { name: 'viewer', channelId: 'channel-1', thumbnail: { url: 'https://example.com/a.jpg' } },
+      message: [{ text: 'hello' }],
+      isMembership: true,
+      isVerified: true,
+      isOwner: false,
+      isModerator: true,
+      timestamp: new Date('2026-07-15T00:00:00.000Z'),
+    });
+
+    expect(item.id).toBe('chat-1');
+    expect(item.snippet.type).toBe('textMessageEvent');
+    expect(item.snippet.textMessageDetails.messageText).toBe('hello');
+    expect(item.authorDetails).toMatchObject({
+      channelId: 'channel-1',
+      displayName: 'viewer',
+      isChatSponsor: true,
+      isVerified: true,
+      isChatModerator: true,
+    });
+  });
+
+  test('maps KRW Super Chat amounts and keeps stickers distinguishable', () => {
+    const superChat = toYoutubeLiveChatItem({
+      id: 'paid-1',
+      author: { name: 'donor', channelId: 'channel-2' },
+      message: [{ text: 'support' }],
+      superchat: { amount: '\u20a91,000', color: '#00ff00' },
+      timestamp: new Date('2026-07-15T00:00:00.000Z'),
+    });
+    const sticker = toYoutubeLiveChatItem({
+      id: 'sticker-1',
+      author: { name: 'donor', channelId: 'channel-2' },
+      message: [],
+      superchat: {
+        amount: 'US$2.00',
+        color: '#00ff00',
+        sticker: { url: 'https://example.com/sticker.png', alt: 'sticker' },
+      },
+      timestamp: new Date('2026-07-15T00:00:00.000Z'),
+    });
+
+    expect(superChat.snippet.type).toBe('superChatEvent');
+    expect(superChat.snippet.superChatDetails).toMatchObject({
+      currency: 'KRW',
+      amountMicros: 1000000000,
+      userComment: 'support',
+    });
+    expect(sticker.snippet.type).toBe('superStickerEvent');
+  });
+});
