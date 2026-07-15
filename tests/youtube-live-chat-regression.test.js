@@ -129,6 +129,26 @@ describe('YouTube live chat integration regression', () => {
     expect(connectionPage).toContain("searchParams.get('platform') !== 'youtube'");
   });
 
+  test('central YouTube bot deletion enforces server confirmation and records an admin audit result', () => {
+    const helperStart = serverIndex.indexOf('async function recordYoutubeCentralBotAdminAudit');
+    const routeStart = serverIndex.indexOf("app.delete('/api/youtube/bot'", helperStart);
+    const routeEnd = serverIndex.indexOf("app.get('/api/youtube/me'", routeStart);
+    const helperBody = serverIndex.slice(helperStart, routeStart);
+    const routeBody = serverIndex.slice(routeStart, routeEnd);
+
+    expect(helperStart).toBeGreaterThan(0);
+    expect(helperBody).toContain("const action = 'youtube_central_bot_disconnect'");
+    expect(helperBody).toContain('actor: {');
+    expect(helperBody).toContain('result: normalizedResult');
+    expect(helperBody).toContain("source: 'arubot_admin'");
+    expect(routeBody).toContain("req.body?.confirmation !== '연결 해제'");
+    expect(routeBody).toContain("error: 'confirmation_required'");
+    expect(routeBody).toContain("result: 'confirmation_rejected'");
+    expect(routeBody).toContain("result: 'failed'");
+    expect(routeBody).toContain("status: 'success'");
+    expect(routeBody).toContain('recordYoutubeCentralBotAdminAudit(admin');
+  });
+
   test('separates viewer and central bot YouTube OAuth scopes', () => {
     expect(serverIndex).toContain('const YOUTUBE_BOT_AUTH_SCOPE = String(');
     expect(serverIndex).toContain('const YOUTUBE_CHANNEL_READ_AUTH_SCOPE = String(');

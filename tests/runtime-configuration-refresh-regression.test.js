@@ -30,4 +30,27 @@ describe('running bot configuration refresh regression', () => {
     expect(serverIndex).toContain('const publishedVersion = versions.find((version) => version?.published === true)');
     expect(serverIndex).toContain('version: publishedVersion');
   });
+
+  test('admin runtime refresh reports remote ownership, missing sessions and provider failures', () => {
+    const wakeStart = serverIndex.indexOf('async function wakeConnectedProviderRuntimes');
+    const wakeEnd = serverIndex.indexOf('function markRuntimeConfigurationChanged', wakeStart);
+    const wakeBody = serverIndex.slice(wakeStart, wakeEnd);
+    const routeStart = serverIndex.indexOf("app.post('/api/arubot-admin/streamers/runtime-refresh'");
+    const routeEnd = serverIndex.indexOf("app.get('/api/youtube/bot/status'", routeStart);
+    const routeBody = serverIndex.slice(routeStart, routeEnd);
+
+    expect(wakeBody).toContain('options.requireConnected === true');
+    expect(wakeBody).toContain('const settled = await Promise.allSettled');
+    expect(wakeBody).toContain('failedProviders.push');
+    expect(wakeBody).toContain('const lostProviders = requireConnected');
+    expect(wakeBody).toContain('connectedProvidersAfter');
+    expect(routeBody).toContain('getArubotAdminRuntimeOwnership(ownerUserId)');
+    expect(routeBody).toContain("error: 'managed_elsewhere'");
+    expect(routeBody).toContain("state: 'no_local_session'");
+    expect(routeBody).toContain("error: 'runtime_refresh_failed'");
+    expect(routeBody).toContain("state: 'session_lost'");
+    expect(routeBody).toContain('res.status(409)');
+    expect(routeBody).toContain('res.status(502)');
+    expect(routeBody).toContain('refreshedProviders: refresh.refreshedProviders');
+  });
 });

@@ -9,7 +9,7 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
-import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, revokeSession, getSessionUserId, listChannelPoints, listChannelPointsPage, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, deductChannelPointsIfEnough, getChannelPoints, getChannelPointBalanceSummary, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, issueApiWebSocketTicket, consumeApiWebSocketTicket, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, findSidByChannelViewerTokenSupabase, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, findAppUserIdByChannelUid, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, markPlatformTokenValidated, deletePlatformTokens, deletePlatformAccount, getAppUserAdminStatus, getYoutubeBotProfile, upsertYoutubeBotProfile, updateYoutubeBotProfileTokens, markYoutubeBotProfileStatus, deleteYoutubeBotProfile, getYoutubeStreamerChannel, upsertYoutubeStreamerChannel, markYoutubeStreamerChannelModeratorRegistered, deleteYoutubeStreamerChannel, listYoutubeStreamerChannelsByYoutubeChannelId, updateYoutubeStreamerChannelLive, updateYoutubeStreamerChannelWebsub, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, claimBotRuleCooldown, enqueueDurableRuntimeJob, enqueuePaidDurableRuntimeJob, claimDurableRuntimeJobs, completeDurableRuntimeJob, failDurableRuntimeJob, claimRuntimeLease, releaseRuntimeLease, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps, recordBotEventLog, listBotEventLogs, getBotEventLog, insertDrawingDonationItem, listDrawingDonationItems, getDrawingDonationItem, getCurrentDrawingDonationItem, updateDrawingDonationItemStatus, deleteDrawingDonationItem, reorderDrawingDonationItems, uploadDrawingDonationObject, deleteDrawingDonationObjectKeys, deleteAccountData, cleanupPrivacyRetentionData, validateSecretEncryptionConfig, getPgPoolStatus, checkDatabaseReady, closeDatabaseConnections } from './supabase.js';
+import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, revokeSession, getSessionUserId, listChannelPoints, listChannelPointsPage, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, deductChannelPointsIfEnough, getChannelPoints, getChannelPointBalanceSummary, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, issueApiWebSocketTicket, consumeApiWebSocketTicket, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, findSidByChannelViewerTokenSupabase, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, findAppUserIdByChannelUid, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, markPlatformTokenValidated, deletePlatformTokens, deletePlatformAccount, getAppUserAdminStatus, getArubotAdminConsoleSnapshot, getArubotAdminStreamerFeatureDetails, getYoutubeBotProfile, upsertYoutubeBotProfile, updateYoutubeBotProfileTokens, markYoutubeBotProfileStatus, deleteYoutubeBotProfile, getYoutubeStreamerChannel, upsertYoutubeStreamerChannel, markYoutubeStreamerChannelModeratorRegistered, deleteYoutubeStreamerChannel, listYoutubeStreamerChannelsByYoutubeChannelId, updateYoutubeStreamerChannelLive, updateYoutubeStreamerChannelWebsub, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, claimBotRuleCooldown, enqueueDurableRuntimeJob, enqueuePaidDurableRuntimeJob, claimDurableRuntimeJobs, completeDurableRuntimeJob, failDurableRuntimeJob, claimRuntimeLease, releaseRuntimeLease, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps, recordBotEventLog, listBotEventLogs, getBotEventLog, insertDrawingDonationItem, listDrawingDonationItems, getDrawingDonationItem, getCurrentDrawingDonationItem, updateDrawingDonationItemStatus, deleteDrawingDonationItem, reorderDrawingDonationItems, uploadDrawingDonationObject, deleteDrawingDonationObjectKeys, deleteAccountData, cleanupPrivacyRetentionData, validateSecretEncryptionConfig, getPgPoolStatus, checkDatabaseReady, closeDatabaseConnections } from './supabase.js';
 import { confirmPlatformTokenConsent, confirmYoutubeBotProfileConsent, touchPlatformTokenUsed, touchYoutubeBotProfileUsed } from './supabase.js';
 import { createPlatformProfileService } from './platform-profiles.js';
 import { executeAndStripLiveChangeTokens, filterLiveInfoByProvider, selectCategorySearchResult } from './live-command-actions.js';
@@ -2202,6 +2202,148 @@ const connectionPool = new ChannelConnectionPool({
 
 const channelRouletteConnections = new Map(); // channelId -> Map<token, Set<WebSocket>>
 const channelPvdConnections = new Map(); // channelId -> Map<token, Set<WebSocket>>
+const rouletteTestConnections = new Map(); // testConnectionId -> { ws, token, channelId, sid, expiresAt }
+const rouletteTestAuthorizations = new Map(); // testConnectionId -> { token, sid, issuedAt, expiresAt }
+
+const ROULETTE_TEST_CONNECTION_ID_PATTERN = /^[A-Za-z0-9_-]{16,128}$/;
+const ROULETTE_TEST_AUTH_TTL_MS = 90 * 1000;
+const MAX_ROULETTE_TEST_AUTHORIZATIONS = 500;
+const MAX_ROULETTE_TEST_CONNECTIONS = 250;
+const MAX_ROULETTE_TEST_CONNECTIONS_PER_TOKEN = 4;
+const MAX_ROULETTE_TEST_AUTHORIZATIONS_PER_SID = 12;
+
+function normalizeRouletteTestConnectionId(value) {
+  const connectionId = String(value || '').trim();
+  return ROULETTE_TEST_CONNECTION_ID_PATTERN.test(connectionId) ? connectionId : '';
+}
+
+function pruneRouletteTestState(now = Date.now()) {
+  for (const [connectionId, entry] of rouletteTestConnections.entries()) {
+    const expired = Number(entry?.expiresAt || 0) > 0 && Number(entry.expiresAt) <= now;
+    if (!entry?.ws || expired || entry.ws.readyState === WebSocket.CLOSING || entry.ws.readyState === WebSocket.CLOSED) {
+      rouletteTestConnections.delete(connectionId);
+      if (expired && entry?.ws?.readyState === WebSocket.OPEN) {
+        try { entry.ws.close(1000, 'Test connection expired'); } catch { }
+      }
+    }
+  }
+  for (const [connectionId, authorization] of rouletteTestAuthorizations.entries()) {
+    if (!authorization || Number(authorization.expiresAt || 0) <= now) {
+      rouletteTestAuthorizations.delete(connectionId);
+    }
+  }
+}
+
+function authorizeRouletteTestConnection(testConnectionId, authorization) {
+  const normalizedId = normalizeRouletteTestConnectionId(testConnectionId);
+  const token = String(authorization?.token || '').trim();
+  const sid = String(authorization?.sid || '').trim();
+  if (!normalizedId || !token || !sid) return false;
+
+  const now = Date.now();
+  pruneRouletteTestState(now);
+  const sameSid = Array.from(rouletteTestAuthorizations.entries())
+    .filter(([, entry]) => entry.sid === sid)
+    .sort((left, right) => Number(left[1].issuedAt || 0) - Number(right[1].issuedAt || 0));
+  while (sameSid.length >= MAX_ROULETTE_TEST_AUTHORIZATIONS_PER_SID) {
+    const staleIndex = sameSid.findIndex(([connectionId]) => !rouletteTestConnections.has(connectionId));
+    if (staleIndex < 0) return false;
+    const [stale] = sameSid.splice(staleIndex, 1);
+    rouletteTestAuthorizations.delete(stale[0]);
+  }
+  if (!rouletteTestAuthorizations.has(normalizedId) && rouletteTestAuthorizations.size >= MAX_ROULETTE_TEST_AUTHORIZATIONS) {
+    return false;
+  }
+
+  rouletteTestAuthorizations.set(normalizedId, {
+    token,
+    sid,
+    issuedAt: now,
+    expiresAt: now + ROULETTE_TEST_AUTH_TTL_MS,
+  });
+  return true;
+}
+
+function getRouletteTestAuthorization(testConnectionId) {
+  const normalizedId = normalizeRouletteTestConnectionId(testConnectionId);
+  if (!normalizedId) return null;
+  pruneRouletteTestState();
+  return rouletteTestAuthorizations.get(normalizedId) || null;
+}
+
+function registerRouletteTestConnection(testConnectionId, connection) {
+  const normalizedId = normalizeRouletteTestConnectionId(testConnectionId);
+  const ws = connection?.ws;
+  if (!normalizedId || !ws || ws.readyState !== WebSocket.OPEN) return false;
+
+  const existing = rouletteTestConnections.get(normalizedId);
+  pruneRouletteTestState();
+  if (!existing && rouletteTestConnections.size >= MAX_ROULETTE_TEST_CONNECTIONS) return false;
+  const token = String(connection?.token || '');
+  const tokenConnectionCount = Array.from(rouletteTestConnections.values())
+    .filter((entry) => entry?.token === token && entry?.ws !== existing?.ws)
+    .length;
+  if (tokenConnectionCount >= MAX_ROULETTE_TEST_CONNECTIONS_PER_TOKEN) return false;
+  if (existing && (existing.token !== token || existing.channelId !== String(connection?.channelId || ''))) return false;
+  rouletteTestConnections.set(normalizedId, {
+    ws,
+    token,
+    channelId: String(connection?.channelId || ''),
+    sid: String(connection?.sid || ''),
+    expiresAt: Number(connection?.expiresAt || 0) || (Date.now() + ROULETTE_TEST_AUTH_TTL_MS),
+  });
+
+  if (existing?.ws && existing.ws !== ws) {
+    try { existing.ws.close(1000, 'Test overlay reconnected'); } catch { }
+  }
+  return true;
+}
+
+setInterval(pruneRouletteTestState, 30 * 1000).unref?.();
+
+function unregisterRouletteTestConnection(testConnectionId, ws) {
+  const normalizedId = normalizeRouletteTestConnectionId(testConnectionId);
+  if (!normalizedId) return;
+  const existing = rouletteTestConnections.get(normalizedId);
+  if (existing?.ws === ws) rouletteTestConnections.delete(normalizedId);
+}
+
+function broadcastToRouletteTestConnection(testConnectionId, channelId, token, message) {
+  const normalizedId = normalizeRouletteTestConnectionId(testConnectionId);
+  const entry = normalizedId ? rouletteTestConnections.get(normalizedId) : null;
+  const baseResult = {
+    success: 0,
+    failed: 0,
+    total: 0,
+    channelId,
+    tokenType: 'roulette-test',
+  };
+
+  if (!entry) return { ...baseResult, error: 'NO_CONNECTIONS' };
+  if (entry.channelId !== channelId || entry.token !== token) {
+    return { ...baseResult, failed: 1, total: 1, error: 'TEST_CONNECTION_MISMATCH' };
+  }
+
+  const health = validateWebSocketConnection(entry.ws);
+  if (!health.isValid) {
+    if (health.shouldRemove) unregisterRouletteTestConnection(normalizedId, entry.ws);
+    return { ...baseResult, failed: 1, total: 1, error: 'TEST_CONNECTION_UNAVAILABLE' };
+  }
+
+  try {
+    entry.ws.send(JSON.stringify({ ...message, channelId, serverTimestamp: Date.now() }));
+    return { ...baseResult, success: 1, total: 1 };
+  } catch (error) {
+    unregisterRouletteTestConnection(normalizedId, entry.ws);
+    return {
+      ...baseResult,
+      failed: 1,
+      total: 1,
+      error: 'TEST_CONNECTION_SEND_FAILED',
+      errorMessage: error?.message || String(error),
+    };
+  }
+}
 
 // =============================
 // Roulette Viewer (token-based, per-spin)
@@ -2211,7 +2353,7 @@ const rouletteTokenToSid = new Map(); // token -> sid
 // Per-sid roulette queues to serialize spins
 const rouletteQueues = new Map(); // sid -> Array<QueuedSpin>
 const rouletteProcessing = new Set(); // sid currently processing
-const ROULETTE_SPIN_MS = 5000; // must match viewer spin duration
+const ROULETTE_SPIN_MS = 5200; // must match viewer spin duration
 const ROULETTE_EMPHASIS_MS = 1000; // final emphasis time in viewer
 // Dedup map to avoid duplicate result chats if overlapping triggers happen
 const rouletteLastResultSent = new Map(); // sid -> { key, at }
@@ -5504,6 +5646,12 @@ app.post('/api/roulette/test', rateLimiters.userWrite, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
+    const testConnectionId = normalizeRouletteTestConnectionId(req.body?.testConnectionId);
+    if (!testConnectionId) return res.status(400).json({ error: '유효한 룰렛 테스트 연결 ID가 필요합니다.' });
+    const testAuthorization = getRouletteTestAuthorization(testConnectionId);
+    if (!testAuthorization || testAuthorization.sid !== sid) {
+      return res.status(403).json({ error: '룰렛 테스트 연결이 만료되었거나 유효하지 않습니다.' });
+    }
     const settings = await getBotSettings(sid) || {};
     const definitions = getRouletteDefsFromSettings(settings);
     const id = String(req.body?.id || '').trim();
@@ -5513,7 +5661,14 @@ app.post('/api/roulette/test', rateLimiters.userWrite, async (req, res) => {
       (name && String(item?.name || '').trim().toLowerCase() === name.toLowerCase())
     ));
     if (!definition) return res.status(404).json({ error: '룰렛을 찾을 수 없습니다.' });
-    const result = await startRouletteSpin(sid, definition.name, 'arubot_test_viewer', '테스트 시청자', { instant: true, suppressResultChat: true });
+    const result = await startRouletteSpin(sid, definition.name, 'arubot_test_viewer', '테스트 시청자', {
+      instant: false,
+      suppressResultChat: true,
+      executeResultActions: false,
+      testMode: true,
+      targetConnectionId: testConnectionId,
+      viewerToken: testAuthorization.token,
+    });
     return res.json({ ok: true, roulette: definition.name, result });
   } catch (e) {
     console.error('[roulette:test] error', e?.message || e);
@@ -5597,6 +5752,13 @@ app.get('/api/roulette/viewer-url', async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
+    const requestedTestConnectionId = String(req.query?.testConnectionId || '').trim();
+    const testConnectionId = requestedTestConnectionId
+      ? normalizeRouletteTestConnectionId(requestedTestConnectionId)
+      : '';
+    if (requestedTestConnectionId && !testConnectionId) {
+      return res.status(400).json({ error: '유효한 룰렛 테스트 연결 ID가 필요합니다.' });
+    }
     const settings = await getBotSettings(sid) || {};
     let uid = null;
     try { uid = await resolveStreamerUidForSid(sid); } catch { }
@@ -5614,8 +5776,19 @@ app.get('/api/roulette/viewer-url', async (req, res) => {
       try { await setBotSettings(sid, { ...settings, rouletteViewerToken: token }); } catch { }
     }
     try { rouletteTokenToSid.set(token, sid); } catch { }
+    if (testConnectionId && !authorizeRouletteTestConnection(testConnectionId, { token, sid })) {
+      return res.status(429).json({ error: '동시에 실행할 수 있는 룰렛 테스트 수를 초과했습니다. 잠시 후 다시 시도해 주세요.' });
+    }
     const path = `/roulette/${encodeURIComponent(token)}`;
-    return res.json({ sid, token, path });
+    return res.json({
+      sid,
+      token,
+      path,
+      ...(testConnectionId ? {
+        testConnectionId,
+        testConnectionExpiresAt: Date.now() + ROULETTE_TEST_AUTH_TTL_MS,
+      } : {}),
+    });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to get viewer url' });
   }
@@ -9592,12 +9765,17 @@ async function startRouletteSpin(sid, rouletteName, userId, username, opts = {})
     throw new Error('roulette_not_found');
   }
   const picked = chooseRouletteItem(def);
+  const spinId = String(opts?.spinId || crypto.randomUUID());
 
-  let token = null;
-  try {
-    token = await getOrCreateViewerTokenSupabase(channelContext.channelId, 'roulette', sid, 'rlt').catch(() => null);
-  } catch (error) {
-    console.warn('[Roulette] Failed to load stable roulette viewer token from Supabase:', error?.message || error);
+  let token = typeof opts?.viewerToken === 'string' && opts.viewerToken.trim()
+    ? opts.viewerToken.trim()
+    : null;
+  if (!token) {
+    try {
+      token = await getOrCreateViewerTokenSupabase(channelContext.channelId, 'roulette', sid, 'rlt').catch(() => null);
+    } catch (error) {
+      console.warn('[Roulette] Failed to load stable roulette viewer token from Supabase:', error?.message || error);
+    }
   }
   if (!token) {
     token = typeof settings.rouletteViewerToken === 'string' && settings.rouletteViewerToken.trim()
@@ -9620,54 +9798,58 @@ async function startRouletteSpin(sid, rouletteName, userId, username, opts = {})
   } catch { }
   console.log(`[Roulette] Using stable viewer token for ${channelContext.channelId}: ${token.substring(0, 16)}...`);
 
-  try {
-    await insertRouletteSession({
-      sid,
-      token,
-      channel_id: channelContext.channelId,
-      roulette_name: def.name,
-      user_id: userId,
-      username,
-      result_label: picked.label,
-      result_value: picked.value,
-      created_at: new Date().toISOString()
+  if (opts?.testMode !== true) {
+    try {
+      await insertRouletteSession({
+        sid,
+        token,
+        channel_id: channelContext.channelId,
+        roulette_name: def.name,
+        user_id: userId,
+        username,
+        result_label: picked.label,
+        result_value: picked.value,
+        created_at: new Date().toISOString()
+      });
+
+      console.log(`[Roulette] Saved session to database - Channel: ${channelContext.channelId}, Token: ${token.substring(0, 16)}..., Result: ${picked.label}`);
+
+    } catch (e) {
+      console.error('[Roulette] Failed to save roulette session to database:', e?.message || e);
+
+      console.error(`[Roulette] Database save failed for channel: ${channelContext.channelId}, user: ${username}, roulette: ${def.name}`);
+    }
+
+    await recordBotEventLogSafe(sid, {
+      category: 'roulette',
+      eventType: 'roulette_result',
+      provider: providerFromLogContext(opts),
+      channelUid: channelContext.channelId,
+      viewerUserId: userId ? String(userId) : null,
+      viewerName: username ? String(username) : null,
+      pointDelta: Number(opts?.eventContext?.pointDelta || 0) || 0,
+      pointBefore: opts?.eventContext?.pointBefore ?? null,
+      pointAfter: opts?.eventContext?.pointAfter ?? null,
+      triggerName: opts?.eventContext?.triggerName || opts?.source || null,
+      targetName: def.name,
+      summary: `룰렛 결과: ${def.name} · ${picked.label || '결과 없음'}`,
+      resultLabel: picked.label || null,
+      resultValue: picked.value != null ? String(picked.value) : null,
+      metadata: {
+        rouletteId: def.id || null,
+        rouletteName: def.name,
+        token,
+        spinId,
+        instant: opts?.instant === true,
+        testMode: false,
+        batchId: opts?.batchId || null,
+        batchCount: Math.max(1, Number(opts?.batchCount ?? 1)),
+        source: opts?.eventContext?.source || opts?.source || null,
+      },
     });
-
-    console.log(`[Roulette] Saved session to database - Channel: ${channelContext.channelId}, Token: ${token.substring(0, 16)}..., Result: ${picked.label}`);
-
-  } catch (e) {
-    console.error('[Roulette] Failed to save roulette session to database:', e?.message || e);
-
-    console.error(`[Roulette] Database save failed for channel: ${channelContext.channelId}, user: ${username}, roulette: ${def.name}`);
   }
 
-  await recordBotEventLogSafe(sid, {
-    category: 'roulette',
-    eventType: 'roulette_result',
-    provider: providerFromLogContext(opts),
-    channelUid: channelContext.channelId,
-    viewerUserId: userId ? String(userId) : null,
-    viewerName: username ? String(username) : null,
-    pointDelta: Number(opts?.eventContext?.pointDelta || 0) || 0,
-    pointBefore: opts?.eventContext?.pointBefore ?? null,
-    pointAfter: opts?.eventContext?.pointAfter ?? null,
-    triggerName: opts?.eventContext?.triggerName || opts?.source || null,
-    targetName: def.name,
-    summary: `룰렛 결과: ${def.name} · ${picked.label || '결과 없음'}`,
-    resultLabel: picked.label || null,
-    resultValue: picked.value != null ? String(picked.value) : null,
-    metadata: {
-      rouletteId: def.id || null,
-      rouletteName: def.name,
-      token,
-      instant: opts?.instant === true,
-      batchId: opts?.batchId || null,
-      batchCount: Math.max(1, Number(opts?.batchCount ?? 1)),
-      source: opts?.eventContext?.source || opts?.source || null,
-    },
-  });
-
-  if (picked.value && typeof picked.value === 'string' && picked.value.trim()) {
+  if (opts?.testMode !== true && opts?.executeResultActions !== false && picked.value && typeof picked.value === 'string' && picked.value.trim()) {
     await executeActionVariableTokens(sid, picked.value, {
       source: 'roulette',
       roulette: { id: def.id || null, name: def.name },
@@ -9691,7 +9873,10 @@ async function startRouletteSpin(sid, rouletteName, userId, username, opts = {})
   // Broadcast to any connected viewers for this token, include 'instant' flag when requested
   let broadcastSuccess = false;
   let retryCount = 0;
-  const maxRetries = 3;
+  const targetConnectionId = normalizeRouletteTestConnectionId(opts?.targetConnectionId);
+  const maxRetries = targetConnectionId ? 8 : 3;
+  const spinDurationMs = opts?.instant === true ? 0 : ROULETTE_SPIN_MS;
+  const spinStartedAt = Date.now();
 
   while (!broadcastSuccess && retryCount < maxRetries) {
     try {
@@ -9709,10 +9894,13 @@ async function startRouletteSpin(sid, rouletteName, userId, username, opts = {})
         username,
         value: picked.value ?? null,
         label: picked.label || null,
-        createdAt: new Date().toISOString(),
+        createdAt: new Date(spinStartedAt).toISOString(),
         theme,
         items,
+        spinId,
+        spinDurationMs,
         instant: opts?.instant === true,
+        testMode: opts?.testMode === true,
         batchId: opts?.batchId ? String(opts.batchId) : null,
         batchCount: Math.max(1, Number(opts?.batchCount ?? 1)),
         channelId: channelContext.channelId,
@@ -9723,36 +9911,75 @@ async function startRouletteSpin(sid, rouletteName, userId, username, opts = {})
 
       // Remember last batch meta for this token
       try {
-        if (message.batchId) rouletteTokenLastBatch.set(token, { batchId: message.batchId, batchCount: message.batchCount });
+        if (opts?.testMode !== true && message.batchId) rouletteTokenLastBatch.set(token, { batchId: message.batchId, batchCount: message.batchCount });
       } catch { }
 
-      const channelResult = await broadcastToChannel(channelContext.channelId, 'roulette', message, token);
+      const channelResult = targetConnectionId
+        ? broadcastToRouletteTestConnection(targetConnectionId, channelContext.channelId, token, message)
+        : await broadcastToChannel(channelContext.channelId, 'roulette', message, token);
 
-      console.log(`[Roulette] Channel broadcast result for ${channelContext.channelId}: ${channelResult.success}/${channelResult.total} successful (token: ${token.substring(0, 8)}...)`);
+      console.log(`[Roulette] ${targetConnectionId ? 'Test connection' : 'Channel'} broadcast result for ${channelContext.channelId}: ${channelResult.success}/${channelResult.total} successful (token: ${token.substring(0, 8)}...)`);
 
       if (channelResult.success > 0) {
         broadcastSuccess = true;
+        if (targetConnectionId) {
+          rouletteTestAuthorizations.delete(targetConnectionId);
+          const deliveredConnection = rouletteTestConnections.get(targetConnectionId);
+          if (deliveredConnection) {
+            rouletteTestConnections.delete(targetConnectionId);
+            const closeTimer = setTimeout(() => {
+              try { deliveredConnection.ws.close(1000, 'Test event delivered'); } catch { }
+            }, 250);
+            closeTimer.unref?.();
+          }
+        }
         console.log(`[Roulette] Successfully broadcasted to ${channelResult.success} connections in channel: ${channelContext.channelId}`);
+      } else if (targetConnectionId) {
+        retryCount++;
+        if (retryCount < maxRetries) {
+          const delay = Math.min(125 * Math.pow(1.5, retryCount - 1), 750);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
       } else if (channelResult.total === 0) {
         console.warn(`[Roulette] No active connections found in channel: ${channelContext.channelId} for token: ${token.substring(0, 8)}...`);
 
-        try {
-          await broadcastRouletteResult(token);
+        if (opts?.testMode === true) {
           broadcastSuccess = true;
-          console.log(`[Roulette] Fallback broadcast completed for token: ${token.substring(0, 16)}...`);
-        } catch (fallbackError) {
-          console.error(`[Roulette] Fallback broadcast failed:`, fallbackError);
-          broadcastSuccess = true;
+        } else {
+          try {
+            await broadcastRouletteResult(token, {
+              spinId,
+              spinDurationMs,
+              spinStartedAt,
+              instant: opts?.instant === true,
+              testMode: opts?.testMode === true,
+            });
+            broadcastSuccess = true;
+            console.log(`[Roulette] Fallback broadcast completed for token: ${token.substring(0, 16)}...`);
+          } catch (fallbackError) {
+            console.error(`[Roulette] Fallback broadcast failed:`, fallbackError);
+            broadcastSuccess = true;
+          }
         }
       } else if (channelResult.failed === channelResult.total) {
         console.warn(`[Roulette] All ${channelResult.total} connections failed in channel: ${channelContext.channelId}, trying fallback`);
 
-        try {
-          await broadcastRouletteResult(token);
+        if (opts?.testMode === true) {
           broadcastSuccess = true;
-          console.log(`[Roulette] Fallback broadcast successful for token: ${token.substring(0, 16)}...`);
-        } catch (fallbackError) {
-          console.error(`[Roulette] Fallback broadcast failed:`, fallbackError);
+        } else {
+          try {
+            await broadcastRouletteResult(token, {
+              spinId,
+              spinDurationMs,
+              spinStartedAt,
+              instant: opts?.instant === true,
+              testMode: opts?.testMode === true,
+            });
+            broadcastSuccess = true;
+            console.log(`[Roulette] Fallback broadcast successful for token: ${token.substring(0, 16)}...`);
+          } catch (fallbackError) {
+            console.error(`[Roulette] Fallback broadcast failed:`, fallbackError);
+          }
         }
       } else {
         broadcastSuccess = true;
@@ -9779,12 +10006,25 @@ async function startRouletteSpin(sid, rouletteName, userId, username, opts = {})
       const failureKey = `broadcast_failure:${channelContext.channelId}`;
     } catch (e) {
     }
+    if (targetConnectionId) {
+      const error = new Error('roulette_test_connection_unavailable');
+      error.code = 'ROULETTE_TEST_CONNECTION_UNAVAILABLE';
+      throw error;
+    }
   } else {
     console.log(`[Roulette] Broadcast completed successfully for channel: ${channelContext.channelId}, user: ${username}, result: ${picked.label}`);
   }
   const origin = (process.env.PUBLIC_ORIGIN || '');
   const path = `/roulette/${encodeURIComponent(token)}`;
-  return { token, path, url: origin ? (origin.replace(/\/$/, '') + path) : path, result: picked };
+  return {
+    token,
+    path,
+    url: origin ? (origin.replace(/\/$/, '') + path) : path,
+    result: picked,
+    spinId,
+    spinDurationMs,
+    spinStartedAt,
+  };
 }
 
 /**
@@ -11670,10 +11910,54 @@ function getRuntimeConfigurationRevision(sid) {
   return Number(runtimeConfigurationRevisions.get(String(sid || '')) || 0);
 }
 
-async function wakeConnectedProviderRuntimes(sid, reason = 'configuration_changed') {
+function getLocalProviderRuntimeEntries(sid) {
   const normalizedSid = String(sid || '').trim();
-  if (!normalizedSid) return;
   const ownerUserId = ownerUserIdFromSid(normalizedSid);
+  return [
+    { provider: 'chzzk', entry: sessionStore.get(normalizedSid) || null },
+    { provider: 'cime', entry: cimeSessionStore.get(ownerUserId) || null },
+    { provider: 'youtube', entry: youtubeSessionStore.get(ownerUserId) || null },
+  ];
+}
+
+function getConnectedLocalProviderRuntimeNames(sid) {
+  return getLocalProviderRuntimeEntries(sid)
+    .filter(({ entry }) => entry?.connected === true)
+    .map(({ provider }) => provider);
+}
+
+function getLocalProviderRuntimeLeaseNames(ownerUserId) {
+  const owner = String(ownerUserId || '').replace(/^user:/, '').trim();
+  const now = Date.now();
+  return Array.from(providerRuntimeLeases.values())
+    .filter((state) => state?.ownerUserId === owner && Number(state?.expiresAtMs || 0) > now)
+    .map((state) => String(state.provider || '').trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function getLocalProviderRuntimeLeaseKeys(ownerUserId) {
+  const owner = String(ownerUserId || '').replace(/^user:/, '').trim();
+  const now = Date.now();
+  return Array.from(providerRuntimeLeases.values())
+    .filter((state) => state?.ownerUserId === owner && Number(state?.expiresAtMs || 0) > now)
+    .map((state) => String(state.resourceKey || '').trim())
+    .filter(Boolean);
+}
+
+async function wakeConnectedProviderRuntimes(sid, reason = 'configuration_changed', options = {}) {
+  const normalizedSid = String(sid || '').trim();
+  if (!normalizedSid) {
+    return {
+      attemptedProviders: [],
+      refreshedProviders: [],
+      failedProviders: [],
+      lostProviders: [],
+      connectedProvidersBefore: [],
+      connectedProvidersAfter: [],
+    };
+  }
+  const ownerUserId = ownerUserIdFromSid(normalizedSid);
+  const requireConnected = options.requireConnected === true;
 
   const chzzkEntry = sessionStore.get(normalizedSid);
   if (chzzkEntry) chzzkEntry.primarySid = normalizedSid;
@@ -11682,16 +11966,71 @@ async function wakeConnectedProviderRuntimes(sid, reason = 'configuration_change
   const youtubeEntry = youtubeSessionStore.get(ownerUserId);
   if (youtubeEntry) youtubeEntry.primarySid = normalizedSid;
 
-  await Promise.allSettled([
-    refreshChzzkLiveStatusForSid(normalizedSid, { force: true }),
-    cimeEntry
-      ? refreshCimeLiveStatus(ownerUserId, normalizedSid, cimeEntry.channelId).then(() => ensureCimeSession(ownerUserId))
-      : Promise.resolve(null),
-    youtubeEntry
-      ? refreshYoutubeLiveStatus(ownerUserId, normalizedSid, { force: true, allowSearch: true }).then(() => ensureYoutubeSession(ownerUserId))
-      : Promise.resolve(null),
-  ]);
-  console.log(`[Runtime Config] Active provider sessions refreshed sid=${normalizedSid} reason=${reason}`);
+  const operations = [];
+  if (!requireConnected || chzzkEntry?.connected === true) {
+    operations.push({
+      provider: 'chzzk',
+      run: () => refreshChzzkLiveStatusForSid(normalizedSid, { force: true }),
+    });
+  }
+  if (cimeEntry && (!requireConnected || cimeEntry.connected === true)) {
+    operations.push({
+      provider: 'cime',
+      run: () => refreshCimeLiveStatus(ownerUserId, normalizedSid, cimeEntry.channelId)
+        .then(() => ensureCimeSession(ownerUserId)),
+    });
+  }
+  if (youtubeEntry && (!requireConnected || youtubeEntry.connected === true)) {
+    operations.push({
+      provider: 'youtube',
+      run: () => refreshYoutubeLiveStatus(ownerUserId, normalizedSid, { force: true, allowSearch: true })
+        .then(() => ensureYoutubeSession(ownerUserId)),
+    });
+  }
+
+  const connectedProvidersBefore = getConnectedLocalProviderRuntimeNames(normalizedSid);
+  const settled = await Promise.allSettled(operations.map(({ run }) => run()));
+  const refreshedProviders = [];
+  const failedProviders = [];
+  settled.forEach((result, index) => {
+    const provider = operations[index]?.provider || 'unknown';
+    if (result.status === 'fulfilled') {
+      refreshedProviders.push(provider);
+      return;
+    }
+    failedProviders.push({
+      provider,
+      error: compactLogText(result.reason?.message || result.reason || 'runtime_refresh_failed', 240),
+    });
+  });
+  const connectedProvidersAfter = getConnectedLocalProviderRuntimeNames(normalizedSid);
+  const connectedAfterSet = new Set(connectedProvidersAfter);
+  const lostProviders = requireConnected
+    ? operations
+      .map(({ provider }) => provider)
+      .filter((provider) => connectedProvidersBefore.includes(provider) && !connectedAfterSet.has(provider))
+    : [];
+  if (requireConnected && lostProviders.length) {
+    for (let index = refreshedProviders.length - 1; index >= 0; index -= 1) {
+      if (lostProviders.includes(refreshedProviders[index])) refreshedProviders.splice(index, 1);
+    }
+  }
+  if (failedProviders.length || lostProviders.length) {
+    console.warn(`[Runtime Config] Provider refresh incomplete sid=${normalizedSid} reason=${reason}:`, {
+      failedProviders,
+      lostProviders,
+    });
+  } else {
+    console.log(`[Runtime Config] Active provider sessions refreshed sid=${normalizedSid} reason=${reason} providers=${refreshedProviders.join(',') || 'none'}`);
+  }
+  return {
+    attemptedProviders: operations.map(({ provider }) => provider),
+    refreshedProviders,
+    failedProviders,
+    lostProviders,
+    connectedProvidersBefore,
+    connectedProvidersAfter,
+  };
 }
 
 function markRuntimeConfigurationChanged(sid, reason = 'configuration_changed') {
@@ -11706,6 +12045,16 @@ function markRuntimeConfigurationChanged(sid, reason = 'configuration_changed') 
     });
   });
   return revision;
+}
+
+async function refreshRuntimeConfigurationNow(sid, reason = 'admin_runtime_refresh', options = {}) {
+  const normalizedSid = String(sid || '').trim();
+  if (!normalizedSid) return { revision: 0, refresh: null };
+  const revision = getRuntimeConfigurationRevision(normalizedSid) + 1;
+  runtimeConfigurationRevisions.set(normalizedSid, revision);
+  activeSids.set(normalizedSid, Date.now());
+  const refresh = await wakeConnectedProviderRuntimes(normalizedSid, reason, options);
+  return { revision, refresh };
 }
 
 // Optional Redis (for multi-instance fan-out)
@@ -16138,6 +16487,168 @@ app.get('/api/cime/live/me', async (req, res) => {
   }
 });
 
+function visibleArubotAdminRuntimeError(value) {
+  const text = compactLogText(value?.message || value || '', 320);
+  const normalized = text.toLowerCase();
+  if (!text || ['not_live', 'offline', 'not live'].includes(normalized)) return null;
+  return text;
+}
+
+function enrichArubotAdminStreamerRuntime(streamer = {}) {
+  const ownerUserId = String(streamer.userId || '').trim();
+  const sid = `user:${ownerUserId}`;
+  const cachedLive = liveStatusCache.get(sid) || null;
+  const sourcePlatforms = Array.isArray(streamer.platforms) ? streamer.platforms : [];
+  const platforms = sourcePlatforms.map((platform) => {
+    const provider = String(platform?.provider || '').toLowerCase();
+    const entry = provider === 'chzzk'
+      ? sessionStore.get(sid) || null
+      : provider === 'cime'
+        ? cimeSessionStore.get(ownerUserId) || null
+        : provider === 'youtube'
+          ? youtubeSessionStore.get(ownerUserId) || null
+          : null;
+    const localLive = provider === 'youtube'
+      ? !!entry?.liveChatId
+      : provider === 'chzzk' && entry?.connected
+        ? true
+      : cachedLive?.provider === provider
+        ? cachedLive.live === true
+        : null;
+    const aggregateLiveFallback = sourcePlatforms.length === 1 ? streamer?.live?.live === true : null;
+    const diagnostic = provider === 'chzzk' ? chzzkRuntimeErrors.get(sid) || null : null;
+    const lastError = visibleArubotAdminRuntimeError(
+      diagnostic?.message || entry?.lastError || platform?.lastError || null
+    );
+    const reauthRequired = platform?.authorization === 'expired'
+      || diagnostic?.status === 401
+      || (provider === 'youtube' && isYoutubeReauthRequired(entry));
+    const streamConnected = !!entry?.connected;
+    const runtimeLeaseActive = platform?.runtimeLeaseActive === true;
+    return {
+      ...platform,
+      live: localLive ?? aggregateLiveFallback,
+      streamConnected,
+      queueSize: Array.isArray(entry?.queue) ? entry.queue.length : 0,
+      lastError,
+      reauthRequired,
+      runtimeLeaseActive,
+      runtimeLocation: streamConnected ? 'local' : 'none',
+    };
+  });
+
+  // Keep the aggregate value aligned with the database query that produced filters and totals.
+  // Per-platform runtime observations above may be newer and are shown separately in details.
+  const aggregateLive = streamer?.live?.live === true;
+  const runtimeObservedLive = aggregateLive || platforms.some((platform) => platform.live === true);
+  const streamConnected = platforms.some((platform) => platform.streamConnected);
+  const runtimeLeaseActive = platforms.some((platform) => platform.runtimeLeaseActive === true);
+  const managedElsewhere = false;
+  const lastError = platforms.map((platform) => platform.lastError).find(Boolean) || null;
+  const attentionRequired = platforms.some((platform) => platform.reauthRequired || !!platform.lastError)
+    || Number(streamer?.features?.automations?.attention || 0) > 0;
+  const botEnabled = streamer?.bot?.enabled !== false;
+  let status = 'standby';
+  if (!botEnabled) status = 'disabled';
+  else if (!platforms.length) status = 'unconfigured';
+  else if (attentionRequired) status = 'attention';
+  else if (streamConnected) status = 'running';
+  else if (runtimeObservedLive && !runtimeReadinessState.initialBootstrapCompleted) status = 'checking';
+  else if (runtimeObservedLive) status = 'attention';
+
+  return {
+    ...streamer,
+    platforms,
+    live: { ...(streamer.live || {}), live: aggregateLive },
+    runtime: {
+      status,
+      streamConnected,
+      managedElsewhere,
+      runtimeLeaseActive,
+      responseAvailable: streamConnected,
+      lastError,
+      configurationRevision: getRuntimeConfigurationRevision(sid),
+    },
+  };
+}
+
+async function getArubotAdminRuntimeOwnership(ownerUserId) {
+  const owner = String(ownerUserId || '').replace(/^user:/, '').trim();
+  const sid = `user:${owner}`;
+  const snapshot = await getArubotAdminConsoleSnapshot({ q: owner, limit: 100 });
+  const streamer = (snapshot.streamers || []).find((item) => String(item?.userId || '') === owner) || null;
+  const managedRuntimes = (streamer?.platforms || [])
+    .filter((platform) => platform?.runtimeLeaseActive === true)
+    .map((platform) => {
+      const provider = String(platform?.provider || '').trim().toLowerCase();
+      const resourceId = provider === 'chzzk'
+        ? String(platform?.channelId || platform?.platformUserId || '').trim()
+        : owner;
+      return {
+        provider,
+        resourceKey: provider && resourceId ? `provider-runtime:${provider}:${resourceId}` : '',
+      };
+    })
+    .filter((runtime) => runtime.provider && runtime.resourceKey);
+  const managedProviders = Array.from(new Set(managedRuntimes.map((runtime) => runtime.provider)));
+  const connectedLocalProviders = getConnectedLocalProviderRuntimeNames(sid);
+  const localLeaseProviders = getLocalProviderRuntimeLeaseNames(owner);
+  const localLeaseKeys = new Set(getLocalProviderRuntimeLeaseKeys(owner));
+  const remoteManagedProviders = Array.from(new Set(
+    managedRuntimes
+      .filter((runtime) => !localLeaseKeys.has(runtime.resourceKey))
+      .map((runtime) => runtime.provider)
+  ));
+  return {
+    sid,
+    managedProviders,
+    connectedLocalProviders,
+    localLeaseProviders,
+    remoteManagedProviders,
+  };
+}
+
+function getArubotAdminSystemSnapshot(database) {
+  const memory = process.memoryUsage();
+  const uniqueChzzkSessions = new Set(
+    Array.from(sessionStore.values()).filter((entry) => entry?.connected)
+  );
+  return {
+    role: PROCESS_ROLE,
+    releaseSha: RELEASE_SHA,
+    startedAt: SERVER_STARTED_AT,
+    uptimeSec: Math.round(process.uptime()),
+    database: {
+      ok: database?.ok === true,
+      latencyMs: Number(database?.latencyMs || 0),
+      pool: getPgPoolStatus(),
+    },
+    readiness: {
+      ready: database?.ok === true && runtimeReadinessState.initialBootstrapCompleted && !runtimeReadinessState.shuttingDown,
+      initialBootstrapCompleted: runtimeReadinessState.initialBootstrapCompleted,
+      lastMonitorAt: runtimeReadinessState.lastMonitorAt,
+      lastMonitorError: visibleArubotAdminRuntimeError(runtimeReadinessState.lastMonitorError),
+      shuttingDown: runtimeReadinessState.shuttingDown,
+    },
+    runtime: {
+      chzzk: uniqueChzzkSessions.size,
+      cime: Array.from(cimeSessionStore.values()).filter((entry) => entry?.connected).length,
+      youtube: Array.from(youtubeSessionStore.values()).filter((entry) => entry?.connected).length,
+      leases: providerRuntimeLeases.size,
+    },
+    memory: {
+      heapUsedMb: Math.round(memory.heapUsed / 1024 / 1024),
+      heapTotalMb: Math.round(memory.heapTotal / 1024 / 1024),
+      rssMb: Math.round(memory.rss / 1024 / 1024),
+    },
+    chzzkTransport: {
+      protocol: 'Socket.IO 2.x',
+      clientVersion: '2.0.3',
+      locked: true,
+    },
+  };
+}
+
 app.get('/api/arubot-admin/me', async (req, res) => {
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
@@ -16151,6 +16662,131 @@ app.get('/api/arubot-admin/me', async (req, res) => {
     });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to load AruBot admin status' });
+  }
+});
+
+app.get('/api/arubot-admin/overview', async (req, res) => {
+  res.set('Cache-Control', 'private, no-store, max-age=0');
+  try {
+    const admin = await requireCurrentAdminUser(req, res);
+    if (!admin) return;
+    const [snapshot, database] = await Promise.all([
+      getArubotAdminConsoleSnapshot({
+        q: req.query?.q,
+        platform: req.query?.platform,
+        live: req.query?.live,
+        feature: req.query?.feature,
+        limit: req.query?.limit,
+        cursor: req.query?.cursor,
+      }),
+      checkDatabaseReady(),
+    ]);
+    return res.json({
+      ...snapshot,
+      streamers: snapshot.streamers.map(enrichArubotAdminStreamerRuntime),
+      system: getArubotAdminSystemSnapshot(database),
+    });
+  } catch (error) {
+    console.error('[AruBot Admin] Failed to load console snapshot:', error?.message || error);
+    return res.status(500).json({ error: 'Failed to load AruBot admin console' });
+  }
+});
+
+app.get('/api/arubot-admin/streamers/:userId/features', async (req, res) => {
+  res.set('Cache-Control', 'private, no-store, max-age=0');
+  try {
+    const admin = await requireCurrentAdminUser(req, res);
+    if (!admin) return;
+    const ownerUserId = String(req.params?.userId || '').replace(/^user:/, '').trim();
+    if (!ownerUserId || ownerUserId.length > 240) {
+      return res.status(400).json({ error: 'Valid userId is required' });
+    }
+    const details = await getArubotAdminStreamerFeatureDetails(ownerUserId);
+    if (!details) return res.status(404).json({ error: 'Streamer not found' });
+    return res.json(details);
+  } catch (error) {
+    console.error('[AruBot Admin] Failed to load streamer feature details:', error?.message || error);
+    return res.status(500).json({ error: 'Failed to load streamer feature details' });
+  }
+});
+
+app.post('/api/arubot-admin/streamers/runtime-refresh', rateLimiters.userWrite, async (req, res) => {
+  res.set('Cache-Control', 'private, no-store, max-age=0');
+  try {
+    const admin = await requireCurrentAdminUser(req, res);
+    if (!admin) return;
+    const ownerUserId = String(req.body?.userId || '').replace(/^user:/, '').trim();
+    if (!ownerUserId || ownerUserId.length > 240) return res.status(400).json({ error: 'Valid userId is required' });
+    const target = await getAppUserAdminStatus(ownerUserId);
+    if (!target?.exists) return res.status(404).json({ error: 'Streamer not found' });
+    const ownership = await getArubotAdminRuntimeOwnership(ownerUserId);
+    if (ownership.remoteManagedProviders.length) {
+      return res.status(409).json({
+        ok: false,
+        error: 'managed_elsewhere',
+        state: 'managed_elsewhere',
+        userId: ownerUserId,
+        providers: ownership.remoteManagedProviders,
+      });
+    }
+    if (!ownership.connectedLocalProviders.length) {
+      return res.status(409).json({
+        ok: false,
+        error: 'runtime_unavailable',
+        state: 'no_local_session',
+        userId: ownerUserId,
+        providers: ownership.localLeaseProviders,
+      });
+    }
+
+    const outcome = await refreshRuntimeConfigurationNow(
+      ownership.sid,
+      'arubot_admin_runtime_refresh',
+      { requireConnected: true }
+    );
+    const refresh = outcome.refresh || {};
+    if (Array.isArray(refresh.failedProviders) && refresh.failedProviders.length) {
+      return res.status(502).json({
+        ok: false,
+        error: 'runtime_refresh_failed',
+        state: 'refresh_failed',
+        userId: ownerUserId,
+        runtimeRevision: outcome.revision,
+        failures: refresh.failedProviders,
+      });
+    }
+    if (Array.isArray(refresh.lostProviders) && refresh.lostProviders.length) {
+      return res.status(409).json({
+        ok: false,
+        error: 'runtime_unavailable',
+        state: 'session_lost',
+        userId: ownerUserId,
+        runtimeRevision: outcome.revision,
+        providers: refresh.lostProviders,
+      });
+    }
+    if (!Array.isArray(refresh.attemptedProviders) || !refresh.attemptedProviders.length
+      || !Array.isArray(refresh.connectedProvidersAfter) || !refresh.connectedProvidersAfter.length) {
+      return res.status(409).json({
+        ok: false,
+        error: 'runtime_unavailable',
+        state: 'session_lost',
+        userId: ownerUserId,
+        runtimeRevision: outcome.revision,
+        attemptedProviders: refresh.attemptedProviders || [],
+      });
+    }
+    return res.json({
+      ok: true,
+      state: 'refreshed',
+      userId: ownerUserId,
+      runtimeRevision: outcome.revision,
+      refreshedProviders: refresh.refreshedProviders,
+      connectedProviders: refresh.connectedProvidersAfter,
+    });
+  } catch (error) {
+    console.error('[AruBot Admin] Runtime refresh failed:', error?.message || error);
+    return res.status(500).json({ error: 'Failed to refresh streamer runtime' });
   }
 });
 
@@ -16285,16 +16921,106 @@ app.post('/api/youtube/bot/consent/confirm', rateLimiters.userWrite, async (req,
   }
 });
 
+async function recordYoutubeCentralBotAdminAudit(admin, {
+  result,
+  status,
+  profile = null,
+  stage = null,
+  error = null,
+  summary = null,
+} = {}) {
+  const actorUserId = String(admin?.userId || '').replace(/^user:/, '').trim();
+  if (!actorUserId) return null;
+  const action = 'youtube_central_bot_disconnect';
+  const normalizedResult = String(result || 'unknown');
+  const errorText = compactLogText(error?.message || error || '', 320) || null;
+  return recordBotEventLogSafe(`user:${actorUserId}`, {
+    category: 'admin',
+    eventType: action,
+    provider: 'youtube',
+    source: 'arubot_admin',
+    viewerUserId: actorUserId,
+    viewerName: admin?.displayName || null,
+    triggerName: action,
+    targetName: profile?.selectedChannelTitle
+      || profile?.selectedChannelHandle
+      || profile?.selectedChannelId
+      || 'YouTube central bot',
+    status,
+    summary: summary || `YouTube 중앙 봇 연결 해제: ${normalizedResult}`,
+    resultLabel: normalizedResult,
+    resultValue: profile?.id || YOUTUBE_BOT_PROFILE_ID,
+    metadata: {
+      audit: true,
+      actor: {
+        userId: actorUserId,
+        displayName: admin?.displayName || null,
+      },
+      action,
+      result: normalizedResult,
+      stage,
+      profileId: profile?.id || YOUTUBE_BOT_PROFILE_ID,
+      selectedChannelId: profile?.selectedChannelId || null,
+      error: errorText,
+    },
+  });
+}
+
 app.delete('/api/youtube/bot', rateLimiters.userWrite, async (req, res) => {
+  let admin = null;
+  let profile = null;
+  let stage = 'authorization';
   try {
-    const admin = await requireCurrentAdminUser(req, res);
+    admin = await requireCurrentAdminUser(req, res);
     if (!admin) return;
-    const profile = await getYoutubeBotProfile(YOUTUBE_BOT_PROFILE_ID);
-    if (profile?.accessToken || profile?.refreshToken) await revokeYoutubeOAuthGrant(profile);
+
+    if (req.body?.confirmation !== '연결 해제') {
+      await recordYoutubeCentralBotAdminAudit(admin, {
+        result: 'confirmation_rejected',
+        status: 'cancelled',
+        stage: 'confirmation',
+        summary: 'YouTube 중앙 봇 연결 해제 요청이 확인 문구 불일치로 거부됨',
+      });
+      return res.status(400).json({
+        ok: false,
+        error: 'confirmation_required',
+        requiredConfirmation: '연결 해제',
+      });
+    }
+
+    stage = 'load_profile';
+    profile = await getYoutubeBotProfile(YOUTUBE_BOT_PROFILE_ID);
+    if (profile?.accessToken || profile?.refreshToken) {
+      stage = 'revoke_oauth';
+      await revokeYoutubeOAuthGrant(profile);
+    }
+    stage = 'delete_profile';
     await deleteYoutubeBotProfile(YOUTUBE_BOT_PROFILE_ID);
+    stage = 'close_sessions';
     for (const key of Array.from(youtubeSessionStore.keys())) closeYoutubeSession(key, 'bot_profile_deleted');
-    return res.json({ ok: true });
+    const result = profile ? 'deleted' : 'already_absent';
+    stage = 'audit';
+    await recordYoutubeCentralBotAdminAudit(admin, {
+      result,
+      status: 'success',
+      profile,
+      stage: 'completed',
+      summary: result === 'deleted'
+        ? '관리자가 YouTube 중앙 봇 OAuth 연결과 저장 프로필을 삭제함'
+        : '관리자가 이미 해제된 YouTube 중앙 봇 상태를 확인함',
+    });
+    return res.json({ ok: true, result });
   } catch (e) {
+    if (admin) {
+      await recordYoutubeCentralBotAdminAudit(admin, {
+        result: 'failed',
+        status: 'failed',
+        profile,
+        stage,
+        error: e,
+        summary: `YouTube 중앙 봇 연결 해제 실패 (${stage})`,
+      });
+    }
     return res.status(502).json({ error: 'Failed to revoke and delete YouTube bot profile' });
   }
 });
@@ -17590,7 +18316,12 @@ app.post('/api/local-remote/roulette/test', requireAutomationLocalAgent, async (
       (name && String(item?.name || '').trim().toLowerCase() === name.toLowerCase())
     ));
     if (!definition) return res.status(404).json({ error: '룰렛을 찾을 수 없습니다.' });
-    const result = await startRouletteSpin(sid, definition.name, 'arubot_local_remote', '로컬 리모컨', { instant: true, suppressResultChat: true });
+    const result = await startRouletteSpin(sid, definition.name, 'arubot_local_remote', '로컬 리모컨', {
+      instant: false,
+      suppressResultChat: true,
+      executeResultActions: false,
+      testMode: true,
+    });
     return res.json({ result });
   } catch (e) {
     console.error('[Local Remote] roulette test error', e?.message || e);
@@ -23342,7 +24073,11 @@ async function refreshCimeLiveStatus(ownerUserId, sid, channelId) {
           last_update: now
         });
       } catch { }
-    } else if (!live && liveSession.get(sid)?.live) {
+    } else if (live) {
+      const currentSession = liveSession.get(sid) || {};
+      liveSession.set(sid, { ...currentSession, live: true, lastUpdate: now });
+      try { await updateLiveSessionLastUpdate(sid, now); } catch { }
+    } else if (liveSession.get(sid)?.live) {
       try { await updateSessionState(sid, false, now); } catch { }
     }
     return live;
@@ -25997,14 +26732,33 @@ function registerRouletteRoutes() {
     let channelId = null;
     let token = null;
     let validationResult = null;
+    let testConnectionId = null;
 
     try {
       const url = new URL(req.url, `http://localhost:${PORT}`);
       token = String(url.searchParams.get('token') || '');
+      const requestedTestConnectionId = String(url.searchParams.get('testConnectionId') || '').trim();
+      testConnectionId = requestedTestConnectionId ? normalizeRouletteTestConnectionId(requestedTestConnectionId) : null;
+      if (requestedTestConnectionId && !testConnectionId) {
+        try { ws.close(1008, 'Invalid test connection ID'); } catch { }
+        return;
+      }
+      const testAuthorization = testConnectionId
+        ? getRouletteTestAuthorization(testConnectionId)
+        : null;
+      if (testConnectionId && (!testAuthorization || testAuthorization.token !== token)) {
+        try { ws.close(1008, 'Unauthorized test connection'); } catch { }
+        return;
+      }
       const ip = (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').toString();
       const userAgent = req.headers['user-agent'] || '';
 
       validationResult = await validateWebSocketTokenConnection(token, 'roulette', req);
+
+      if (testAuthorization && testAuthorization.sid !== validationResult.sid) {
+        try { ws.close(1008, 'Test connection owner mismatch'); } catch { }
+        return;
+      }
 
       channelId = validationResult.channelId;
 
@@ -26015,7 +26769,15 @@ function registerRouletteRoutes() {
         ip
       });
 
-      const registered = registerChannelConnection(channelId, 'roulette', token, ws);
+      const registered = testConnectionId
+        ? registerRouletteTestConnection(testConnectionId, {
+          ws,
+          token,
+          channelId,
+          sid: validationResult.sid,
+          expiresAt: testAuthorization?.expiresAt,
+        })
+        : registerChannelConnection(channelId, 'roulette', token, ws);
       if (!registered) {
         const error = new Error('Connection limit exceeded');
         handleWebSocketError(ws, error, {
@@ -26028,74 +26790,86 @@ function registerRouletteRoutes() {
         return;
       }
 
+      if (testConnectionId) {
+        ws.send(JSON.stringify({
+          type: 'roulette:test-ready',
+          token,
+          channelId,
+          testConnectionId,
+          serverTimestamp: Date.now(),
+        }));
+      }
 
-      console.log(`[Roulette WS] Connected - Channel: ${channelId}, Token: ${token.substring(0, 8)}...`);
+
+      console.log(`[Roulette WS] Connected${testConnectionId ? ' (isolated test)' : ''} - Channel: ${channelId}, Token: ${token.substring(0, 8)}...`);
 
       // Send current stored result if exists
-      try {
-        const row = await getRouletteSessionByToken(token);
-        if (row) {
-          // Try to resolve items/theme using validated sid from connection
-          let theme = null;
-          let items = null;
-          try {
-            const sid = validationResult.sid;
+      if (!testConnectionId) {
+        try {
+          const row = await getRouletteSessionByToken(token);
+          if (row) {
+            // Try to resolve items/theme using validated sid from connection
+            let theme = null;
+            let items = null;
+            try {
+              const sid = validationResult.sid;
 
-            const cachedSid = rouletteTokenToSid.get(token);
-            if (cachedSid !== sid) {
-              console.warn(`[Roulette WS] Token-SID mapping inconsistency detected: cached=${cachedSid}, validated=${sid}`);
-              rouletteTokenToSid.set(token, sid);
-              console.log(`[Roulette WS] Token-SID mapping corrected: ${token.substring(0, 8)}... -> ${sid}`);
-            } else {
-              console.log(`[Roulette WS] Token-SID mapping verified: ${token.substring(0, 8)}... -> ${sid}`);
-            }
-
-            if (channelId && sid) {
-              const cacheKey = `${sid}_roulette_mapping`;
-              const mappingData = {
-                token: token,
-                channelId: channelId,
-                sid: sid,
-                verifiedAt: Date.now(),
-                source: 'websocket_connection'
-              };
-              channelCache.set(channelId, cacheKey, mappingData, 15 * 60 * 1000);
-            }
-
-            if (sid) {
-              const settings = await getBotSettings(sid) || {};
-              const defs = getRouletteDefsFromSettings(settings);
-              const def = defs.find(d => String(d.name).toLowerCase() === String(row.roulette_name || '').toLowerCase());
-              if (def) {
-                theme = def.theme || null;
-                items = Array.isArray(def.items) ? def.items.map(it => String(it.label || '')).filter(Boolean) : null;
+              const cachedSid = rouletteTokenToSid.get(token);
+              if (cachedSid !== sid) {
+                console.warn(`[Roulette WS] Token-SID mapping inconsistency detected: cached=${cachedSid}, validated=${sid}`);
+                rouletteTokenToSid.set(token, sid);
+                console.log(`[Roulette WS] Token-SID mapping corrected: ${token.substring(0, 8)}... -> ${sid}`);
+              } else {
+                console.log(`[Roulette WS] Token-SID mapping verified: ${token.substring(0, 8)}... -> ${sid}`);
               }
-            }
-          } catch (settingsError) {
-            console.error('[Roulette WS] Error resolving roulette settings:', settingsError);
-          }
 
-          // Augment with last batch meta if available
-          let meta = rouletteTokenLastBatch.get(token) || null;
-          const payload = {
-            type: 'roulette',
-            initialSnapshot: true,
-            token,
-            channelId,
-            name: row.roulette_name || null,
-            username: row.username || null,
-            value: row.result_value ?? null,
-            label: row.result_label || null,
-            createdAt: row.created_at || null,
-            theme,
-            items,
-            batchId: meta?.batchId || null,
-            batchCount: meta?.batchCount || 1
-          };
-          ws.send(JSON.stringify(payload));
+              if (channelId && sid) {
+                const cacheKey = `${sid}_roulette_mapping`;
+                const mappingData = {
+                  token: token,
+                  channelId: channelId,
+                  sid: sid,
+                  verifiedAt: Date.now(),
+                  source: 'websocket_connection'
+                };
+                channelCache.set(channelId, cacheKey, mappingData, 15 * 60 * 1000);
+              }
+
+              if (sid) {
+                const settings = await getBotSettings(sid) || {};
+                const defs = getRouletteDefsFromSettings(settings);
+                const def = defs.find(d => String(d.name).toLowerCase() === String(row.roulette_name || '').toLowerCase());
+                if (def) {
+                  theme = def.theme || null;
+                  items = Array.isArray(def.items) ? def.items.map(it => String(it.label || '')).filter(Boolean) : null;
+                }
+              }
+            } catch (settingsError) {
+              console.error('[Roulette WS] Error resolving roulette settings:', settingsError);
+            }
+
+            // Augment with last batch meta if available
+            const meta = rouletteTokenLastBatch.get(token) || null;
+            const payload = {
+              type: 'roulette',
+              initialSnapshot: true,
+              token,
+              channelId,
+              name: row.roulette_name || null,
+              username: row.username || null,
+              value: row.result_value ?? null,
+              label: row.result_label || null,
+              createdAt: row.created_at || null,
+              theme,
+              items,
+              batchId: meta?.batchId || null,
+              batchCount: meta?.batchCount || 1
+            };
+            ws.send(JSON.stringify(payload));
+          }
+        } catch (error) {
+          console.error('[Roulette WS] Error sending stored result:', error);
         }
-      } catch (error) {
-        console.error('[Roulette WS] Error sending stored result:', error);
       }
 
       // Keepalive
@@ -26104,7 +26878,9 @@ function registerRouletteRoutes() {
       ws.on('close', (code, reason) => {
         try { clearInterval(ka); } catch { }
 
-        if (channelId && token) {
+        if (testConnectionId) {
+          unregisterRouletteTestConnection(testConnectionId, ws);
+        } else if (channelId && token) {
           unregisterChannelConnection(channelId, 'roulette', token, ws);
         }
 
@@ -26133,7 +26909,9 @@ function registerRouletteRoutes() {
         userAgent: req.headers['user-agent'] || ''
       };
 
-      if (channelId && token) {
+      if (testConnectionId) {
+        unregisterRouletteTestConnection(testConnectionId, ws);
+      } else if (channelId && token) {
         unregisterChannelConnection(channelId, 'roulette', token, ws);
       }
 
@@ -26509,7 +27287,7 @@ wss.on('connection', async (ws, req) => {
   }
 });
 
-async function broadcastRouletteResult(token) {
+async function broadcastRouletteResult(token, eventMeta = {}) {
   try {
     if (!token || typeof token !== 'string' || token.trim().length === 0) {
       console.error('[Roulette Broadcast] Invalid token provided');
@@ -26582,9 +27360,13 @@ async function broadcastRouletteResult(token) {
       username: row.username || null,
       value: row.result_value ?? null,
       label: row.result_label || null,
-      createdAt: row.created_at || null,
+      createdAt: eventMeta?.spinStartedAt ? new Date(eventMeta.spinStartedAt).toISOString() : (row.created_at || null),
       theme,
       items,
+      spinId: eventMeta?.spinId || null,
+      spinDurationMs: Number.isFinite(Number(eventMeta?.spinDurationMs)) ? Number(eventMeta.spinDurationMs) : ROULETTE_SPIN_MS,
+      instant: eventMeta?.instant === true,
+      testMode: eventMeta?.testMode === true,
       batchId: meta?.batchId || null,
       batchCount: meta?.batchCount || 1
     };

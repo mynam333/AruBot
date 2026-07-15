@@ -1738,23 +1738,20 @@ export async function getSessionUserId(sid) {
   
   // PostgREST 스키마 캐시 문제를 우회하기 위해 직접 PostgreSQL 연결 사용
   try {
-    const nowIso = new Date().toISOString();
     let result = null;
     
     await withPgClient(async (pg) => {
       const res = await pg.query(
-        `SELECT user_id, revoked, expires_at FROM sessions WHERE sid = $1`,
+        `select user_id
+           from sessions
+          where sid = $1
+            and revoked is not true
+            and (expires_at is null or expires_at > now())
+          limit 1`,
         [sid]
       );
       if (res.rows.length > 0) {
         const row = res.rows[0];
-        
-        if (row.revoked) {
-          return;
-        }
-        if (row.expires_at && row.expires_at < nowIso) {
-          return;
-        }
         result = row.user_id ? String(row.user_id) : null;
       }
     });
@@ -2339,6 +2336,8 @@ async function ensureBotEventLogTables() {
       );
       create index if not exists idx_bot_event_logs_owner_created
         on public.bot_event_logs(owner_user_id, created_at desc);
+      create index if not exists idx_bot_event_logs_created
+        on public.bot_event_logs(created_at desc, id desc);
       create index if not exists idx_bot_event_logs_owner_category_created
         on public.bot_event_logs(owner_user_id, category, created_at desc);
       create index if not exists idx_bot_event_logs_owner_provider_created
@@ -4362,6 +4361,7 @@ async function ensurePlatformIdentityTables() {
       );
       alter table app_users add column if not exists is_admin boolean not null default false;
       create index if not exists idx_app_users_is_admin on app_users(is_admin) where is_admin = true;
+      create index if not exists idx_app_users_created_id on app_users(created_at desc, id desc);
       create table if not exists platform_accounts (
         id uuid primary key default gen_random_uuid(),
         user_id text not null references app_users(id) on delete cascade,
@@ -4394,6 +4394,7 @@ async function ensurePlatformIdentityTables() {
         unique (provider, platform_user_id)
       );
       create index if not exists idx_platform_accounts_user_provider on platform_accounts(user_id, provider);
+      create index if not exists idx_platform_accounts_provider_user on platform_accounts(provider, user_id);
       create index if not exists idx_platform_accounts_provider_channel on platform_accounts(provider, channel_id);
       create index if not exists idx_platform_tokens_expiry on platform_tokens(provider, expires_at) where expires_at is not null;
       alter table platform_tokens add column if not exists last_validated_at timestamptz not null default now();
@@ -4402,8 +4403,10 @@ async function ensurePlatformIdentityTables() {
       alter table platform_tokens add column if not exists last_used_at timestamptz not null default now();
       create index if not exists idx_platform_tokens_validation on platform_tokens(provider, last_validated_at);
       create index if not exists idx_platform_tokens_youtube_activity on platform_tokens(last_used_at) where provider = 'youtube';
+      create index if not exists idx_platform_tokens_user_provider on platform_tokens(user_id, provider);
       alter table sessions add column if not exists account_user_id text;
       create index if not exists idx_sessions_account_user_id on sessions(account_user_id);
+      create index if not exists idx_sessions_account_last_seen_active on sessions(account_user_id, last_seen desc) where revoked = false;
     `);
   });
 }
@@ -4423,6 +4426,7 @@ export async function getAppUserAdminStatus(userId) {
     const row = rows[0] || null;
     return {
       userId: id,
+      exists: !!row,
       isAdmin: row?.is_admin === true,
       displayName: row?.display_name || null,
       avatarUrl: row?.avatar_url || null,
@@ -4430,8 +4434,775 @@ export async function getAppUserAdminStatus(userId) {
   });
 }
 
+let arubotAdminConsoleReadyPromise = null;
+
+async function ensureArubotAdminConsoleTables() {
+  if (!getDbUrl()) throw new Error('PostgreSQL is required for the AruBot admin console');
+  if (!arubotAdminConsoleReadyPromise) {
+    arubotAdminConsoleReadyPromise = (async () => {
+      await ensurePlatformIdentityTables();
+      await Promise.all([
+        ensureYoutubeCentralBotTables(),
+        ensureAutomationTables(),
+        ensureBotEventLogTables(),
+      ]);
+    })().catch((error) => {
+      arubotAdminConsoleReadyPromise = null;
+      throw error;
+    });
+  }
+  await arubotAdminConsoleReadyPromise;
+}
+
+function normalizeArubotAdminConsoleCursor(value) {
+  const encoded = String(value || '').trim();
+  if (!encoded) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+    const createdAt = new Date(parsed?.createdAt || '');
+    const userId = String(parsed?.userId || '').trim();
+    if (!Number.isFinite(createdAt.getTime()) || !userId) return null;
+    return { createdAt: createdAt.toISOString(), userId };
+  } catch {
+    return null;
+  }
+}
+
+function encodeArubotAdminConsoleCursor(row) {
+  if (!row?.createdAt || !row?.userId) return null;
+  return Buffer.from(JSON.stringify({ createdAt: row.createdAt, userId: row.userId }), 'utf8').toString('base64url');
+}
+
+export async function getArubotAdminConsoleSnapshot(options = {}) {
+  await ensureArubotAdminConsoleTables();
+
+  const limit = Math.max(1, Math.min(100, Number(options.limit || 25) || 25));
+  const query = String(options.q || options.query || '').trim().slice(0, 120);
+  const platform = ['chzzk', 'cime', 'youtube'].includes(String(options.platform || '').toLowerCase())
+    ? String(options.platform).toLowerCase()
+    : 'all';
+  const live = ['live', 'offline'].includes(String(options.live || '').toLowerCase())
+    ? String(options.live).toLowerCase()
+    : 'all';
+  const feature = ['commands', 'macros', 'roulettes', 'actions', 'donations', 'automations'].includes(String(options.feature || '').toLowerCase())
+    ? String(options.feature).toLowerCase()
+    : 'all';
+  const cursor = normalizeArubotAdminConsoleCursor(options.cursor);
+
+  const params = [];
+  const addParam = (value) => {
+    params.push(value);
+    return `$${params.length}`;
+  };
+  const where = ['true'];
+
+  if (query) {
+    const needle = `%${query.replace(/[%_\\]/g, '\\$&')}%`;
+    const slot = addParam(needle);
+    where.push(`(
+      b.user_id ilike ${slot} escape '\\'
+      or b.display_name ilike ${slot} escape '\\'
+      or b.platform_search ilike ${slot} escape '\\'
+    )`);
+  }
+  if (platform !== 'all') {
+    const slot = addParam(platform);
+    where.push(`${slot} = any(b.providers)`);
+  }
+  if (live === 'live') where.push('b.live = true');
+  if (live === 'offline') where.push('b.live = false');
+
+  const featureFilters = {
+    commands: 'b.commands_total > 0',
+    macros: 'b.macros_total > 0',
+    roulettes: 'b.roulettes_total > 0',
+    actions: 'b.actions_total > 0',
+    donations: 'b.donation_rules_total > 0',
+    automations: 'b.automation_connections_total > 0',
+  };
+  if (featureFilters[feature]) where.push(featureFilters[feature]);
+
+  let cursorSql = '';
+  if (cursor) {
+    const createdSlot = addParam(cursor.createdAt);
+    const userSlot = addParam(cursor.userId);
+    cursorSql = `where (p.created_at, p.user_id) < (${createdSlot}::timestamptz, ${userSlot})`;
+  }
+
+  const pageLimitSlot = addParam(limit + 1);
+  const whereSql = where.join(' and ');
+
+  return withPgClient(async (pg) => {
+    await ensureRuntimeLeasesWithClient(pg);
+    const result = await pg.query(
+      `with account_source as (
+         select pa.user_id,
+                lower(pa.provider) as provider,
+                pa.platform_user_id,
+                coalesce(ysc.youtube_channel_id, pa.channel_id) as channel_id,
+                coalesce(ysc.title, pa.channel_name) as channel_name,
+                coalesce(ysc.youtube_handle, pa.channel_handle) as channel_handle,
+                coalesce(ysc.thumbnail_url, pa.avatar_url) as avatar_url,
+                pa.connected_at,
+                greatest(pa.last_login_at, pa.connected_at, ysc.updated_at) as last_activity_at,
+                case
+                  when pt.user_id is not null
+                       and pt.expires_at is not null
+                       and pt.expires_at <= now()
+                       and nullif(pt.refresh_token, '') is null then 'expired'
+                  when pt.user_id is not null then 'valid'
+                  when lower(pa.provider) = 'chzzk'
+                       and nullif(lt.access_token, '') is not null
+                       and nullif(lt.refresh_token, '') is null
+                       and lt.expires_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$'
+                       and lt.expires_at <= to_char(now() at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') then 'expired'
+                  when lower(pa.provider) = 'chzzk' and nullif(lt.access_token, '') is not null then 'valid'
+                  when lower(pa.provider) = 'youtube' and ysc.owner_user_id is not null then 'configured'
+                  else 'unknown'
+                end as authorization,
+                coalesce(
+                  to_char(pt.expires_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+                  case when lower(pa.provider) = 'chzzk' then nullif(lt.expires_at, '') end
+                ) as authorization_expires_at,
+                pt.last_validated_at,
+                ysc.moderator_registered,
+                ysc.websub_status,
+                ysc.websub_lease_expires_at,
+                ysc.last_live_title,
+                ysc.last_live_started_at,
+                ysc.last_error,
+                exists (
+                  select 1
+                    from runtime_leases rl
+                   where rl.expires_at > now()
+                     and rl.resource_key = case
+                       when lower(pa.provider) = 'chzzk'
+                         then 'provider-runtime:chzzk:' || coalesce(nullif(pa.channel_id, ''), pa.platform_user_id)
+                       else 'provider-runtime:' || lower(pa.provider) || ':' || pa.user_id
+                     end
+                ) as runtime_lease_active
+           from platform_accounts pa
+           left join platform_tokens pt
+             on pt.user_id = pa.user_id and lower(pt.provider) = lower(pa.provider)
+           left join tokens lt
+             on lower(pa.provider) = 'chzzk' and lt.sid = 'user:' || pa.user_id
+           left join youtube_streamer_channels ysc
+             on ysc.owner_user_id = pa.user_id and lower(pa.provider) = 'youtube'
+         union all
+         select ysc.owner_user_id,
+                'youtube',
+                ysc.youtube_channel_id,
+                ysc.youtube_channel_id,
+                ysc.title,
+                ysc.youtube_handle,
+                ysc.thumbnail_url,
+                ysc.created_at,
+                ysc.updated_at,
+                'configured',
+                null::text,
+                null::timestamptz,
+                ysc.moderator_registered,
+                ysc.websub_status,
+                ysc.websub_lease_expires_at,
+                ysc.last_live_title,
+                ysc.last_live_started_at,
+                ysc.last_error,
+                exists (
+                  select 1
+                    from runtime_leases rl
+                   where rl.expires_at > now()
+                     and rl.resource_key = 'provider-runtime:youtube:' || ysc.owner_user_id
+                )
+           from youtube_streamer_channels ysc
+          where not exists (
+            select 1 from platform_accounts pa
+             where pa.user_id = ysc.owner_user_id and lower(pa.provider) = 'youtube'
+          )
+       ),
+       account_stats as (
+         select user_id,
+                count(*)::int as platform_count,
+                array_agg(distinct provider order by provider) as providers,
+                string_agg(concat_ws(' ', provider, platform_user_id, channel_id, channel_name, channel_handle), ' ') as platform_search,
+                max(last_activity_at) as last_platform_activity_at,
+                jsonb_agg(
+                  jsonb_build_object(
+                    'provider', provider,
+                    'platformUserId', platform_user_id,
+                    'channelId', channel_id,
+                    'channelName', channel_name,
+                    'channelHandle', channel_handle,
+                    'avatarUrl', avatar_url,
+                    'connectedAt', connected_at,
+                    'lastActivityAt', last_activity_at,
+                    'authorization', authorization,
+                    'authorizationExpiresAt', authorization_expires_at,
+                    'lastValidatedAt', last_validated_at,
+                    'moderatorRegistered', moderator_registered,
+                    'websubStatus', websub_status,
+                    'websubLeaseExpiresAt', websub_lease_expires_at,
+                    'lastLiveTitle', last_live_title,
+                    'lastLiveStartedAt', last_live_started_at,
+                    'lastError', last_error,
+                    'runtimeLeaseActive', runtime_lease_active
+                  ) order by provider, channel_name nulls last
+                ) as platforms
+           from account_source
+          group by user_id
+       ),
+       rule_stats as (
+         select regexp_replace(sid, '^user:', '') as user_id,
+                count(*)::int as commands_total,
+                (count(*) filter (where enabled is not false))::int as commands_enabled,
+                max(last_used) as commands_last_used
+           from bot_rules
+          where sid like 'user:%'
+          group by regexp_replace(sid, '^user:', '')
+       ),
+       settings_stats as (
+         select regexp_replace(bs.sid, '^user:', '') as user_id,
+                case when jsonb_typeof(bs.settings->'macros') = 'array'
+                     then jsonb_array_length(bs.settings->'macros') else 0 end as macros_total,
+                case when jsonb_typeof(bs.settings->'macros') = 'array'
+                     then (select count(*)::int from jsonb_array_elements(bs.settings->'macros') item where coalesce(lower(item->>'enabled') <> 'false', true))
+                     else 0 end as macros_enabled,
+                case when jsonb_typeof(bs.settings->'rouletteDefs') = 'array'
+                     then jsonb_array_length(bs.settings->'rouletteDefs') else 0 end as roulettes_total,
+                case when jsonb_typeof(bs.settings->'rouletteDefs') = 'array'
+                     then coalesce((select sum(case when jsonb_typeof(item->'items') = 'array' then jsonb_array_length(item->'items') else 0 end)::int from jsonb_array_elements(bs.settings->'rouletteDefs') item), 0)
+                     else 0 end as roulette_items_total,
+                case when jsonb_typeof(bs.settings->'donationRules') = 'array'
+                     then jsonb_array_length(bs.settings->'donationRules') else 0 end as donation_rules_total,
+                coalesce(lower(bs.settings->>'botEnabled') <> 'false', true) as bot_enabled,
+                coalesce(lower(bs.settings->>'videoDonationAcceptEnabled') = 'true', false) as video_donation_enabled,
+                coalesce(lower(bs.settings->'drawingDonation'->>'enabled') = 'true', false) as drawing_donation_enabled
+           from bot_settings bs
+          where bs.sid like 'user:%'
+       ),
+       action_stats as (
+         select ab.owner_user_id as user_id,
+                count(*)::int as actions_total,
+                (count(*) filter (where ab.enabled is not false))::int as actions_enabled,
+                (count(*) filter (where av.published = true))::int as actions_published,
+                max(ab.updated_at) as actions_updated_at
+           from action_blueprints ab
+           left join action_blueprint_versions av on av.id = ab.current_version_id
+          group by ab.owner_user_id
+       ),
+       automation_stats as (
+         select ac.owner_user_id as user_id,
+                count(*)::int as automation_connections_total,
+                (count(*) filter (where ac.enabled is not false))::int as automation_connections_enabled,
+                (count(*) filter (where lower(coalesce(ac.last_status, '')) in ('error', 'failed', 'offline')))::int as automation_connections_attention,
+                max(ac.last_checked_at) as automation_last_checked_at
+           from automation_connections ac
+          group by ac.owner_user_id
+       ),
+       agent_stats as (
+         select ala.owner_user_id as user_id,
+                (count(*) filter (where ala.revoked_at is null))::int as local_agents_total,
+                (count(*) filter (
+                  where ala.revoked_at is null
+                    and ala.status = 'online'
+                    and ala.last_seen_at > now() - interval '2 minutes'
+                ))::int as local_agents_online
+           from automation_local_agents ala
+          group by ala.owner_user_id
+       ),
+       event_recent as (
+         select bel.owner_user_id as user_id,
+                count(*)::int as events_24h,
+                (count(*) filter (where bel.status = 'failed'))::int as failed_events_24h
+           from bot_event_logs bel
+          where bel.created_at > now() - interval '24 hours'
+          group by bel.owner_user_id
+       ),
+       base as (
+         select u.id as user_id,
+                u.display_name,
+                u.avatar_url,
+                u.primary_provider,
+                u.is_admin,
+                u.created_at,
+                u.updated_at,
+                coalesce(a.platform_count, 0) as platform_count,
+                coalesce(a.providers, array[]::text[]) as providers,
+                coalesce(a.platform_search, '') as platform_search,
+                coalesce(a.platforms, '[]'::jsonb) as platforms,
+                a.last_platform_activity_at,
+                (coalesce(ls.live, false) and coalesce(ls.last_update, 0) >= (extract(epoch from now()) * 1000 - 300000)) as live,
+                (coalesce(ls.live, false) and coalesce(ls.last_update, 0) < (extract(epoch from now()) * 1000 - 300000)) as live_stale,
+                ls.start_date as live_start_date,
+                ls.session_start_time,
+                ls.last_update as live_last_update,
+                coalesce(rs.commands_total, 0) as commands_total,
+                coalesce(rs.commands_enabled, 0) as commands_enabled,
+                rs.commands_last_used,
+                coalesce(ss.macros_total, 0) as macros_total,
+                coalesce(ss.macros_enabled, 0) as macros_enabled,
+                coalesce(ss.roulettes_total, 0) as roulettes_total,
+                coalesce(ss.roulette_items_total, 0) as roulette_items_total,
+                coalesce(ss.donation_rules_total, 0) as donation_rules_total,
+                coalesce(ss.bot_enabled, true) as bot_enabled,
+                coalesce(ss.video_donation_enabled, false) as video_donation_enabled,
+                coalesce(ss.drawing_donation_enabled, false) as drawing_donation_enabled,
+                coalesce(acs.actions_total, 0) as actions_total,
+                coalesce(acs.actions_enabled, 0) as actions_enabled,
+                coalesce(acs.actions_published, 0) as actions_published,
+                acs.actions_updated_at,
+                coalesce(ats.automation_connections_total, 0) as automation_connections_total,
+                coalesce(ats.automation_connections_enabled, 0) as automation_connections_enabled,
+                coalesce(ats.automation_connections_attention, 0) as automation_connections_attention,
+                ats.automation_last_checked_at,
+                coalesce(ags.local_agents_total, 0) as local_agents_total,
+                coalesce(ags.local_agents_online, 0) as local_agents_online,
+                coalesce(bs.messages_processed, 0) as messages_processed,
+                coalesce(bs.commands_handled, 0) as commands_handled,
+                bs.last_active,
+                coalesce(er.events_24h, 0) as events_24h,
+                coalesce(er.failed_events_24h, 0) as failed_events_24h
+           from app_users u
+           left join account_stats a on a.user_id = u.id
+           left join live_sessions ls on ls.sid = 'user:' || u.id
+           left join rule_stats rs on rs.user_id = u.id
+           left join settings_stats ss on ss.user_id = u.id
+           left join action_stats acs on acs.user_id = u.id
+           left join automation_stats ats on ats.user_id = u.id
+           left join agent_stats ags on ags.user_id = u.id
+           left join bot_stats bs on bs.sid = 'user:' || u.id
+           left join event_recent er on er.user_id = u.id
+       ),
+       filtered as (
+         select * from base b where ${whereSql}
+       ),
+       page_rows as (
+         select * from filtered p
+          ${cursorSql}
+          order by created_at desc, user_id desc
+          limit ${pageLimitSlot}
+       ),
+       page_event_last as (
+         select p.user_id,
+                latest.created_at as last_event_at
+           from page_rows p
+           left join lateral (
+             select bel.created_at
+               from bot_event_logs bel
+              where bel.owner_user_id = p.user_id
+              order by bel.created_at desc, bel.id desc
+              limit 1
+           ) latest on true
+       ),
+       page_rows_with_activity as (
+         select p.*, pel.last_event_at
+           from page_rows p
+           left join page_event_last pel on pel.user_id = p.user_id
+       ),
+       recent_events as (
+         select bel.id,
+                bel.owner_user_id,
+                coalesce(u.display_name, bel.owner_user_id) as streamer_name,
+                bel.provider,
+                bel.category,
+                bel.event_type,
+                bel.trigger_name,
+                bel.viewer_name,
+                bel.status,
+                bel.summary,
+                bel.created_at
+           from bot_event_logs bel
+           left join app_users u on u.id = bel.owner_user_id
+          order by bel.created_at desc, bel.id desc
+          limit 30
+       )
+       select jsonb_build_object(
+                'registeredUsers', (select count(*)::int from base),
+                'linkedStreamers', (select (count(*) filter (where platform_count > 0))::int from base),
+                'connectedPlatforms', (select count(*)::int from account_source),
+                'liveStreamers', (select (count(*) filter (where live = true))::int from base),
+                'activeLast24h', (select (count(*) filter (where events_24h > 0))::int from base),
+                'failedEvents24h', (select coalesce(sum(failed_events_24h), 0)::int from base),
+                'platforms', (
+                  select coalesce(jsonb_object_agg(provider, total), '{}'::jsonb)
+                    from (select provider, count(distinct user_id)::int as total from account_source group by provider) counts
+                ),
+                'features', jsonb_build_object(
+                  'commands', jsonb_build_object('users', (select (count(*) filter (where commands_total > 0))::int from base), 'total', (select coalesce(sum(commands_total), 0)::int from base), 'enabled', (select coalesce(sum(commands_enabled), 0)::int from base)),
+                  'macros', jsonb_build_object('users', (select (count(*) filter (where macros_total > 0))::int from base), 'total', (select coalesce(sum(macros_total), 0)::int from base), 'enabled', (select coalesce(sum(macros_enabled), 0)::int from base)),
+                  'roulettes', jsonb_build_object('users', (select (count(*) filter (where roulettes_total > 0))::int from base), 'total', (select coalesce(sum(roulettes_total), 0)::int from base), 'items', (select coalesce(sum(roulette_items_total), 0)::int from base)),
+                  'actions', jsonb_build_object('users', (select (count(*) filter (where actions_total > 0))::int from base), 'total', (select coalesce(sum(actions_total), 0)::int from base), 'enabled', (select coalesce(sum(actions_enabled), 0)::int from base), 'published', (select coalesce(sum(actions_published), 0)::int from base)),
+                  'donations', jsonb_build_object('users', (select (count(*) filter (where donation_rules_total > 0))::int from base), 'total', (select coalesce(sum(donation_rules_total), 0)::int from base)),
+                  'automations', jsonb_build_object('users', (select (count(*) filter (where automation_connections_total > 0))::int from base), 'total', (select coalesce(sum(automation_connections_total), 0)::int from base), 'enabled', (select coalesce(sum(automation_connections_enabled), 0)::int from base))
+                )
+              ) as summary,
+              (select count(*)::int from filtered) as total,
+              coalesce((
+                select jsonb_agg(jsonb_build_object(
+                  'userId', p.user_id,
+                  'displayName', p.display_name,
+                  'avatarUrl', p.avatar_url,
+                  'primaryProvider', p.primary_provider,
+                  'isAdmin', p.is_admin,
+                  'createdAt', p.created_at,
+                  'updatedAt', p.updated_at,
+                  'lastPlatformActivityAt', p.last_platform_activity_at,
+                  'platforms', p.platforms,
+                  'live', jsonb_build_object('live', p.live, 'stale', p.live_stale, 'startDate', p.live_start_date, 'sessionStartTime', p.session_start_time, 'lastUpdate', p.live_last_update),
+                  'features', jsonb_build_object(
+                    'commands', jsonb_build_object('total', p.commands_total, 'enabled', p.commands_enabled, 'lastUsed', p.commands_last_used),
+                    'macros', jsonb_build_object('total', p.macros_total, 'enabled', p.macros_enabled),
+                    'roulettes', jsonb_build_object('total', p.roulettes_total, 'items', p.roulette_items_total),
+                    'actions', jsonb_build_object('total', p.actions_total, 'enabled', p.actions_enabled, 'published', p.actions_published, 'updatedAt', p.actions_updated_at),
+                    'donations', jsonb_build_object('total', p.donation_rules_total),
+                    'automations', jsonb_build_object('total', p.automation_connections_total, 'enabled', p.automation_connections_enabled, 'attention', p.automation_connections_attention, 'lastCheckedAt', p.automation_last_checked_at, 'localAgents', p.local_agents_total, 'localAgentsOnline', p.local_agents_online),
+                    'videoDonations', jsonb_build_object('enabled', p.video_donation_enabled),
+                    'drawingDonations', jsonb_build_object('enabled', p.drawing_donation_enabled)
+                  ),
+                  'bot', jsonb_build_object('enabled', p.bot_enabled, 'messagesProcessed', p.messages_processed, 'commandsHandled', p.commands_handled, 'lastActiveAt', p.last_active),
+                  'activity', jsonb_build_object('lastEventAt', p.last_event_at, 'events24h', p.events_24h, 'failedEvents24h', p.failed_events_24h)
+                ) order by p.created_at desc, p.user_id desc)
+                  from page_rows_with_activity p
+              ), '[]'::jsonb) as streamers,
+              coalesce((
+                select jsonb_agg(jsonb_build_object(
+                  'id', e.id,
+                  'ownerUserId', e.owner_user_id,
+                  'streamerName', e.streamer_name,
+                  'provider', e.provider,
+                  'category', e.category,
+                  'eventType', e.event_type,
+                  'triggerName', e.trigger_name,
+                  'viewerName', e.viewer_name,
+                  'status', e.status,
+                  'summary', e.summary,
+                  'createdAt', e.created_at
+                ) order by e.created_at desc, e.id desc) from recent_events e
+              ), '[]'::jsonb) as recent_events`,
+      params
+    );
+
+    const row = result.rows?.[0] || {};
+    const pageRows = Array.isArray(row.streamers) ? row.streamers : [];
+    const hasMore = pageRows.length > limit;
+    const streamers = hasMore ? pageRows.slice(0, limit) : pageRows;
+    const last = streamers[streamers.length - 1] || null;
+    return {
+      generatedAt: new Date().toISOString(),
+      filters: { q: query, platform, live, feature, limit },
+      summary: row.summary || {},
+      total: Number(row.total || 0),
+      streamers,
+      recentEvents: Array.isArray(row.recent_events) ? row.recent_events : [],
+      nextCursor: hasMore ? encodeArubotAdminConsoleCursor(last) : null,
+    };
+  });
+}
+
 function normalizeProvider(provider) {
   return String(provider || '').trim().toLowerCase();
+}
+
+const ARUBOT_ADMIN_FEATURE_DETAIL_LIMIT = 100;
+
+function normalizeArubotAdminDetailText(value, maxLength = 120) {
+  const text = String(value ?? '').trim();
+  return text ? text.slice(0, maxLength) : null;
+}
+
+function normalizeArubotAdminDetailPreview(value) {
+  const text = String(value ?? '').replace(/\s+/g, ' ').trim();
+  return text ? text.slice(0, 240) : null;
+}
+
+function normalizeArubotAdminDetailNumber(value, { minimum = 0, integer = false } = {}) {
+  if (value == null || (typeof value === 'string' && !value.trim())) return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  const normalized = Math.max(minimum, parsed);
+  return integer ? Math.trunc(normalized) : normalized;
+}
+
+function formatArubotAdminDonationAmount(value) {
+  const amount = normalizeArubotAdminDetailNumber(value);
+  if (amount == null) return null;
+  return amount.toLocaleString('ko-KR', { maximumFractionDigits: 2 });
+}
+
+function summarizeArubotAdminDonationAmount(item = {}) {
+  const conditions = Array.isArray(item.amountConditions) ? item.amountConditions.slice(0, 20) : [];
+  const summaries = conditions.map((condition) => {
+    const amount = formatArubotAdminDonationAmount(condition?.amount);
+    if (amount == null) return null;
+    const operator = String(condition?.operator || 'gte').toLowerCase();
+    if (operator === 'lt') return `${amount}원 미만`;
+    if (operator === 'eq') return `${amount}원 일치`;
+    if (operator === 'range') {
+      const amountTo = formatArubotAdminDonationAmount(condition?.amountTo);
+      return amountTo == null ? null : `${amount}원~${amountTo}원`;
+    }
+    return `${amount}원 이상`;
+  }).filter(Boolean);
+  if (summaries.length) return normalizeArubotAdminDetailPreview(summaries.join(' · '));
+
+  const minAmount = formatArubotAdminDonationAmount(item.minAmount) || '0';
+  const maxAmountValue = normalizeArubotAdminDetailNumber(item.maxAmount);
+  const maxAmount = maxAmountValue != null && maxAmountValue > 0
+    ? formatArubotAdminDonationAmount(maxAmountValue)
+    : null;
+  return maxAmount
+    ? normalizeArubotAdminDetailPreview(`${minAmount}원~${maxAmount}원`)
+    : normalizeArubotAdminDetailPreview(`${minAmount}원 이상`);
+}
+
+function takeArubotAdminFeatureDetails(value) {
+  const rows = Array.isArray(value) ? value : [];
+  return {
+    rows: rows.slice(0, ARUBOT_ADMIN_FEATURE_DETAIL_LIMIT),
+    truncated: rows.length > ARUBOT_ADMIN_FEATURE_DETAIL_LIMIT,
+  };
+}
+
+export async function getArubotAdminStreamerFeatureDetails(userId) {
+  await ensureArubotAdminConsoleTables();
+  const owner = String(userId || '').replace(/^user:/, '').trim();
+  if (!owner || owner.length > 240) return null;
+
+  return withPgClient(async (pg) => {
+    const { rows } = await pg.query(
+      `with target as (
+         select id
+           from app_users
+          where id = $1
+          limit 1
+       ),
+       settings_source as (
+         select case when jsonb_typeof(bs.settings->'macros') = 'array' then bs.settings->'macros' else '[]'::jsonb end as macros,
+                case when jsonb_typeof(bs.settings->'rouletteDefs') = 'array' then bs.settings->'rouletteDefs' else '[]'::jsonb end as roulettes,
+                case when jsonb_typeof(bs.settings->'donationRules') = 'array' then bs.settings->'donationRules' else '[]'::jsonb end as donations
+           from target t
+           left join bot_settings bs on bs.sid = 'user:' || t.id
+       ),
+       command_rows as (
+         select lower(coalesce(br.name, '')) as sort_name,
+                br.id as sort_id,
+                jsonb_build_object(
+                  'id', br.id,
+                  'name', nullif(left(trim(coalesce(br.name, '')), 120), ''),
+                  'keywords', coalesce((
+                    select jsonb_agg(
+                             left(trim(regexp_replace(keyword.value #>> '{}', '[[:space:]]+', ' ', 'g')), 120)
+                             order by keyword_position.position
+                           )
+                      from generate_series(0, least(jsonb_array_length(safe.keywords), 20) - 1) as keyword_position(position)
+                      cross join lateral (select safe.keywords -> keyword_position.position as value) keyword
+                     where jsonb_typeof(keyword.value) = 'string'
+                       and trim(keyword.value #>> '{}') <> ''
+                  ), '[]'::jsonb),
+                  'responsePreview', nullif(left(coalesce((
+                    select string_agg(
+                             left(trim(regexp_replace(response.value #>> '{}', '[[:space:]]+', ' ', 'g')), 240),
+                             ' · ' order by response_position.position
+                           )
+                      from generate_series(0, least(jsonb_array_length(safe.responses), 3) - 1) as response_position(position)
+                      cross join lateral (select safe.responses -> response_position.position as value) response
+                     where jsonb_typeof(response.value) = 'string'
+                       and trim(response.value #>> '{}') <> ''
+                  ), ''), 240), ''),
+                  'enabled', coalesce(br.enabled, true),
+                  'adminOnly', coalesce(br.admin_only, false)
+                ) as item
+           from target t
+           join bot_rules br on br.sid = 'user:' || t.id
+           cross join lateral (
+             select case when jsonb_typeof(br.keywords) = 'array' then br.keywords else '[]'::jsonb end as keywords,
+                    case when jsonb_typeof(br.responses) = 'array' then br.responses else '[]'::jsonb end as responses
+           ) safe
+          order by lower(coalesce(br.name, '')), br.id
+          limit 101
+       ),
+       macro_rows as (
+         select macro_position.position,
+                jsonb_build_object(
+                  'id', nullif(left(trim(coalesce(macro.value->>'id', '')), 120), ''),
+                  'messagePreview', nullif(left(trim(regexp_replace(coalesce(macro.value->>'message', ''), '[[:space:]]+', ' ', 'g')), 240), ''),
+                  'intervalSec', case
+                    when coalesce(macro.value->>'intervalSec', '') ~ '^[0-9]+([.][0-9]+)?$'
+                         and length(macro.value->>'intervalSec') <= 18
+                      then greatest(1, (macro.value->>'intervalSec')::numeric)
+                    else null
+                  end,
+                  'enabled', lower(coalesce(macro.value->>'enabled', 'true')) <> 'false'
+                ) as item
+           from settings_source ss
+           cross join lateral generate_series(0, least(jsonb_array_length(ss.macros), 101) - 1) as macro_position(position)
+           cross join lateral (select ss.macros -> macro_position.position as value) macro
+          order by macro_position.position
+          limit 101
+       ),
+       roulette_rows as (
+         select roulette_position.position,
+                jsonb_build_object(
+                  'id', nullif(left(trim(coalesce(roulette.value->>'id', '')), 120), ''),
+                  'name', nullif(left(trim(coalesce(roulette.value->>'name', '')), 120), ''),
+                  'type', left(coalesce(nullif(trim(roulette.value->>'type'), ''), 'items'), 40),
+                  'theme', left(coalesce(nullif(trim(roulette.value->>'theme'), ''), 'studio'), 80),
+                  'itemCount', case when jsonb_typeof(roulette.value->'items') = 'array' then jsonb_array_length(roulette.value->'items') else 0 end
+                ) as item
+           from settings_source ss
+           cross join lateral generate_series(0, least(jsonb_array_length(ss.roulettes), 101) - 1) as roulette_position(position)
+           cross join lateral (select ss.roulettes -> roulette_position.position as value) roulette
+          order by roulette_position.position
+          limit 101
+       ),
+       donation_rows as (
+         select donation_position.position,
+                jsonb_build_object(
+                  'id', nullif(left(trim(coalesce(donation.value->>'id', '')), 120), ''),
+                  'name', nullif(left(trim(coalesce(donation.value->>'name', '')), 120), ''),
+                  'enabled', lower(coalesce(donation.value->>'enabled', 'true')) <> 'false',
+                  'amountConditions', coalesce((
+                    select jsonb_agg(jsonb_build_object(
+                             'operator', left(coalesce(condition.value->>'operator', 'gte'), 16),
+                             'amount', left(coalesce(condition.value->>'amount', ''), 32),
+                             'amountTo', left(coalesce(condition.value->>'amountTo', ''), 32)
+                           ) order by condition_position.position)
+                      from generate_series(0, least(jsonb_array_length(donation.amount_conditions), 20) - 1) as condition_position(position)
+                      cross join lateral (select donation.amount_conditions -> condition_position.position as value) condition
+                  ), '[]'::jsonb),
+                  'minAmount', left(coalesce(donation.value->>'minAmount', ''), 32),
+                  'maxAmount', left(coalesce(donation.value->>'maxAmount', ''), 32)
+                ) as item
+           from settings_source ss
+           cross join lateral generate_series(0, least(jsonb_array_length(ss.donations), 101) - 1) as donation_position(position)
+           cross join lateral (
+             select ss.donations -> donation_position.position as value,
+                    case
+                      when jsonb_typeof((ss.donations -> donation_position.position)->'amountConditions') = 'array'
+                        then (ss.donations -> donation_position.position)->'amountConditions'
+                      else '[]'::jsonb
+                    end as amount_conditions
+           ) donation
+          order by donation_position.position
+          limit 101
+       ),
+       action_rows as (
+         select ab.updated_at as sort_updated_at,
+                ab.id as sort_id,
+                jsonb_build_object(
+                  'id', ab.id,
+                  'name', nullif(left(trim(coalesce(ab.name, '')), 120), ''),
+                  'slug', nullif(left(trim(coalesce(ab.slug, '')), 120), ''),
+                  'description', nullif(left(trim(regexp_replace(coalesce(ab.description, ''), '[[:space:]]+', ' ', 'g')), 240), ''),
+                  'enabled', coalesce(ab.enabled, true),
+                  'published', coalesce(av.published, false),
+                  'updatedAt', ab.updated_at
+                ) as item
+           from target t
+           join action_blueprints ab on ab.owner_user_id = t.id
+           left join action_blueprint_versions av
+             on av.id = ab.current_version_id and av.owner_user_id = t.id
+          order by ab.updated_at desc, ab.id
+          limit 101
+       ),
+       automation_rows as (
+         select ac.updated_at as sort_updated_at,
+                ac.id as sort_id,
+                jsonb_build_object(
+                  'id', ac.id,
+                  'name', nullif(left(trim(coalesce(ac.name, '')), 120), ''),
+                  'type', nullif(left(trim(coalesce(ac.type, '')), 80), ''),
+                  'enabled', coalesce(ac.enabled, true),
+                  'executionMode', case when ac.execution_mode = 'local_program' then 'local_program' else 'oracle_direct' end,
+                  'lastStatus', nullif(left(trim(coalesce(ac.last_status, '')), 80), ''),
+                  'lastCheckedAt', ac.last_checked_at
+                ) as item
+           from target t
+           join automation_connections ac on ac.owner_user_id = t.id
+          order by ac.updated_at desc, ac.id
+          limit 101
+       )
+       select t.id as user_id,
+              coalesce((select jsonb_agg(item order by sort_name, sort_id) from command_rows), '[]'::jsonb) as commands,
+              coalesce((select jsonb_agg(item order by position) from macro_rows), '[]'::jsonb) as macros,
+              coalesce((select jsonb_agg(item order by position) from roulette_rows), '[]'::jsonb) as roulettes,
+              coalesce((select jsonb_agg(item order by sort_updated_at desc, sort_id) from action_rows), '[]'::jsonb) as actions,
+              coalesce((select jsonb_agg(item order by position) from donation_rows), '[]'::jsonb) as donations,
+              coalesce((select jsonb_agg(item order by sort_updated_at desc, sort_id) from automation_rows), '[]'::jsonb) as automations
+         from target t`,
+      [owner]
+    );
+
+    const row = rows?.[0];
+    if (!row) return null;
+
+    const commands = takeArubotAdminFeatureDetails(row.commands);
+    const macros = takeArubotAdminFeatureDetails(row.macros);
+    const roulettes = takeArubotAdminFeatureDetails(row.roulettes);
+    const actions = takeArubotAdminFeatureDetails(row.actions);
+    const donations = takeArubotAdminFeatureDetails(row.donations);
+    const automations = takeArubotAdminFeatureDetails(row.automations);
+
+    return {
+      userId: owner,
+      generatedAt: new Date().toISOString(),
+      commands: commands.rows.map((item, index) => ({
+        id: normalizeArubotAdminDetailText(item?.id) || `command-${index + 1}`,
+        name: normalizeArubotAdminDetailText(item?.name),
+        keywords: (Array.isArray(item?.keywords) ? item.keywords : [])
+          .map((keyword) => normalizeArubotAdminDetailText(keyword, 120))
+          .filter(Boolean)
+          .slice(0, 20),
+        responsePreview: normalizeArubotAdminDetailPreview(item?.responsePreview),
+        enabled: item?.enabled !== false,
+        adminOnly: item?.adminOnly === true,
+      })),
+      macros: macros.rows.map((item, index) => ({
+        id: normalizeArubotAdminDetailText(item?.id) || `macro-${index + 1}`,
+        messagePreview: normalizeArubotAdminDetailPreview(item?.messagePreview),
+        intervalSec: normalizeArubotAdminDetailNumber(item?.intervalSec, { minimum: 1 }),
+        enabled: item?.enabled !== false,
+      })),
+      roulettes: roulettes.rows.map((item, index) => ({
+        id: normalizeArubotAdminDetailText(item?.id) || `roulette-${index + 1}`,
+        name: normalizeArubotAdminDetailText(item?.name),
+        type: normalizeArubotAdminDetailText(item?.type, 40) || 'items',
+        theme: normalizeArubotAdminDetailText(item?.theme, 80) || 'studio',
+        itemCount: normalizeArubotAdminDetailNumber(item?.itemCount, { minimum: 0, integer: true }) || 0,
+      })),
+      actions: actions.rows.map((item, index) => ({
+        id: normalizeArubotAdminDetailText(item?.id) || `action-${index + 1}`,
+        name: normalizeArubotAdminDetailText(item?.name),
+        slug: normalizeArubotAdminDetailText(item?.slug),
+        description: normalizeArubotAdminDetailPreview(item?.description),
+        enabled: item?.enabled !== false,
+        published: item?.published === true,
+        updatedAt: normalizeArubotAdminDetailText(item?.updatedAt, 64),
+      })),
+      donations: donations.rows.map((item, index) => ({
+        id: normalizeArubotAdminDetailText(item?.id) || `donation-${index + 1}`,
+        name: normalizeArubotAdminDetailText(item?.name),
+        enabled: item?.enabled !== false,
+        amountSummary: summarizeArubotAdminDonationAmount(item),
+      })),
+      automations: automations.rows.map((item, index) => ({
+        id: normalizeArubotAdminDetailText(item?.id) || `automation-${index + 1}`,
+        name: normalizeArubotAdminDetailText(item?.name),
+        type: normalizeArubotAdminDetailText(item?.type, 80),
+        enabled: item?.enabled !== false,
+        executionMode: item?.executionMode === 'local_program' ? 'local_program' : 'oracle_direct',
+        lastStatus: normalizeArubotAdminDetailText(item?.lastStatus, 80),
+        lastCheckedAt: normalizeArubotAdminDetailText(item?.lastCheckedAt, 64),
+      })),
+      truncated: {
+        commands: commands.truncated,
+        macros: macros.truncated,
+        roulettes: roulettes.truncated,
+        actions: actions.truncated,
+        donations: donations.truncated,
+        automations: automations.truncated,
+      },
+    };
+  });
 }
 
 export async function upsertPlatformIdentity(provider, profile, preferredUserId = null) {

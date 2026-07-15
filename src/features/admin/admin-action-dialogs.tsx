@@ -372,7 +372,6 @@ export function RouletteCreateDialog({ variant = 'secondary', label = '룰렛 �
   const [layout, setLayout] = useState<RouletteLayout>('reel');
   const [skin, setSkin] = useState<RouletteSkin>('studio');
   const [items, setItems] = useState<EditableRouletteItem[]>(() => createDefaultRouletteItems());
-  const [pointsCost, setPointsCost] = useState('0');
   const [isPending, startTransition] = useTransition();
 
   const normalizedItems = useMemo(() => normalizeEditableRouletteItems(items), [items]);
@@ -403,7 +402,7 @@ export function RouletteCreateDialog({ variant = 'secondary', label = '룰렛 �
               enabled: true,
               adminOnly: false,
               requiredRoleLevel: 1,
-              pointsCost: Math.max(0, Number(pointsCost || 0)),
+              pointsCost: 0,
               cooldown: 3000,
               lastUsed: 0,
             },
@@ -459,13 +458,8 @@ export function RouletteCreateDialog({ variant = 'secondary', label = '룰렛 �
         <div>룰렛 항목</div>
         <RouletteItemsEditor items={items} onChange={setItems} />
       </div>
-      <div className="grid gap-[clamp(1rem,2vw,1.35rem)] md:grid-cols-[repeat(2,minmax(0,1fr))]">
-        <Field label="실행 비용">
-          <Input value={pointsCost} onChange={(event) => setPointsCost(event.target.value)} inputMode="numeric" />
-        </Field>
-        <div className="rounded-[var(--radius-control)] border bg-background/70 p-[clamp(0.85rem,1.6vw,1.1rem)] text-sm leading-6 text-muted-foreground">
-          현재 항목 {normalizedItems.length}개가 준비되었습니다. 같은 가중치를 입력하면 같은 확률로 추첨됩니다.
-        </div>
+      <div className="rounded-[var(--radius-control)] border bg-background/70 p-[clamp(0.85rem,1.6vw,1.1rem)] text-sm leading-6 text-muted-foreground">
+        현재 항목 {normalizedItems.length}개가 준비되었습니다. 같은 가중치를 입력하면 같은 확률로 추첨됩니다.
       </div>
     </ActionDialogFrame>
   );

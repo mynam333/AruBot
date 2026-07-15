@@ -28,10 +28,11 @@ function getRouletteApiBase() {
   return window.location.origin;
 }
 
-function getRouletteWsUrl(token: string) {
+function getRouletteWsUrl(token: string, testConnectionId = '') {
   const url = new URL('/api/roulette/ws', getRouletteApiBase());
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   url.searchParams.set('token', token);
+  if (testConnectionId) url.searchParams.set('testConnectionId', testConnectionId);
   return url.toString();
 }
 
@@ -395,9 +396,20 @@ type WsPayload = {
   theme?: string | null;
   items?: string[] | null;
   channelId?: string | null;
+  spinId?: string | null;
+  spinDurationMs?: number | string | null;
   instant?: boolean;
+  testMode?: boolean;
   batchId?: string | null;
   batchCount?: number | string | null;
+};
+
+type RouletteTestReadyPayload = {
+  type: 'roulette:test-ready';
+  token?: string;
+  channelId?: string | null;
+  testConnectionId?: string;
+  serverTimestamp?: number;
 };
 
 // WebSocket 연결 상태 추적을 위한 인터페이스
@@ -427,10 +439,33 @@ type WheelSpinPlan = {
   durationMs: number;
 };
 
+type SpinCompletionBarrier = {
+  id: number;
+  reelDone: boolean;
+  wheelDone: boolean;
+  completed: boolean;
+  finish: () => void;
+};
+
+function tryFinishSpinBarrier(barrier: SpinCompletionBarrier | null) {
+  if (!barrier || barrier.completed || !barrier.reelDone || !barrier.wheelDone) return;
+  barrier.completed = true;
+  barrier.finish();
+}
+
+const DEFAULT_ROULETTE_SPIN_DURATION_MS = 5200;
 const WHEEL_STOP_EDGE_PADDING_RATIO = 0.14;
 
+function normalizeRouletteSpinDuration(value: unknown) {
+  const durationMs = Number(value);
+  if (!Number.isFinite(durationMs) || durationMs < 1000 || durationMs > 20000) {
+    return DEFAULT_ROULETTE_SPIN_DURATION_MS;
+  }
+  return Math.round(durationMs);
+}
+
 function normalizeWheelResultLabel(value: unknown) {
-  return String(value || '').replace(/\s+/g, '').trim();
+  return String(value || '').trim().normalize('NFC');
 }
 
 function randomWheelStopOffsetRatio() {
@@ -496,10 +531,10 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
   const wheelAnimationRef = React.useRef<Animation | null>(null);
   const wheelSpinPlanIdRef = React.useRef(0);
   const wheelRotationRef = React.useRef(0);
+  const spinCompletionBarrierRef = React.useRef<SpinCompletionBarrier | null>(null);
   // RAF physics refs
   const rafIdRef = React.useRef<number | null>(null);
   const animStartRef = React.useRef<number>(0);
-  const durationRef = React.useRef<number>(5200); // 5.2s
   const v0Ref = React.useRef<number>(0); // px/s
   const aRef = React.useRef<number>(0);  // px/s^2 (deceleration)
   const startCenterRef = React.useRef<number>(0); // start center index (rows)
@@ -647,6 +682,23 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       return q.get('preview') === '1';
     } catch { return false; }
   }, []);
+  const embeddedTestMode = React.useMemo(() => {
+    try {
+      const q = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
+      return q.get('embeddedTest') === '1';
+    } catch { return false; }
+  }, []);
+  const testConnectionId = React.useMemo(() => {
+    try {
+      const q = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
+      const value = String(q.get('testConnectionId') || '').trim();
+      return /^[A-Za-z0-9_-]{16,128}$/.test(value) ? value : '';
+    } catch { return ''; }
+  }, []);
+  const postEmbeddedMessage = React.useCallback((payload: Record<string, unknown>) => {
+    if (typeof window === 'undefined' || window.parent === window) return;
+    window.parent.postMessage({ ...payload, token, testConnectionId }, window.location.origin);
+  }, [testConnectionId, token]);
 
   // 메시지 채널 ID 검증 함수
   const validateMessageChannelId = React.useCallback((message: WsPayload, expectedChannelId: string | null): boolean => {
@@ -729,21 +781,40 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
 
     const { id, startRotation, finalRotation, durationMs } = wheelSpinPlan;
     wheel.style.transform = `rotate(${startRotation}deg)`;
+    const notifyWheelFinished = () => {
+      if (wheelSpinPlanIdRef.current !== id) return;
+      wheelRotationRef.current = finalRotation;
+      setWheelRotationDeg(finalRotation);
+      setWheelSettled(true);
+      const barrier = spinCompletionBarrierRef.current;
+      if (barrier?.id === id) {
+        barrier.wheelDone = true;
+        tryFinishSpinBarrier(barrier);
+      }
+    };
 
     if (typeof wheel.animate !== 'function') {
       wheel.style.transition = `transform ${durationMs}ms cubic-bezier(0.12, 0.68, 0.1, 1)`;
+      let completed = false;
+      let settleId: number | null = null;
+      const finishFallback = () => {
+        if (completed) return;
+        completed = true;
+        wheel.removeEventListener('transitionend', onTransitionEnd);
+        notifyWheelFinished();
+      };
+      const onTransitionEnd = (event: TransitionEvent) => {
+        if (event.target === wheel && event.propertyName === 'transform') finishFallback();
+      };
+      wheel.addEventListener('transitionend', onTransitionEnd);
       const frameId = window.requestAnimationFrame(() => {
         wheel.style.transform = `rotate(${finalRotation}deg)`;
+        settleId = window.setTimeout(finishFallback, durationMs + 250);
       });
-      const settleId = window.setTimeout(() => {
-        if (wheelSpinPlanIdRef.current !== id) return;
-        wheelRotationRef.current = finalRotation;
-        setWheelRotationDeg(finalRotation);
-        setWheelSettled(true);
-      }, durationMs);
       return () => {
         window.cancelAnimationFrame(frameId);
-        window.clearTimeout(settleId);
+        if (settleId != null) window.clearTimeout(settleId);
+        wheel.removeEventListener('transitionend', onTransitionEnd);
         wheel.style.transition = '';
       };
     }
@@ -761,10 +832,10 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     );
     wheelAnimationRef.current = animation;
     animation.onfinish = () => {
-      if (wheelSpinPlanIdRef.current !== id) return;
-      wheelRotationRef.current = finalRotation;
-      setWheelRotationDeg(finalRotation);
-      setWheelSettled(true);
+      wheel.style.transform = `rotate(${finalRotation}deg)`;
+      if (wheelAnimationRef.current === animation) wheelAnimationRef.current = null;
+      try { animation.cancel(); } catch {}
+      notifyWheelFinished();
     };
 
     return () => {
@@ -778,6 +849,11 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
 
   React.useEffect(() => () => {
     try { wheelAnimationRef.current?.cancel(); } catch {}
+    if (spinCompletionBarrierRef.current) spinCompletionBarrierRef.current.completed = true;
+    spinCompletionBarrierRef.current = null;
+    if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current);
+    timersRef.current.forEach((timerId) => window.clearTimeout(timerId));
+    timersRef.current = [];
   }, []);
   // SFX defaults to ON; allow disabling with ?sfx=off
   const sfxOn = React.useMemo(() => {
@@ -885,12 +961,27 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
   }, [sfxOn]);
   const playStartSfx = React.useCallback(() => {
     if (!sfxOn || !(userInteractedRef.current || canAutoPlayRef.current)) return;
-    if (startAudioRef.current) { try { startAudioRef.current.currentTime = 0; startAudioRef.current.play(); return; } catch {} }
+    if (startAudioRef.current) {
+      try {
+        startAudioRef.current.currentTime = 0;
+        void startAudioRef.current.play().catch(() => playBeep(880, 120, 'square', 0.015));
+        return;
+      } catch {}
+    }
     playBeep(880, 120, 'square', 0.015);
   }, [sfxOn, playBeep]);
   const playEndSfx = React.useCallback(() => {
     if (!sfxOn || !(userInteractedRef.current || canAutoPlayRef.current)) return;
-    if (endAudioRef.current) { try { endAudioRef.current.currentTime = 0; endAudioRef.current.play(); return; } catch {} }
+    if (endAudioRef.current) {
+      try {
+        endAudioRef.current.currentTime = 0;
+        void endAudioRef.current.play().catch(() => {
+          playBeep(440, 120, 'triangle', 0.02);
+          window.setTimeout(() => playBeep(660, 120, 'triangle', 0.02), 130);
+        });
+        return;
+      } catch {}
+    }
     playBeep(440, 120, 'triangle', 0.02); setTimeout(()=>playBeep(660, 120, 'triangle', 0.02), 130);
   }, [sfxOn, playBeep]);
 
@@ -931,7 +1022,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     }
 
     try {
-      const url = getRouletteWsUrl(token);
+      const url = getRouletteWsUrl(token, testConnectionId);
       
       updateDebugInfo({ 
         connectionState: 'connecting',
@@ -958,6 +1049,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
           reconnectAttempts: 0,
           channelId: null // 연결 시 채널 ID 초기화
         });
+        if (!testConnectionId) postEmbeddedMessage({ type: 'arubot:roulette-ready' });
       };
 
       ws.onmessage = async (ev) => {
@@ -967,7 +1059,13 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
             messageCount: prev.messageCount + 1
           }));
 
-          const data = JSON.parse(ev.data) as WsPayload;
+          const data = JSON.parse(ev.data) as WsPayload | RouletteTestReadyPayload;
+          if (data?.type === 'roulette:test-ready') {
+            if (testConnectionId && data.testConnectionId === testConnectionId && data.token === token) {
+              postEmbeddedMessage({ type: 'arubot:roulette-ready' });
+            }
+            return;
+          }
           if (data && data.type === 'roulette') {
             // 채널 ID 검증 로직 추가
             if (channelIdValidationEnabledRef.current) {
@@ -1135,7 +1233,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
                 // Animated spin: set state immediately and run full spin
                 setState({ name: payload.name || undefined, username: payload.username || undefined, label: payload.label || undefined, value: (payload.value != null ? payload.value : undefined) });
                 applyServerLook(payload.theme);
-                startSpinAnimation(final, Array.isArray(payload.items) ? payload.items : null);
+                startSpinAnimation(final, Array.isArray(payload.items) ? payload.items : null, payload);
               }
             };
             applyEvent(data);
@@ -1157,7 +1255,18 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
 
       ws.onclose = (event) => {
         const closeMsg = `WebSocket 연결 종료: code=${event.code}, reason=${event.reason}, wasClean=${event.wasClean}`;
-        console.warn('[RouletteViewer]', closeMsg);
+        const intentionalTestClose = Boolean(
+          testConnectionId && event.code === 1000 && event.reason === 'Test event delivered',
+        );
+        if (!intentionalTestClose) console.warn('[RouletteViewer]', closeMsg);
+
+        if (intentionalTestClose) {
+          updateDebugInfo({
+            connectionState: 'disconnected',
+            lastError: null,
+          });
+          return;
+        }
         
         // 서버 검증 실패 감지 (채널 접근 거부 등)
         if (event.code === 1008 || event.code === 1009 || event.code === 1012) {
@@ -1220,7 +1329,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     }
   // Keep this callback stable enough to avoid reconnect churn during roulette animation state updates.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [previewMode, token, validateToken, validateMessageChannelId, updateDebugInfo, sfxOn, channelValidationOn, primeAudio, applyServerLook]);
+  }, [previewMode, token, testConnectionId, validateToken, validateMessageChannelId, updateDebugInfo, sfxOn, channelValidationOn, primeAudio, applyServerLook, postEmbeddedMessage]);
 
   React.useEffect(() => {
     const cleanup = connectWebSocket();
@@ -1236,6 +1345,8 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       rafIdRef.current = null;
     }
     wheelSpinPlanIdRef.current += 1;
+    if (spinCompletionBarrierRef.current) spinCompletionBarrierRef.current.completed = true;
+    spinCompletionBarrierRef.current = null;
     try { wheelAnimationRef.current?.cancel(); } catch {}
     wheelAnimationRef.current = null;
     setWheelSpinPlan(null);
@@ -1274,6 +1385,14 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       setWheelSettled(true);
       playEndSfx();
       setActive(true);
+      postEmbeddedMessage({
+        type: 'arubot:roulette-settled',
+        spinId: meta?.spinId || null,
+        label: finalLabel,
+        value: meta?.value ?? null,
+        selectedIndex: instantWheelIndex,
+        itemCount: instantWheelItems.length,
+      });
       const doneId = window.setTimeout(() => {
         // Allow next queued item to display
         isSpinningRef.current = false;
@@ -1292,13 +1411,15 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       timersRef.current.push(doneId);
     }, OUT_MS);
     timersRef.current.push(prepId);
-  }, [playEndSfx, applyServerLook]);
+  }, [playEndSfx, applyServerLook, postEmbeddedMessage]);
 
-  const startSpinAnimation = React.useCallback((finalLabel: string, itemsFromServer: string[] | null) => {
+  const startSpinAnimation = React.useCallback((finalLabel: string, itemsFromServer: string[] | null, meta?: WsPayload) => {
     // clear previous timers
     timersRef.current.forEach(id => window.clearTimeout(id));
     timersRef.current = [];
     wheelSpinPlanIdRef.current += 1;
+    if (spinCompletionBarrierRef.current) spinCompletionBarrierRef.current.completed = true;
+    spinCompletionBarrierRef.current = null;
     try { wheelAnimationRef.current?.cancel(); } catch {}
     wheelAnimationRef.current = null;
     // keep reel view; no separate final stage view
@@ -1323,11 +1444,68 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       6 + Math.floor(Math.random() * 3)
     );
     const wheelResolvedIndex = wheelIndexAtPointer(wheelFinalRotation, nextWheelItems.length);
+    const wheelResolvedLabel = nextWheelItems[wheelResolvedIndex] || finalLabel;
     setWheelSelectedIndex(wheelResolvedIndex);
-    const spinDurationMs = durationRef.current;
+    const spinDurationMs = normalizeRouletteSpinDuration(meta?.spinDurationMs);
+    const wheelSpinPlanId = wheelSpinPlanIdRef.current;
+    const messageLayout = parseRouletteLook(meta?.theme).layout;
+    const waitForPhysicalWheel = (urlLook.layout || messageLayout || layout) === 'wheel';
+    const finishSpin = () => {
+      const barrier = spinCompletionBarrierRef.current;
+      if (!barrier || barrier.id !== wheelSpinPlanId) return;
+      spinCompletionBarrierRef.current = null;
+      wheelRotationRef.current = wheelFinalRotation;
+      setWheelRotationDeg(wheelFinalRotation);
+      setWheelSettled(true);
+      setWheelSpinPlan(null);
+      postEmbeddedMessage({
+        type: 'arubot:roulette-settled',
+        spinId: meta?.spinId || null,
+        label: wheelResolvedLabel,
+        value: meta?.value ?? null,
+        selectedIndex: wheelResolvedIndex,
+        itemCount: nextWheelItems.length,
+      });
+      playEndSfx();
+      if (embeddedTestMode) {
+        isSpinningRef.current = false;
+        spinCooldownUntilRef.current = Date.now() + 600;
+        if (meta?.testMode === true) {
+          queuedEventsRef.current.length = 0;
+          updateDebugInfo({ queuedMessagesCount: 0 });
+          return;
+        }
+        const hasQueued = queuedEventsRef.current.length > 0;
+        setActive(false);
+        if (hasQueued) {
+          const nextId = window.setTimeout(() => { processQueuedRef.current(); }, FADE_MS);
+          timersRef.current.push(nextId);
+        }
+        return;
+      }
+      const hideId = window.setTimeout(() => {
+        const hasQueued = queuedEventsRef.current.length > 0;
+        isSpinningRef.current = false;
+        spinCooldownUntilRef.current = Date.now() + 600;
+        if (hasQueued) {
+          setActive(false);
+          window.setTimeout(() => { processQueuedRef.current(); }, FADE_MS);
+        } else {
+          setActive(false);
+        }
+      }, 1000);
+      timersRef.current.push(hideId);
+    };
+    spinCompletionBarrierRef.current = {
+      id: wheelSpinPlanId,
+      reelDone: false,
+      wheelDone: !waitForPhysicalWheel,
+      completed: false,
+      finish: finishSpin,
+    };
     setWheelRotationDeg(wheelStartRotation);
     setWheelSpinPlan({
-      id: wheelSpinPlanIdRef.current,
+      id: wheelSpinPlanId,
       startRotation: wheelStartRotation,
       finalRotation: wheelFinalRotation,
       durationMs: spinDurationMs,
@@ -1357,7 +1535,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     const travelRows = Math.max(40, Math.min(120, pool.length * 8));
     const targetIdx = startIdx + travelRows; // virtual absolute target index
     finalIndexRef.current = targetIdx;
-    finalLabelRef.current = finalLabel;
+    finalLabelRef.current = wheelResolvedLabel;
     startCenterRef.current = startIdx;
     targetIndexRef.current = targetIdx;
     animStartRef.current = performance.now();
@@ -1389,23 +1567,11 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
             setOffsetRows(targetIdx - px2rows(1));
             requestAnimationFrame(() => {
               setOffsetRows(targetIdx);
-              wheelRotationRef.current = wheelFinalRotation;
-              setWheelRotationDeg(wheelFinalRotation);
-              setWheelSettled(true);
-              // done
-              playEndSfx();
-              const hideId = window.setTimeout(() => {
-                const hasQueued = queuedEventsRef.current.length > 0;
-                isSpinningRef.current = false;
-                spinCooldownUntilRef.current = Date.now() + 600;
-                if (hasQueued) {
-                  setActive(false);
-                  window.setTimeout(() => { processQueuedRef.current(); }, FADE_MS);
-                } else {
-                  setActive(false);
-                }
-              }, 1000);
-              timersRef.current.push(hideId);
+              const barrier = spinCompletionBarrierRef.current;
+              if (barrier?.id === wheelSpinPlanId) {
+                barrier.reelDone = true;
+                tryFinishSpinBarrier(barrier);
+              }
             });
           });
         };
@@ -1413,7 +1579,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       }
     };
     rafIdRef.current = requestAnimationFrame(run);
-  }, [playStartSfx, playEndSfx, rowH, computeRowsHalf]);
+  }, [playStartSfx, playEndSfx, rowH, computeRowsHalf, postEmbeddedMessage, embeddedTestMode, updateDebugInfo, layout, urlLook.layout]);
 
   // Process any queued roulette events after current spin completes
   processQueuedRef.current = () => {
@@ -1470,7 +1636,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       if (payload.instant === true) {
         showInstantResult(final, payload);
       } else {
-        startSpinAnimation(final, Array.isArray(payload.items) ? payload.items : null);
+        startSpinAnimation(final, Array.isArray(payload.items) ? payload.items : null, payload);
       }
     }, 50);
   };

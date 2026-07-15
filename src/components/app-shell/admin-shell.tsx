@@ -10,7 +10,7 @@ import { ThemeToggle } from '@/components/ui/theme-toggle';
 import { Button, LinkButton } from '@/components/ui/button';
 import { Tooltip } from '@/components/ui/tooltip';
 import { LegalFooter } from '@/components/app-shell/legal-footer';
-import { readJson } from '@/shared/api/http';
+import { readJsonResult } from '@/shared/api/http';
 
 type AdminAccess = {
   isAdmin?: boolean;
@@ -23,9 +23,10 @@ async function readAdminAccess() {
   const now = Date.now();
   if (adminAccessCache && adminAccessCache.expiresAt > now) return adminAccessCache.value;
   if (!adminAccessPromise) {
-    adminAccessPromise = readJson<AdminAccess>('/api/arubot-admin/me')
-      .then((status) => {
-        const value = status?.isAdmin === true;
+    adminAccessPromise = readJsonResult<AdminAccess>('/api/arubot-admin/me')
+      .then((result) => {
+        if (!result.ok) return false;
+        const value = result.data?.isAdmin === true;
         adminAccessCache = { value, expiresAt: Date.now() + 5 * 60 * 1000 };
         return value;
       })
@@ -51,7 +52,7 @@ function getActiveLabel(pathname: string, isAdmin: boolean) {
 function Brand({ compact = false, onClick }: { compact?: boolean; onClick?: () => void }) {
   return (
     <Link
-      href="/dashboard"
+      href="/"
       onClick={onClick}
       aria-label={compact ? 'AruBot 홈' : undefined}
       className={cn(
