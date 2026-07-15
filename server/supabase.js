@@ -893,6 +893,16 @@ function sanitizeTableNameSuffix(s) {
   return /^[A-Za-z_]/.test(base) ? base : `u_${base}`;
 }
 
+function quoteChannelPointsTable(table) {
+  const name = String(table || '').trim();
+  if (!/^channelpoint_[A-Za-z0-9_]+$/.test(name)) {
+    const error = new Error('Invalid channel points table identifier');
+    error.code = 'invalid_channel_points_table';
+    throw error;
+  }
+  return quoteIdent(`public.${name}`);
+}
+
 function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
 async function withPgClient(fn, retries = 2) {
   const dbUrl = getDbUrl();
@@ -927,7 +937,7 @@ function isUndefinedDbFunctionError(error, functionName) {
 async function ensureChannelPointsTableWithClient(pg, streamerUid) {
   const suffix = sanitizeTableNameSuffix(streamerUid);
   const table = `channelpoint_${suffix}`;
-  const tableSql = quoteIdent(table);
+  const tableSql = quoteChannelPointsTable(table);
   const constraintName = `${table.slice(0, 40)}_points_nonnegative_ck`;
   await pg.query(`
     create table if not exists ${tableSql} (
@@ -952,7 +962,7 @@ export async function listChannelPoints(streamerUid) {
     const rawRows = [];
 
     for (const table of tables) {
-      const { rows } = await pg.query(`select user_id, username, points from ${table}`);
+      const { rows } = await pg.query(`select user_id, username, points from ${quoteChannelPointsTable(table)}`);
       rawRows.push(...(rows || []));
     }
 
@@ -983,7 +993,7 @@ export async function listChannelPoints(streamerUid) {
 
 function buildChannelPointPageCte(tables, useIdentityLookup = true) {
   const rawUnion = tables
-    .map((table) => `select user_id::text as raw_user_id, username::text as username, coalesce(points, 0)::bigint as points from ${table}`)
+    .map((table) => `select user_id::text as raw_user_id, username::text as username, coalesce(points, 0)::bigint as points from ${quoteChannelPointsTable(table)}`)
     .join('\nunion all\n');
   const matchedCte = useIdentityLookup
     ? `
@@ -1093,11 +1103,18 @@ export async function listViewerPointBalancesForUserIds(userIds) {
           avatarUrl: row.avatar_url || null,
           provider: row.provider || null,
         };
-        tableUidLookup.set(`channelpoint_${sanitizeTableNameSuffix(channelUid)}`, lookup);
+        const channelTable = `channelpoint_${sanitizeTableNameSuffix(channelUid)}`;
+        tableUidLookup.set(channelTable, lookup);
+        if (!tableUidLookup.has(channelTable.toLowerCase()) || row.provider === 'chzzk') {
+          tableUidLookup.set(channelTable.toLowerCase(), lookup);
+        }
         if (canonicalChannelUid) {
           const canonicalTable = `channelpoint_${sanitizeTableNameSuffix(canonicalChannelUid)}`;
           if (!tableUidLookup.has(canonicalTable) || row.provider === 'chzzk') {
             tableUidLookup.set(canonicalTable, lookup);
+          }
+          if (!tableUidLookup.has(canonicalTable.toLowerCase()) || row.provider === 'chzzk') {
+            tableUidLookup.set(canonicalTable.toLowerCase(), lookup);
           }
         }
       }
@@ -1119,10 +1136,16 @@ export async function listViewerPointBalancesForUserIds(userIds) {
       const table = String(tableRow.table_name || '');
       if (!/^channelpoint_[A-Za-z0-9_]+$/.test(table)) continue;
 
-      const result = await pg.query(
-        `select user_id, username, points from ${table} where user_id = any($1::text[])`,
-        [ids]
-      );
+      let result;
+      try {
+        result = await pg.query(
+          `select user_id, username, points from ${quoteChannelPointsTable(table)} where user_id = any($1::text[])`,
+          [ids]
+        );
+      } catch (error) {
+        if (error?.code === '42P01') continue;
+        throw error;
+      }
       if (!result.rows?.length) continue;
 
       const lookup = tableUidLookup.get(table);
@@ -1336,6 +1359,23 @@ async function listPointTablesForChannelAliases(channelAliases, pg = null) {
       ? await ensureChannelPointsTableWithClient(pg, channelUid)
       : await ensureChannelPointsTable(channelUid));
   }
+  if (pg) {
+    const legacyCandidates = uniqueNonEmpty(tables.flatMap((table) => {
+      const legacyTable = String(table).toLowerCase();
+      return legacyTable === table ? [] : [legacyTable];
+    }));
+    if (legacyCandidates.length) {
+      const legacyTables = await pg.query(
+        `select table_name
+           from information_schema.tables
+          where table_schema = 'public'
+            and table_type = 'BASE TABLE'
+            and table_name = any($1::text[])`,
+        [legacyCandidates]
+      );
+      tables.push(...(legacyTables.rows || []).map((row) => String(row.table_name || '')).filter(Boolean));
+    }
+  }
   return uniqueNonEmpty(tables);
 }
 
@@ -1345,7 +1385,7 @@ async function sumPointsForIdentity(pg, channelAliases, identityKeys) {
   let total = 0;
   const tables = await listPointTablesForChannelAliases(channelAliases, pg);
   for (const table of tables) {
-    const { rows } = await pg.query(`select coalesce(sum(points), 0) as points from ${table} where user_id = any($1::text[])`, [keys]);
+    const { rows } = await pg.query(`select coalesce(sum(points), 0) as points from ${quoteChannelPointsTable(table)} where user_id = any($1::text[])`, [keys]);
     total += Number(rows?.[0]?.points || 0);
   }
   return total;
@@ -1359,7 +1399,7 @@ async function getPointBalanceSummaryForIdentity(pg, channelAliases, identityKey
   let found = false;
   const tables = await listPointTablesForChannelAliases(channelAliases, pg);
   for (const table of tables) {
-    const { rows } = await pg.query(`select username, points from ${table} where user_id = any($1::text[])`, [keys]);
+    const { rows } = await pg.query(`select username, points from ${quoteChannelPointsTable(table)} where user_id = any($1::text[])`, [keys]);
     for (const row of rows || []) {
       found = true;
       if (!username && row.username) username = row.username;
@@ -1374,17 +1414,18 @@ async function deletePointRowsForIdentity(pg, channelAliases, identityKeys) {
   if (!keys.length) return;
   const tables = await listPointTablesForChannelAliases(channelAliases, pg);
   for (const table of tables) {
-    await pg.query(`delete from ${table} where user_id = any($1::text[])`, [keys]);
+    await pg.query(`delete from ${quoteChannelPointsTable(table)} where user_id = any($1::text[])`, [keys]);
   }
 }
 
 async function upsertCanonicalPointDelta(pg, canonicalChannelUid, canonicalUserId, username, delta) {
   const table = await ensureChannelPointsTableWithClient(pg, canonicalChannelUid);
+  const tableSql = quoteChannelPointsTable(table);
   await pg.query(
-    `insert into ${table} (user_id, username, points) values ($1, $2, $3)
+    `insert into ${tableSql} as current_points (user_id, username, points) values ($1, $2, $3)
      on conflict (user_id) do update set
-       username = coalesce(excluded.username, ${table}.username),
-       points = ${table}.points + excluded.points`,
+       username = coalesce(excluded.username, current_points.username),
+       points = current_points.points + excluded.points`,
     [String(canonicalUserId), username ? String(username) : null, Number(delta) || 0]
   );
 }
@@ -1393,7 +1434,7 @@ async function setCanonicalPointBalance(pg, channelIdentity, userIdentity, usern
   await deletePointRowsForIdentity(pg, channelIdentity.channelAliases, userIdentity.identityKeys);
   const table = await ensureChannelPointsTableWithClient(pg, channelIdentity.canonicalChannelUid);
   await pg.query(
-    `insert into ${table} (user_id, username, points) values ($1, $2, $3)
+    `insert into ${quoteChannelPointsTable(table)} (user_id, username, points) values ($1, $2, $3)
      on conflict (user_id) do update set username = excluded.username, points = excluded.points`,
     [String(userIdentity.canonicalUserId), username ? String(username) : null, Number(points) || 0]
   );
@@ -1545,7 +1586,7 @@ async function deductChannelPointsIfEnoughWithClient(pg, streamerUid, userId, us
   let resolvedUsername = username ? String(username) : null;
   for (const table of tables) {
     const result = await pg.query(
-      `select username, points from ${quoteIdent(table)} where user_id = any($1::text[]) for update`,
+      `select username, points from ${quoteChannelPointsTable(table)} where user_id = any($1::text[]) for update`,
       [userIdentity.identityKeys]
     );
     for (const row of result.rows || []) {
@@ -1570,7 +1611,7 @@ async function deductChannelPointsIfEnoughWithClient(pg, streamerUid, userId, us
   const balanceAfter = balanceBefore - normalizedAmount;
   const canonicalTable = await ensureChannelPointsTableWithClient(pg, channelIdentity.canonicalChannelUid);
   await pg.query(
-    `insert into ${quoteIdent(canonicalTable)} (user_id, username, points)
+    `insert into ${quoteChannelPointsTable(canonicalTable)} (user_id, username, points)
      values ($1, $2, $3)
      on conflict (user_id) do update set username = excluded.username, points = excluded.points`,
     [String(userIdentity.canonicalUserId), resolvedUsername, balanceAfter]
@@ -1652,7 +1693,7 @@ export async function clearAllChannelPoints(streamerUid) {
     const channelIdentity = await resolvePointChannelIdentity(pg, streamerUid);
     const tables = await listPointTablesForChannelAliases(channelIdentity.channelAliases, pg);
     for (const table of tables) {
-      await pg.query(`delete from ${table}`);
+      await pg.query(`delete from ${quoteChannelPointsTable(table)}`);
     }
   });
 }
@@ -1665,6 +1706,7 @@ export async function bulkUpsertChannelPoints(streamerUid, rows) {
     const channelIdentity = await resolvePointChannelIdentity(pg, streamerUid);
     if (!channelIdentity.canonicalChannelUid) return;
     const table = await ensureChannelPointsTableWithClient(pg, channelIdentity.canonicalChannelUid);
+    const tableSql = quoteChannelPointsTable(table);
     const normalizedRowsByUser = new Map();
     const userIdentities = await resolvePointUserIdentities(pg, rows.map((row) => row?.user_id));
 
@@ -1692,8 +1734,8 @@ export async function bulkUpsertChannelPoints(streamerUid, rows) {
         values.push(`($${base + 1}, $${base + 2}, $${base + 3})`);
       });
       if (!values.length) continue;
-      const sql = `insert into ${table} (user_id, username, points) values ${values.join(', ')}
-        on conflict (user_id) do update set username = coalesce(excluded.username, ${table}.username), points = excluded.points`;
+      const sql = `insert into ${tableSql} as current_points (user_id, username, points) values ${values.join(', ')}
+        on conflict (user_id) do update set username = coalesce(excluded.username, current_points.username), points = excluded.points`;
       await pg.query(sql, params);
       // small pacing to avoid connection saturation
       await sleep(50);
@@ -2913,7 +2955,10 @@ async function deleteDynamicChannelPointRows(pg, summary, scope) {
         and table_type = 'BASE TABLE'
         and table_name like 'channelpoint\\_%' escape '\\'`
   );
-  const ownedPointTables = new Set(scope.channelAliases.map((alias) => `channelpoint_${sanitizeTableNameSuffix(alias)}`));
+  const ownedPointTables = new Set(scope.channelAliases.flatMap((alias) => {
+    const table = `channelpoint_${sanitizeTableNameSuffix(alias)}`;
+    return [table, table.toLowerCase()];
+  }));
   for (const row of result.rows || []) {
     const tableName = `${row.table_schema}.${row.table_name}`;
     const fullChannelDelete = ownedPointTables.has(String(row.table_name));
@@ -3298,14 +3343,15 @@ export async function cancelPredictionForSid(sid, predictionId) {
     if (!row) return null;
     if (row.status === 'settled' || row.status === 'cancelled') return fetchPredictionWithBets(pg, predictionId);
     const table = await ensureChannelPointsTableWithClient(pg, row.channel_uid);
+    const tableSql = quoteChannelPointsTable(table);
     const bets = await pg.query(`select * from prediction_bets where prediction_id = $1 and refunded = false`, [row.id]);
     const eventLogs = [];
     for (const bet of bets.rows || []) {
       await pg.query(
-        `insert into ${table} (user_id, username, points) values ($1, $2, $3)
+        `insert into ${tableSql} as current_points (user_id, username, points) values ($1, $2, $3)
          on conflict (user_id) do update set
-           username = coalesce(excluded.username, ${table}.username),
-           points = ${table}.points + excluded.points`,
+           username = coalesce(excluded.username, current_points.username),
+           points = current_points.points + excluded.points`,
         [String(bet.user_id), bet.username ? String(bet.username) : null, Number(bet.amount || 0)]
       );
       eventLogs.push({
@@ -3344,6 +3390,7 @@ export async function settlePredictionForSid(sid, predictionId, winningOptionId)
     if (!winning) throw new Error('invalid winning option');
 
     const table = await ensureChannelPointsTableWithClient(pg, row.channel_uid);
+    const tableSql = quoteChannelPointsTable(table);
     const bets = await pg.query(`select * from prediction_bets where prediction_id = $1 order by created_at asc`, [row.id]);
     const allBets = bets.rows || [];
     const eventLogs = [];
@@ -3354,10 +3401,10 @@ export async function settlePredictionForSid(sid, predictionId, winningOptionId)
     if (total <= 0 || winnerTotal <= 0) {
       for (const bet of allBets) {
         await pg.query(
-          `insert into ${table} (user_id, username, points) values ($1, $2, $3)
+          `insert into ${tableSql} as current_points (user_id, username, points) values ($1, $2, $3)
            on conflict (user_id) do update set
-             username = coalesce(excluded.username, ${table}.username),
-             points = ${table}.points + excluded.points`,
+             username = coalesce(excluded.username, current_points.username),
+             points = current_points.points + excluded.points`,
           [String(bet.user_id), bet.username ? String(bet.username) : null, Number(bet.amount || 0)]
         );
         eventLogs.push({
@@ -3383,10 +3430,10 @@ export async function settlePredictionForSid(sid, predictionId, winningOptionId)
     for (const bet of winners) {
       const payout = Math.floor((Number(bet.amount || 0) * total) / winnerTotal);
       await pg.query(
-        `insert into ${table} (user_id, username, points) values ($1, $2, $3)
+        `insert into ${tableSql} as current_points (user_id, username, points) values ($1, $2, $3)
          on conflict (user_id) do update set
-           username = coalesce(excluded.username, ${table}.username),
-           points = ${table}.points + excluded.points`,
+           username = coalesce(excluded.username, current_points.username),
+           points = current_points.points + excluded.points`,
         [String(bet.user_id), bet.username ? String(bet.username) : null, payout]
       );
       await pg.query(`update prediction_bets set payout = $2, updated_at = now() where id = $1`, [bet.id, payout]);

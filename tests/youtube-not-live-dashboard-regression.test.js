@@ -27,7 +27,8 @@ describe('YouTube not_live dashboard regression', () => {
     expect(ensure).toContain('cacheYoutubeReceiverLiveState(entry)');
     expect(ensure).not.toContain('if (!liveState.live || !liveState.liveChatId)');
     expect(server).toContain('live: !!entry.connected || !!entry.liveChatId');
-    expect(status).toContain("String(youtubeLastError || '').trim().toLowerCase() === 'not_live'");
+    expect(status).toContain('isYoutubeNotLiveError(youtubeLastError)');
+    expect(server).toContain("text.includes('live stream was not found')");
     expect(status).toContain('lastError: visibleYoutubeLastError');
   });
 });

@@ -25,15 +25,19 @@ describe('streamer home runtime status regression', () => {
     expect(dashboard).toContain('platformRuntimeError(runtime)');
   });
 
-  test('refresh status actively heals live provider sessions and exposes CHZZK errors', () => {
+  test('refresh status is read-only while background recovery exposes diagnostics', () => {
     const statusStart = server.indexOf("app.get('/api/platforms/status'");
     const statusEnd = server.indexOf("app.post('/api/cime/reset'", statusStart);
     const status = server.slice(statusStart, statusEnd);
 
-    expect(status).toContain('if (chzzkLive) await ensureChzzkChatSessionForLiveSid');
-    expect(status).toContain('cimeEntry = await ensureCimeSession(ownerUserId)');
-    expect(status).toContain('youtubeEntry = await ensureYoutubeSession(ownerUserId)');
-    expect(status).toContain('lastError: chzzkDiagnostic?.message || null');
+    expect(status).not.toContain('await ensureChzzkChatSessionForLiveSid');
+    expect(status).not.toContain('await ensureCimeSession(ownerUserId)');
+    expect(status).not.toContain('await ensureYoutubeSession(ownerUserId)');
+    expect(status).not.toContain('disconnectProviderRuntimeState(');
+    expect(status).toContain('lastError: chzzkRefreshError || chzzkDiagnostic?.message || null');
+    expect(status).toContain('recovering: !!cimeRecovery');
+    expect(status).toContain('recovering: !!youtubeRecovery');
+    expect(status).toContain('persistSession: false');
     expect(status).toContain("transportVersion: '2.x'");
     expect(packageJson.dependencies['socket.io-client']).toBe('2.0.3');
   });

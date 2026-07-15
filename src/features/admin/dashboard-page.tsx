@@ -73,6 +73,10 @@ type PlatformStatusItem = {
   streamConnected?: boolean;
   lastError?: string | null;
   reauthRequired?: boolean;
+  recovering?: boolean;
+  recoveryAttempt?: number;
+  nextRetryAt?: number | null;
+  recoveryError?: string | null;
 };
 
 type PlatformStatusResponse = {
@@ -125,6 +129,7 @@ function platformRuntimeError(item?: PlatformStatusItem | null) {
   if (!error) return null;
   const normalizedError = error.toLowerCase();
   if (normalizedError === 'not_live') return null;
+  if (normalizedError.includes('live stream was not found') || normalizedError.includes('live_chat_not_found')) return null;
   if (item?.live === false && normalizedError === 'offline') return null;
   return error;
 }
@@ -132,6 +137,7 @@ function platformRuntimeError(item?: PlatformStatusItem | null) {
 function platformRuntimeLabel(item?: PlatformStatusItem | null) {
   if (!item) return '상태 확인 중';
   if (item.reauthRequired) return '재인증 필요';
+  if (item.recovering) return '자동 복구 중';
   if (platformRuntimeError(item)) return '연결 점검 필요';
   if (!item.connected) return '채널 미연결';
   if (item.streamConnected) return '채팅 수신 중';
@@ -142,7 +148,9 @@ function platformRuntimeLabel(item?: PlatformStatusItem | null) {
 
 function platformRuntimeStatus(item?: PlatformStatusItem | null) {
   if (!item) return 'neutral' as const;
-  if (item.reauthRequired || platformRuntimeError(item)) return 'danger' as const;
+  if (item.reauthRequired) return 'danger' as const;
+  if (item.recovering) return 'info' as const;
+  if (platformRuntimeError(item)) return 'danger' as const;
   if (!item.connected) return 'warning' as const;
   if (item.streamConnected) return 'success' as const;
   if (item.live === true) return 'info' as const;
@@ -313,7 +321,8 @@ export function DashboardPage() {
   const connectedRuntimeItems = platformStatusItems.filter((item) => item.connected);
   const streamingRuntimeItems = connectedRuntimeItems.filter((item) => item.streamConnected);
   const liveRuntimeItems = connectedRuntimeItems.filter((item) => item.live === true);
-  const runtimeProblem = connectedRuntimeItems.find((item) => item.reauthRequired || platformRuntimeError(item)) || null;
+  const recoveringRuntimeItems = connectedRuntimeItems.filter((item) => item.recovering);
+  const runtimeProblem = connectedRuntimeItems.find((item) => item.reauthRequired || (!item.recovering && platformRuntimeError(item))) || null;
   const connectedProviders = new Set(accounts.map((account) => account.provider?.toLowerCase()).filter(Boolean));
   if (youtubeConfigured) connectedProviders.add('youtube');
   const youtubeLoginHref = apiUrl(`/api/auth/youtube/login?returnTo=${encodeURIComponent('/connection?platform=youtube')}`);
@@ -326,6 +335,7 @@ export function DashboardPage() {
     if (!dashboardData?.platformStatus) return { value: '연결 확인 필요', detail: '런타임 상태 조회 실패', status: 'warning' as const };
     if (runtimeProblem) return { value: '점검 필요', detail: runtimeProblem.reauthRequired ? '플랫폼 재인증 필요' : '채팅 연결 오류', status: 'danger' as const };
     if (streamingRuntimeItems.length) return { value: '작동 중', detail: `${streamingRuntimeItems.length}개 채널 채팅 수신`, status: 'success' as const };
+    if (recoveringRuntimeItems.length) return { value: '복구 중', detail: '채팅 연결을 자동으로 다시 시도하고 있습니다', status: 'info' as const };
     if (liveRuntimeItems.length) return { value: '연결 중', detail: '방송 채팅 연결 복구 중', status: 'info' as const };
     if (connectedRuntimeItems.length) return { value: '방송 대기', detail: '방송 시작 시 자동 연결', status: 'neutral' as const };
     return { value: '연결 필요', detail: '플랫폼 채널을 연결하세요', status: 'warning' as const };

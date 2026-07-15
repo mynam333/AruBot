@@ -11,6 +11,9 @@ describe('startup live status refresh regression', () => {
     const startupStart = serverIndex.indexOf('setTimeout(() =>', bootstrapEnd);
     const startupEnd = serverIndex.indexOf('// =============================', startupStart);
     const startupBody = serverIndex.slice(startupStart, startupEnd);
+    const monitorStart = serverIndex.indexOf('async function runRegisteredRuntimeMonitor');
+    const monitorEnd = serverIndex.indexOf('setTimeout(() =>', monitorStart);
+    const monitorBody = serverIndex.slice(monitorStart, monitorEnd);
 
     expect(bootstrapBody).toContain('await bootstrapEnsureSessions()');
     expect(bootstrapBody).toContain('await bootstrapEnsureCimeSessions()');
@@ -20,11 +23,13 @@ describe('startup live status refresh regression', () => {
     expect(serverIndex).toContain('async function runRegisteredRuntimeMonitor');
     expect(serverIndex).toContain('if (registeredRuntimeMonitorRunning) return false');
     expect(startupBody).toContain("runRegisteredRuntimeMonitor('startup')");
-    expect(startupBody).toContain('runtimeReadinessState.initialBootstrapCompleted = true');
+    expect(monitorBody).toContain('runtimeReadinessState.initialBootstrapCompleted = true');
     expect(startupBody).toContain('.catch((e) =>');
     expect(startupBody).toContain("runRegisteredRuntimeMonitor('scheduled').catch");
     expect(startupBody).toContain('REGISTERED_RUNTIME_MONITOR_INTERVAL_MS');
-    expect(serverIndex).toContain("if (reason === 'startup')");
+    expect(monitorBody).toContain("reason === 'startup'");
+    expect(monitorBody).toContain('REGISTERED_PROVIDER_RECOVERY_INTERVAL_MS');
+    expect(monitorBody).toContain('await bootstrapRegisteredChannelLiveStatuses(reason)');
     expect(serverIndex).toContain('await bootstrapEnsureSessions()');
     expect(startupBody).not.toContain('bootstrapEnsureSessions().catch');
     expect(startupBody).not.toContain('bootstrapEnsureCimeSessions().catch');

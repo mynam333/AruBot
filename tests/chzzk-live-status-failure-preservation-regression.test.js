@@ -27,6 +27,6 @@ describe('CHZZK live status failure preservation regression', () => {
     const status = server.slice(statusStart, statusEnd);
 
     expect(status).toContain('const chzzkDiagnostic = chzzkRuntimeErrors.get(sid) || null');
-    expect(status).toContain('lastError: chzzkDiagnostic?.message || null');
+    expect(status).toContain('lastError: chzzkRefreshError || chzzkDiagnostic?.message || null');
   });
 });

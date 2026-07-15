@@ -16,8 +16,10 @@ import { executeAndStripLiveChangeTokens, filterLiveInfoByProvider, selectCatego
 import { buildYoutubeLiveInfoFallback, buildYoutubeLiveLookupContext } from './youtube-live-info.js';
 import { extractYouTubeWatchDurationSec, resolveVideoDonationTiming } from './video-donation-timing.js';
 import { appendVideoDonationQueueCount, countNonDurableVideoDonationItems, countVideoDonationQueueIncludingItem } from './video-donation-queue.js';
+import { buildCanonicalOAuthStartUrl, createOAuthStateToken, resolveOAuthRequestOrigin, verifyOAuthStateToken } from './oauth-state.js';
 import { getChannelIdFromUserId, selectPlatformChannelId, validateChannelId } from './channel-identity.js';
 import { findCommandKeywordMatch, getCommandRuleMatches } from './command-keyword.js';
+import { createRuntimeRecoverySupervisor } from './runtime-recovery.js';
 import youtubeLiveChatReceiver from './youtube-live-chat-receiver.cjs';
 import { WebSocketServer, WebSocket } from 'ws';
 
@@ -331,14 +333,19 @@ const youtubeSessionCreatePromises = new Map(); // ownerUserId -> Promise(entry)
 const youtubeSendQueues = new Map(); // ownerUserId -> Promise
 const cimeSessionStore = new Map(); // ownerUserId -> entry
 const cimeSessionCreatePromises = new Map(); // ownerUserId -> Promise(entry)
-const cimeReconnectAttempts = new Map(); // ownerUserId -> consecutive reconnect failures
 const providerRuntimeLeases = new Map(); // resourceKey -> local lease metadata
 const providerRuntimeBootstrapRetryTimers = new Map(); // provider -> retry timer
+const providerRuntimeRecoverySupervisor = createRuntimeRecoverySupervisor({
+  baseDelayMs: 1_000,
+  maxDelayMs: 60_000,
+  jitterRatio: 0.2,
+});
 const PROVIDER_RUNTIME_LEASE_TTL_MS = Math.max(15_000, Math.min(5 * 60_000, Number(process.env.PROVIDER_RUNTIME_LEASE_TTL_MS || 45_000)));
 const PROVIDER_RUNTIME_LEASE_RENEW_MS = Math.max(5_000, Math.min(PROVIDER_RUNTIME_LEASE_TTL_MS - 5_000, Number(process.env.PROVIDER_RUNTIME_LEASE_RENEW_MS || 15_000)));
 const disconnectedProviderRuntimeGuards = new Map(); // `${ownerUserId}:${provider}` -> { at, platformUserId, reason }
 const runtimeConfigurationRevisions = new Map(); // sid -> monotonically increasing config revision
 const CACHE_TTL = 5 * 60 * 1000;
+let providerRuntimeLeaseRenewalRunning = false;
 
 function providerRuntimeLeaseResourceKey(provider, ownerUserId, channelId = null) {
   const normalizedProvider = String(provider || '').trim().toLowerCase();
@@ -398,6 +405,171 @@ function scheduleProviderRuntimeBootstrapRetry(provider) {
   providerRuntimeBootstrapRetryTimers.set(normalizedProvider, timer);
 }
 
+function providerRuntimeRecoveryKey(provider, ownerUserId) {
+  const normalizedProvider = normalizeRuntimeProvider(provider);
+  const owner = String(ownerUserId || '').replace(/^user:/, '').trim();
+  return normalizedProvider && owner ? `${normalizedProvider}:${owner}` : '';
+}
+
+function getProviderSessionRecoveryStatus(provider, ownerUserId) {
+  const key = providerRuntimeRecoveryKey(provider, ownerUserId);
+  return key ? providerRuntimeRecoverySupervisor.getState(key) : null;
+}
+
+function cancelProviderSessionRecovery(provider, ownerUserId) {
+  const key = providerRuntimeRecoveryKey(provider, ownerUserId);
+  return key ? providerRuntimeRecoverySupervisor.cancel(key) : false;
+}
+
+function isProviderSessionRecoveryBlocked(provider, ownerUserId, error = null) {
+  if (runtimeReadinessState.shuttingDown) return true;
+  const guardKey = providerRuntimeGuardKey(ownerUserId, provider);
+  if (guardKey && disconnectedProviderRuntimeGuards.has(guardKey)) return true;
+  const status = Number(error?.response?.status || error?.status || error?.lastStatus || 0);
+  const text = String(error?.lastError || error?.message || error?.response?.data?.error || '').toLowerCase();
+  return error?.code === 'CHANNEL_DISCONNECTED'
+    || status === 401
+    || text.includes('invalid_grant')
+    || text.includes('unauthorized')
+    || text.includes('no cime refresh token')
+    || text.includes('no youtube refresh token');
+}
+
+function disposeYoutubeSessionForRecovery(ownerUserId, reason = 'runtime_recovery') {
+  const entry = youtubeSessionStore.get(ownerUserId);
+  if (!entry) return false;
+  entry.closed = true;
+  entry.connected = false;
+  entry.closeReason = reason;
+  if (entry.reconnectTimer) clearTimeout(entry.reconnectTimer);
+  if (entry.pollTimer) clearTimeout(entry.pollTimer);
+  try { entry.chatClient?.stop?.(reason); } catch { }
+  try { entry.abortController?.abort(); } catch { }
+  try { entry.stream?.destroy?.(); } catch { }
+  youtubeSessionStore.delete(ownerUserId);
+  return true;
+}
+
+function disposeCimeSessionForRecovery(ownerUserId, reason = 'runtime_recovery') {
+  const entry = cimeSessionStore.get(ownerUserId);
+  if (!entry) return false;
+  entry.closed = true;
+  entry.connected = false;
+  entry.closeReason = reason;
+  if (entry.pingTimer) clearInterval(entry.pingTimer);
+  if (entry.subscribeRetryTimer) clearTimeout(entry.subscribeRetryTimer);
+  if (entry.reconnectTimer) clearTimeout(entry.reconnectTimer);
+  try { entry.ws?.close?.(1000, reason); } catch { }
+  try { entry.ws?.terminate?.(); } catch { }
+  cimeSessionStore.delete(ownerUserId);
+  return true;
+}
+
+function waitForCimeSessionOpen(entry, timeoutMs = 10_000) {
+  if (entry?.connected && entry?.ws?.readyState === WebSocket.OPEN) return Promise.resolve(entry);
+  if (!entry?.ws || entry.closed) return Promise.reject(new Error('cime_session_not_available'));
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const ws = entry.ws;
+    const cleanup = () => {
+      clearTimeout(timer);
+      ws.removeListener?.('open', onOpen);
+      ws.removeListener?.('close', onClose);
+      ws.removeListener?.('error', onError);
+    };
+    const finish = (error = null) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error) reject(error); else resolve(entry);
+    };
+    const onOpen = () => finish();
+    const onClose = () => finish(new Error(entry.lastError || 'cime_websocket_closed_before_ready'));
+    const onError = (error) => finish(error instanceof Error ? error : new Error(String(error || 'cime_websocket_error')));
+    const timer = setTimeout(() => finish(new Error('cime_websocket_open_timeout')), timeoutMs);
+    timer.unref?.();
+    ws.once('open', onOpen);
+    ws.once('close', onClose);
+    ws.once('error', onError);
+  });
+}
+
+async function recoverProviderSession(provider, ownerUserId) {
+  const normalizedProvider = normalizeRuntimeProvider(provider);
+  const owner = String(ownerUserId || '').replace(/^user:/, '').trim();
+  if (!owner || !['cime', 'youtube'].includes(normalizedProvider)) return;
+  assertProviderRuntimeConnected(owner, normalizedProvider);
+
+  if (normalizedProvider === 'cime') {
+    let entry = cimeSessionStore.get(owner);
+    if (entry && !entry.closed && entry.connected && entry.ws?.readyState === WebSocket.OPEN) {
+      await ensureCimeSubscribed(entry);
+      return entry;
+    }
+    if (entry && !entry.closed && entry.ws?.readyState === WebSocket.CONNECTING) {
+      try {
+        return await waitForCimeSessionOpen(entry);
+      } catch {
+        disposeCimeSessionForRecovery(owner, 'stale_connecting_session');
+      }
+    } else if (entry) {
+      disposeCimeSessionForRecovery(owner, 'stale_session');
+    }
+    await ensureProviderRuntimeLease('cime', owner);
+    entry = await ensureCimeSession(owner);
+    return waitForCimeSessionOpen(entry);
+  }
+
+  let entry = youtubeSessionStore.get(owner);
+  if (entry && !entry.closed && entry.connected) return entry;
+  if (isYoutubeReauthRequired(entry)) {
+    const error = new Error(entry?.lastError || 'youtube_reauth_required');
+    error.status = 401;
+    error.shouldRetry = false;
+    throw error;
+  }
+  if (entry) disposeYoutubeSessionForRecovery(owner, 'stale_session');
+  await ensureProviderRuntimeLease('youtube', owner);
+  entry = await ensureYoutubeSession(owner);
+  if (entry?.connected) return entry;
+  const error = new Error(entry?.lastError || 'youtube_session_not_live');
+  error.status = entry?.lastStatus || null;
+  const reconnectDelay = getYoutubeReconnectDelayForError(error);
+  if (reconnectDelay != null) error.retryAfterMs = reconnectDelay;
+  if (isYoutubeReauthRequired(error)) error.shouldRetry = false;
+  throw error;
+}
+
+function scheduleProviderSessionRecovery(provider, ownerUserId, options = {}) {
+  const normalizedProvider = normalizeRuntimeProvider(provider);
+  const owner = String(ownerUserId || '').replace(/^user:/, '').trim();
+  const key = providerRuntimeRecoveryKey(normalizedProvider, owner);
+  if (!key || !['cime', 'youtube'].includes(normalizedProvider)) return null;
+  if (isProviderSessionRecoveryBlocked(normalizedProvider, owner, options.error)) return null;
+  const existing = providerRuntimeRecoverySupervisor.getState(key);
+  if (existing) return existing;
+  const initialDelayMs = options.delayMs ?? (normalizedProvider === 'youtube'
+    ? getYoutubeReconnectDelayForError(options.error)
+    : undefined);
+  const state = providerRuntimeRecoverySupervisor.schedule(key, async () => {
+    try {
+      await recoverProviderSession(normalizedProvider, owner);
+      console.log(`[runtime-recovery] ${normalizedProvider} session recovered: ${owner}`);
+    } catch (error) {
+      if (normalizedProvider === 'youtube' && error?.retryAfterMs == null) {
+        const retryDelay = getYoutubeReconnectDelayForError(error);
+        if (retryDelay != null) error.retryAfterMs = retryDelay;
+      }
+      throw error;
+    }
+  }, {
+    initialDelayMs,
+    shouldRetry: (error) => !isProviderSessionRecoveryBlocked(normalizedProvider, owner, error),
+  });
+  console.warn(`[runtime-recovery] ${normalizedProvider} recovery scheduled for ${owner}:`, options.reason || options.error?.message || 'runtime_unhealthy');
+  return state;
+}
+
 async function releaseProviderRuntimeLeases(provider, ownerUserId, { channelId = null } = {}) {
   const normalizedProvider = String(provider || '').trim().toLowerCase();
   const owner = String(ownerUserId || '').replace(/^user:/, '').trim();
@@ -414,37 +586,44 @@ function closeProviderRuntimeAfterLeaseLoss(state) {
   if (!state) return;
   if (state.provider === 'youtube') {
     closeYoutubeSession(state.ownerUserId, 'runtime_lease_lost');
+    scheduleProviderSessionRecovery('youtube', state.ownerUserId, { reason: 'runtime_lease_lost' });
   } else if (state.provider === 'cime') {
     closeCimeSession(state.ownerUserId, 'runtime_lease_lost');
+    scheduleProviderSessionRecovery('cime', state.ownerUserId, { reason: 'runtime_lease_lost' });
   } else if (state.provider === 'chzzk') {
     closeChzzkProviderRuntimeSession(state.ownerUserId, 'runtime_lease_lost');
   }
 }
 
 async function renewProviderRuntimeLeases() {
-  if (runtimeReadinessState.shuttingDown) return;
-  for (const state of Array.from(providerRuntimeLeases.values())) {
-    try {
-      const renewed = await claimRuntimeLease(state.resourceKey, INSTANCE_ID, PROVIDER_RUNTIME_LEASE_TTL_MS);
-      if (!renewed?.acquired) {
-        providerRuntimeLeases.delete(state.resourceKey);
-        closeProviderRuntimeAfterLeaseLoss(state);
-        console.warn('[runtime-lease] Lease ownership lost; local provider session closed:', state.resourceKey);
-        continue;
-      }
-      state.fencingToken = Number(renewed.fencingToken || state.fencingToken || 1);
-      state.expiresAtMs = Number(new Date(renewed.expiresAt || Date.now() + PROVIDER_RUNTIME_LEASE_TTL_MS).getTime()) || Date.now() + PROVIDER_RUNTIME_LEASE_TTL_MS;
-      state.lastRenewError = null;
-    } catch (error) {
-      state.lastRenewError = error?.message || String(error);
-      if (Date.now() >= Number(state.expiresAtMs || 0)) {
-        providerRuntimeLeases.delete(state.resourceKey);
-        closeProviderRuntimeAfterLeaseLoss(state);
-        console.error('[runtime-lease] Renewal expired; local provider session closed:', state.resourceKey, state.lastRenewError);
-      } else {
-        console.warn('[runtime-lease] Renewal failed; retaining the lease until its current expiry:', state.resourceKey, state.lastRenewError);
+  if (runtimeReadinessState.shuttingDown || providerRuntimeLeaseRenewalRunning) return;
+  providerRuntimeLeaseRenewalRunning = true;
+  try {
+    for (const state of Array.from(providerRuntimeLeases.values())) {
+      try {
+        const renewed = await claimRuntimeLease(state.resourceKey, INSTANCE_ID, PROVIDER_RUNTIME_LEASE_TTL_MS);
+        if (!renewed?.acquired) {
+          providerRuntimeLeases.delete(state.resourceKey);
+          closeProviderRuntimeAfterLeaseLoss(state);
+          console.warn('[runtime-lease] Lease ownership lost; local provider session closed:', state.resourceKey);
+          continue;
+        }
+        state.fencingToken = Number(renewed.fencingToken || state.fencingToken || 1);
+        state.expiresAtMs = Number(new Date(renewed.expiresAt || Date.now() + PROVIDER_RUNTIME_LEASE_TTL_MS).getTime()) || Date.now() + PROVIDER_RUNTIME_LEASE_TTL_MS;
+        state.lastRenewError = null;
+      } catch (error) {
+        state.lastRenewError = error?.message || String(error);
+        if (Date.now() >= Number(state.expiresAtMs || 0)) {
+          providerRuntimeLeases.delete(state.resourceKey);
+          closeProviderRuntimeAfterLeaseLoss(state);
+          console.error('[runtime-lease] Renewal expired; local provider session closed:', state.resourceKey, state.lastRenewError);
+        } else {
+          console.warn('[runtime-lease] Renewal failed; retaining the lease until its current expiry:', state.resourceKey, state.lastRenewError);
+        }
       }
     }
+  } finally {
+    providerRuntimeLeaseRenewalRunning = false;
   }
 }
 
@@ -825,7 +1004,7 @@ class ResourceManager {
 
         try {
           const channelContext = await getChannelContext(sid);
-          if (!channelContext ||
+          if (channelContext &&
             (now - channelContext.lastActivity) > this.tokenExpiryThreshold) {
 
             rouletteTokenToSid.delete(token);
@@ -833,9 +1012,8 @@ class ResourceManager {
             console.log(`[ResourceManager] Cleaned up expired roulette token: ${token.substring(0, 8)}...`);
           }
         } catch (error) {
-          rouletteTokenToSid.delete(token);
-          results.tokensCleanedUp++;
           results.errors.push(`Failed to validate token ${token.substring(0, 8)}...: ${error.message}`);
+          this.metrics.errors++;
         }
       }
 
@@ -844,7 +1022,7 @@ class ResourceManager {
 
         try {
           const channelContext = await getChannelContext(sid);
-          if (!channelContext ||
+          if (channelContext &&
             (now - channelContext.lastActivity) > this.tokenExpiryThreshold) {
 
             pvdTokenToSid.delete(token);
@@ -852,9 +1030,8 @@ class ResourceManager {
             console.log(`[ResourceManager] Cleaned up expired PVD token: ${token.substring(0, 8)}...`);
           }
         } catch (error) {
-          pvdTokenToSid.delete(token);
-          results.tokensCleanedUp++;
           results.errors.push(`Failed to validate PVD token ${token.substring(0, 8)}...: ${error.message}`);
+          this.metrics.errors++;
         }
       }
 
@@ -894,7 +1071,7 @@ class ResourceManager {
 
         try {
           const channelContext = await getChannelContext(sid);
-          if (!channelContext ||
+          if (channelContext &&
             (now - channelContext.lastActivity) > this.sessionExpiryThreshold) {
 
             videoDonationQueues.delete(sid);
@@ -910,11 +1087,8 @@ class ResourceManager {
             console.log(`[ResourceManager] Cleaned up expired video donation session: ${sid}`);
           }
         } catch (error) {
-          videoDonationQueues.delete(sid);
-          videoDonationTimers.delete(sid);
-          pvdAdminSockets.delete(sid);
-          results.sessionsCleanedUp++;
           results.errors.push(`Failed to validate session ${sid}: ${error.message}`);
+          this.metrics.errors++;
         }
       }
 
@@ -923,7 +1097,7 @@ class ResourceManager {
 
         try {
           const channelContext = await getChannelContext(sid);
-          if (!channelContext ||
+          if (channelContext &&
             (now - channelContext.lastActivity) > this.sessionExpiryThreshold) {
 
             rouletteQueues.delete(sid);
@@ -932,10 +1106,8 @@ class ResourceManager {
             console.log(`[ResourceManager] Cleaned up expired roulette session: ${sid}`);
           }
         } catch (error) {
-          rouletteQueues.delete(sid);
-          rouletteProcessing.delete(sid);
-          results.sessionsCleanedUp++;
           results.errors.push(`Failed to validate roulette session ${sid}: ${error.message}`);
+          this.metrics.errors++;
         }
       }
 
@@ -945,7 +1117,7 @@ class ResourceManager {
 
         try {
           const channelContext = await getChannelContext(sid);
-          if (!channelContext ||
+          if (channelContext &&
             (now - channelContext.lastActivity) > this.sessionExpiryThreshold) {
 
             for (const ws of sockets) {
@@ -960,9 +1132,8 @@ class ResourceManager {
             console.log(`[ResourceManager] Cleaned up expired PVD socket session: ${sid}`);
           }
         } catch (error) {
-          pvdSidSockets.delete(sid);
-          results.sessionsCleanedUp++;
           results.errors.push(`Failed to validate PVD session ${sid}: ${error.message}`);
+          this.metrics.errors++;
         }
       }
 
@@ -971,7 +1142,7 @@ class ResourceManager {
 
         try {
           const channelContext = await getChannelContext(sid);
-          if (!channelContext ||
+          if (channelContext &&
             (now - channelContext.lastActivity) > this.sessionExpiryThreshold) {
 
             for (const ws of sockets) {
@@ -985,9 +1156,8 @@ class ResourceManager {
             console.log(`[ResourceManager] Cleaned up expired PVD admin socket session: ${sid}`);
           }
         } catch (error) {
-          pvdAdminSockets.delete(sid);
-          results.sessionsCleanedUp++;
           results.errors.push(`Failed to validate PVD admin session ${sid}: ${error.message}`);
+          this.metrics.errors++;
         }
       }
 
@@ -4859,11 +5029,12 @@ setInterval(() => {
   performanceMonitor.recordMemoryUsage();
 }, 5 * 60 * 1000);
 
+let sessionValidationCycleRunning = false;
 let macroDeliveryCycleRunning = false;
 
 setInterval(async () => {
-  if (macroDeliveryCycleRunning) return;
-  macroDeliveryCycleRunning = true;
+  if (sessionValidationCycleRunning) return;
+  sessionValidationCycleRunning = true;
   try {
     const now = Date.now();
     const activeSidsArray = Array.from(activeSids.keys());
@@ -4906,6 +5077,8 @@ setInterval(async () => {
   } catch (error) {
     console.error('[Session-Validation] Batch validation failed:', error);
     performanceMonitor.recordError('session_validation_batch_failed');
+  } finally {
+    sessionValidationCycleRunning = false;
   }
 }, 10 * 60 * 1000);
 
@@ -5176,6 +5349,8 @@ async function isMacroDeliveryTargetLive(target) {
 }
 
 setInterval(async () => {
+  if (macroDeliveryCycleRunning) return;
+  macroDeliveryCycleRunning = true;
   try {
     for (const target of getMacroDeliveryTargets()) {
       const sid = target.sid;
@@ -11324,15 +11499,6 @@ async function axiosGetWithRetry(url, opts = {}, retries = DEFAULT_RETRIES) {
   }
   throw lastErr;
 }
-// Global process-level error handlers to prevent crashes on unhandled promise rejections
-try {
-  process.on('unhandledRejection', (reason) => {
-    console.error('[UnhandledRejection]', reason);
-  });
-  process.on('uncaughtException', (err) => {
-    console.error('[UncaughtException]', err);
-  });
-} catch { }
 // Defer socket.io-client import until runtime and ensure Node's undici WebSocket is not used
 async function getIoClient() {
   try {
@@ -11612,13 +11778,17 @@ async function validateAndRecoverSessionState(sid) {
       }
     }
 
-    const liveStatusLive = liveStatus?.live || false;
+    const liveStatusAgeMs = liveStatus?.ts ? Date.now() - Number(liveStatus.ts) : Number.POSITIVE_INFINITY;
+    const hasAuthoritativeLiveStatus = liveStatus?.live === true
+      && liveStatus?.stale !== true
+      && liveStatusAgeMs >= 0
+      && liveStatusAgeMs < 2 * 60 * 1000;
     const sessionLive = dbSession?.live || false;
     const hasSessionDate = !!(dbSession?.start_date);
 
-    if (liveStatusLive && (!sessionLive || !hasSessionDate)) {
+    if (hasAuthoritativeLiveStatus && (!sessionLive || !hasSessionDate)) {
       logCacheDBMismatch(sid, 'live_status', {
-        liveStatus: liveStatusLive
+        liveStatus: true
       }, {
         sessionLive: sessionLive,
         hasSessionDate: hasSessionDate
@@ -11626,16 +11796,11 @@ async function validateAndRecoverSessionState(sid) {
 
       console.warn(`[Session] Live status mismatch for ${sid}, recovering session...`);
       await updateSessionState(sid, true, Date.now());
-
-    } else if (!liveStatusLive && sessionLive) {
-      logCacheDBMismatch(sid, 'live_status', {
-        liveStatus: liveStatusLive
-      }, {
-        sessionLive: sessionLive
-      }, 'end_session');
-
-      console.warn(`[Session] Session shows live but status cache shows offline for ${sid}, ending session...`);
-      await updateSessionState(sid, false);
+    } else if (sessionLive && liveStatus?.live === false) {
+      // A shared cache entry can be stale, unavailable, or belong to only one of
+      // several connected providers. Only a provider-specific, verified offline
+      // transition may end a live session; validation must never guess offline.
+      console.warn(`[Session] Offline cache observed for ${sid}; preserving the live session until the provider confirms it.`);
     }
 
     logPerformanceMetrics('validateAndRecoverSessionState', sid, {
@@ -11920,7 +12085,7 @@ async function refreshChzzkLiveStatusForSid(sid, options = {}) {
     ? previousLive !== true || !cachedSession?.live || (now - sessionLastUpdate) > 60 * 1000
     : previousLive === true || !!cachedSession?.live;
 
-  if (shouldPersistSessionState) {
+  if (options.persistSession !== false && shouldPersistSessionState) {
     try {
       await updateSessionState(sid, anyLive, startTs || now);
     } catch (error) {
@@ -12143,17 +12308,31 @@ async function getPartitionIdByApiKey(req) {
 }
 
 // Config
+function normalizeOAuthRedirectUri(rawValue, fallback) {
+  const value = String(rawValue || '').trim() || fallback;
+  try {
+    const url = new URL(value);
+    const isLocal = ['localhost', '127.0.0.1', '::1'].includes(url.hostname);
+    if (url.protocol === 'http:' && !isLocal) url.protocol = 'https:';
+    return url.toString();
+  } catch {
+    return value;
+  }
+}
+
 const CHZZK_CLIENT_ID = process.env.CHZZK_CLIENT_ID;
 const CHZZK_CLIENT_SECRET = process.env.CHZZK_CLIENT_SECRET;
-const CHZZK_REDIRECT_URI = process.env.CHZZK_REDIRECT_URI || `http://localhost:${PORT}/api/auth/chzzk/callback`;
+const CHZZK_REDIRECT_URI = normalizeOAuthRedirectUri(process.env.CHZZK_REDIRECT_URI, `http://localhost:${PORT}/api/auth/chzzk/callback`);
 const OPENAPI_BASE = process.env.CHZZK_OPENAPI_BASE || 'https://openapi.chzzk.naver.com';
 const API_BASE = process.env.CHZZK_API_BASE || OPENAPI_BASE;
 const CHZZK_UNOFFICIAL_API_BASE = process.env.CHZZK_UNOFFICIAL_API_BASE || 'https://api.chzzk.naver.com';
 const CIME_CLIENT_ID = process.env.CIME_CLIENT_ID;
 const CIME_CLIENT_SECRET = process.env.CIME_CLIENT_SECRET;
-const CIME_REDIRECT_URI = process.env.CIME_REDIRECT_URI || `http://localhost:${PORT}/api/auth/cime/callback`;
+const CIME_REDIRECT_URI = normalizeOAuthRedirectUri(process.env.CIME_REDIRECT_URI, `http://localhost:${PORT}/api/auth/cime/callback`);
 const CIME_OPENAPI_BASE = process.env.CIME_OPENAPI_BASE || 'https://ci.me/api/openapi';
 const CIME_AUTH_URL = process.env.CIME_AUTH_URL || 'https://ci.me/auth/openapi/account-interlock';
+const CIME_RUNTIME_HTTP_TIMEOUT_MS = Math.max(3_000, Math.min(30_000, Number(process.env.CIME_RUNTIME_HTTP_TIMEOUT_MS || 8_000)));
+const CIME_RUNTIME_STALE_MS = Math.max(120_000, Math.min(15 * 60_000, Number(process.env.CIME_RUNTIME_STALE_MS || 180_000)));
 const CIME_REQUIRED_AUTH_SCOPES = [
   'READ:USER',
   'READ:CHANNEL',
@@ -12199,19 +12378,8 @@ const CIME_UNOFFICIAL_PROFILE_URL_TEMPLATE = process.env.CIME_UNOFFICIAL_PROFILE
 const YOUTUBE_CLIENT_ID = process.env.YOUTUBE_CLIENT_ID || process.env.GOOGLE_YOUTUBE_CLIENT_ID || '';
 const YOUTUBE_CLIENT_SECRET = process.env.YOUTUBE_CLIENT_SECRET || process.env.GOOGLE_YOUTUBE_CLIENT_SECRET || '';
 function normalizeYoutubeRedirectUri(rawValue) {
-  const configured = String(rawValue || '').trim();
   const fallback = `http://localhost:${PORT}/api/auth/youtube/callback`;
-  const value = configured || fallback;
-  try {
-    const url = new URL(value);
-    const isLocal = ['localhost', '127.0.0.1', '::1'].includes(url.hostname);
-    if (url.protocol === 'http:' && !isLocal) {
-      url.protocol = 'https:';
-    }
-    return url.toString();
-  } catch {
-    return value;
-  }
+  return normalizeOAuthRedirectUri(rawValue, fallback);
 }
 const YOUTUBE_REDIRECT_URI = normalizeYoutubeRedirectUri(
   process.env.YOUTUBE_REDIRECT_URI ||
@@ -14331,6 +14499,33 @@ function clearManagedCookie(res, name) {
   }
 }
 
+function setOAuthNoStoreHeaders(res) {
+  res.set('Cache-Control', 'no-store, max-age=0');
+  res.set('Pragma', 'no-cache');
+}
+
+function getCanonicalOAuthStartUrl(req, redirectUri) {
+  const requestOrigin = resolveOAuthRequestOrigin({
+    protocol: req.protocol,
+    host: req.get('host'),
+    forwardedProto: req.get('x-forwarded-proto'),
+    forwardedHost: req.get('x-forwarded-host'),
+  });
+  return buildCanonicalOAuthStartUrl({
+    requestOrigin,
+    originalUrl: req.originalUrl || req.url || '/',
+    redirectUri,
+  });
+}
+
+function redirectOAuthStartToCanonicalOrigin(req, res, redirectUri) {
+  const canonicalUrl = getCanonicalOAuthStartUrl(req, redirectUri);
+  if (!canonicalUrl) return false;
+  setOAuthNoStoreHeaders(res);
+  res.redirect(302, canonicalUrl);
+  return true;
+}
+
 function getAuthRedirectUrl(req, params = {}) {
   const appRedirect = process.env.APP_REDIRECT_AFTER_LOGIN || '/?auth=success';
   const base = `${req.protocol}://${req.get('host')}`;
@@ -14407,40 +14602,21 @@ function getOAuthStateSecret() {
   );
 }
 
-function signOAuthState(provider, nonce, tsHex) {
-  return crypto
-    .createHmac('sha256', getOAuthStateSecret())
-    .update(`${provider}:${nonce}:${tsHex}`)
-    .digest('hex')
-    .slice(0, 32);
-}
-
-function createSignedOAuthState(provider) {
-  const nonce = crypto.randomBytes(16).toString('hex');
-  const tsHex = Date.now().toString(16).padStart(12, '0');
-  const signature = signOAuthState(provider, nonce, tsHex);
-  return `${nonce}${tsHex}${signature}`;
+function createSignedOAuthState(provider, extra = {}) {
+  return createOAuthStateToken({
+    provider,
+    secret: getOAuthStateSecret(),
+    extra,
+  });
 }
 
 function verifySignedOAuthState(provider, state) {
-  const text = String(state || '');
-  if (!/^[a-f0-9]{76}$/i.test(text)) {
-    return { ok: false, reason: 'format' };
-  }
-  const nonce = text.slice(0, 32);
-  const tsHex = text.slice(32, 44);
-  const signature = text.slice(44, 76).toLowerCase();
-  const issuedAt = Number.parseInt(tsHex, 16);
-  if (!Number.isFinite(issuedAt)) {
-    return { ok: false, reason: 'timestamp' };
-  }
-  const age = Date.now() - issuedAt;
-  if (age < -60 * 1000 || age > OAUTH_STATE_TTL_MS) {
-    return { ok: false, reason: 'expired', age };
-  }
-  const expected = signOAuthState(provider, nonce, tsHex);
-  const ok = crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
-  return { ok, reason: ok ? null : 'signature', age };
+  return verifyOAuthStateToken({
+    provider,
+    state,
+    secret: getOAuthStateSecret(),
+    ttlMs: OAUTH_STATE_TTL_MS,
+  });
 }
 
 function cleanupOAuthStateStore() {
@@ -14454,7 +14630,7 @@ function cleanupOAuthStateStore() {
 
 function createOAuthState(provider, req, extra = {}) {
   cleanupOAuthStateStore();
-  const state = createSignedOAuthState(provider);
+  const state = createSignedOAuthState(provider, extra);
   oauthStateStore.set(state, {
     provider: String(provider || ''),
     createdAt: Date.now(),
@@ -14471,26 +14647,37 @@ function consumeOAuthState(provider, state, cookieState) {
   const record = textState ? oauthStateStore.get(textState) : null;
   const providerMatches = !!record && record.provider === provider;
   const ageOk = !!record && Date.now() - Number(record.createdAt || 0) <= OAUTH_STATE_TTL_MS;
+  const alreadyConsumed = !!record?.consumedAt;
   const cookieMatches = !!textState && !!textCookieState && textState === textCookieState;
-  const storeMatches = !!textState && providerMatches && ageOk;
+  const storeMatches = !!textState && providerMatches && ageOk && !alreadyConsumed;
   const signedState = verifySignedOAuthState(provider, textState);
   const signedMatches = signedState.ok;
-
-  if (storeMatches) oauthStateStore.delete(textState);
-
   const signedCookieMatches = signedMatches && cookieMatches;
+  const legacyContextAvailable = signedState.version !== 1 || storeMatches;
+  const ok = signedCookieMatches && !alreadyConsumed && legacyContextAvailable;
+
+  if (ok && record) {
+    record.consumedAt = Date.now();
+    oauthStateStore.set(textState, record);
+  }
+
+  const storedExtra = storeMatches && record?.extra ? record.extra : {};
+  const signedExtra = signedState.extra && typeof signedState.extra === 'object' ? signedState.extra : {};
 
   return {
-    ok: storeMatches || signedCookieMatches,
-    record: storeMatches ? record : null,
-    extra: storeMatches ? (record.extra || {}) : {},
+    ok,
+    record: ok && storeMatches ? record : null,
+    extra: ok ? { ...signedExtra, ...storedExtra } : {},
     cookieMatches,
     storeMatches,
     signedMatches: signedCookieMatches,
     signedStateReason: signedState.reason,
+    signedStateVersion: signedState.version ?? null,
     storeFound: !!record,
     providerMatches,
     ageOk,
+    alreadyConsumed,
+    legacyContextAvailable,
   };
 }
 
@@ -15159,7 +15346,13 @@ async function sendTitsRequest(endpoint, messageType, data = {}, timeoutMs = 450
     }, timeoutMs);
 
     ws.once('open', () => {
-      ws.send(JSON.stringify(message));
+      try {
+        ws.send(JSON.stringify(message));
+      } catch (error) {
+        clearTimeout(timer);
+        try { ws.close(); } catch { }
+        reject(error);
+      }
     });
     ws.on('message', (raw) => {
       try {
@@ -15226,7 +15419,15 @@ async function sendVtubeRequest(endpoint, messageType, data = {}, timeoutMs = 70
       reject(new Error('VTube Studio response timeout'));
     }, Math.max(1500, Math.min(30000, Number(timeoutMs || 7000))));
 
-    ws.once('open', () => ws.send(JSON.stringify(message)));
+    ws.once('open', () => {
+      try {
+        ws.send(JSON.stringify(message));
+      } catch (error) {
+        clearTimeout(timer);
+        try { ws.close(); } catch { }
+        reject(error);
+      }
+    });
     ws.on('message', (raw) => {
       try {
         const parsed = JSON.parse(String(raw));
@@ -15494,7 +15695,8 @@ async function getValidCimeAccessToken(ownerUserId) {
       refreshToken: tokens.refreshToken
     };
     const r = await axios.post(`${CIME_OPENAPI_BASE}/auth/v1/token`, body, {
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 'Content-Type': 'application/json' },
+      timeout: CIME_RUNTIME_HTTP_TIMEOUT_MS,
     });
     const payload = unwrapOpenApiContent(r);
     tokens = {
@@ -16057,6 +16259,8 @@ async function refreshYoutubeLiveFromRegisteredChannel(ownerUserId, options = {}
 // GET /api/auth/chzzk/login -> redirect to CHZZK authorize page
 app.get('/api/auth/chzzk/login', (req, res) => {
   try {
+    setOAuthNoStoreHeaders(res);
+    if (redirectOAuthStartToCanonicalOrigin(req, res, CHZZK_REDIRECT_URI)) return;
     if (!CHZZK_CLIENT_ID || !CHZZK_CLIENT_SECRET) {
       return res.status(500).json({ error: 'Server not configured with CHZZK credentials' });
     }
@@ -16079,6 +16283,8 @@ app.get('/api/auth/chzzk/login', (req, res) => {
 
 app.get('/api/auth/youtube/login', (req, res) => {
   try {
+    setOAuthNoStoreHeaders(res);
+    if (redirectOAuthStartToCanonicalOrigin(req, res, YOUTUBE_REDIRECT_URI)) return;
     if (!YOUTUBE_CLIENT_ID || !YOUTUBE_CLIENT_SECRET) {
       return res.status(500).json({ error: 'Server not configured with YouTube credentials' });
     }
@@ -16128,6 +16334,7 @@ app.get('/api/youtube/bot/login', (req, res) => {
 
 app.get('/api/auth/youtube/callback', async (req, res) => {
   try {
+    setOAuthNoStoreHeaders(res);
     const { code, state, error, error_description } = req.query;
     const savedState = req.cookies.oauth_state_youtube;
     const stateValidation = consumeOAuthState('youtube', state, savedState);
@@ -16334,6 +16541,8 @@ app.post('/api/auth/youtube/revoke', async (req, res) => {
 
 app.get('/api/auth/cime/login', (req, res) => {
   try {
+    setOAuthNoStoreHeaders(res);
+    if (redirectOAuthStartToCanonicalOrigin(req, res, CIME_REDIRECT_URI)) return;
     if (!CIME_CLIENT_ID || !CIME_CLIENT_SECRET) {
       return res.status(500).json({ error: 'Server not configured with CIME credentials' });
     }
@@ -16354,6 +16563,7 @@ app.get('/api/auth/cime/login', (req, res) => {
 
 app.get('/api/auth/cime/callback', async (req, res) => {
   try {
+    setOAuthNoStoreHeaders(res);
     const { code, state, error, error_description } = req.query;
     const savedState = req.cookies.oauth_state_cime;
     const stateValidation = consumeOAuthState('cime', state, savedState);
@@ -17468,7 +17678,6 @@ function closeCimeSession(ownerUserId, reason = 'account_deleted') {
   try { entry.ws?.close?.(1000, reason); } catch { }
   try { entry.ws?.terminate?.(); } catch { }
   cimeSessionStore.delete(ownerUserId);
-  cimeReconnectAttempts.delete(ownerUserId);
   releaseProviderRuntimeLeases('cime', ownerUserId).catch(() => { });
   return true;
 }
@@ -17496,6 +17705,7 @@ function disconnectProviderRuntimeState(ownerUserId, provider, platformUserId = 
   const normalizedProvider = normalizeRuntimeProvider(provider);
   if (!owner || !normalizedProvider) return { provider: normalizedProvider || null, disconnected: false };
   markProviderRuntimeDisconnected(owner, normalizedProvider, platformUserId, reason);
+  cancelProviderSessionRecovery(normalizedProvider, owner);
   let closed = false;
   if (normalizedProvider === 'chzzk') {
     closed = closeChzzkProviderRuntimeSession(owner, reason);
@@ -17522,6 +17732,8 @@ function clearDeletedAccountRuntimeState(ownerUserId) {
   const owner = String(ownerUserId || '').replace(/^user:/, '').trim();
   if (!owner) return { sid: null, soundFilesDeleted: false };
   const sid = `user:${owner}`;
+  cancelProviderSessionRecovery('youtube', owner);
+  cancelProviderSessionRecovery('cime', owner);
   try { closeYoutubeSession(owner, 'account_deleted'); } catch { }
   try { closeCimeSession(owner, 'account_deleted'); } catch { }
   const chzzkEntry = sessionStore.get(sid);
@@ -20426,6 +20638,7 @@ app.post('/api/chzzk/chat/send', async (req, res) => {
 // GET /api/auth/chzzk/callback -> exchange code for tokens and store
 app.get('/api/auth/chzzk/callback', async (req, res) => {
   try {
+    setOAuthNoStoreHeaders(res);
     console.log('[auth:callback] Callback received');
     const { code, state, error, error_description } = req.query;
     const savedState = req.cookies.oauth_state;
@@ -22687,8 +22900,17 @@ async function ensureSubscribed(entry, sid, channelId) {
 }
 
 function pushEvent(entry, ev) {
-  entry.queue.push(ev);
-  if (entry.queue.length > MAX_QUEUE) entry.queue.splice(0, entry.queue.length - MAX_QUEUE);
+  if (!entry || !ev) return false;
+  try {
+    if (!Array.isArray(entry.queue)) entry.queue = [];
+    entry.queue.push(ev);
+    if (entry.queue.length > MAX_QUEUE) entry.queue.splice(0, entry.queue.length - MAX_QUEUE);
+    return true;
+  } catch (error) {
+    entry.lastError = error?.message || String(error || 'provider_event_queue_failed');
+    console.error('[runtime-event] Failed to queue provider event:', entry.provider || 'unknown', entry.lastError);
+    return false;
+  }
 }
 
 async function subscribeEvent(kind, sessionKey, channelId, accessToken) {
@@ -22804,8 +23026,9 @@ async function refreshYoutubeLiveStatus(ownerUserId, sid, options = {}) {
   const now = Date.now();
   const cached = liveStatusCache.get(normalizedSid);
   const ttlMs = Number.isFinite(Number(options.ttlMs)) ? Number(options.ttlMs) : 30 * 1000;
-  if (!options.force && cached?.provider === 'youtube' && (now - cached.ts) < ttlMs) {
+  if (!options.force && cached?.provider === 'youtube' && cached.stale !== true && (now - cached.ts) < ttlMs) {
     return {
+      provider: 'youtube',
       live: !!cached.live,
       channelId: cached.channelId || null,
       liveChatId: cached.liveChatId || null,
@@ -22813,6 +23036,7 @@ async function refreshYoutubeLiveStatus(ownerUserId, sid, options = {}) {
       title: cached.title || '',
       startTs: cached.startTs || null,
       cached: true,
+      stale: cached.stale === true,
     };
   }
 
@@ -22826,6 +23050,32 @@ async function refreshYoutubeLiveStatus(ownerUserId, sid, options = {}) {
   } catch (e) {
     lookupError = e;
     console.warn('[YouTube] Active live lookup failed:', e?.response?.data?.error?.message || e?.message || e);
+  }
+
+  if (lookupError) {
+    const entry = youtubeSessionStore.get(ownerUserId);
+    const preserved = cached?.provider === 'youtube' ? cached : null;
+    if (preserved) {
+      liveStatusCache.set(normalizedSid, {
+        ...preserved,
+        stale: true,
+        lastAttemptAt: now,
+        lookupError: lookupError?.response?.data?.error?.message || lookupError?.message || String(lookupError),
+      });
+    }
+    return {
+      provider: 'youtube',
+      live: preserved ? !!preserved.live : !!entry?.connected,
+      channelId: preserved?.channelId || entry?.channelId || null,
+      liveChatId: preserved?.liveChatId || entry?.liveChatId || null,
+      broadcastId: preserved?.broadcastId || entry?.broadcastId || null,
+      title: preserved?.title || entry?.title || '',
+      startTs: preserved?.startTs || null,
+      cached: !!preserved,
+      stale: true,
+      lookupError: lookupError?.response?.data?.error?.message || lookupError?.message || String(lookupError),
+      quotaExceeded: isYoutubeQuotaExceededError(lookupError),
+    };
   }
 
   const channelId = await getYoutubeChannelId(ownerUserId).catch(() => null);
@@ -22847,7 +23097,7 @@ async function refreshYoutubeLiveStatus(ownerUserId, sid, options = {}) {
   const shouldPersistSessionState = live
     ? previousLive !== true || !cachedSession?.live || (now - Number(cachedSession?.lastUpdate || 0)) > 60 * 1000
     : previousLive === true || !!cachedSession?.live;
-  if (shouldPersistSessionState) {
+  if (options.persistSession !== false && shouldPersistSessionState) {
     try { await updateSessionState(normalizedSid, live, startTs || now); } catch { }
   }
 
@@ -23756,22 +24006,32 @@ function handleYoutubeParsedLiveChatEvent(entry, eventName, ev) {
 function scheduleYoutubeReconnect(ownerUserId, delayMs = null) {
   const entry = youtubeSessionStore.get(ownerUserId);
   if (!entry || entry.closed) return;
-  if (entry.reconnectTimer) clearTimeout(entry.reconnectTimer);
-  const attempts = Number(entry.reconnectAttempts || 0) + 1;
-  entry.reconnectAttempts = attempts;
-  const delay = delayMs ?? Math.min(60 * 1000, 1000 * Math.pow(2, Math.min(6, attempts - 1)));
-  entry.reconnectTimer = setTimeout(() => {
-    youtubeSessionStore.delete(ownerUserId);
-    ensureYoutubeSession(ownerUserId).catch((e) => {
-      console.warn('[YouTube] Reconnect failed:', e?.response?.data || e?.message || e);
-    });
-  }, delay);
+  const error = new Error(entry.lastError || 'youtube_session_disconnected');
+  error.status = entry.lastStatus || null;
+  scheduleProviderSessionRecovery('youtube', ownerUserId, {
+    reason: entry.lastError || 'receiver_ended',
+    error,
+    delayMs: delayMs ?? undefined,
+  });
+}
+
+function isYoutubeNotLiveError(error) {
+  const status = Number(error?.response?.status || error?.status || error?.lastStatus || 0);
+  const text = String(error?.lastError || error?.message || error?.response?.data?.error || error || '').trim().toLowerCase();
+  return status === 404
+    || text === 'not_live'
+    || text.includes('live stream was not found')
+    || text.includes('live_chat_not_found')
+    || text.includes('session_not_live');
 }
 
 function getYoutubeReconnectDelayForError(error) {
   const status = Number(error?.response?.status || error?.status || error?.lastStatus || 0);
   if (status === 401) return null;
   if (isYoutubeQuotaExceededError(error)) return YOUTUBE_QUOTA_RETRY_MS;
+  if (isYoutubeNotLiveError(error)) {
+    return 60 * 1000;
+  }
   if (status === 403) return 5 * 60 * 1000;
   if (status === 429) return 60 * 1000;
   return undefined;
@@ -23838,6 +24098,7 @@ async function openYoutubeChatStream(entry) {
       entry.lastError = null;
       entry.lastStatus = null;
       entry.reconnectAttempts = 0;
+      cancelProviderSessionRecovery('youtube', entry.ownerUserId);
       if (!settled) {
         settled = true;
         resolve();
@@ -23846,12 +24107,17 @@ async function openYoutubeChatStream(entry) {
 
     chatClient.on('chat', (chatItem) => {
       if (entry.closed) return;
-      consecutiveErrors = 0;
-      entry.connected = true;
-      entry.lastError = null;
-      entry.lastMessageAt = Date.now();
-      const parsed = normalizeYoutubeLiveChatItem(toYoutubeLiveChatItem(chatItem));
-      if (parsed) handleYoutubeParsedLiveChatEvent(entry, parsed.eventName, parsed.ev);
+      try {
+        consecutiveErrors = 0;
+        entry.connected = true;
+        entry.lastError = null;
+        entry.lastMessageAt = Date.now();
+        const parsed = normalizeYoutubeLiveChatItem(toYoutubeLiveChatItem(chatItem));
+        if (parsed) handleYoutubeParsedLiveChatEvent(entry, parsed.eventName, parsed.ev);
+      } catch (error) {
+        entry.lastError = error?.message || String(error || 'youtube_chat_event_failed');
+        console.error('[YouTube] Chat event processing failed; receiver remains active:', entry.lastError);
+      }
     });
 
     chatClient.on('error', (error) => {
@@ -24218,20 +24484,23 @@ async function sendCimeChat(ownerUserId, message) {
     message: text.slice(0, 100),
     senderType: 'APP'
   }, {
-    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    timeout: CIME_RUNTIME_HTTP_TIMEOUT_MS,
   });
   rememberOutboundMessage(cimeSessionStore.get(ownerUserId), text.slice(0, 100));
   return unwrapOpenApiContent(r);
 }
 
-async function refreshCimeLiveStatus(ownerUserId, sid, channelId) {
+async function refreshCimeLiveStatus(ownerUserId, sid, channelId, options = {}) {
   try {
     const cached = liveStatusCache.get(sid);
     const now = Date.now();
-    if (cached && cached.provider === 'cime' && (now - cached.ts) < 60 * 1000) return !!cached.live;
+    if (cached && cached.provider === 'cime' && cached.stale !== true && (now - cached.ts) < 60 * 1000) return !!cached.live;
     const cid = channelId || await getCimeChannelId(ownerUserId);
     if (!cid) return false;
-    const r = await axios.get(`${CIME_OPENAPI_BASE}/v1/${encodeURIComponent(cid)}/live-status`);
+    const r = await axios.get(`${CIME_OPENAPI_BASE}/v1/${encodeURIComponent(cid)}/live-status`, {
+      timeout: CIME_RUNTIME_HTTP_TIMEOUT_MS,
+    });
     const content = unwrapOpenApiContent(r);
     const status = String(content?.status || content?.liveStatus || content?.state || '').toLowerCase();
     const live = isCimeLiveContentOpen(content);
@@ -24240,7 +24509,7 @@ async function refreshCimeLiveStatus(ownerUserId, sid, channelId) {
     const sessionStart = Number(liveSession.get(sid)?.sessionStartTime || 0) || null;
     const startTs = live ? parseLiveTimestamp(startedCandidate, existingStart || sessionStart || now) : null;
     liveStatusCache.set(sid, { ts: now, live, provider: 'cime', channelId: cid, startTs });
-    if (live && !liveSession.get(sid)?.live) {
+    if (options.persistSession !== false && live && !liveSession.get(sid)?.live) {
       const today = getKstDateString(startTs || now);
       liveSession.set(sid, { live: true, startDate: today, sessionStartTime: startTs || now, lastUpdate: now });
       try {
@@ -24252,16 +24521,28 @@ async function refreshCimeLiveStatus(ownerUserId, sid, channelId) {
           last_update: now
         });
       } catch { }
-    } else if (live) {
+    } else if (options.persistSession !== false && live) {
       const currentSession = liveSession.get(sid) || {};
       liveSession.set(sid, { ...currentSession, live: true, lastUpdate: now });
       try { await updateLiveSessionLastUpdate(sid, now); } catch { }
-    } else if (liveSession.get(sid)?.live) {
+    } else if (options.persistSession !== false && liveSession.get(sid)?.live) {
       try { await updateSessionState(sid, false, now); } catch { }
     }
     return live;
-  } catch {
-    return false;
+  } catch (error) {
+    const cached = liveStatusCache.get(sid);
+    const entry = cimeSessionStore.get(ownerUserId);
+    const preservedLive = cached?.provider === 'cime' ? !!cached.live : !!entry?.connected;
+    if (cached?.provider === 'cime') {
+      liveStatusCache.set(sid, {
+        ...cached,
+        stale: true,
+        lastAttemptAt: Date.now(),
+        lookupError: error?.response?.data || error?.message || String(error),
+      });
+    }
+    console.warn('[CIME] Live status lookup failed; preserving the last known state:', ownerUserId, error?.response?.data || error?.message || error);
+    return preservedLive;
   }
 }
 
@@ -24851,7 +25132,8 @@ async function subscribeCimeEvent(kind, sessionKey, accessToken) {
   const url = `${CIME_OPENAPI_BASE}${map[kind]}`;
   await axios.post(url, null, {
     params: { sessionKey },
-    headers: { Authorization: `Bearer ${accessToken}` }
+    headers: { Authorization: `Bearer ${accessToken}` },
+    timeout: CIME_RUNTIME_HTTP_TIMEOUT_MS,
   });
 }
 
@@ -24903,7 +25185,8 @@ async function ensureCimeSession(ownerUserId) {
   const createPromise = (async () => {
     const accessToken = await getValidCimeAccessToken(ownerUserId);
     const sessResp = await axios.get(`${CIME_OPENAPI_BASE}/open/v1/sessions/auth`, {
-      headers: { Authorization: `Bearer ${accessToken}` }
+      headers: { Authorization: `Bearer ${accessToken}` },
+      timeout: CIME_RUNTIME_HTTP_TIMEOUT_MS,
     });
     const content = unwrapOpenApiContent(sessResp);
     const url = content?.url || sessResp?.data?.url;
@@ -24942,7 +25225,8 @@ async function ensureCimeSession(ownerUserId) {
 
     ws.on('open', async () => {
       entry.connected = true;
-      cimeReconnectAttempts.delete(ownerUserId);
+      entry.lastEventAt = Date.now();
+      cancelProviderSessionRecovery('cime', ownerUserId);
       activeSids.set(entry.primarySid, Date.now());
       try {
         await ensureCimeSubscribed(entry);
@@ -24953,31 +25237,51 @@ async function ensureCimeSession(ownerUserId) {
       }
       entry.pingTimer = setInterval(() => {
         try {
-          if (entry.ws?.readyState === WebSocket.OPEN) entry.ws.send(JSON.stringify({ type: 'PING' }));
-        } catch { }
+          if (entry.ws?.readyState !== WebSocket.OPEN) return;
+          if (entry.lastEventAt && Date.now() - entry.lastEventAt > CIME_RUNTIME_STALE_MS) {
+            entry.lastError = 'cime_websocket_stale';
+            console.warn('[CIME] WebSocket became stale; reconnecting:', ownerUserId);
+            entry.ws.terminate();
+            return;
+          }
+          entry.ws.send(JSON.stringify({ type: 'PING' }));
+        } catch (error) {
+          entry.lastError = error?.message || 'cime_ping_failed';
+          try { entry.ws?.terminate?.(); } catch { }
+        }
       }, 60 * 1000);
+      entry.pingTimer.unref?.();
     });
 
     ws.on('message', (buf) => {
+      try {
+        entry.lastEventAt = Date.now();
+        const parsed = parseCimeEvent(buf.toString('utf8'));
+        if (!parsed) return;
+        const { eventName, ev } = parsed;
+        const dedupeKey = `${eventName}:${ev.id || ev.ts || ''}`;
+        if (entry.processedIds.has(dedupeKey)) return;
+        entry.processedIds.add(dedupeKey);
+        if (entry.processedIds.size > 2000) {
+          let i = 0; for (const key of entry.processedIds) { entry.processedIds.delete(key); if (++i >= 200) break; }
+        }
+        pushEvent(entry, ev);
+        activeSids.set(entry.primarySid, Date.now());
+        if (eventName === 'CHAT') {
+          processCimeChatAutomation(entry, ev).catch(() => { });
+        } else if (eventName === 'DONATION') {
+          processCimeDonationAutomation(entry, ev).catch(() => { });
+        } else if (eventName === 'SUBSCRIPTION') {
+          rememberCimeSubscriptionMonths(entry, ev);
+        }
+      } catch (error) {
+        entry.lastError = error?.message || String(error || 'cime_event_failed');
+        console.error('[CIME] Event processing failed; websocket remains active:', entry.lastError);
+      }
+    });
+
+    ws.on('pong', () => {
       entry.lastEventAt = Date.now();
-      const parsed = parseCimeEvent(buf.toString('utf8'));
-      if (!parsed) return;
-      const { eventName, ev } = parsed;
-      const dedupeKey = `${eventName}:${ev.id || ev.ts || ''}`;
-      if (entry.processedIds.has(dedupeKey)) return;
-      entry.processedIds.add(dedupeKey);
-      if (entry.processedIds.size > 2000) {
-        let i = 0; for (const key of entry.processedIds) { entry.processedIds.delete(key); if (++i >= 200) break; }
-      }
-      pushEvent(entry, ev);
-      activeSids.set(entry.primarySid, Date.now());
-      if (eventName === 'CHAT') {
-        processCimeChatAutomation(entry, ev).catch(() => { });
-      } else if (eventName === 'DONATION') {
-        processCimeDonationAutomation(entry, ev).catch(() => { });
-      } else if (eventName === 'SUBSCRIPTION') {
-        rememberCimeSubscriptionMonths(entry, ev);
-      }
     });
 
     ws.on('close', () => {
@@ -24987,20 +25291,13 @@ async function ensureCimeSession(ownerUserId) {
       if (entry.subscribeRetryTimer) clearTimeout(entry.subscribeRetryTimer);
       entry.subscribeRetryTimer = null;
       if (entry.closed) return;
-      const reconnectAttempt = Number(cimeReconnectAttempts.get(ownerUserId) || 0) + 1;
-      cimeReconnectAttempts.set(ownerUserId, reconnectAttempt);
-      const reconnectBaseDelay = Math.min(60_000, 1_500 * (2 ** Math.min(reconnectAttempt - 1, 6)));
-      const reconnectDelay = Math.round(reconnectBaseDelay * (0.8 + Math.random() * 0.4));
-      entry.reconnectTimer = setTimeout(() => {
-        cimeSessionStore.delete(ownerUserId);
-        ensureCimeSession(ownerUserId).catch((error) => {
-          entry.lastError = error?.response?.data || error?.message || 'cime_reconnect_failed';
-        });
-      }, reconnectDelay);
-      entry.reconnectTimer.unref?.();
+      scheduleProviderSessionRecovery('cime', ownerUserId, {
+        reason: entry.lastError || 'websocket_closed',
+      });
     });
 
     ws.on('error', (err) => {
+      entry.lastError = err?.message || 'cime_websocket_error';
       console.error('[CIME] WebSocket error', err?.message || err);
     });
 
@@ -25010,6 +25307,12 @@ async function ensureCimeSession(ownerUserId) {
   cimeSessionCreatePromises.set(ownerUserId, createPromise);
   try {
     return await createPromise;
+  } catch (error) {
+    scheduleProviderSessionRecovery('cime', ownerUserId, {
+      reason: 'session_create_failed',
+      error,
+    });
+    throw error;
   } finally {
     cimeSessionCreatePromises.delete(ownerUserId);
   }
@@ -25246,6 +25549,7 @@ app.post('/api/youtube/reset', async (req, res) => {
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    cancelProviderSessionRecovery('youtube', ownerUserId);
     closeYoutubeSession(ownerUserId, 'reset');
     const entry = await ensureYoutubeSession(ownerUserId);
     return res.json({ ok: true, connected: !!entry.connected, liveChatId: entry.liveChatId || null, lastError: entry.lastError || null });
@@ -25259,20 +25563,38 @@ app.get('/api/platforms/status', async (req, res) => {
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
     const sid = `user:${ownerUserId}`;
-    const platforms = await listPlatformAccounts(ownerUserId).catch(() => []);
+    let platforms;
+    try {
+      platforms = await listPlatformAccounts(ownerUserId);
+    } catch (error) {
+      console.warn('[platform-status] Account lookup failed; runtime sessions were preserved:', ownerUserId, error?.message || error);
+      return res.status(503).json({
+        error: 'Platform status is temporarily unavailable',
+        code: 'platform_status_database_unavailable',
+        retryable: true,
+        stale: true,
+        db: getPgPoolStatus(),
+      });
+    }
     const byProvider = new Map((platforms || []).map((account) => [String(account.provider || '').toLowerCase(), account]));
     const refresh = String(req.query?.refresh || '').toLowerCase() === 'true';
 
     const chzzkAccount = byProvider.get('chzzk') || null;
-    if (!chzzkAccount && sessionStore.get(sid)?.connected) {
-      disconnectProviderRuntimeState(ownerUserId, 'chzzk', null, 'platform_status_disconnected');
-    }
     let chzzkState = liveStatusCache.get(sid);
     let chzzkLive = chzzkState?.provider === 'chzzk' ? !!chzzkState.live : null;
+    let chzzkRefreshError = null;
     if (refresh && chzzkAccount?.channel_id) {
-      chzzkState = await refreshChzzkLiveStatusForSid(sid, { channelUids: [String(chzzkAccount.channel_id)], force: true }).catch(() => chzzkState);
+      chzzkState = await refreshChzzkLiveStatusForSid(sid, {
+        channelUids: [String(chzzkAccount.channel_id)],
+        force: true,
+        ensureChat: false,
+        closeChat: false,
+        persistSession: false,
+      }).catch((error) => {
+        chzzkRefreshError = compactLogText(error?.message || error, 400);
+        return chzzkState;
+      });
       if (chzzkState && Object.prototype.hasOwnProperty.call(chzzkState, 'live')) chzzkLive = !!chzzkState.live;
-      if (chzzkLive) await ensureChzzkChatSessionForLiveSid(sid, chzzkState?.channelId || chzzkAccount.channel_id);
     }
     const chzzkEntry = sessionStore.get(sid) || null;
     const chzzkDiagnostic = chzzkRuntimeErrors.get(sid) || null;
@@ -25281,7 +25603,6 @@ app.get('/api/platforms/status', async (req, res) => {
     const cimeTokenStatus = cimeAccount
       ? await getPlatformTokens('cime', ownerUserId)
         .then((tokens) => ({ checked: true, tokens }))
-        .catch(() => ({ checked: false, tokens: null }))
       : { checked: true, tokens: null };
     const cimeMissingScopes = cimeTokenStatus.checked && cimeTokenStatus.tokens
       ? getMissingOAuthScopes(cimeTokenStatus.tokens.scope, CIME_REQUIRED_AUTH_SCOPES)
@@ -25289,55 +25610,38 @@ app.get('/api/platforms/status', async (req, res) => {
     const cimeReauthRequired = !!cimeAccount
       && cimeTokenStatus.checked
       && (!cimeTokenStatus.tokens || cimeMissingScopes.length > 0);
-    let cimeEntry = cimeSessionStore.get(ownerUserId) || null;
-    if (!cimeAccount && cimeEntry?.connected) {
-      disconnectProviderRuntimeState(ownerUserId, 'cime', null, 'platform_status_disconnected');
-      cimeEntry = null;
-    }
+    const cimeEntry = cimeSessionStore.get(ownerUserId) || null;
     let cimeLive = null;
     let cimeRefreshError = null;
     if (cimeAccount) {
       if (refresh) {
-        cimeLive = await refreshCimeLiveStatus(ownerUserId, sid, cimeAccount.channel_id || cimeAccount.platform_user_id).catch((error) => {
+        cimeLive = await refreshCimeLiveStatus(ownerUserId, sid, cimeAccount.channel_id || cimeAccount.platform_user_id, { persistSession: false }).catch((error) => {
           cimeRefreshError = compactLogText(error?.message || error, 400);
-          return false;
+          const cached = liveStatusCache.get(sid);
+          return cached?.provider === 'cime' ? !!cached.live : null;
         });
-        if (cimeLive) {
-          cimeEntry = await ensureCimeSession(ownerUserId).catch((error) => {
-            cimeRefreshError = compactLogText(error?.message || error, 400);
-            return cimeSessionStore.get(ownerUserId) || null;
-          });
-        }
       } else {
         cimeLive = liveStatusCache.get(sid)?.provider === 'cime' ? !!liveStatusCache.get(sid)?.live : null;
       }
     }
 
     const youtubeAccount = byProvider.get('youtube') || null;
-    const youtubeBotProfile = await getYoutubeBotProfile(YOUTUBE_BOT_PROFILE_ID).catch(() => null);
-    const youtubeStreamerChannel = await getYoutubeStreamerChannel(ownerUserId).catch(() => null);
-    let youtubeEntry = youtubeSessionStore.get(ownerUserId) || null;
-    if (!(youtubeBotProfile?.selectedChannelId && youtubeStreamerChannel?.youtubeChannelId) && youtubeEntry?.connected) {
-      disconnectProviderRuntimeState(ownerUserId, 'youtube', null, 'platform_status_disconnected');
-      youtubeEntry = null;
-    }
+    const [youtubeBotProfile, youtubeStreamerChannel] = await Promise.all([
+      getYoutubeBotProfile(YOUTUBE_BOT_PROFILE_ID),
+      getYoutubeStreamerChannel(ownerUserId),
+    ]);
+    const youtubeEntry = youtubeSessionStore.get(ownerUserId) || null;
     let youtubeRefreshError = null;
     const youtubeState = refresh && (youtubeAccount || youtubeStreamerChannel)
-      ? await refreshYoutubeLiveStatus(ownerUserId, sid, { force: true }).catch((error) => {
+      ? await refreshYoutubeLiveStatus(ownerUserId, sid, { force: true, persistSession: false }).catch((error) => {
           youtubeRefreshError = compactLogText(error?.message || error, 400);
           return liveStatusCache.get(sid);
         })
       : liveStatusCache.get(sid);
-    if (refresh && youtubeState?.provider === 'youtube' && youtubeState.live) {
-      youtubeEntry = await ensureYoutubeSession(ownerUserId).catch((error) => {
-        youtubeRefreshError = compactLogText(error?.message || error, 400);
-        return youtubeSessionStore.get(ownerUserId) || null;
-      });
-    }
     const youtubeLastError = youtubeRefreshError || youtubeEntry?.lastError || null;
-    const visibleYoutubeLastError = String(youtubeLastError || '').trim().toLowerCase() === 'not_live'
-      ? null
-      : youtubeLastError;
+    const visibleYoutubeLastError = isYoutubeNotLiveError(youtubeLastError) ? null : youtubeLastError;
+    const cimeRecovery = getProviderSessionRecoveryStatus('cime', ownerUserId);
+    const youtubeRecovery = getProviderSessionRecoveryStatus('youtube', ownerUserId);
 
     const items = [
       {
@@ -25350,9 +25654,13 @@ app.get('/api/platforms/status', async (req, res) => {
         queueSize: Array.isArray(chzzkEntry?.queue) ? chzzkEntry.queue.length : 0,
         mode: 'socket',
         transportVersion: '2.x',
-        lastError: chzzkDiagnostic?.message || null,
+        lastError: chzzkRefreshError || chzzkDiagnostic?.message || null,
         lastStatus: chzzkDiagnostic?.status || null,
         reauthRequired: chzzkDiagnostic?.status === 401,
+        recovering: false,
+        recoveryAttempt: 0,
+        nextRetryAt: null,
+        recoveryError: null,
         ignoredDonations: { count: 0, byReason: {}, recent: [] }
       },
       {
@@ -25366,6 +25674,10 @@ app.get('/api/platforms/status', async (req, res) => {
         mode: 'websocket',
         lastError: cimeRefreshError || cimeEntry?.lastError || null,
         reauthRequired: cimeReauthRequired,
+        recovering: !!cimeRecovery,
+        recoveryAttempt: cimeRecovery?.attempt || 0,
+        nextRetryAt: cimeRecovery?.nextRetryAt || null,
+        recoveryError: cimeRecovery?.lastError || null,
         missingScopes: cimeMissingScopes,
         ignoredDonations: { count: 0, byReason: {}, recent: [] }
       },
@@ -25381,6 +25693,10 @@ app.get('/api/platforms/status', async (req, res) => {
         lastError: visibleYoutubeLastError,
         lastStatus: youtubeEntry?.lastStatus || null,
         reauthRequired: isYoutubeReauthRequired(youtubeEntry) || youtubeBotProfile?.status === 'reauth_required',
+        recovering: !!youtubeRecovery,
+        recoveryAttempt: youtubeRecovery?.attempt || 0,
+        nextRetryAt: youtubeRecovery?.nextRetryAt || null,
+        recoveryError: youtubeRecovery?.lastError || null,
         botConfigured: !!youtubeBotProfile?.selectedChannelId,
         ignoredDonations: getYoutubeIgnoredDonationSummary(youtubeEntry)
       }
@@ -25393,13 +25709,21 @@ app.get('/api/platforms/status', async (req, res) => {
         connected: items.filter((item) => item.connected).length,
         live: items.filter((item) => item.live === true).length,
         streamConnected: items.filter((item) => item.streamConnected).length,
+        recovering: items.filter((item) => item.recovering).length,
         reauthRequired: items.filter((item) => item.reauthRequired).length,
         ignoredDonations: items.reduce((sum, item) => sum + Number(item.ignoredDonations?.count || 0), 0)
       },
       db: getPgPoolStatus()
     });
   } catch (e) {
-    return res.status(500).json({ error: 'Failed to load platform status' });
+    console.warn('[platform-status] Read-only status lookup failed; runtime sessions were preserved:', e?.message || e);
+    return res.status(503).json({
+      error: 'Platform status is temporarily unavailable',
+      code: 'platform_status_unavailable',
+      retryable: true,
+      stale: true,
+      db: getPgPoolStatus(),
+    });
   }
 });
 
@@ -25407,6 +25731,7 @@ app.post('/api/cime/reset', async (req, res) => {
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    cancelProviderSessionRecovery('cime', ownerUserId);
     closeCimeSession(ownerUserId, 'manual_reset');
     await ensureCimeSession(ownerUserId);
     return res.json({ ok: true });
@@ -25422,6 +25747,12 @@ const server = SERVER_HOST
   : app.listen(PORT, () => {
       console.log(`[server] listening on http://localhost:${PORT}`);
     });
+server.on('error', (error) => {
+  console.error('[Server] HTTP listener error:', error?.message || error);
+  if (error?.code === 'EADDRINUSE' || error?.code === 'EACCES') {
+    gracefulShutdown(`http_listener_${error.code}`, { exitCode: 1 });
+  }
+});
 
 const REGISTERED_RUNTIME_MONITOR_CONCURRENCY = Math.max(1, Math.min(12, Number(process.env.REGISTERED_RUNTIME_MONITOR_CONCURRENCY || 4)));
 
@@ -25472,7 +25803,10 @@ async function bootstrapEnsureCimeSessions(reason = 'startup') {
       const ownerUserId = String(user?.userId || '').trim();
       if (!ownerUserId) return;
       const existing = cimeSessionStore.get(ownerUserId);
-      if (existing && !existing.closed) return;
+      if (existing && !existing.closed && existing.connected && existing.ws?.readyState === WebSocket.OPEN) return;
+      if (existing && !existing.closed && existing.ws?.readyState === WebSocket.CONNECTING) return;
+      if (getProviderSessionRecoveryStatus('cime', ownerUserId)) return;
+      if (existing) disposeCimeSessionForRecovery(ownerUserId, 'bootstrap_stale_session');
       const sid = `user:${ownerUserId}`;
       const channelId = String(user?.platformUserId || '').trim() || null;
       try {
@@ -25485,6 +25819,10 @@ async function bootstrapEnsureCimeSessions(reason = 'startup') {
           return;
         }
         console.warn('[bootstrap] CIME live status/session skipped:', ownerUserId, e?.response?.data || e?.message || e);
+        scheduleProviderSessionRecovery('cime', ownerUserId, {
+          reason: 'bootstrap_failed',
+          error: e,
+        });
       }
       await sleep(150);
     });
@@ -25507,7 +25845,10 @@ async function bootstrapEnsureYoutubeSessions(reason = 'startup') {
       const ownerUserId = String(user?.userId || '').trim();
       if (!ownerUserId) return;
       const existing = youtubeSessionStore.get(ownerUserId);
-      if (existing && !existing.closed) return;
+      if (existing && !existing.closed && existing.connected) return;
+      if (isYoutubeReauthRequired(existing)) return;
+      if (getProviderSessionRecoveryStatus('youtube', ownerUserId)) return;
+      if (existing) disposeYoutubeSessionForRecovery(ownerUserId, 'bootstrap_stale_session');
       try {
         await ensureProviderRuntimeLease('youtube', ownerUserId);
         await ensureYoutubeSession(ownerUserId);
@@ -25521,6 +25862,10 @@ async function bootstrapEnsureYoutubeSessions(reason = 'startup') {
           return;
         }
         console.warn('[bootstrap] YouTube live status/session skipped:', ownerUserId, e?.response?.data || e?.message || e);
+        scheduleProviderSessionRecovery('youtube', ownerUserId, {
+          reason: 'bootstrap_failed',
+          error: e,
+        });
       }
       await sleep(150);
     });
@@ -25721,17 +26066,24 @@ async function bootstrapRegisteredChannelLiveStatuses(reason = 'startup') {
 }
 
 const REGISTERED_RUNTIME_MONITOR_INTERVAL_MS = Math.max(5000, Number(process.env.REGISTERED_RUNTIME_MONITOR_INTERVAL_MS || 10000));
+const REGISTERED_PROVIDER_RECOVERY_INTERVAL_MS = Math.max(30_000, Number(process.env.REGISTERED_PROVIDER_RECOVERY_INTERVAL_MS || 60_000));
 let registeredRuntimeMonitorRunning = false;
+let lastFullProviderRecoveryAt = 0;
 
 async function runRegisteredRuntimeMonitor(reason = 'scheduled') {
   if (registeredRuntimeMonitorRunning) return false;
   registeredRuntimeMonitorRunning = true;
   try {
-    if (reason === 'startup') {
+    const shouldRunFullRecovery = reason === 'startup'
+      || !runtimeReadinessState.initialBootstrapCompleted
+      || Date.now() - lastFullProviderRecoveryAt >= REGISTERED_PROVIDER_RECOVERY_INTERVAL_MS;
+    if (shouldRunFullRecovery) {
       await bootstrapRegisteredChannelLiveStatuses(reason);
+      lastFullProviderRecoveryAt = Date.now();
+      runtimeReadinessState.initialBootstrapCompleted = true;
     } else {
-      // CIME keeps a reconnecting websocket and YouTube uses WebSub push notifications.
-      // Only CHZZK needs a short-interval registered-channel live poll.
+      // CHZZK needs a short live poll. CIME and YouTube are reconciled by the
+      // persistent recovery supervisor and by the full periodic pass above.
       await bootstrapEnsureSessions();
     }
     runtimeReadinessState.lastMonitorAt = new Date().toISOString();
@@ -25747,9 +26099,7 @@ async function runRegisteredRuntimeMonitor(reason = 'scheduled') {
 
 setTimeout(() => {
   runRegisteredRuntimeMonitor('startup')
-    .then(() => {
-      runtimeReadinessState.initialBootstrapCompleted = true;
-    })
+    .then(() => undefined)
     .catch((e) => {
       runtimeReadinessState.lastMonitorError = e?.message || String(e);
       console.warn('[bootstrap] Sequential live status check failed:', e?.message || e);
@@ -25804,7 +26154,7 @@ function closeWebSocketServer(webSocketServer) {
   });
 }
 
-async function gracefulShutdown(signal) {
+async function gracefulShutdown(signal, { exitCode = 0 } = {}) {
   if (gracefulShutdownPromise) return gracefulShutdownPromise;
   gracefulShutdownPromise = (async () => {
     runtimeReadinessState.shuttingDown = true;
@@ -25816,6 +26166,9 @@ async function gracefulShutdown(signal) {
     forceTimer.unref?.();
 
     try {
+      providerRuntimeRecoverySupervisor.cancelAll();
+      const leasesToRelease = Array.from(providerRuntimeLeases.values());
+      providerRuntimeLeases.clear();
       for (const ownerUserId of Array.from(youtubeSessionStore.keys())) closeYoutubeSession(ownerUserId, 'shutdown');
       for (const ownerUserId of Array.from(cimeSessionStore.keys())) closeCimeSession(ownerUserId, 'shutdown');
       for (const entry of sessionStore.values()) {
@@ -25843,15 +26196,13 @@ async function gracefulShutdown(signal) {
       }
       redisSubscribers.clear();
       try { await redisPublisher?.quit?.(); } catch { }
-      const leasesToRelease = Array.from(providerRuntimeLeases.values());
-      providerRuntimeLeases.clear();
       await Promise.allSettled(leasesToRelease.map((state) => releaseRuntimeLease(state.resourceKey, INSTANCE_ID)));
       await closeHttpServer();
       await closeDatabaseConnections();
 
       clearTimeout(forceTimer);
       console.log('[Server] Graceful shutdown completed');
-      process.exit(0);
+      process.exit(exitCode);
     } catch (error) {
       clearTimeout(forceTimer);
       console.error('[Server] Error during graceful shutdown:', error);
@@ -25865,20 +26216,18 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 process.on('uncaughtException', (error) => {
-  if (error.message && error.message.includes('db_termination')) {
+  if (runtimeReadinessState.shuttingDown && error.message && error.message.includes('db_termination')) {
     console.log('[Server] Database connection terminated (normal during shutdown)');
     return;
   }
 
   console.error('[Server] Uncaught Exception:', error);
 
-  if (!process.exitCode) {
-    gracefulShutdown('uncaughtException');
-  }
+  gracefulShutdown('uncaughtException', { exitCode: 1 });
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-  if (reason && reason.message && reason.message.includes('db_termination')) {
+  if (runtimeReadinessState.shuttingDown && reason && reason.message && reason.message.includes('db_termination')) {
     console.log('[Server] Database rejection during shutdown (normal)');
     return;
   }
@@ -26414,6 +26763,9 @@ const predictionAutoLockTimers = new Map(); // predictionId -> timeout
 function enableWebSocketHeartbeat(webSocketServer, intervalMs = 30_000) {
   if (!webSocketServer || webSocketServer.__arubotHeartbeatEnabled) return;
   webSocketServer.__arubotHeartbeatEnabled = true;
+  webSocketServer.on('error', (error) => {
+    console.error('[WebSocketServer] Listener error:', error?.message || error);
+  });
   webSocketServer.on('connection', (socket) => {
     socket.__arubotAlive = true;
     socket.on('pong', () => {

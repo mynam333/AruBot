@@ -34,7 +34,7 @@ describe('disconnected channel runtime regression', () => {
     expect(closeBody).toContain('entry.closed = true');
     expect(ensureBody).toContain('closed: false');
     expect(ensureBody).toContain('if (entry.closed) return');
-    expect(ensureBody).toContain('ensureCimeSession(ownerUserId).catch');
+    expect(ensureBody).toContain("scheduleProviderSessionRecovery('cime', ownerUserId");
   });
 
   test('specific provider revokes remove matching stored tokens too', () => {
@@ -58,13 +58,15 @@ describe('disconnected channel runtime regression', () => {
     expect(chzzkBody).toContain('await updateTokens(sid, null)');
   });
 
-  test('platform status closes orphan sessions for disconnected channels', () => {
+  test('platform status remains observational when account lookups change or fail', () => {
     const statusStart = serverIndex.indexOf("app.get('/api/platforms/status'");
     const statusEnd = serverIndex.indexOf("app.post('/api/cime/reset'", statusStart);
     const statusBody = serverIndex.slice(statusStart, statusEnd);
 
-    expect(statusBody).toContain("if (!chzzkAccount && sessionStore.get(sid)?.connected)");
-    expect(statusBody).toContain("if (!cimeAccount && cimeEntry?.connected)");
-    expect(statusBody).toContain("if (!(youtubeBotProfile?.selectedChannelId && youtubeStreamerChannel?.youtubeChannelId) && youtubeEntry?.connected)");
+    expect(statusBody).not.toContain('disconnectProviderRuntimeState(');
+    expect(statusBody).not.toContain('await ensureCimeSession(');
+    expect(statusBody).not.toContain('await ensureYoutubeSession(');
+    expect(statusBody).toContain("code: 'platform_status_database_unavailable'");
+    expect(statusBody).toContain('persistSession: false');
   });
 });

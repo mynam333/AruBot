@@ -13,6 +13,14 @@ fs.mkdirSync(logsDir, { recursive: true });
 const port = process.env.PORT || process.env.SERVER_PORT || '3001';
 const maxOldSpaceSize = process.env.ARUBOT_NODE_MAX_OLD_SPACE_SIZE || '768';
 const maxMemoryRestart = process.env.ARUBOT_PM2_MAX_MEMORY_RESTART || '900M';
+const readPositiveInteger = (name, fallback) => {
+  const value = Number(process.env[name]);
+  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
+};
+const maxRestarts = readPositiveInteger('ARUBOT_PM2_MAX_RESTARTS', 100);
+const expBackoffRestartDelay = readPositiveInteger('ARUBOT_PM2_EXP_BACKOFF_RESTART_DELAY_MS', 1000);
+const killTimeout = readPositiveInteger('ARUBOT_PM2_KILL_TIMEOUT_MS', 25000);
+const listenTimeout = readPositiveInteger('ARUBOT_PM2_LISTEN_TIMEOUT_MS', 15000);
 const releaseSha = process.env.ARUBOT_RELEASE_SHA || process.env.RELEASE_SHA || 'local';
 
 module.exports = {
@@ -27,11 +35,11 @@ module.exports = {
       autorestart: true,
       watch: false,
       max_memory_restart: maxMemoryRestart,
-      min_uptime: '20s',
-      max_restarts: 10,
-      restart_delay: 5000,
-      kill_timeout: 15000,
-      listen_timeout: 10000,
+      min_uptime: '30s',
+      max_restarts: maxRestarts,
+      exp_backoff_restart_delay: expBackoffRestartDelay,
+      kill_timeout: killTimeout,
+      listen_timeout: listenTimeout,
       node_args: [`--max-old-space-size=${maxOldSpaceSize}`],
       out_file: path.join(logsDir, 'api.out.log'),
       error_file: path.join(logsDir, 'api.err.log'),
