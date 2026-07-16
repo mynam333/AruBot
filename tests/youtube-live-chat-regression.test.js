@@ -79,6 +79,16 @@ describe('YouTube live chat integration regression', () => {
     expect(ensureBody).not.toContain('await refreshYoutubeLiveStatus(ownerUserId, sid, { force: true })');
   });
 
+  test('treats an active receiver as authoritative for command live checks', () => {
+    const processStart = serverIndex.indexOf('async function processYoutubeChatAutomation');
+    const processEnd = serverIndex.indexOf('function closeYoutubeSession', processStart);
+    const processBody = serverIndex.slice(processStart, processEnd);
+
+    expect(processBody).toContain('const liveState = entry.connected');
+    expect(processBody).toContain('? { live: true, channelId: entry.channelId || null');
+    expect(processBody).toContain(': await refreshYoutubeLiveStatus(ownerUserId, sid, { ttlMs: 30 * 1000 })');
+  });
+
   test('resolves live-title placeholders only from the active YouTube broadcast', () => {
     const liveInfoStart = serverIndex.indexOf('async function fetchYoutubeLiveInfoForSid');
     const liveInfoEnd = serverIndex.indexOf('async function getChannelUidsForSid', liveInfoStart);

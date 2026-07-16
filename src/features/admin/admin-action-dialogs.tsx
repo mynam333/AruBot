@@ -22,6 +22,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { RouletteThemeSwatch } from '@/components/rouletteThemeSwatch';
 import { CommandVariableHelpButton } from '@/features/admin/command-variable-help';
+import { parseCommandTriggers } from '@/features/admin/command-triggers';
 import {
   RouletteItemsEditor,
 } from '@/features/admin/roulette-item-editor';
@@ -269,17 +270,18 @@ export function CommandCreateDialog({ variant = 'secondary', label = '명령어 
   const [isPending, startTransition] = useTransition();
 
   const submit = (close: () => void) => {
-    const keyword = normalizeCommand(command);
+    const keywords = parseCommandTriggers(command);
+    const primaryKeyword = keywords[0] || '';
     const message = response.trim();
-    if (!keyword || keyword === '!') return toast.warning('명령어를 입력해 주세요.');
+    if (!primaryKeyword) return toast.warning('명령어를 입력해 주세요.');
     if (!message) return toast.warning('응답 문구를 입력해 주세요.');
     startTransition(async () => {
       try {
         await postJson('/api/bot/rules/upsert', {
           rule: {
             id: `cmd_${Date.now().toString(36)}`,
-            name: name.trim() || keyword,
-            keywords: [keyword],
+            name: name.trim() || primaryKeyword,
+            keywords,
             responses: [message],
             enabled,
             adminOnly: false,
@@ -323,7 +325,7 @@ export function CommandCreateDialog({ variant = 'secondary', label = '명령어 
           <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="예: 투표 안내" />
         </Field>
         <Field label="채팅 명령어">
-          <Input value={command} onChange={(event) => setCommand(event.target.value)} placeholder="예: !투표" />
+          <Input value={command} onChange={(event) => setCommand(event.target.value)} placeholder="예: !투표 !예측 !vote" />
         </Field>
       </div>
       <Field label="응답 문구">

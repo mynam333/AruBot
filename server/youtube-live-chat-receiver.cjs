@@ -8,11 +8,16 @@ const RECEIVER_PAGE_HEADERS = Object.freeze({
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
 });
 const RECEIVER_PAGE_TIMEOUT_MS = 15000;
+const RECEIVER_CHAT_TIMEOUT_MS = 15000;
 
 function youtubePageValue(data, pattern, errorMessage) {
   const match = String(data || '').match(pattern);
   if (!match?.[1]) throw new Error(errorMessage);
   return match[1];
+}
+
+function optionalYoutubePageValue(data, pattern) {
+  return String(data || '').match(pattern)?.[1] || '';
 }
 
 function parseAssignedJsonObject(data, assignment) {
@@ -172,7 +177,15 @@ function getOptionsFromLivePageCompat(data, knownLiveId = '') {
   );
   const continuation = continuationFromRenderer(renderer);
   if (!continuation) throw new Error('Live chat continuation was not found');
-  return { liveId, apiKey, clientVersion, continuation };
+  const visitorData = optionalYoutubePageValue(source, /["']visitorData["']:\s*["']([^"']+)["']/)
+    || optionalYoutubePageValue(source, /["']VISITOR_DATA["']:\s*["']([^"']+)["']/);
+  return {
+    liveId,
+    apiKey,
+    clientVersion,
+    continuation,
+    ...(visitorData ? { visitorData } : {}),
+  };
 }
 
 function receiverLookupUrl(id) {
@@ -214,8 +227,60 @@ async function fetchLivePageCompat(id) {
   return getOptionsFromLivePageCompat(response.data, liveId);
 }
 
+function buildYoutubeChatRequest(options = {}) {
+  const clientVersion = String(options.clientVersion || '').trim();
+  const visitorData = String(options.visitorData || '').trim();
+  const liveId = String(options.liveId || '').trim();
+  return {
+    body: {
+      context: {
+        client: {
+          clientName: 'WEB',
+          clientVersion,
+          hl: 'en',
+          gl: 'US',
+          userAgent: RECEIVER_PAGE_HEADERS['User-Agent'],
+          ...(visitorData ? { visitorData } : {}),
+        },
+      },
+      continuation: options.continuation,
+    },
+    headers: {
+      'Content-Type': 'application/json',
+      Origin: 'https://www.youtube.com',
+      Referer: `https://www.youtube.com/live_chat?v=${encodeURIComponent(liveId)}&is_popout=1`,
+      'User-Agent': RECEIVER_PAGE_HEADERS['User-Agent'],
+      'X-Youtube-Bootstrap-Logged-In': 'false',
+      'X-Youtube-Client-Name': '1',
+      'X-Youtube-Client-Version': clientVersion,
+      ...(visitorData ? { 'X-Goog-Visitor-Id': visitorData } : {}),
+    },
+  };
+}
+
+async function fetchChatCompat(options = {}) {
+  let retriedWithFreshPage = false;
+  while (true) {
+    const request = buildYoutubeChatRequest(options);
+    try {
+      const response = await axios.post(
+        `https://www.youtube.com/youtubei/v1/live_chat/get_live_chat?key=${encodeURIComponent(String(options.apiKey || ''))}&prettyPrint=false`,
+        request.body,
+        { headers: request.headers, timeout: RECEIVER_CHAT_TIMEOUT_MS },
+      );
+      return youtubeChatParser.parseChatData(response.data);
+    } catch (error) {
+      const status = Number(error?.response?.status || 0);
+      if (status !== 403 || retriedWithFreshPage || !options.liveId) throw error;
+      retriedWithFreshPage = true;
+      Object.assign(options, await fetchLivePageCompat({ liveId: options.liveId }));
+    }
+  }
+}
+
 youtubeChatParser.getOptionsFromLivePage = getOptionsFromLivePageCompat;
 youtubeChatRequests.fetchLivePage = fetchLivePageCompat;
+youtubeChatRequests.fetchChat = fetchChatCompat;
 
 const { LiveChat } = require('youtube-chat');
 
@@ -308,7 +373,9 @@ function toYoutubeLiveChatItem(chatItem = {}) {
 }
 
 module.exports = {
+  buildYoutubeChatRequest,
   createYoutubeLiveChatReceiver,
+  fetchChatCompat,
   fetchLivePageCompat,
   getOptionsFromLivePageCompat,
   liveIdsFromChannelPage,

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState, useTransition } from 'react'
 import { toast } from 'sonner';
 import { CommandCreateDialog } from '@/features/admin/admin-action-dialogs';
 import { CommandVariableHelpButton } from '@/features/admin/command-variable-help';
+import { formatCommandTriggers, parseCommandTriggers } from '@/features/admin/command-triggers';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -78,7 +79,7 @@ function normalizeCommand(value: string) {
 function toForm(rule: BotRule): CommandForm {
   return {
     name: rule.name || '',
-    command: rule.keywords?.[0] || '!',
+    command: formatCommandTriggers(rule.keywords) || '!',
     response: rule.responses?.join('\n') || '',
     pointsCost: String(rule.pointsCost ?? 0),
     cooldownSec: String(Math.max(1, Math.round((rule.cooldown ?? 3000) / 1000))),
@@ -171,9 +172,10 @@ export function CommandsPage() {
 
   const saveEdit = async () => {
     if (!editingRule || !form) return;
-    const keyword = normalizeCommand(form.command);
+    const keywords = parseCommandTriggers(form.command);
+    const primaryKeyword = keywords[0] || '';
     const responses = form.response.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-    if (!keyword || keyword === '!') return toast.warning('명령어를 입력해 주세요.');
+    if (!primaryKeyword) return toast.warning('명령어를 입력해 주세요.');
     if (!responses.length) return toast.warning('응답 문구를 입력해 주세요.');
 
     setBusyId(editingRule.id);
@@ -181,8 +183,8 @@ export function CommandsPage() {
       await postJson('/api/bot/rules/upsert', {
         rule: {
           ...editingRule,
-          name: form.name.trim() || keyword,
-          keywords: [keyword],
+          name: form.name.trim() || primaryKeyword,
+          keywords,
           responses,
           enabled: form.enabled,
           adminOnly: editingRule.adminOnly ?? false,
@@ -305,9 +307,11 @@ export function CommandsPage() {
           <Card key={rule.id} className="overflow-hidden">
             <CardContent className="grid gap-4 p-[clamp(1rem,2vw,1.35rem)] lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1.5fr)_minmax(var(--control-height),0.42fr)] lg:items-center">
               <div className="min-w-0">
-                <div className="flex max-w-full items-center gap-2 overflow-x-auto pb-1">
+                <div className="flex max-w-full flex-wrap items-center gap-2 pb-1">
                   <Badge tone={rule.enabled === false ? 'neutral' : 'mint'}>{rule.enabled === false ? '꺼짐' : '사용 중'}</Badge>
-                  <code className="shrink-0 rounded-full bg-muted px-2.5 py-1 text-xs font-bold">{rule.keywords?.[0] || '-'}</code>
+                  {rule.keywords?.length
+                    ? rule.keywords.map((keyword) => <code key={keyword} className="shrink-0 rounded-full bg-muted px-2.5 py-1 text-xs font-bold">{keyword}</code>)
+                    : <code className="shrink-0 rounded-full bg-muted px-2.5 py-1 text-xs font-bold">-</code>}
                 </div>
                 <div className="mt-2 truncate text-base font-bold">{rule.name || rule.keywords?.[0] || '이름 없는 명령어'}</div>
                 <div className="mt-1 text-xs text-muted-foreground">포인트 {Number(rule.pointsCost || 0).toLocaleString('ko-KR')} · 쿨다운 {Math.round((rule.cooldown || 0) / 1000)}초</div>
@@ -356,7 +360,7 @@ export function CommandsPage() {
               </label>
               <label className="grid gap-2 text-sm font-semibold">
                 채팅 명령어
-                <Input value={form.command} onChange={(event) => setForm({ ...form, command: event.target.value })} />
+                <Input value={form.command} onChange={(event) => setForm({ ...form, command: event.target.value })} placeholder="예: !투표 !예측 !vote" />
               </label>
             </div>
             <label className="grid gap-2 text-sm font-semibold">

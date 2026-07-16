@@ -1,5 +1,8 @@
+const axios = require('axios');
 const {
+  buildYoutubeChatRequest,
   createYoutubeLiveChatReceiver,
+  fetchChatCompat,
   getOptionsFromLivePageCompat,
   liveIdsFromChannelPage,
   receiverMessageText,
@@ -110,6 +113,83 @@ describe('YouTube live chat receiver adapter', () => {
     `;
 
     expect(liveIdsFromChannelPage(page)).toEqual(['legacyLive1']);
+  });
+
+  test('builds browser-context headers for live chat continuation requests', () => {
+    const request = buildYoutubeChatRequest({
+      liveId: 'video123',
+      clientVersion: '2.20260716.00.00',
+      visitorData: 'visitor-token',
+      continuation: 'continuation-token',
+    });
+
+    expect(request.body).toMatchObject({
+      context: {
+        client: {
+          clientName: 'WEB',
+          clientVersion: '2.20260716.00.00',
+          visitorData: 'visitor-token',
+        },
+      },
+      continuation: 'continuation-token',
+    });
+    expect(request.headers).toMatchObject({
+      Origin: 'https://www.youtube.com',
+      Referer: 'https://www.youtube.com/live_chat?v=video123&is_popout=1',
+      'X-Goog-Visitor-Id': 'visitor-token',
+      'X-Youtube-Client-Name': '1',
+      'X-Youtube-Client-Version': '2.20260716.00.00',
+    });
+  });
+
+  test('refreshes the live page once and retries a rejected chat request', async () => {
+    const post = jest.spyOn(axios, 'post')
+      .mockRejectedValueOnce(Object.assign(new Error('Request failed with status code 403'), { response: { status: 403 } }))
+      .mockResolvedValueOnce({
+        data: {
+          continuationContents: {
+            liveChatContinuation: {
+              actions: [],
+              continuations: [{ timedContinuationData: { continuation: 'next-token' } }],
+            },
+          },
+        },
+      });
+    const get = jest.spyOn(axios, 'get').mockResolvedValue({
+      data: `
+        <script>var ytcfg = {"INNERTUBE_API_KEY":"fresh-api-key","clientVersion":"2.20260716.01.00","visitorData":"fresh-visitor"};</script>
+        <script>window["ytInitialData"] = ${JSON.stringify({
+          contents: {
+            liveChatRenderer: {
+              continuations: [{ timedContinuationData: { continuation: 'fresh-token' } }],
+            },
+          },
+        })};</script>
+      `,
+    });
+
+    try {
+      const [items, continuation] = await fetchChatCompat({
+        liveId: 'video123',
+        apiKey: 'expired-api-key',
+        clientVersion: '2.20260716.00.00',
+        visitorData: 'expired-visitor',
+        continuation: 'expired-token',
+      });
+
+      expect(items).toEqual([]);
+      expect(continuation).toBe('next-token');
+      expect(post).toHaveBeenCalledTimes(2);
+      expect(post.mock.calls[1][1]).toMatchObject({ continuation: 'fresh-token' });
+      expect(post.mock.calls[1][2].headers).toMatchObject({
+        'X-Goog-Visitor-Id': 'fresh-visitor',
+        'X-Youtube-Client-Version': '2.20260716.01.00',
+      });
+      expect(get).toHaveBeenCalledTimes(1);
+    } finally {
+      post.mockRestore();
+      get.mockRestore();
+    }
   });
 
   test('creates an event receiver for a known broadcast without starting network work', () => {

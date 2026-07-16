@@ -23666,7 +23666,9 @@ async function processYoutubeChatAutomation(entry, ev) {
     if (!text) return;
 
     const settings = await getBotSettings(sid) || {};
-    const liveState = await refreshYoutubeLiveStatus(ownerUserId, sid, { ttlMs: 30 * 1000 });
+    const liveState = entry.connected
+      ? { live: true, channelId: entry.channelId || null, liveChatId: entry.liveChatId || null, broadcastId: entry.broadcastId || null }
+      : await refreshYoutubeLiveStatus(ownerUserId, sid, { ttlMs: 30 * 1000 });
     if (settings.onlyWhenLive && !liveState.live) return;
 
     const resolvedUserId = String(ev.userId || ev.user || 'unknown_user');
@@ -24302,6 +24304,13 @@ async function ensureYoutubeSession(ownerUserId) {
     youtubeSessionStore.set(ownerUserId, entry);
     try {
       await openYoutubeChatStream(entry);
+      if (
+        streamerChannel.lastDetectedVideoId
+        && String(streamerChannel.lastDetectedVideoId) === String(entry.broadcastId)
+        && streamerChannel.lastLiveChatId
+      ) {
+        entry.liveChatId = String(streamerChannel.lastLiveChatId);
+      }
       cacheYoutubeReceiverLiveState(entry);
       await updateSessionState(sid, true, Date.now()).catch(() => null);
       await hydrateYoutubeReceiverApiMetadata(entry);
