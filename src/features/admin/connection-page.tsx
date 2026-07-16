@@ -249,9 +249,15 @@ export function ConnectionPage() {
 
   useEffect(() => {
     const auth = searchParams.get('auth');
+    const platform = searchParams.get('platform');
+    const reason = searchParams.get('reason');
     if (auth === 'success') toast.success('플랫폼 연결이 완료되었습니다.');
     if (auth === 'cancelled') toast.info('플랫폼 연결을 취소했습니다.');
-    if (auth === 'failed' || auth === 'error') toast.error('플랫폼 연결을 완료하지 못했습니다.');
+    if ((auth === 'failed' || auth === 'error') && platform === 'youtube' && reason === 'quota_exceeded') {
+      toast.error('YouTube API 할당량이 소진되어 채널 확인을 완료하지 못했습니다. 할당량이 복구된 후 다시 연결해 주세요.');
+    } else if (auth === 'failed' || auth === 'error') {
+      toast.error('플랫폼 연결을 완료하지 못했습니다.');
+    }
   }, [searchParams]);
 
   const grouped = useMemo(() => {

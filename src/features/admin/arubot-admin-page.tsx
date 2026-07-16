@@ -507,11 +507,13 @@ export function ArubotAdminPage() {
     const reason = searchParams.get('reason');
     const noticeKey = `${auth || ''}:${reason || ''}`;
     const recognized = (auth === 'error' && reason === 'admin_required')
+      || (auth === 'error' && reason === 'quota_exceeded')
       || reason === 'central_bot_select_channel'
       || reason === 'central_bot_configured';
     if (!recognized || oauthNoticeRef.current === noticeKey) return;
     oauthNoticeRef.current = noticeKey;
     if (auth === 'error' && reason === 'admin_required') toast.error('AruBot 관리자 권한이 필요합니다.');
+    if (auth === 'error' && reason === 'quota_exceeded') toast.error('YouTube API 할당량이 소진되어 봇 채널 확인을 완료하지 못했습니다. 할당량 복구 후 다시 연결해 주세요.');
     if (reason === 'central_bot_select_channel') toast.info('YouTube 봇으로 사용할 채널을 선택해 주세요.');
     if (reason === 'central_bot_configured') toast.success('YouTube 중앙 봇 채널을 설정했습니다.');
     const params = new URLSearchParams(searchParams.toString());

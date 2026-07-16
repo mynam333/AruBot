@@ -16333,11 +16333,14 @@ app.get('/api/youtube/bot/login', (req, res) => {
 });
 
 app.get('/api/auth/youtube/callback', async (req, res) => {
+  let callbackStateValidation = null;
+  let callbackOauthMode = '';
   try {
     setOAuthNoStoreHeaders(res);
     const { code, state, error, error_description } = req.query;
     const savedState = req.cookies.oauth_state_youtube;
     const stateValidation = consumeOAuthState('youtube', state, savedState);
+    callbackStateValidation = stateValidation;
 
     if (error) {
       if (stateValidation.ok || savedState) clearManagedCookie(res, 'oauth_state_youtube');
@@ -16374,6 +16377,7 @@ app.get('/api/auth/youtube/callback', async (req, res) => {
       redirect_uri: YOUTUBE_REDIRECT_URI
     });
     const oauthMode = String(stateValidation.extra?.mode || '').trim();
+    callbackOauthMode = oauthMode;
     const tokenFallbackScope = oauthMode === 'viewer'
       ? YOUTUBE_VIEWER_AUTH_SCOPE
       : oauthMode === 'streamer_oauth'
@@ -16449,6 +16453,16 @@ app.get('/api/auth/youtube/callback', async (req, res) => {
       reason: oauthMode === 'viewer' ? null : 'youtube_streamer_registered'
     }));
   } catch (e) {
+    if (isYoutubeQuotaExceededError(e)) {
+      console.warn('[YouTube] OAuth callback deferred: Data API quota is exhausted', {
+        mode: callbackOauthMode || 'unknown',
+      });
+      const params = { auth: 'error', platform: 'youtube', reason: 'quota_exceeded' };
+      const redirectUrl = callbackOauthMode === 'central_bot'
+        ? getArubotAdminRedirectUrl(req, params)
+        : getAuthRedirectUrlWithState(req, callbackStateValidation, params);
+      return res.redirect(redirectUrl);
+    }
     console.error('[YouTube] Callback error', e?.response?.data || e?.message || e);
     return res.redirect(getAuthRedirectUrl(req, { auth: 'error', platform: 'youtube' }));
   }
