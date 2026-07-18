@@ -13,6 +13,7 @@ import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSett
 import { confirmPlatformTokenConsent, confirmYoutubeBotProfileConsent, countActiveDurableRuntimeJobs, touchPlatformTokenUsed, touchYoutubeBotProfileUsed } from './supabase.js';
 import { createPlatformProfileService } from './platform-profiles.js';
 import { executeAndStripLiveChangeTokens, filterLiveInfoByProvider, selectCategorySearchResult } from './live-command-actions.js';
+import { canManageLiveSettings, createLiveManagerRoleResolver, getLiveRoleLevel } from './live-command-permissions.js';
 import { buildYoutubeLiveInfoFallback, buildYoutubeLiveLookupContext } from './youtube-live-info.js';
 import { extractYouTubeWatchDurationSec, resolveVideoDonationTiming } from './video-donation-timing.js';
 import { appendVideoDonationQueueCount, countNonDurableVideoDonationItems, countVideoDonationQueueIncludingItem } from './video-donation-queue.js';
@@ -9968,6 +9969,7 @@ async function executeCommandLiveChangeTokens(sid, text, context = {}) {
   const result = await executeAndStripLiveChangeTokens(text, {
     provider,
     argsText: context.argsText,
+    canManageLive: context.canManageLive,
     changeTitle: (value) => changeLiveTitleForProvider(sid, provider, value),
     changeGame: (value) => changeLiveGameForProvider(sid, provider, value),
   });
@@ -10342,6 +10344,7 @@ async function executeRouletteResultCommand(sid, commandText, userId, username, 
         const liveChangeResult = await executeCommandLiveChangeTokens(sid, responseToSend, {
           provider: chatPostProvider || 'chzzk',
           argsText,
+          canManageLive: () => resolveQueuedLiveManagePermission(sid, chatPost),
         });
         responseToSend = liveChangeResult.text;
         if (liveChangeResult.executed.length > 0) ruleUsed = true;
@@ -10373,10 +10376,10 @@ async function executeRouletteResultCommand(sid, commandText, userId, username, 
                 userId: String(userId || ''),
                 username: String(username || ''),
                 chatPost: isCimeChatPost
-                  ? makeCimeChatPost(chatPost.ownerUserId, username, { suppressResultChat: false })
+                  ? makeCimeChatPost(chatPost.ownerUserId, username, { suppressResultChat: false, liveManageActorId: chatPost?.liveManageActorId || null })
                   : isYoutubeChatPost
                     ? makeYoutubeChatPost(chatPost.ownerUserId, chatPost.liveChatId, username, { suppressResultChat: false })
-                    : makeChzzkChatPost(entry.sessionKey, accessToken, username, { suppressResultChat: false })
+                    : makeChzzkChatPost(entry.sessionKey, accessToken, username, { suppressResultChat: false, liveManageActorId: chatPost?.liveManageActorId || null })
               };
 
               console.log(`[Roulette Command] Enqueueing nested roulette: ${name}`);
@@ -10463,7 +10466,7 @@ async function executeRouletteResultCommand(sid, commandText, userId, username, 
           user: { userId, username },
           chatPost: (isCimeChatPost || isYoutubeChatPost)
             ? chatPost
-            : makeChzzkChatPost(entry?.sessionKey || null, null, username),
+            : makeChzzkChatPost(entry?.sessionKey || null, null, username, { liveManageActorId: chatPost?.liveManageActorId || null }),
         });
         if (actionResult.used) {
           responseToSend = actionResult.text;
@@ -12333,6 +12336,7 @@ const CIME_OPENAPI_BASE = process.env.CIME_OPENAPI_BASE || 'https://ci.me/api/op
 const CIME_AUTH_URL = process.env.CIME_AUTH_URL || 'https://ci.me/auth/openapi/account-interlock';
 const CIME_RUNTIME_HTTP_TIMEOUT_MS = Math.max(3_000, Math.min(30_000, Number(process.env.CIME_RUNTIME_HTTP_TIMEOUT_MS || 8_000)));
 const CIME_RUNTIME_STALE_MS = Math.max(120_000, Math.min(15 * 60_000, Number(process.env.CIME_RUNTIME_STALE_MS || 180_000)));
+const CIME_LIVE_MANAGER_CACHE_TTL_MS = Math.max(10_000, Math.min(5 * 60_000, Number(process.env.CIME_LIVE_MANAGER_CACHE_TTL_MS || 60_000)));
 const CIME_REQUIRED_AUTH_SCOPES = [
   'READ:USER',
   'READ:CHANNEL',
@@ -12347,6 +12351,54 @@ const CIME_AUTH_SCOPE = Array.from(new Set([
   ...String(process.env.CIME_AUTH_SCOPE || '').trim().split(/\s+/).filter(Boolean),
   ...CIME_REQUIRED_AUTH_SCOPES,
 ])).join(' ');
+
+const cimeLiveManagerRoleResolver = createLiveManagerRoleResolver({
+  ttlMs: CIME_LIVE_MANAGER_CACHE_TTL_MS,
+  getCacheKey: (context) => `${String(context?.ownerUserId || '')}\u0000${String(context?.ownerChannelId || '')}`,
+  loadRoles: async (context) => {
+    const accessToken = await getValidCimeAccessToken(context?.ownerUserId);
+    const response = await axios.get(`${CIME_OPENAPI_BASE}/open/v1/channels/streaming-roles`, {
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      timeout: CIME_RUNTIME_HTTP_TIMEOUT_MS,
+    });
+    return openApiList(response);
+  },
+});
+
+async function getCimeLiveActorRoleLevel(ownerUserId, ownerChannelId, actorChannelId, options = {}) {
+  const actorId = String(actorChannelId || '').trim();
+  const channelId = String(ownerChannelId || '').trim();
+  if (!actorId) return 1;
+  if (channelId && actorId === channelId) return 4;
+  return cimeLiveManagerRoleResolver.getRoleLevel({ ownerUserId, ownerChannelId: channelId }, actorId, options);
+}
+
+async function resolveQueuedLiveManagePermission(sid, chatPost) {
+  const provider = String(chatPost?.provider || '').trim().toLowerCase();
+  const actorChannelId = String(chatPost?.liveManageActorId || '').trim();
+  if (!actorChannelId) return false;
+
+  if (provider === 'cime') {
+    const ownerUserId = String(chatPost?.ownerUserId || '').trim();
+    const ownerChannelId = await getCimeChannelId(ownerUserId);
+    const roleLevel = await getCimeLiveActorRoleLevel(ownerUserId, ownerChannelId, actorChannelId, { force: true });
+    return canManageLiveSettings({ roleLevel });
+  }
+
+  if (provider === 'chzzk') {
+    const accessToken = await getValidAccessToken(sid);
+    const response = await axios.get(`${OPENAPI_BASE}/open/v1/channels/streaming-roles`, {
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      timeout: DEFAULT_TIMEOUT,
+    });
+    return openApiList(response).some((role) => (
+      String(role?.managerChannelId || '').trim() === actorChannelId
+      && canManageLiveSettings({ role: role?.userRole })
+    ));
+  }
+
+  return false;
+}
 
 function normalizeOAuthScopeSet(value) {
   if (Array.isArray(value)) {
@@ -19434,8 +19486,8 @@ const BOT_VARIABLES = [
   { key: '{live.elapsed_ko}', label: '방송 진행 시간', description: '한국어 형식으로 표시되는 방송 진행 시간입니다.', group: '방송', providers: BOT_VARIABLE_PROVIDERS },
   { key: '{live.channel}', label: '방송 채널', description: '현재 방송 채널 이름 또는 식별자입니다.', group: '방송', providers: BOT_VARIABLE_PROVIDERS },
   { key: '{channel.followers}', label: '팔로워 수', description: '확인 가능한 현재 채널 팔로워 수입니다.', group: '채널', providers: ['chzzk', 'cime'], caveat: '씨미는 프로필 동기화로 저장된 공개 수치를 사용합니다.' },
-  { key: '${live.title_change}', label: '방송 제목 변경', description: '명령어 뒤에 입력한 전체 문장으로 현재 플랫폼의 방송 제목을 변경합니다.', group: '특수 실행', providers: ['chzzk', 'cime'], caveat: '채팅에는 출력되지 않습니다. 명령어 인자가 없으면 실행하지 않으며, 제거 후 응답이 비어 있으면 채팅도 보내지 않습니다.' },
-  { key: '${live.game_change}', label: '방송 카테고리 변경', description: '명령어 뒤에 입력한 전체 문장으로 현재 플랫폼의 카테고리를 검색해 변경합니다.', group: '특수 실행', providers: ['chzzk', 'cime'], caveat: '채팅에는 출력되지 않습니다. 명령어 인자가 없으면 실행하지 않으며, 제거 후 응답이 비어 있으면 채팅도 보내지 않습니다.' },
+  { key: '${live.title_change}', label: '방송 제목 변경', description: '명령어 뒤에 입력한 전체 문장으로 현재 플랫폼의 방송 제목을 변경합니다.', group: '특수 실행', providers: ['chzzk', 'cime'], caveat: '스트리머 또는 매니저만 실행할 수 있으며 채팅에는 출력되지 않습니다. 명령어 인자가 없으면 실행하지 않고, 제거 후 응답이 비어 있으면 채팅도 보내지 않습니다.' },
+  { key: '${live.game_change}', label: '방송 카테고리 변경', description: '명령어 뒤에 입력한 전체 문장으로 현재 플랫폼의 카테고리를 검색해 변경합니다.', group: '특수 실행', providers: ['chzzk', 'cime'], caveat: '스트리머 또는 매니저만 실행할 수 있으며 채팅에는 출력되지 않습니다. 명령어 인자가 없으면 실행하지 않고, 제거 후 응답이 비어 있으면 채팅도 보내지 않습니다.' },
   { key: '${video_donation}', label: '영상 후원 신청 실행', description: '명령어 인자로 받은 주소를 영상 후원 대기열에 넣고 실제 재생 구간만큼 포인트를 차감합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, caveat: '사용법: <주소> [<시작초>] [<종료초>] · 시작초와 종료초는 초 또는 분:초(예: 1:23 = 83초) 형식으로 입력합니다. 시작초 기본값은 0초이며, 종료초를 생략하면 영상 마지막까지 재생합니다. 설정된 최대 재생 시간은 항상 적용되며, 이 변수는 채팅에 출력되지 않습니다.' },
   { key: '${roulette::룰렛이름}', label: '룰렛 실행', description: '지정한 룰렛을 즉시 실행하고 결과를 채팅/오버레이 흐름에 반영합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, caveat: '룰렛 이름 또는 ID를 :: 뒤에 입력하세요. 예: ${roulette::오늘의 벌칙}' },
   { key: '${action::액션이름}', label: '블루프린트 실행', description: '게시된 실행 액션 블루프린트를 명령어 응답 중 실행합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, caveat: '채팅으로 출력되지 않고 액션이 실행됩니다. 액션 이름, slug 또는 ID를 사용할 수 있습니다.' },
@@ -22021,9 +22073,11 @@ async function ensureSession(sid, channelId) {
           let isOwner = false;
           try {
             const owner = await getOwnerInfoForSid(sid);
-            if (owner?.userId && String(msg?.profile?.userId || '') === String(owner.userId)) {
-              isOwner = true;
-            }
+            const ownerChannelId = String(owner?.channelId || '').trim();
+            const actorChannelIds = [resolvedUserId, msg?.senderChannelId, msg?.profile?.channelId, msg?.profile?.userId]
+              .map((value) => String(value || '').trim())
+              .filter(Boolean);
+            isOwner = !!ownerChannelId && actorChannelIds.includes(ownerChannelId);
           } catch { }
 
           // Additional guard: mark recognizable bot account to avoid attendance/echo loops (do not abort rule flow here)
@@ -22243,14 +22297,8 @@ async function ensureSession(sid, channelId) {
           // Prefer the longest safe command boundary, then the exact configured spelling.
           const now = Date.now();
           const code = (msg && (msg.userRoleCode ?? msg?.profile?.userRoleCode)) ?? 0;
-          const roleLevel = (() => {
-            // Accept both numeric and string codes defensively
-            const c = typeof code === 'string' ? code.toLowerCase() : code;
-            if (c === 4 || c === 'streamer') return 4;
-            if (c === 3 || c === 'streaming_channel_manager') return 3;
-            if (c === 2 || c === 'streaming_chat_manager') return 2;
-            return 1; // default ?쇰컲?좎?
-          })();
+          const roleLevel = getLiveRoleLevel(code, { isOwner });
+          const canManageLive = canManageLiveSettings({ roleLevel, isOwner });
           for (const { rule: r, match: commandMatch } of getCommandRuleMatches(text, rules)) {
             if (!r.enabled) continue;
             // Role permission check
@@ -22342,6 +22390,7 @@ async function ensureSession(sid, channelId) {
               const liveChangeResult = await executeCommandLiveChangeTokens(sid, responseToSend, {
                 provider: 'chzzk',
                 argsText: restForVd,
+                canManageLive,
               });
               responseToSend = liveChangeResult.text;
               if (liveChangeResult.executed.length > 0) {
@@ -22481,8 +22530,8 @@ async function ensureSession(sid, channelId) {
                         username: String(resolvedUsername || ''),
                         // For batches (count>1), suppress per-spin chat and tag batch meta; for single spin, allow per-spin chat
                         chatPost: count > 1
-                          ? { sessionKey: entry.sessionKey, accessToken, resolvedUsername, suppressResultChat: true, batchId: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, batchCount: count }
-                          : { sessionKey: entry.sessionKey, accessToken, resolvedUsername }
+                          ? makeChzzkChatPost(entry.sessionKey, accessToken, resolvedUsername, { liveManageActorId: resolvedUserId, suppressResultChat: true, batchId: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, batchCount: count })
+                          : makeChzzkChatPost(entry.sessionKey, accessToken, resolvedUsername, { liveManageActorId: resolvedUserId })
                       };
 
                       console.log(`[Roulette] Enqueueing ${count} spins for roulette: ${name}, user: ${resolvedUsername}`);
@@ -22528,7 +22577,7 @@ async function ensureSession(sid, channelId) {
                 platform: 'chzzk',
                 command: { keyword: matchedKeyword || '', text, ruleId: r.id || null, ruleName: r.name || null },
                 user: { userId: resolvedUserId, username: resolvedUsername },
-                chatPost: makeChzzkChatPost(entry.sessionKey, null, resolvedUsername),
+                chatPost: makeChzzkChatPost(entry.sessionKey, null, resolvedUsername, { liveManageActorId: resolvedUserId }),
                 channelUid: liveState.channelId || entry.channelId || null,
                 channel: { channelUid: liveState.channelId || entry.channelId || null },
               });
@@ -23848,6 +23897,7 @@ async function processYoutubeChatAutomation(entry, ev) {
         const liveChangeResult = await executeCommandLiveChangeTokens(sid, cleaned, {
           provider: 'youtube',
           argsText,
+          canManageLive: false,
         });
         cleaned = liveChangeResult.text;
       }
@@ -24827,8 +24877,26 @@ async function processCimeChatAutomation(entry, ev) {
     if (!Array.isArray(rules)) return;
 
     const now = Date.now();
-    const roleLevel = isOwner ? 4 : 1;
-    for (const { rule: r, match: commandMatch } of getCommandRuleMatches(text, rules)) {
+    const commandMatches = getCommandRuleMatches(text, rules);
+    const needsManagerLookup = !isOwner && commandMatches.some(({ rule }) => {
+      if (!rule || rule.enabled === false) return false;
+      const required = Number(rule.requiredRoleLevel || (rule.adminOnly ? 3 : 1));
+      return required > 1;
+    });
+    let roleLevel = isOwner ? 4 : 1;
+    if (needsManagerLookup) {
+      try {
+        roleLevel = await getCimeLiveActorRoleLevel(ownerUserId, entry.channelId, resolvedUserId);
+      } catch (error) {
+        console.warn('[CIME] Manager permission lookup failed; privileged command actions remain denied:', error?.message || error);
+        roleLevel = 1;
+      }
+    }
+    const canManageLive = async () => {
+      const currentRoleLevel = await getCimeLiveActorRoleLevel(ownerUserId, entry.channelId, resolvedUserId, { force: true });
+      return canManageLiveSettings({ roleLevel: currentRoleLevel });
+    };
+    for (const { rule: r, match: commandMatch } of commandMatches) {
       if (!r || r.enabled === false) continue;
       const required = Number(r.requiredRoleLevel || (r.adminOnly ? 3 : 1));
       if (roleLevel < required) continue;
@@ -24897,6 +24965,7 @@ async function processCimeChatAutomation(entry, ev) {
         const liveChangeResult = await executeCommandLiveChangeTokens(sid, cleaned, {
           provider: 'cime',
           argsText,
+          canManageLive,
         });
         cleaned = liveChangeResult.text;
         if (liveChangeResult.executed.includes('title_change')) commandFeatures.push('live_title_change');
@@ -24975,8 +25044,8 @@ async function processCimeChatAutomation(entry, ev) {
               userId: resolvedUserId,
               username: resolvedUsername,
               chatPost: count > 1
-                ? makeCimeChatPost(ownerUserId, resolvedUsername, { suppressResultChat: true, batchId: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, batchCount: count })
-                : makeCimeChatPost(ownerUserId, resolvedUsername)
+                ? makeCimeChatPost(ownerUserId, resolvedUsername, { liveManageActorId: resolvedUserId, suppressResultChat: true, batchId: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, batchCount: count })
+                : makeCimeChatPost(ownerUserId, resolvedUsername, { liveManageActorId: resolvedUserId })
             };
             await enqueueRouletteSpin(sid, {
               ...base,
@@ -25003,7 +25072,7 @@ async function processCimeChatAutomation(entry, ev) {
           platform: 'cime',
           command: { keyword: matchedKeyword || '', text, ruleId: r.id || null, ruleName: r.name || null },
           user: { userId: resolvedUserId, username: resolvedUsername },
-          chatPost: makeCimeChatPost(ownerUserId, resolvedUsername),
+          chatPost: makeCimeChatPost(ownerUserId, resolvedUsername, { liveManageActorId: resolvedUserId }),
           channelUid: pointChannelUid || entry.channelId || null,
           channel: { channelUid: pointChannelUid || entry.channelId || null },
         });

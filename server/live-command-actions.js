@@ -29,6 +29,8 @@ export async function executeAndStripLiveChangeTokens(text, options = {}) {
     used: inspected.used,
     provider,
     argsText,
+    permissionChecked: false,
+    authorized: false,
     requested: [],
     executed: [],
     errors: [],
@@ -37,6 +39,16 @@ export async function executeAndStripLiveChangeTokens(text, options = {}) {
   if (inspected.titleRequested) result.requested.push('title_change');
   if (inspected.gameRequested) result.requested.push('game_change');
   if (!inspected.used || !argsText || !['chzzk', 'cime'].includes(provider)) return result;
+
+  result.permissionChecked = true;
+  try {
+    result.authorized = typeof options.canManageLive === 'function'
+      ? (await options.canManageLive()) === true
+      : options.canManageLive === true;
+  } catch (error) {
+    result.errors.push({ name: 'permission_check', error });
+  }
+  if (!result.authorized) return result;
 
   const run = async (name, handler) => {
     if (typeof handler !== 'function') return;
