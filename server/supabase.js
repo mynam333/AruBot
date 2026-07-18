@@ -3097,6 +3097,10 @@ export async function deleteAccountData(ownerUserId, options = {}) {
       await deleteRowsByColumnValues(pg, summary, 'public.live_days', [
         { column: 'sid', values: scope.channelAliases },
       ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.attendance_integrity_archive', [
+        { column: 'sid', values: scope.channelAliases },
+        { column: 'user_id', values: scope.identityKeys },
+      ]);
       await deleteRowsByColumnValues(pg, summary, 'public.attendance_state', [
         { column: 'sid', values: scope.channelAliases },
         { column: 'user_id', values: scope.identityKeys },
@@ -3152,6 +3156,7 @@ export async function cleanupPrivacyRetentionData(options = {}) {
     videoDonationDays: retentionDays(options.videoDonationDays ?? process.env.ARUBOT_VIDEO_DONATION_RETENTION_DAYS, 365),
     automationJobDays: retentionDays(options.automationJobDays ?? process.env.ARUBOT_AUTOMATION_JOB_RETENTION_DAYS, 90),
     actionRunDays: retentionDays(options.actionRunDays ?? process.env.ARUBOT_ACTION_RUN_RETENTION_DAYS, 180),
+    attendanceArchiveDays: retentionDays(options.attendanceArchiveDays ?? process.env.ARUBOT_ATTENDANCE_ARCHIVE_RETENTION_DAYS, 90),
   };
   const summary = { ok: true, deleted: {}, objectKeysDeleted: 0, objectKeysSkipped: 0, config };
   const drawingObjectKeys = [];
@@ -3187,6 +3192,11 @@ export async function cleanupPrivacyRetentionData(options = {}) {
     const actionRunCutoff = cutoffIsoForDays(config.actionRunDays);
     if (actionRunCutoff) {
       await deleteRowsWhere(pg, summary, 'public.action_blueprint_runs', `finished_at is not null and finished_at < $1::timestamptz`, [actionRunCutoff]);
+    }
+
+    const attendanceArchiveCutoff = cutoffIsoForDays(config.attendanceArchiveDays);
+    if (attendanceArchiveCutoff) {
+      await deleteRowsWhere(pg, summary, 'public.attendance_integrity_archive', `archived_at < $1::timestamptz`, [attendanceArchiveCutoff]);
     }
   });
 
@@ -4044,14 +4054,16 @@ export async function ensureSchema() {
 
       create table if not exists attendance (
         sid text not null,
+        user_id text not null,
         date text not null,
         username text,
-        -- legacy installs might miss user_id, so don't include in PK until ensured below
-        primary key (sid, date, username)
+        created_at timestamptz not null default now(),
+        primary key (sid, user_id, date)
       );
       -- ensure user_id column exists
       alter table attendance add column if not exists user_id text;
-      -- if PK is not (sid,user_id,date), leave as-is (changing PK online is complex); uniqueness can be enforced by upsert logic
+      alter table attendance add column if not exists created_at timestamptz;
+      alter table attendance alter column created_at set default now();
       -- Backfill from legacy camelCase
       do $$ begin
         if exists (select 1 from information_schema.columns where table_name='attendance' and column_name='userid') then
@@ -4079,11 +4091,18 @@ export async function ensureSchema() {
 
       create table if not exists attendance_state (
         sid text not null,
-        streak integer default 0
+        user_id text not null,
+        last_date text,
+        streak integer default 0,
+        total_days integer default 0,
+        updated_at timestamptz not null default now(),
+        primary key (sid, user_id)
       );
       alter table attendance_state add column if not exists user_id text;
       alter table attendance_state add column if not exists last_date text;
       alter table attendance_state add column if not exists total_days integer default 0;
+      alter table attendance_state add column if not exists updated_at timestamptz;
+      alter table attendance_state alter column updated_at set default now();
       -- add PK only if not exists
       do $$
       declare has_pk boolean;
@@ -8398,7 +8417,7 @@ export async function migrateSidToUserPid(oldSid, userId) {
   if (!oldSid || !userId) return;
   const oldPidCandidates = [String(oldSid), `sid:${oldSid}`];
   const newPid = `user:${userId}`;
-  const tables = ['tokens', 'bot_settings', 'bot_stats', 'bot_rules', 'live_days', 'attendance', 'attendance_state'];
+  const tables = ['tokens', 'bot_settings', 'bot_stats', 'bot_rules', 'live_days', 'attendance', 'attendance_state', 'attendance_integrity_archive'];
   for (const t of tables) {
     try {
       // Update rows that match either plain sid or prefixed sid
@@ -8410,13 +8429,180 @@ export async function migrateSidToUserPid(oldSid, userId) {
 }
 
 // Attendance helpers
+function normalizeAttendanceDate(date) {
+  const value = String(date || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const error = new Error('Attendance date must use YYYY-MM-DD format');
+    error.code = 'invalid_attendance_date';
+    throw error;
+  }
+  return value;
+}
+
+function normalizeAttendanceIdentity(value, fieldName) {
+  const normalized = String(value || '').trim();
+  if (!normalized) {
+    const error = new Error(`${fieldName} is required for attendance`);
+    error.code = 'invalid_attendance_identity';
+    throw error;
+  }
+  return normalized;
+}
+
+async function getAttendanceTotalsWithPg(pg, sid, userId, today) {
+  const result = await pg.query(
+    `with ordered_days as (
+       select ld.date,
+              exists (
+                select 1
+                  from public.attendance a
+                 where a.sid = ld.sid
+                   and a.user_id = $2
+                   and a.date = ld.date
+              ) as attended
+         from public.live_days ld
+        where ld.sid = $1
+          and ld.date <= $3
+     ), marked_days as (
+       select date,
+              attended,
+              sum(case when attended then 0 else 1 end) over (
+                order by date desc
+                rows between unbounded preceding and current row
+              ) as missed_days
+         from ordered_days
+     ), attendance_totals as (
+       select count(distinct date)::integer as total_days
+         from public.attendance
+        where sid = $1
+          and user_id = $2
+     )
+     select coalesce((
+              select count(*)::integer
+                from marked_days
+               where attended = true
+                 and missed_days = 0
+            ), 0) as streak,
+            coalesce((select total_days from attendance_totals), 0) as total_days`,
+    [sid, userId, today]
+  );
+  return {
+    streak: Number(result.rows?.[0]?.streak || 0),
+    totalDays: Number(result.rows?.[0]?.total_days || 0),
+  };
+}
+
+async function withAttendanceTransactionRetry(fn, retries = 2) {
+  let lastError = null;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      return await withPgClient(fn, 0);
+    } catch (error) {
+      lastError = error;
+      const retryable = ['40001', '40P01', '55P03'].includes(String(error?.code || ''));
+      if (!retryable || attempt >= retries) throw error;
+      await sleep(100 * (attempt + 1));
+    }
+  }
+  throw lastError;
+}
+
+async function recordAttendanceWithPg(sid, userId, username, today) {
+  return withAttendanceTransactionRetry(async (pg) => {
+    await pg.query('begin');
+    try {
+      await pg.query(
+        `select pg_advisory_xact_lock(hashtextextended($1, 0))`,
+        [`attendance:${sid}:${userId}`]
+      );
+      await pg.query(
+        `insert into public.live_days (sid, date)
+         values ($1, $2)
+         on conflict (sid, date) do nothing`,
+        [sid, today]
+      );
+
+      const inserted = await pg.query(
+        `insert into public.attendance (sid, user_id, date, username)
+         values ($1, $2, $3, $4)
+         on conflict do nothing
+         returning user_id`,
+        [sid, userId, today, username]
+      );
+      const isNew = inserted.rowCount > 0;
+
+      if (!isNew) {
+        const canonicalRow = await pg.query(
+          `select 1
+             from public.attendance
+            where sid = $1 and user_id = $2 and date = $3
+            limit 1`,
+          [sid, userId, today]
+        );
+        if (canonicalRow.rowCount === 0) {
+          const error = new Error('Attendance was blocked by a legacy non-user identity constraint');
+          error.code = 'attendance_identity_constraint_conflict';
+          throw error;
+        }
+      }
+
+      const totals = await getAttendanceTotalsWithPg(pg, sid, userId, today);
+      await pg.query(
+        `insert into public.attendance_state (sid, user_id, last_date, streak, total_days, updated_at)
+         values ($1, $2, $3, $4, $5, now())
+         on conflict (sid, user_id) do update
+           set last_date = excluded.last_date,
+               streak = excluded.streak,
+               total_days = excluded.total_days,
+               updated_at = now()`,
+        [sid, userId, today, totals.streak, totals.totalDays]
+      );
+
+      await pg.query('commit');
+      return { streak: totals.streak, totalDays: totals.totalDays, isNew };
+    } catch (error) {
+      try { await pg.query('rollback'); } catch {}
+      throw error;
+    }
+  });
+}
+
 export async function markLiveDay(sid, date) {
   ensure();
-  await supabase.from('live_days').upsert({ sid, date }, { onConflict: 'sid,date' });
+  const normalizedSid = normalizeAttendanceIdentity(sid, 'sid');
+  const normalizedDate = normalizeAttendanceDate(date);
+  if (getDbUrl()) {
+    await withPgClient((pg) => pg.query(
+      `insert into public.live_days (sid, date) values ($1, $2)
+       on conflict (sid, date) do nothing`,
+      [normalizedSid, normalizedDate]
+    ));
+    return;
+  }
+  const result = await supabase.from('live_days').upsert(
+    { sid: normalizedSid, date: normalizedDate },
+    { onConflict: 'sid,date' }
+  );
+  if (result.error) throw result.error;
 }
 
 export async function recordAttendanceAndGetStreak(sid, userId, username, today) {
   ensure();
+  const normalizedSid = normalizeAttendanceIdentity(sid, 'sid');
+  const normalizedUserId = normalizeAttendanceIdentity(userId, 'userId');
+  const normalizedUsername = String(username || normalizedUserId).trim() || normalizedUserId;
+  const normalizedToday = normalizeAttendanceDate(today);
+
+  if (getDbUrl()) {
+    return recordAttendanceWithPg(
+      normalizedSid,
+      normalizedUserId,
+      normalizedUsername,
+      normalizedToday
+    );
+  }
+
+  await markLiveDay(normalizedSid, normalizedToday);
   // Determine available columns dynamically (snake_case, legacy camelCase, or fallback username)
   let hasUserId = await tableHasColumn('attendance', 'user_id');
   let hasUserIdCamel = await tableHasColumn('attendance', 'userid');
@@ -8427,11 +8613,12 @@ export async function recordAttendanceAndGetStreak(sid, userId, username, today)
   }
 
   // 1) Check if already checked in today
-  let query = supabase.from('attendance').select('*').eq('sid', sid).eq('date', today);
-  if (hasUserId) query = query.eq('user_id', userId);
-  else if (hasUserIdCamel) query = query.eq('userid', userId);
-  else if (hasUsernameCol) query = query.eq('username', username);
+  let query = supabase.from('attendance').select('*').eq('sid', normalizedSid).eq('date', normalizedToday);
+  if (hasUserId) query = query.eq('user_id', normalizedUserId);
+  else if (hasUserIdCamel) query = query.eq('userid', normalizedUserId);
+  else if (hasUsernameCol) query = query.eq('username', normalizedUsername);
   const existing = await query.maybeSingle();
+  if (existing?.error) throw existing.error;
   if (existing && existing.data) {
     // Fetch streak from state
     let hasStateUserId = await tableHasColumn('attendance_state', 'user_id');
@@ -8444,19 +8631,20 @@ export async function recordAttendanceAndGetStreak(sid, userId, username, today)
     if (!hasLastDate && !hasLastDateCamel) {
       hasLastDateCamel = true;
     }
-    let stq = supabase.from('attendance_state').select('*').eq('sid', sid);
-    if (hasStateUserId) stq = stq.eq('user_id', userId);
-    else if (hasStateUserIdCamel) stq = stq.eq('userid', userId);
+    let stq = supabase.from('attendance_state').select('*').eq('sid', normalizedSid);
+    if (hasStateUserId) stq = stq.eq('user_id', normalizedUserId);
+    else if (hasStateUserIdCamel) stq = stq.eq('userid', normalizedUserId);
     const st = await stq.maybeSingle();
+    if (st?.error) throw st.error;
     const streakVal = st?.data?.streak || 0;
     return { streak: Number(streakVal) || 0, isNew: false };
   }
 
   // 2) Insert attendance (manual insert after existence check; no onConflict requirement)
-  const attRow = { sid, date: today };
-  if (hasUserId) attRow.user_id = userId;
-  else if (hasUserIdCamel) attRow.userid = userId;
-  if (hasUsernameCol) attRow.username = username;
+  const attRow = { sid: normalizedSid, date: normalizedToday };
+  if (hasUserId) attRow.user_id = normalizedUserId;
+  else if (hasUserIdCamel) attRow.userid = normalizedUserId;
+  if (hasUsernameCol) attRow.username = normalizedUsername;
   {
     const { error } = await supabase.from('attendance').insert(attRow);
     if (error) throw error;
@@ -8465,11 +8653,12 @@ export async function recordAttendanceAndGetStreak(sid, userId, username, today)
   // 3) Compute next streak
   const prevLive = await supabase.from('live_days')
     .select('date')
-    .eq('sid', sid)
-    .lt('date', today)
+    .eq('sid', normalizedSid)
+    .lt('date', normalizedToday)
     .order('date', { ascending: false })
     .limit(1)
     .maybeSingle();
+  if (prevLive?.error) throw prevLive.error;
 
   let hasStateUserId = await tableHasColumn('attendance_state', 'user_id');
   let hasStateUserIdCamel = await tableHasColumn('attendance_state', 'userid');
@@ -8483,10 +8672,11 @@ export async function recordAttendanceAndGetStreak(sid, userId, username, today)
     hasLastDateCamel = true;
   }
 
-  let stateQ = supabase.from('attendance_state').select('*').eq('sid', sid);
-  if (hasStateUserId) stateQ = stateQ.eq('user_id', userId);
-  else if (hasStateUserIdCamel) stateQ = stateQ.eq('userid', userId);
+  let stateQ = supabase.from('attendance_state').select('*').eq('sid', normalizedSid);
+  if (hasStateUserId) stateQ = stateQ.eq('user_id', normalizedUserId);
+  else if (hasStateUserIdCamel) stateQ = stateQ.eq('userid', normalizedUserId);
   const state = await stateQ.maybeSingle();
+  if (state?.error) throw state.error;
 
   let lastDateVal = state?.data ? (hasLastDate ? state.data.last_date : (hasLastDateCamel ? state.data.lastdate : null)) : null;
   let streakVal = state?.data ? Number(state.data.streak || 0) : 0;
@@ -8502,16 +8692,16 @@ export async function recordAttendanceAndGetStreak(sid, userId, username, today)
 
   // 4) Upsert state via update-or-insert to avoid relying on constraints
   const stateKeyFilter = (q) => {
-    q = q.eq('sid', sid);
-    if (hasStateUserId) return q.eq('user_id', userId);
-    if (hasStateUserIdCamel) return q.eq('userid', userId);
+    q = q.eq('sid', normalizedSid);
+    if (hasStateUserId) return q.eq('user_id', normalizedUserId);
+    if (hasStateUserIdCamel) return q.eq('userid', normalizedUserId);
     return q; // worst case: sid only
   };
-  const row = { sid, streak: nextStreak };
-  if (hasStateUserId) row.user_id = userId;
-  else if (hasStateUserIdCamel) row.userid = userId;
-  if (hasLastDate) row.last_date = today;
-  else if (hasLastDateCamel) row.lastdate = today;
+  const row = { sid: normalizedSid, streak: nextStreak };
+  if (hasStateUserId) row.user_id = normalizedUserId;
+  else if (hasStateUserIdCamel) row.userid = normalizedUserId;
+  if (hasLastDate) row.last_date = normalizedToday;
+  else if (hasLastDateCamel) row.lastdate = normalizedToday;
   if (hasTotalDays) row.total_days = (Number(totalDaysVal) || 0) + 1;
 
   // Try update first (select to know affected rows)
@@ -8529,24 +8719,37 @@ export async function recordAttendanceAndGetStreak(sid, userId, username, today)
 
 export async function getUserAttendanceTotalDays(sid, userId) {
   ensure();
+  const normalizedSid = normalizeAttendanceIdentity(sid, 'sid');
+  const normalizedUserId = normalizeAttendanceIdentity(userId, 'userId');
+  if (getDbUrl()) {
+    return withPgClient(async (pg) => {
+      const result = await pg.query(
+        `select count(distinct date)::integer as total_days
+           from public.attendance
+          where sid = $1 and user_id = $2`,
+        [normalizedSid, normalizedUserId]
+      );
+      return Number(result.rows?.[0]?.total_days || 0);
+    });
+  }
   // Try to read from attendance_state.total_days; if column missing, fallback to counting attendance rows
   const hasTotal = await tableHasColumn('attendance_state', 'total_days');
   if (hasTotal) {
-    let q = supabase.from('attendance_state').select('total_days').eq('sid', sid);
+    let q = supabase.from('attendance_state').select('total_days').eq('sid', normalizedSid);
     const hasUserId = await tableHasColumn('attendance_state', 'user_id');
     const hasUserIdCamel = await tableHasColumn('attendance_state', 'userid');
-    if (hasUserId) q = q.eq('user_id', userId);
-    else if (hasUserIdCamel) q = q.eq('userid', userId);
+    if (hasUserId) q = q.eq('user_id', normalizedUserId);
+    else if (hasUserIdCamel) q = q.eq('userid', normalizedUserId);
     const { data, error } = await q.maybeSingle();
     if (!error && data && typeof data.total_days === 'number') return Number(data.total_days) || 0;
   }
   // Fallback: count distinct days in attendance (best-effort, may be slower)
-  let q2 = supabase.from('attendance').select('date', { count: 'exact', head: true }).eq('sid', sid);
+  let q2 = supabase.from('attendance').select('date', { count: 'exact', head: true }).eq('sid', normalizedSid);
   const hasAttUserId = await tableHasColumn('attendance', 'user_id');
   const hasAttUserIdCamel = await tableHasColumn('attendance', 'userid');
   const hasUsernameCol = await tableHasColumn('attendance', 'username');
-  if (hasAttUserId) q2 = q2.eq('user_id', userId);
-  else if (hasAttUserIdCamel) q2 = q2.eq('userid', userId);
+  if (hasAttUserId) q2 = q2.eq('user_id', normalizedUserId);
+  else if (hasAttUserIdCamel) q2 = q2.eq('userid', normalizedUserId);
   else if (hasUsernameCol) {
     // no reliable username here; return 0
     return 0;

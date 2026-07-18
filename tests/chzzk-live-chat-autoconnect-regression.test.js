@@ -11,7 +11,7 @@ describe('CHZZK live chat auto-connect regression', () => {
 
     expect(refreshBody).toContain('isChzzkLiveDetailOpen(content)');
     expect(refreshBody).toContain('content?.startedAt || content?.started_at || content?.openDate');
-    expect(refreshBody).toContain('parseChzzkLiveTimestamp(candidate, now)');
+    expect(refreshBody).toContain('parseChzzkLiveTimestamp(candidate, null)');
     expect(refreshBody).toContain('updateSessionState(sid, anyLive');
     expect(refreshBody).toContain('ensureChzzkChatSessionForLiveSid(sid, liveChannelId)');
     expect(refreshBody).toContain('closeChzzkChatSessionForOfflineSid(sid');

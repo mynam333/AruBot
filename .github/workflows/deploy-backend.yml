@@ -14,6 +14,7 @@ on:
       - 'package-lock.json'
       - 'server/**'
       - 'scripts/**'
+      - 'tests/**'
 
 concurrency:
   group: backend-deploy-${{ github.ref }}
@@ -23,6 +24,21 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: arubot_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d arubot_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
 
     env:
       ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
@@ -34,6 +50,7 @@ jobs:
       NODE_VERSION: '22'
       REMOTE_NODE_BIN_DIR: ${{ vars.REMOTE_NODE_BIN_DIR || '' }}
       BACKEND_RELEASES_TO_KEEP: ${{ vars.BACKEND_RELEASES_TO_KEEP || '2' }}
+      ARUBOT_TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/arubot_test
 
     steps:
       - name: Checkout

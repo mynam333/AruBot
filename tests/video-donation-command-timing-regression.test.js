@@ -3,6 +3,7 @@ const path = require('path');
 
 describe('video donation command timing integration regression', () => {
   const serverIndex = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+  const youtubeMetadata = fs.readFileSync(path.join(__dirname, '..', 'server', 'youtube-video-metadata.js'), 'utf8');
   const viewer = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'PvdViewer.tsx'), 'utf8');
 
   test('all three chat platforms use the shared video donation command path', () => {
@@ -59,8 +60,9 @@ describe('video donation command timing integration regression', () => {
 
   test('YouTube metadata and viewer duration sync cover omitted end values', () => {
     expect(serverIndex).toContain("new Set(['youtube', 'tiktok', 'chzzk_clip', 'cime_clip'])");
-    expect(serverIndex).toContain('if (!title || !durationSec)');
-    expect(serverIndex).toContain('extractYouTubeWatchDurationSec(html)');
+    expect(serverIndex).toContain('return id ? fetchYouTubeVideoMetadata(id)');
+    expect(youtubeMetadata).toContain('extractYouTubeWatchDurationSec(html)');
+    expect(youtubeMetadata).not.toContain('googleapis.com/youtube/v3');
     expect(viewer).toContain('getDuration?: () => number');
     expect(viewer).toContain('const reportYouTubeDuration = useCallback');
     expect(viewer).toContain("emitControl('duration', undefined, undefined, durationSec)");

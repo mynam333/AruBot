@@ -15,8 +15,17 @@ import { createPlatformProfileService } from './platform-profiles.js';
 import { executeAndStripLiveChangeTokens, filterLiveInfoByProvider, selectCategorySearchResult } from './live-command-actions.js';
 import { canManageLiveSettings, createLiveManagerRoleResolver, getLiveRoleLevel } from './live-command-permissions.js';
 import { buildYoutubeLiveInfoFallback, buildYoutubeLiveLookupContext } from './youtube-live-info.js';
-import { extractYouTubeWatchDurationSec, resolveVideoDonationTiming } from './video-donation-timing.js';
+import { resolveVideoDonationTiming } from './video-donation-timing.js';
 import { appendVideoDonationQueueCount, countNonDurableVideoDonationItems, countVideoDonationQueueIncludingItem } from './video-donation-queue.js';
+import { fetchYouTubeVideoMetadata } from './youtube-video-metadata.js';
+import { getKstCalendarDate, resolveAttendanceDate } from './attendance-calendar.js';
+import {
+  planLiveSessionTransition,
+  primeProviderLiveObservations,
+  reconcileProviderLiveObservation,
+  removeProviderLiveObservation,
+  summarizeProviderLiveObservations,
+} from './live-session-transition.js';
 import { buildCanonicalOAuthStartUrl, createOAuthStateToken, resolveOAuthRequestOrigin, verifyOAuthStateToken } from './oauth-state.js';
 import { getChannelIdFromUserId, selectPlatformChannelId, validateChannelId } from './channel-identity.js';
 import { findCommandKeywordMatch, getCommandRuleMatches } from './command-keyword.js';
@@ -2938,57 +2947,11 @@ function extractYouTubeId(url) {
   return null;
 }
 
-// Fetch YouTube title and durationSec using Data API v3 when available
+// Resolve direct-video metadata without consuming YouTube Data API quota.
 async function fetchYouTubeInfo(videoIdOrUrl) {
-  try {
-    const id = extractYouTubeId(videoIdOrUrl) || String(videoIdOrUrl);
-    if (!id) return { title: null, durationSec: null };
-    let title = null;
-    let durationSec = null;
-
-    // 1) Try YouTube Data API v3 if API key is configured
-    if (YT_API_KEY) {
-      try {
-        const url = `https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails&id=${encodeURIComponent(id)}&key=${encodeURIComponent(YT_API_KEY)}`;
-        const r = await axios.get(url, { timeout: 5000 });
-        const item = Array.isArray(r?.data?.items) && r.data.items.length ? r.data.items[0] : null;
-        if (item) {
-          title = item?.snippet?.title || title;
-          const durationIso = item?.contentDetails?.duration || null;
-          durationSec = durationIso ? parseIso8601Duration(durationIso) : durationSec;
-        }
-      } catch { }
-    }
-
-    // 2) Fallback to oEmbed (title only)
-    if (!title) {
-      try {
-        const watchUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(id)}`;
-        const r = await axios.get(`https://www.youtube.com/oembed?url=${encodeURIComponent(watchUrl)}&format=json`, { timeout: 7000 });
-        title = r?.data?.title || title;
-      } catch { }
-    }
-
-    // 3) Final fallback: fetch the watch page for missing title or duration.
-    if (!title || !durationSec) {
-      try {
-        const watchUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(id)}`;
-        const r = await axios.get(watchUrl, { timeout: 7000, responseType: 'text' });
-        const html = String(r?.data || '');
-        if (!title) {
-          const m = html.match(/<title>([^<]+)<\/title>/i);
-          if (m && m[1]) {
-            title = m[1].replace(/\s*-\s*YouTube\s*$/i, '').trim();
-          }
-        }
-        if (!durationSec) durationSec = extractYouTubeWatchDurationSec(html);
-      } catch { }
-    }
-
-    return { title: title || null, durationSec };
-  } catch {
-    return { title: null, durationSec: null };
-  }
+  const raw = String(videoIdOrUrl || '').trim();
+  const id = extractYouTubeId(raw) || (/^[A-Za-z0-9_-]{6,64}$/.test(raw) ? raw : null);
+  return id ? fetchYouTubeVideoMetadata(id) : { title: null, durationSec: null };
 }
 
 // Search YouTube by text query and return best matching videoId
@@ -10920,6 +10883,8 @@ function providerRuntimeGuardKey(ownerUserId, provider) {
 function markProviderRuntimeConnected(ownerUserId, provider) {
   const key = providerRuntimeGuardKey(ownerUserId, provider);
   if (key) disconnectedProviderRuntimeGuards.delete(key);
+  const owner = String(ownerUserId || '').replace(/^user:/, '').trim();
+  if (owner) accountDeletionSessionGuards.delete(`user:${owner}`);
 }
 
 function markProviderRuntimeDisconnected(ownerUserId, provider, platformUserId = null, reason = 'platform_disconnected') {
@@ -11516,14 +11481,77 @@ async function getIoClient() {
 
 // Utility: get KST date (YYYY-MM-DD)
 function getKstDateString(ts = Date.now()) {
-  const kst = new Date(ts + 9 * 60 * 60 * 1000);
-  return kst.toISOString().slice(0, 10);
+  return getKstCalendarDate(ts);
+}
+
+const sessionStateUpdateQueues = new Map();
+const providerLiveObservations = new Map();
+const accountDeletionSessionGuards = new Set();
+let providerObservationBootstrapPending = true;
+
+async function enqueueSessionStateUpdate(sid, task) {
+  const previous = sessionStateUpdateQueues.get(sid) || Promise.resolve();
+  const queued = previous
+    .catch(() => { })
+    .then(task);
+  sessionStateUpdateQueues.set(sid, queued);
+  try {
+    return await queued;
+  } finally {
+    if (sessionStateUpdateQueues.get(sid) === queued) {
+      sessionStateUpdateQueues.delete(sid);
+    }
+  }
+}
+
+async function updateSessionState(sid, isLive, startTimestamp, provider = null) {
+  return enqueueSessionStateUpdate(sid, () => {
+    if (accountDeletionSessionGuards.has(sid)) {
+      return { operation: 'ignore_observation', reason: 'account_deletion_pending' };
+    }
+    const normalizedProvider = normalizeRuntimeProvider(provider);
+    const providerGuardKey = providerRuntimeGuardKey(ownerUserIdFromSid(sid), normalizedProvider);
+    if (providerGuardKey && disconnectedProviderRuntimeGuards.has(providerGuardKey)) {
+      return { operation: 'ignore_observation', reason: 'provider_disconnected' };
+    }
+    const observation = reconcileProviderLiveObservation({
+      observations: providerLiveObservations,
+      sid,
+      provider: normalizedProvider,
+      isLive,
+      startTimestamp,
+    });
+    if (!observation.isLive && (observation.deferOffline || (provider && providerObservationBootstrapPending))) {
+      return {
+        operation: 'defer_offline',
+        reason: providerObservationBootstrapPending ? 'provider_bootstrap_pending' : 'provider_status_unknown',
+      };
+    }
+    return updateSessionStateLocked(sid, observation.isLive, observation.startTimestamp);
+  });
+}
+
+function reconcileSessionAfterProviderDisconnect(sid, provider) {
+  return enqueueSessionStateUpdate(sid, () => {
+    const observation = removeProviderLiveObservation({
+      observations: providerLiveObservations,
+      sid,
+      provider,
+    });
+    if (!observation.isLive && (observation.deferOffline || providerObservationBootstrapPending)) {
+      return { operation: 'defer_offline', reason: 'provider_status_unknown' };
+    }
+    return updateSessionStateLocked(sid, observation.isLive, observation.startTimestamp);
+  });
 }
 
 /**
  *
  */
-async function updateSessionState(sid, isLive, startTimestamp) {
+async function updateSessionStateLocked(sid, isLive, startTimestamp) {
+  if (accountDeletionSessionGuards.has(sid)) {
+    return { operation: 'ignore_observation', reason: 'account_deletion_pending' };
+  }
   const now = Date.now();
   const startTime = Date.now();
 
@@ -11539,15 +11567,23 @@ async function updateSessionState(sid, isLive, startTimestamp) {
   }
 
   const oldState = currentSession || liveSession.get(sid);
+  const transitionSource = dbLookupSuccess ? currentSession : oldState;
+  const transition = planLiveSessionTransition({
+    currentSession: transitionSource,
+    isLive,
+    incomingStartTimestamp: startTimestamp,
+    now,
+    getDate: getKstDateString,
+  });
 
   if (isLive) {
-    if (!currentSession?.live || !currentSession?.start_date) {
-      const startDateKst = getKstDateString(startTimestamp);
+    if (transition.operation === 'start_session') {
+      const startDateKst = transition.startDate;
       const newSession = {
         sid,
         live: true,
         start_date: startDateKst,
-        session_start_time: startTimestamp || now,
+        session_start_time: transition.sessionStartTime,
         last_update: now
       };
 
@@ -11569,14 +11605,15 @@ async function updateSessionState(sid, isLive, startTimestamp) {
       const newCacheState = {
         live: true,
         startDate: startDateKst,
-        sessionStartTime: startTimestamp || now,
+        sessionStartTime: transition.sessionStartTime,
         lastUpdate: now
       };
       memoryManager.addSessionWithSizeCheck(sid, newCacheState);
 
       logSessionStateChange(sid, oldState, newCacheState, dbLookupSuccess ? 'db' : 'cache', {
         operation: 'start_session',
-        startTimestamp: startTimestamp || now
+        startTimestamp: transition.sessionStartTime,
+        reason: transition.reason,
       });
 
       try {
@@ -11597,15 +11634,20 @@ async function updateSessionState(sid, isLive, startTimestamp) {
         });
       }
 
-      if (liveSession.has(sid)) {
-        const cached = liveSession.get(sid);
-        const oldCacheState = { ...cached };
-        cached.lastUpdate = now;
+      const cached = liveSession.get(sid);
+      const oldCacheState = cached ? { ...cached } : oldState;
+      const nextCacheState = {
+        live: true,
+        startDate: transition.startDate,
+        sessionStartTime: transition.sessionStartTime,
+        lastUpdate: now,
+      };
+      memoryManager.addSessionWithSizeCheck(sid, nextCacheState);
 
-        logSessionStateChange(sid, oldCacheState, cached, 'cache', {
-          operation: 'update_last_update'
-        });
-      }
+      logSessionStateChange(sid, oldCacheState, nextCacheState, 'cache', {
+        operation: 'update_last_update',
+        reason: transition.reason,
+      });
     }
   } else {
     const endSession = {
@@ -11648,86 +11690,13 @@ async function updateSessionState(sid, isLive, startTimestamp) {
  */
 async function getAttendanceDate(sid) {
   const startTime = Date.now();
-
-  try {
-    const cachedSession = liveSession.get(sid);
-    if (cachedSession?.live && cachedSession?.startDate) {
-      if (/^\d{4}-\d{2}-\d{2}$/.test(cachedSession.startDate)) {
-        logPerformanceMetrics('getAttendanceDate', sid, {
-          duration: Date.now() - startTime,
-          source: 'memory',
-          cacheHit: true
-        });
-        return cachedSession.startDate;
-      }
-    }
-
-    //
-    const dbStartTime = Date.now();
-    try {
-      const dbSession = await getLiveSessionFromDB(sid);
-      logDBOperation('get', 'live_sessions', sid, true, Date.now() - dbStartTime, null, {
-        operation: 'attendance_date_lookup'
-      });
-
-      if (dbSession?.live && dbSession?.start_date) {
-        if (/^\d{4}-\d{2}-\d{2}$/.test(dbSession.start_date)) {
-          if (cachedSession && (
-            cachedSession.live !== dbSession.live ||
-            cachedSession.startDate !== dbSession.start_date
-          )) {
-            logCacheDBMismatch(sid, 'session_state', cachedSession, {
-              live: dbSession.live,
-              startDate: dbSession.start_date
-            }, 'sync_from_db');
-          }
-
-          liveSession.set(sid, {
-            live: dbSession.live,
-            startDate: dbSession.start_date,
-            sessionStartTime: dbSession.session_start_time,
-            lastUpdate: dbSession.last_update
-          });
-
-          logPerformanceMetrics('getAttendanceDate', sid, {
-            duration: Date.now() - startTime,
-            source: 'database',
-            cacheHit: false,
-            dbQueryTime: Date.now() - dbStartTime
-          });
-
-          return dbSession.start_date;
-        }
-      }
-    } catch (dbError) {
-      logDBOperation('get', 'live_sessions', sid, false, Date.now() - dbStartTime, dbError, {
-        operation: 'attendance_date_lookup'
-      });
-    }
-
-    const fallbackDate = getKstDateString();
-    logPerformanceMetrics('getAttendanceDate', sid, {
-      duration: Date.now() - startTime,
-      source: 'current_kst',
-      cacheHit: false,
-      fallback: true
-    });
-
-    return fallbackDate;
-  } catch (error) {
-    console.error(`[Attendance] All fallbacks failed for ${sid}:`, error);
-    const fallbackDate = getKstDateString();
-
-    logPerformanceMetrics('getAttendanceDate', sid, {
-      duration: Date.now() - startTime,
-      source: 'emergency',
-      cacheHit: false,
-      fallback: true,
-      error: error.message
-    });
-
-    return fallbackDate;
-  }
+  const attendanceDate = resolveAttendanceDate();
+  logPerformanceMetrics('getAttendanceDate', sid, {
+    duration: Date.now() - startTime,
+    source: 'current_kst',
+    cacheHit: false,
+  });
+  return attendanceDate;
 }
 
 /**
@@ -12040,7 +12009,7 @@ async function refreshChzzkLiveStatusForSid(sid, options = {}) {
         anyLive = true;
         liveChannelId = String(uid);
         const candidate = content?.startedAt || content?.started_at || content?.openDate || content?.openTime || content?.openedAt || content?.liveStartAt || content?.startTime || content?.createdAt || null;
-        startTs = parseChzzkLiveTimestamp(candidate, now);
+        startTs = parseChzzkLiveTimestamp(candidate, null);
         break;
       }
     } catch (e) {
@@ -12086,11 +12055,11 @@ async function refreshChzzkLiveStatusForSid(sid, options = {}) {
 
   const shouldPersistSessionState = anyLive
     ? previousLive !== true || !cachedSession?.live || (now - sessionLastUpdate) > 60 * 1000
-    : previousLive === true || !!cachedSession?.live;
+    : previousLive === true || !!cachedSession?.live || providerObservationBootstrapPending;
 
   if (options.persistSession !== false && shouldPersistSessionState) {
     try {
-      await updateSessionState(sid, anyLive, startTs || now);
+      await updateSessionState(sid, anyLive, startTs, 'chzzk');
     } catch (error) {
       console.error(`[Session] Failed to update CHZZK live session state for ${sid}:`, error?.message || error);
     }
@@ -17781,6 +17750,10 @@ function disconnectProviderRuntimeState(ownerUserId, provider, platformUserId = 
     closed = closeYoutubeSession(owner, reason);
   }
   liveStatusCache.delete(`user:${owner}`);
+  const sid = `user:${owner}`;
+  reconcileSessionAfterProviderDisconnect(sid, normalizedProvider).catch((error) => {
+    console.warn(`[Session] Failed to reconcile ${sid} after ${normalizedProvider} disconnect:`, error?.message || error);
+  });
   return { provider: normalizedProvider, disconnected: true, sessionClosed: closed };
 }
 
@@ -17794,10 +17767,29 @@ function deleteAutomationSoundDirectory(ownerUserId) {
   return true;
 }
 
+async function prepareAccountRuntimeDeletion(ownerUserId) {
+  const owner = String(ownerUserId || '').replace(/^user:/, '').trim();
+  if (!owner) throw new Error('ownerUserId is required');
+  const sid = `user:${owner}`;
+  accountDeletionSessionGuards.add(sid);
+  for (const provider of ['chzzk', 'cime', 'youtube']) {
+    markProviderRuntimeDisconnected(owner, provider, null, 'account_deletion_pending');
+  }
+  await enqueueSessionStateUpdate(sid, () => {
+    providerLiveObservations.delete(sid);
+    return { operation: 'prepare_account_deletion', reason: 'account_deletion_pending' };
+  });
+  return sid;
+}
+
 function clearDeletedAccountRuntimeState(ownerUserId) {
   const owner = String(ownerUserId || '').replace(/^user:/, '').trim();
   if (!owner) return { sid: null, soundFilesDeleted: false };
   const sid = `user:${owner}`;
+  accountDeletionSessionGuards.add(sid);
+  for (const provider of ['chzzk', 'cime', 'youtube']) {
+    markProviderRuntimeDisconnected(owner, provider, null, 'account_deleted');
+  }
   cancelProviderSessionRecovery('youtube', owner);
   cancelProviderSessionRecovery('cime', owner);
   try { closeYoutubeSession(owner, 'account_deleted'); } catch { }
@@ -17809,6 +17801,7 @@ function clearDeletedAccountRuntimeState(ownerUserId) {
   activeSids.delete(sid);
   liveSession.delete(sid);
   liveStatusCache.delete(sid);
+  providerLiveObservations.delete(sid);
   macroCache.delete(sid);
   macroLastSent.delete(sid);
   try { macroTimerManager.macroTimers.delete(sid); } catch { }
@@ -17917,6 +17910,7 @@ app.delete('/api/account', rateLimiters.userWrite, async (req, res) => {
       return res.status(400).json({ error: 'Deletion confirmation required', requiredConfirm: 'delete-account' });
     }
     const revoked = await revokeExternalAccountGrants(ownerUserId);
+    await prepareAccountRuntimeDeletion(ownerUserId);
     const result = await deleteAccountData(ownerUserId, { reason: 'self_service_delete' });
     const runtime = clearDeletedAccountRuntimeState(ownerUserId);
     clearManagedCookie(res, 'oauth_state');
@@ -19474,7 +19468,7 @@ const BOT_VARIABLES = [
   { key: '{attendance.streak}', label: '연속 출석일', description: '출석 메시지에서 사용할 수 있는 현재 연속 출석일입니다.', group: '출석', providers: BOT_VARIABLE_PROVIDERS },
   { key: '{attendance.totalDays}', label: '누적 출석일', description: '출석 메시지에서 사용할 수 있는 전체 출석일입니다.', group: '출석', providers: BOT_VARIABLE_PROVIDERS },
   { key: '{attendance.points}', label: '출석 포인트', description: '출석 체크로 지급되는 포인트입니다.', group: '출석', providers: BOT_VARIABLE_PROVIDERS },
-  { key: '{attendance.date}', label: '출석 날짜', description: '방송 세션 기준 출석 날짜입니다.', group: '출석', providers: BOT_VARIABLE_PROVIDERS },
+  { key: '{attendance.date}', label: '출석 날짜', description: '한국 표준시(KST) 기준 출석 날짜입니다.', group: '출석', providers: BOT_VARIABLE_PROVIDERS },
   { key: '{user.followedAt}', label: '팔로우 시작일', description: '플랫폼에서 팔로우 날짜를 제공하는 경우 시청자가 팔로우를 시작한 날짜입니다.', group: '시청자', providers: BOT_VARIABLE_PROVIDERS },
   { key: '{user.followedDays}', label: '팔로우 일수', description: '팔로우한 날을 1일째로 계산한 팔로우 일수입니다.', group: '시청자', providers: BOT_VARIABLE_PROVIDERS },
   { key: '{user.subscriptionMonths}', label: '구독 개월', description: '구독 이벤트나 구독 목록에서 확인 가능한 시청자의 구독 개월 수입니다.', group: '시청자', providers: BOT_VARIABLE_PROVIDERS, caveat: '씨미와 YouTube는 구독/멤버십 이벤트를 수신한 시청자부터 채워집니다.' },
@@ -22101,22 +22095,7 @@ async function ensureSession(sid, channelId) {
             const attendDate = await getAttendanceDate(sid);
             const attKey = `${sid}:${resolvedUserId}:${attendDate}`;
 
-            let dateSource = 'unknown';
-            const cachedSession = liveSession.get(sid);
-            if (cachedSession?.live && cachedSession?.startDate === attendDate) {
-              dateSource = 'memory';
-            } else {
-              try {
-                const dbSession = await getLiveSessionFromDB(sid);
-                if (dbSession?.live && dbSession?.start_date === attendDate) {
-                  dateSource = 'database';
-                } else {
-                  dateSource = attendDate === getKstDateString() ? 'current_kst' : 'emergency';
-                }
-              } catch {
-                dateSource = attendDate === getKstDateString() ? 'current_kst' : 'emergency';
-              }
-            }
+            const dateSource = 'current_kst';
 
             try {
               if (!attendanceDedupe.has(attKey)) {
@@ -23159,9 +23138,9 @@ async function refreshYoutubeLiveStatus(ownerUserId, sid, options = {}) {
   const cachedSession = liveSession.get(normalizedSid);
   const shouldPersistSessionState = live
     ? previousLive !== true || !cachedSession?.live || (now - Number(cachedSession?.lastUpdate || 0)) > 60 * 1000
-    : previousLive === true || !!cachedSession?.live;
+    : previousLive === true || !!cachedSession?.live || providerObservationBootstrapPending;
   if (options.persistSession !== false && shouldPersistSessionState) {
-    try { await updateSessionState(normalizedSid, live, startTs || now); } catch { }
+    try { await updateSessionState(normalizedSid, live, startTs, 'youtube'); } catch { }
   }
 
   return {
@@ -23766,7 +23745,7 @@ async function processYoutubeChatAutomation(entry, ev) {
             });
             await sendYoutubeChat(ownerUserId, entry.liveChatId, reply).catch(() => { });
           }
-          const bonus = Math.max(0, Number(settings.channelPointsPerAttendance || 0));
+          const bonus = result?.isNew ? Math.max(0, Number(settings.channelPointsPerAttendance || 0)) : 0;
           if (bonus > 0 && entry.channelId && !(await isChannelPointExcluded(settings, resolvedUserId))) {
             await incrChannelPoints(entry.channelId, resolvedUserId, resolvedUsername, bonus).catch(() => { });
           }
@@ -24376,7 +24355,7 @@ async function ensureYoutubeSession(ownerUserId) {
         entry.liveChatId = String(streamerChannel.lastLiveChatId);
       }
       cacheYoutubeReceiverLiveState(entry);
-      await updateSessionState(sid, true, Date.now()).catch(() => null);
+      await updateSessionState(sid, true, null, 'youtube').catch(() => null);
       await hydrateYoutubeReceiverApiMetadata(entry);
     } catch (e) {
       entry.connected = false;
@@ -24578,28 +24557,16 @@ async function refreshCimeLiveStatus(ownerUserId, sid, channelId, options = {}) 
     const status = String(content?.status || content?.liveStatus || content?.state || '').toLowerCase();
     const live = isCimeLiveContentOpen(content);
     const startedCandidate = content?.startedAt || content?.started_at || content?.openDate || content?.openTime || content?.openedAt || content?.liveStartAt || content?.startTime || content?.createdAt || null;
+    const parsedStartTs = live ? parseLiveTimestamp(startedCandidate, null) : null;
     const existingStart = cached?.provider === 'cime' ? Number(cached.startTs || 0) || null : null;
     const sessionStart = Number(liveSession.get(sid)?.sessionStartTime || 0) || null;
-    const startTs = live ? parseLiveTimestamp(startedCandidate, existingStart || sessionStart || now) : null;
+    const startTs = live ? (parsedStartTs || existingStart || sessionStart || null) : null;
     liveStatusCache.set(sid, { ts: now, live, provider: 'cime', channelId: cid, startTs });
-    if (options.persistSession !== false && live && !liveSession.get(sid)?.live) {
-      const today = getKstDateString(startTs || now);
-      liveSession.set(sid, { live: true, startDate: today, sessionStartTime: startTs || now, lastUpdate: now });
-      try {
-        await upsertLiveSessionToDB({
-          sid,
-          live: true,
-          start_date: today,
-          session_start_time: startTs || now,
-          last_update: now
-        });
-      } catch { }
-    } else if (options.persistSession !== false && live) {
-      const currentSession = liveSession.get(sid) || {};
-      liveSession.set(sid, { ...currentSession, live: true, lastUpdate: now });
-      try { await updateLiveSessionLastUpdate(sid, now); } catch { }
-    } else if (options.persistSession !== false && liveSession.get(sid)?.live) {
-      try { await updateSessionState(sid, false, now); } catch { }
+    if (options.persistSession !== false) {
+      const shouldPersistSessionState = live || liveSession.get(sid)?.live || providerObservationBootstrapPending;
+      if (shouldPersistSessionState) {
+        try { await updateSessionState(sid, live, parsedStartTs, 'cime'); } catch { }
+      }
     }
     return live;
   } catch (error) {
@@ -24811,7 +24778,7 @@ async function processCimeChatAutomation(entry, ev) {
             });
             await sendCimeChat(ownerUserId, text).catch(() => { });
           }
-          const bonus = Math.max(0, Number(settings.channelPointsPerAttendance || 0));
+          const bonus = result?.isNew ? Math.max(0, Number(settings.channelPointsPerAttendance || 0)) : 0;
           if (bonus > 0 && pointChannelUid && !(await isChannelPointExcluded(settings, resolvedUserId))) {
             await incrChannelPoints(pointChannelUid, resolvedUserId, resolvedUsername, bonus).catch((error) => {
               console.warn('[CIME] Attendance point award failed:', error?.message || error);
@@ -25895,7 +25862,14 @@ async function bootstrapEnsureCimeSessions(reason = 'startup') {
       const ownerUserId = String(user?.userId || '').trim();
       if (!ownerUserId) return;
       const existing = cimeSessionStore.get(ownerUserId);
-      if (existing && !existing.closed && existing.connected && existing.ws?.readyState === WebSocket.OPEN) return;
+      if (existing && !existing.closed && existing.connected && existing.ws?.readyState === WebSocket.OPEN) {
+        const sid = `user:${ownerUserId}`;
+        const channelId = String(user?.platformUserId || '').trim() || null;
+        await refreshCimeLiveStatus(ownerUserId, sid, channelId, { force: true }).catch((error) => {
+          console.warn('[bootstrap] CIME live status refresh skipped:', ownerUserId, error?.response?.data || error?.message || error);
+        });
+        return;
+      }
       if (existing && !existing.closed && existing.ws?.readyState === WebSocket.CONNECTING) return;
       if (getProviderSessionRecoveryStatus('cime', ownerUserId)) return;
       if (existing) disposeCimeSessionForRecovery(ownerUserId, 'bootstrap_stale_session');
@@ -25937,12 +25911,18 @@ async function bootstrapEnsureYoutubeSessions(reason = 'startup') {
       const ownerUserId = String(user?.userId || '').trim();
       if (!ownerUserId) return;
       const existing = youtubeSessionStore.get(ownerUserId);
-      if (existing && !existing.closed && existing.connected) return;
+      if (existing && !existing.closed && existing.connected) {
+        await refreshYoutubeLiveStatus(ownerUserId, `user:${ownerUserId}`, { force: true }).catch((error) => {
+          console.warn('[bootstrap] YouTube live status refresh skipped:', ownerUserId, error?.response?.data || error?.message || error);
+        });
+        return;
+      }
       if (isYoutubeReauthRequired(existing)) return;
       if (getProviderSessionRecoveryStatus('youtube', ownerUserId)) return;
       if (existing) disposeYoutubeSessionForRecovery(ownerUserId, 'bootstrap_stale_session');
       try {
         await ensureProviderRuntimeLease('youtube', ownerUserId);
+        await refreshYoutubeLiveStatus(ownerUserId, `user:${ownerUserId}`, { force: true });
         await ensureYoutubeSession(ownerUserId);
         const streamerChannel = await getYoutubeStreamerChannel(ownerUserId).catch(() => null);
         if (streamerChannel?.youtubeChannelId && streamerChannel?.websubSecret) {
@@ -25968,6 +25948,56 @@ async function bootstrapEnsureYoutubeSessions(reason = 'startup') {
   } catch (e) {
     console.warn('[bootstrap] YouTube session bootstrap failed:', e?.message || e);
   }
+}
+
+async function primeConnectedProviderLiveObservations() {
+  const [legacyChzzkSids, chzzkUsers, cimeUsers, youtubeUsers] = await Promise.all([
+    listAllSidsWithTokens(),
+    listPlatformTokenUsers('chzzk'),
+    listPlatformTokenUsers('cime'),
+    listPlatformTokenUsers('youtube'),
+  ]);
+  const targets = [];
+  for (const sid of Array.isArray(legacyChzzkSids) ? legacyChzzkSids : []) {
+    const normalizedSid = String(sid || '').trim();
+    if (normalizedSid) targets.push({ sid: normalizedSid, provider: 'chzzk' });
+  }
+  for (const [provider, users] of [
+    ['chzzk', chzzkUsers],
+    ['cime', cimeUsers],
+    ['youtube', youtubeUsers],
+  ]) {
+    for (const user of Array.isArray(users) ? users : []) {
+      const ownerUserId = String(user?.userId || '').replace(/^user:/, '').trim();
+      if (ownerUserId) targets.push({ sid: `user:${ownerUserId}`, provider });
+    }
+  }
+  const summary = primeProviderLiveObservations({
+    observations: providerLiveObservations,
+    targets,
+  });
+  console.log(`[bootstrap] Primed ${summary.providerCount} provider observation(s) for ${summary.sidCount} sid(s)`);
+  return summary;
+}
+
+async function finalizeProviderLiveObservationBootstrap() {
+  const sids = Array.from(providerLiveObservations.keys());
+  await forEachWithConcurrency(sids, REGISTERED_RUNTIME_MONITOR_CONCURRENCY, async (sid) => {
+    try {
+      await enqueueSessionStateUpdate(sid, () => {
+        const observation = summarizeProviderLiveObservations({
+          observations: providerLiveObservations,
+          sid,
+        });
+        if (!observation.isLive && observation.hasUnknownProvider) {
+          return { operation: 'defer_offline', reason: 'provider_status_unknown' };
+        }
+        return updateSessionStateLocked(sid, observation.isLive, observation.startTimestamp);
+      });
+    } catch (error) {
+      console.warn(`[bootstrap] Provider session reconciliation skipped for ${sid}:`, error?.message || error);
+    }
+  });
 }
 
 async function renewExpiringYoutubeWebsubSubscriptions() {
@@ -26149,11 +26179,22 @@ setInterval(() => { validateYoutubeAuthorizations('scheduled').catch(() => null)
 
 async function bootstrapRegisteredChannelLiveStatuses(reason = 'startup') {
   console.log(`[bootstrap] Starting sequential live status check for registered channels reason=${reason}`);
-  await bootstrapEnsureSessions();
-  await sleep(250);
-  await bootstrapEnsureCimeSessions();
-  await sleep(250);
-  await bootstrapEnsureYoutubeSessions();
+  const shouldPrimeProviderObservations = providerObservationBootstrapPending;
+  if (shouldPrimeProviderObservations) {
+    await primeConnectedProviderLiveObservations();
+  }
+  try {
+    await bootstrapEnsureSessions();
+    await sleep(250);
+    await bootstrapEnsureCimeSessions();
+    await sleep(250);
+    await bootstrapEnsureYoutubeSessions();
+  } finally {
+    if (shouldPrimeProviderObservations) {
+      providerObservationBootstrapPending = false;
+      await finalizeProviderLiveObservationBootstrap();
+    }
+  }
   console.log(`[bootstrap] Sequential live status check completed reason=${reason}`);
 }
 

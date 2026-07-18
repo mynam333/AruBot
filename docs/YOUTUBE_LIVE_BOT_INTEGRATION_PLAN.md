@@ -73,7 +73,7 @@
 - `POST /api/account/platforms/refresh`는 현재 `chzzk | cime`만 허용한다. `youtube` 허용과 프로필 보강 분기가 필요하다.
 - `CommandVariableHelpButton`의 provider badge가 CHZZK/CIME만 고려한다.
 - 라이브 상태 캐시는 CHZZK/CIME 각각의 전용 함수가 섞여 있으므로 `refreshYoutubeLiveStatus()`를 추가하고, 장기적으로 `refreshPlatformLiveStatus(provider, ownerUserId)` 형태로 정리하는 게 좋다.
-- `YOUTUBE_API_KEY`는 현재 영상 후원 메타데이터용이다. 라이브 채팅 송수신에는 OAuth client credential이 추가로 필요하다.
+- `YOUTUBE_API_KEY`는 공개 영상 검색, 채널·라이브 메타데이터, 대기 플레이리스트 추천에 사용한다. 영상 후원 URL의 제목과 길이는 Data API 할당량 없이 확인한다.
 
 ## 4. 권장 구현 방식
 

@@ -431,6 +431,8 @@ export function markLiveDay(sid, date) {
 }
 
 export function recordAttendanceAndGetStreak(sid, userId, username, today) {
+  // Every KST attendance date is also a live day, including broadcasts that cross midnight.
+  markLiveDay(sid, today);
   // If already checked in today, return current streak
   const existing = db.prepare('SELECT 1 FROM attendance WHERE sid = ? AND userId = ? AND date = ?').get(sid, userId, today);
   if (existing) {
@@ -1268,6 +1270,7 @@ export function batchRecordAttendance(attendanceRecords) {
   }
   
   const insertStmt = db.prepare('INSERT OR IGNORE INTO attendance (sid, userId, date, username) VALUES (?, ?, ?, ?)');
+  const markLiveDayStmt = db.prepare('INSERT OR IGNORE INTO live_days (sid, date) VALUES (?, ?)');
   const selectStmt = db.prepare('SELECT streak FROM attendance_state WHERE sid = ? AND userId = ?');
   const upsertStateStmt = db.prepare(`
     INSERT INTO attendance_state (sid, userId, lastDate, streak) VALUES (?, ?, ?, ?)
@@ -1278,6 +1281,7 @@ export function batchRecordAttendance(attendanceRecords) {
     const results = [];
     
     for (const { sid, userId, username, date } of records) {
+      markLiveDayStmt.run(sid, date);
       // 출석 기록 삽입 (중복 무시)
       const insertResult = insertStmt.run(sid, userId, date, username);
       const isNew = insertResult.changes > 0;

@@ -65,7 +65,7 @@ cp .env.example .env
 - `YOUTUBE_API_BASE`: YouTube Data API base URL. 기본값은 `https://www.googleapis.com/youtube/v3`
 - `YOUTUBE_STREAM_PATH`: Live Chat streaming endpoint. 기본값은 `/liveChat/messages/stream`
 - `REDIS_URL`: 실시간 이벤트 fanout을 보조할 Redis 인스턴스
-- `YOUTUBE_API_KEY`: 영상 후원 제목/검색 메타데이터 보강. YouTube Live Chat 송수신에는 OAuth 토큰을 사용합니다.
+- `YOUTUBE_API_KEY`: 공개 영상 검색, 채널·라이브 메타데이터, 대기 플레이리스트 추천에 사용합니다. 영상 후원 URL의 제목과 길이 조회에는 Data API 할당량을 사용하지 않습니다.
 - `POSTGRES_POOL_MAX`, `POSTGRES_CONNECT_TIMEOUT_MS`, `POSTGRES_STATEMENT_TIMEOUT_MS`, `POSTGRES_IDLE_TIMEOUT_MS`, `POSTGRES_SSL`: Postgres provider 연결 튜닝
 
 ## 로컬 개발
