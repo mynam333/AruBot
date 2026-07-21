@@ -2,9 +2,15 @@ import axios from 'axios';
 import { extractYouTubeWatchDurationSec } from './video-donation-timing.js';
 
 const YOUTUBE_VIDEO_METADATA_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
-const YOUTUBE_VIDEO_METADATA_FAILURE_CACHE_TTL_MS = 30 * 1000;
+const YOUTUBE_VIDEO_METADATA_FAILURE_CACHE_TTL_MS = 60 * 1000;
 const YOUTUBE_VIDEO_METADATA_CACHE_MAX_ENTRIES = 1000;
-const YOUTUBE_WEB_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+const YOUTUBE_VIDEO_METADATA_TIMEOUT_MS = 15 * 1000;
+const YOUTUBE_WEB_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36';
+const YOUTUBE_PAGE_HEADERS = Object.freeze({
+  Accept: 'text/html,application/xhtml+xml',
+  'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
+  'User-Agent': YOUTUBE_WEB_USER_AGENT,
+});
 
 const metadataCache = new Map();
 const metadataInFlight = new Map();
@@ -30,6 +36,43 @@ function decodeHtmlEntities(value) {
 function normalizeTitle(value) {
   const title = decodeHtmlEntities(value).replace(/\s*-\s*YouTube\s*$/i, '').trim();
   return title && !/^youtube$/i.test(title) ? title : null;
+}
+
+function decodePageValue(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  try {
+    return decodeURIComponent(text);
+  } catch {
+    return text;
+  }
+}
+
+export function extractYouTubeWebPlayerContext(html) {
+  const source = String(html || '');
+  const apiKey = source.match(/["']INNERTUBE_API_KEY["']\s*:\s*["']([^"']+)["']/)?.[1] || '';
+  const clientVersion = source.match(/["']INNERTUBE_CLIENT_VERSION["']\s*:\s*["']([^"']+)["']/)?.[1]
+    || source.match(/["']clientVersion["']\s*:\s*["']([\d.]+)["']/)?.[1]
+    || '';
+  const visitorData = source.match(/["']VISITOR_DATA["']\s*:\s*["']([^"']+)["']/)?.[1]
+    || source.match(/["']visitorData["']\s*:\s*["']([^"']+)["']/)?.[1]
+    || '';
+  return apiKey && clientVersion
+    ? { apiKey, clientVersion, visitorData: decodePageValue(visitorData) }
+    : null;
+}
+
+export function extractYouTubePlayerMetadata(data) {
+  const source = data && typeof data === 'object' ? data : {};
+  const rawDuration = source.videoDetails?.lengthSeconds
+    ?? source.microformat?.playerMicroformatRenderer?.lengthSeconds;
+  const durationSec = Number(rawDuration);
+  return {
+    title: normalizeTitle(source.videoDetails?.title),
+    durationSec: Number.isFinite(durationSec) && durationSec > 0 ? Math.ceil(durationSec) : null,
+    playabilityStatus: String(source.playabilityStatus?.status || '').trim() || null,
+    playabilityReason: String(source.playabilityStatus?.reason || '').trim() || null,
+  };
 }
 
 export function extractYouTubeWatchTitle(html) {
@@ -68,34 +111,130 @@ function cacheMetadata(videoId, value, ttlMs, now) {
   metadataCache.set(videoId, { value, expiresAt: now + ttlMs });
 }
 
-async function fetchUncachedYouTubeVideoMetadata(videoId, httpGet) {
-  const watchUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}&hl=ko&gl=KR`;
-  let title = null;
-  let durationSec = null;
+function describeLookupError(source, error) {
+  return {
+    source,
+    status: Number(error?.response?.status) || null,
+    code: String(error?.code || '').trim() || null,
+    message: String(error?.message || error || 'request_failed').slice(0, 300),
+  };
+}
 
+async function fetchYoutubePage(url, source, httpGet, attempts) {
   try {
-    const response = await httpGet(watchUrl, {
-      timeout: 7000,
+    const response = await httpGet(url, {
+      timeout: YOUTUBE_VIDEO_METADATA_TIMEOUT_MS,
       responseType: 'text',
-      headers: {
-        Accept: 'text/html,application/xhtml+xml',
-        'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
-        'User-Agent': YOUTUBE_WEB_USER_AGENT,
-      },
+      headers: YOUTUBE_PAGE_HEADERS,
     });
     const html = String(response?.data || '');
-    title = extractYouTubeWatchTitle(html);
-    durationSec = extractYouTubeWatchDurationSec(html);
-  } catch { }
+    attempts.push({
+      source,
+      status: Number(response?.status) || 200,
+      responseBytes: html.length,
+      hasPlayerContext: !!extractYouTubeWebPlayerContext(html),
+      durationFound: extractYouTubeWatchDurationSec(html) != null,
+    });
+    return html;
+  } catch (error) {
+    attempts.push(describeLookupError(source, error));
+    return '';
+  }
+}
+
+async function fetchYoutubePlayerMetadata(videoId, context, referer, httpPost, attempts) {
+  if (!context?.apiKey || !context?.clientVersion) return { title: null, durationSec: null };
+  try {
+    const response = await httpPost(
+      `https://www.youtube.com/youtubei/v1/player?key=${encodeURIComponent(context.apiKey)}`,
+      {
+        context: {
+          client: {
+            clientName: 'WEB',
+            clientVersion: context.clientVersion,
+            hl: 'ko',
+            gl: 'KR',
+            ...(context.visitorData ? { visitorData: context.visitorData } : {}),
+          },
+        },
+        videoId,
+        contentCheckOk: true,
+        racyCheckOk: true,
+      },
+      {
+        timeout: YOUTUBE_VIDEO_METADATA_TIMEOUT_MS,
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: 'https://www.youtube.com',
+          Referer: referer,
+          'User-Agent': YOUTUBE_WEB_USER_AGENT,
+          'X-YouTube-Client-Name': '1',
+          'X-YouTube-Client-Version': context.clientVersion,
+          ...(context.visitorData ? { 'X-Goog-Visitor-Id': context.visitorData } : {}),
+        },
+      },
+    );
+    const metadata = extractYouTubePlayerMetadata(response?.data);
+    attempts.push({
+      source: 'player',
+      status: Number(response?.status) || 200,
+      durationFound: metadata.durationSec != null,
+      playabilityStatus: metadata.playabilityStatus,
+      playabilityReason: metadata.playabilityReason,
+    });
+    return metadata;
+  } catch (error) {
+    attempts.push(describeLookupError('player', error));
+    return { title: null, durationSec: null };
+  }
+}
+
+async function fetchUncachedYouTubeVideoMetadata(videoId, httpGet, httpPost, logger) {
+  const watchUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}&hl=ko&gl=KR`;
+  const embedUrl = `https://www.youtube.com/embed/${encodeURIComponent(videoId)}?hl=ko`;
+  const attempts = [];
+  let title = null;
+  let durationSec = null;
+  let playerContext = null;
+
+  const watchHtml = await fetchYoutubePage(watchUrl, 'watch', httpGet, attempts);
+  if (watchHtml) {
+    title = extractYouTubeWatchTitle(watchHtml);
+    durationSec = extractYouTubeWatchDurationSec(watchHtml);
+    playerContext = extractYouTubeWebPlayerContext(watchHtml);
+  }
+
+  if (durationSec == null && playerContext) {
+    const playerMetadata = await fetchYoutubePlayerMetadata(videoId, playerContext, watchUrl, httpPost, attempts);
+    title = title || playerMetadata.title;
+    durationSec = playerMetadata.durationSec;
+  }
+
+  if (durationSec == null) {
+    const embedHtml = await fetchYoutubePage(embedUrl, 'embed', httpGet, attempts);
+    const embedContext = extractYouTubeWebPlayerContext(embedHtml);
+    if (embedContext) {
+      const playerMetadata = await fetchYoutubePlayerMetadata(videoId, embedContext, embedUrl, httpPost, attempts);
+      title = title || playerMetadata.title;
+      durationSec = playerMetadata.durationSec;
+    }
+  }
 
   if (!title) {
     try {
       const response = await httpGet(`https://www.youtube.com/oembed?url=${encodeURIComponent(watchUrl)}&format=json`, {
-        timeout: 7000,
+        timeout: YOUTUBE_VIDEO_METADATA_TIMEOUT_MS,
         headers: { 'Accept-Language': 'ko-KR,ko;q=0.9' },
       });
       title = String(response?.data?.title || '').trim() || null;
-    } catch { }
+      attempts.push({ source: 'oembed', status: Number(response?.status) || 200, titleFound: !!title });
+    } catch (error) {
+      attempts.push(describeLookupError('oembed', error));
+    }
+  }
+
+  if (durationSec == null) {
+    logger('[YouTube video metadata] Duration lookup failed', { videoId, attempts });
   }
 
   return {
@@ -109,6 +248,8 @@ export async function fetchYouTubeVideoMetadata(videoId, options = {}) {
   if (!id) return { title: null, durationSec: null };
 
   const httpGet = typeof options.httpGet === 'function' ? options.httpGet : axios.get;
+  const httpPost = typeof options.httpPost === 'function' ? options.httpPost : axios.post;
+  const logger = typeof options.logger === 'function' ? options.logger : console.warn;
   const cacheTtlMs = Math.max(0, Number(options.cacheTtlMs ?? YOUTUBE_VIDEO_METADATA_CACHE_TTL_MS));
   const failureCacheTtlMs = Math.max(0, Number(options.failureCacheTtlMs ?? YOUTUBE_VIDEO_METADATA_FAILURE_CACHE_TTL_MS));
   const useCache = cacheTtlMs > 0 || failureCacheTtlMs > 0;
@@ -121,7 +262,7 @@ export async function fetchYouTubeVideoMetadata(videoId, options = {}) {
     if (pending) return pending;
   }
 
-  const pending = fetchUncachedYouTubeVideoMetadata(id, httpGet)
+  const pending = fetchUncachedYouTubeVideoMetadata(id, httpGet, httpPost, logger)
     .then((value) => {
       const ttlMs = value.durationSec != null ? cacheTtlMs : failureCacheTtlMs;
       if (ttlMs > 0) cacheMetadata(id, value, ttlMs, Date.now());

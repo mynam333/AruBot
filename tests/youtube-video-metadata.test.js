@@ -33,8 +33,88 @@ describe('quota-free YouTube video metadata', () => {
         },
       });
 
+      const playerCalls = [];
+      const playerFallback = await metadata.fetchYouTubeVideoMetadata('quotaTest03', {
+        cacheTtlMs: 0,
+        failureCacheTtlMs: 0,
+        httpGet: async (url) => {
+          playerCalls.push({ method: 'get', url });
+          return {
+            status: 200,
+            data: '<script>{"INNERTUBE_API_KEY":"test-key","INNERTUBE_CLIENT_VERSION":"2.20260720.01.00","VISITOR_DATA":"visitor%3D"}<\/script>',
+          };
+        },
+        httpPost: async (url, body) => {
+          playerCalls.push({ method: 'post', url, body });
+          return {
+            status: 200,
+            data: {
+              playabilityStatus: { status: 'OK' },
+              videoDetails: { title: 'Player title', lengthSeconds: '89' },
+            },
+          };
+        },
+      });
+
+      const blockedWatchCalls = [];
+      const blockedWatchFallback = await metadata.fetchYouTubeVideoMetadata('quotaTest04', {
+        cacheTtlMs: 0,
+        failureCacheTtlMs: 0,
+        httpGet: async (url) => {
+          blockedWatchCalls.push({ method: 'get', url });
+          if (url.includes('/watch?')) {
+            const error = new Error('Request failed with status code 403');
+            error.response = { status: 403 };
+            throw error;
+          }
+          return {
+            status: 200,
+            data: '<script>{"INNERTUBE_API_KEY":"embed-key","INNERTUBE_CLIENT_VERSION":"2.20260720.01.00"}<\/script>',
+          };
+        },
+        httpPost: async (url) => {
+          blockedWatchCalls.push({ method: 'post', url });
+          return {
+            status: 200,
+            data: {
+              playabilityStatus: { status: 'UNPLAYABLE', reason: 'Playback unavailable' },
+              videoDetails: { title: 'Recovered title', lengthSeconds: '91' },
+            },
+          };
+        },
+      });
+
+      const failureLogs = [];
+      const failed = await metadata.fetchYouTubeVideoMetadata('quotaTest05', {
+        cacheTtlMs: 0,
+        failureCacheTtlMs: 0,
+        logger: (...args) => failureLogs.push(args),
+        httpGet: async (url) => {
+          if (url.includes('/oembed?')) {
+            const error = new Error('Request failed with status code 404');
+            error.response = { status: 404 };
+            throw error;
+          }
+          return { status: 200, data: '<html><head><title>YouTube<\/title><\/head><\/html>' };
+        },
+      });
+
       const genericTitle = metadata.extractYouTubeWatchTitle('<html><head><title>YouTube<\/title><\/head><\/html>');
-      console.log(JSON.stringify({ first, second, cached, calls, fallback, fallbackCalls, genericTitle }));
+      console.log(JSON.stringify({
+        first,
+        second,
+        cached,
+        calls,
+        fallback,
+        fallbackCalls,
+        playerFallback,
+        playerCalls,
+        blockedWatchFallback,
+        blockedWatchCalls,
+        failed,
+        failureLogs,
+        genericTitle,
+      }));
     `;
     result = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '--eval', script], {
       cwd: path.join(__dirname, '..'),
@@ -62,5 +142,26 @@ describe('quota-free YouTube video metadata', () => {
 
   test('does not treat a generic error-page title as video metadata', () => {
     expect(result.genericTitle).toBeNull();
+  });
+
+  test('falls back to player metadata when the watch page omits duration', () => {
+    expect(result.playerFallback).toEqual({ title: 'Player title', durationSec: 89 });
+    expect(result.playerCalls.map((call) => call.method)).toEqual(['get', 'post']);
+    expect(result.playerCalls[1].url).toContain('/youtubei/v1/player?key=');
+    expect(result.playerCalls[1].body.videoId).toBe('quotaTest03');
+  });
+
+  test('recovers through the embed page when the watch page is blocked', () => {
+    expect(result.blockedWatchFallback).toEqual({ title: 'Recovered title', durationSec: 91 });
+    expect(result.blockedWatchCalls.map((call) => call.method)).toEqual(['get', 'get', 'post']);
+    expect(result.blockedWatchCalls[1].url).toContain('/embed/quotaTest04');
+  });
+
+  test('records bounded diagnostics when every duration lookup fails', () => {
+    expect(result.failed).toEqual({ title: null, durationSec: null });
+    expect(result.failureLogs).toHaveLength(1);
+    expect(result.failureLogs[0][0]).toBe('[YouTube video metadata] Duration lookup failed');
+    expect(result.failureLogs[0][1]).toMatchObject({ videoId: 'quotaTest05' });
+    expect(result.failureLogs[0][1].attempts.map((attempt) => attempt.source)).toEqual(['watch', 'embed', 'oembed']);
   });
 });
