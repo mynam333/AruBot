@@ -18,6 +18,8 @@ import { buildYoutubeLiveInfoFallback, buildYoutubeLiveLookupContext } from './y
 import { resolveVideoDonationTiming } from './video-donation-timing.js';
 import { appendVideoDonationQueueCount, countNonDurableVideoDonationItems, countVideoDonationQueueIncludingItem } from './video-donation-queue.js';
 import { fetchYouTubeVideoMetadata } from './youtube-video-metadata.js';
+import { createPvdDurationProbeCoordinator } from './pvd-duration-probe.js';
+import { resolvePvdYouTubeMetadata } from './pvd-youtube-metadata-fallback.js';
 import { getKstCalendarDate, resolveAttendanceDate } from './attendance-calendar.js';
 import {
   planLiveSessionTransition,
@@ -2059,6 +2061,25 @@ const videoDonationTimers = new Map(); // sid -> NodeJS.Timeout
 const pvdSidSockets = new Map(); // sid -> Set<WebSocket>
 const pvdAdminSockets = new Map(); // sid -> Set<WebSocket>
 const pvdTokenToSid = new Map(); // token -> sid (in-memory reverse index)
+const pvdDurationProbeCoordinator = createPvdDurationProbeCoordinator();
+
+async function requestPvdViewerDurationProbe(sid, provider, mediaId) {
+  const durationSec = await pvdDurationProbeCoordinator.request({
+    sid,
+    provider,
+    mediaId,
+    sockets: pvdSidSockets.get(sid),
+  });
+  if (durationSec != null) {
+    console.log('[PVD duration probe] Viewer resolved media duration', {
+      sid,
+      provider,
+      mediaId,
+      durationSec,
+    });
+  }
+  return durationSec;
+}
 
 // =============================
 // Drawing Donation
@@ -3424,6 +3445,16 @@ app.post('/api/video-donation/control-by-token', async (req, res) => {
       await setBotSettings(sid, { ...settings, videoDonationVolume: volume });
       const message = await broadcastPvdControl(sid, { op, volume });
       return res.json({ ok: true, message });
+    }
+    if (op === 'duration_probe_result') {
+      const result = pvdDurationProbeCoordinator.settle({
+        sid,
+        probeId: req.body?.probeId,
+        provider: req.body?.mediaProvider || req.body?.provider,
+        mediaId: req.body?.mediaId,
+        durationSec: req.body?.durationSec,
+      });
+      return res.json({ ok: result.accepted, ...result });
     }
     const q = getVideoQueue(sid);
     if (!q[0]) return res.json({ ok: true, empty: true, paused: null, idleDeferred: false, atSec: 0 });
@@ -7012,9 +7043,10 @@ app.post('/api/video-donation/request', rateLimiters.userWrite, async (req, res)
     const perUserLimit = Math.max(0, Number(settings.videoDonationPerUserQueueLimit ?? 0));
     let { videoUrl, title, startSec, endSec, playSec, requesterUserId, requesterUsername } = req.body || {};
     const input = String(videoUrl || '').trim();
+    const durationProbeSid = [endSec, playSec].some((value) => value != null && String(value).trim() !== '') ? null : sid;
     let media;
     try {
-      media = await resolvePvdMedia(input, settings, { allowSearch: true });
+      media = await resolvePvdMedia(input, settings, { allowSearch: true, durationProbeSid });
     } catch (e) {
       if (e?.code === 'provider_disabled') return res.status(400).json({ error: 'provider_disabled', provider: e.provider, message: `${getPvdProviderLabel(e.provider)} 요청은 꺼져 있습니다.` });
       if (e?.code === 'clip_playback_unavailable') {
@@ -9682,7 +9714,7 @@ async function parsePvdMediaInput(input, { allowSearch = true } = {}) {
   return null;
 }
 
-async function resolvePvdMedia(input, settings = {}, { allowSearch = true } = {}) {
+async function resolvePvdMedia(input, settings = {}, { allowSearch = true, durationProbeSid = null } = {}) {
   const parsed = await parsePvdMediaInput(input, { allowSearch });
   if (!parsed) {
     const error = new Error('unsupported_media');
@@ -9703,7 +9735,12 @@ async function resolvePvdMedia(input, settings = {}, { allowSearch = true } = {}
   let thumbnailUrl = null;
 
   if (parsed.provider === 'youtube') {
-    const info = await fetchYouTubeInfo(parsed.mediaId);
+    const info = durationProbeSid
+      ? await resolvePvdYouTubeMetadata({
+          fetchServerMetadata: () => fetchYouTubeInfo(parsed.mediaId),
+          fetchViewerDuration: () => requestPvdViewerDurationProbe(durationProbeSid, parsed.provider, parsed.mediaId),
+        })
+      : await fetchYouTubeInfo(parsed.mediaId);
     title = info?.title || null;
     durationSec = Number.isFinite(info?.durationSec) ? Number(info.durationSec) : null;
     thumbnailUrl = `https://i.ytimg.com/vi/${encodeURIComponent(parsed.mediaId)}/hqdefault.jpg`;
@@ -17813,6 +17850,7 @@ function clearDeletedAccountRuntimeState(ownerUserId) {
   if (videoTimer) clearTimeout(videoTimer);
   videoDonationTimers.delete(sid);
   pvdPlaybackState.delete(sid);
+  pvdDurationProbeCoordinator.clearSid(sid);
   rouletteQueues.delete(sid);
   rouletteProcessing.delete(sid);
   rouletteLastResultSent.delete(sid);
@@ -24608,9 +24646,10 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
   const pps = Math.max(0, Number(settings.videoDonationPointsPerSecond ?? 1));
   const maxDur = Math.max(1, Number(settings.videoDonationMaxDurationSec ?? 600));
   const inputArg = String(urlArg || '').trim();
+  const durationProbeSid = endArgRaw != null && String(endArgRaw).trim() !== '' ? null : sid;
   let media;
   try {
-    media = await resolvePvdMedia(inputArg, settings, { allowSearch: true });
+    media = await resolvePvdMedia(inputArg, settings, { allowSearch: true, durationProbeSid });
   } catch (e) {
     if (e?.code === 'provider_disabled') return cleaned || `${getPvdProviderLabel(e.provider)} 요청은 꺼져 있습니다.`;
     if (e?.code === 'clip_playback_unavailable') {
@@ -26983,6 +27022,20 @@ function registerPvdRoutes() {
         try { ws.ping(); } catch { }
       }, 30000);
       ws.on('pong', () => { /* optional: mark alive */ });
+      ws.on('message', (raw) => {
+        try {
+          const message = JSON.parse(String(raw || '{}'));
+          if (message?.type === 'duration_probe_result') {
+            pvdDurationProbeCoordinator.settle({
+              sid,
+              probeId: message.probeId,
+              provider: message.mediaProvider || message.provider,
+              mediaId: message.mediaId,
+              durationSec: message.durationSec,
+            });
+          }
+        } catch { }
+      });
 
       // Immediately send current now-playing to this socket so late joiners auto-start
       try {

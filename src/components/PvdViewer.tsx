@@ -6,6 +6,7 @@ import {
   normalizePvdIdlePlaylist,
   type PvdIdlePlaylist,
 } from '@/components/pvdIdlePlaylist';
+import { createYouTubeDurationProbeRunner, type YouTubeDurationProbeRequest, type YouTubeDurationProbeResult } from '@/components/youtubeDurationProbe';
 import { getBrowserApiBase } from '@/shared/api/http';
 
 type PlaybackTarget = {
@@ -130,6 +131,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
   const reconnectRef = useRef<{ attempts: number; timer: ReturnType<typeof setTimeout> | null; closed: boolean }>({ attempts: 0, timer: null, closed: false });
   const volumeEmitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const ytReadyPromiseRef = useRef<Promise<YouTubeApi> | null>(null);
+  const youtubeDurationProbeRunnerRef = useRef<ReturnType<typeof createYouTubeDurationProbeRunner> | null>(null);
   const ensureSeqRef = useRef<number>(0);
   const lastServerSyncRef = useRef<number>(0);
   const lastEmitRef = useRef<number>(0);
@@ -199,6 +201,18 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
 
     return ytReadyPromiseRef.current;
   }, []);
+
+  const probeYouTubeDuration = useCallback((
+    request: YouTubeDurationProbeRequest,
+    report: (result: YouTubeDurationProbeResult) => void,
+  ) => {
+    let runner = youtubeDurationProbeRunnerRef.current;
+    if (!runner) {
+      runner = createYouTubeDurationProbeRunner(getYouTubeApi);
+      youtubeDurationProbeRunnerRef.current = runner;
+    }
+    runner.probe(request, report);
+  }, [getYouTubeApi]);
 
   const getItemProvider = useCallback((item: VideoDonationItem) => {
     return String(item?.mediaProvider || 'youtube').toLowerCase();
@@ -1044,6 +1058,22 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
       ws.onmessage = (ev) => {
         try {
           const data = JSON.parse(ev.data) as Record<string, unknown>;
+          if (data?.type === 'duration_probe') {
+            probeYouTubeDuration(data, (result) => {
+              if (ws?.readyState === WebSocket.OPEN) {
+                try {
+                  ws.send(JSON.stringify(result));
+                  return;
+                } catch {}
+              }
+              fetch(`${apiBase}/api/video-donation/control-by-token`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token, op: 'duration_probe_result', ...result }),
+              }).catch(() => {});
+            });
+            return;
+          }
           if (data?.type === 'start') {
             applyServerPlaybackPayload(data, true);
           } else if (data?.type === 'control') {
@@ -1105,10 +1135,12 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
       reconnectState.timer = null;
       if (ws) { try { ws.close(); } catch {} }
       stopPolling();
+      youtubeDurationProbeRunnerRef.current?.dispose();
+      youtubeDurationProbeRunnerRef.current = null;
       try { playerRef.current && playerRef.current.destroy && playerRef.current.destroy(); } catch {}
       playerRef.current = null;
     };
-  }, [activateDeferredDonation, applyExternalPlaybackTarget, applyIdlePlaylistConfig, applyPlaybackTarget, applyServerPlaybackPayload, applyVolume, getViewerApiBase, resyncFromServer, startIdlePlayback, stopPlayer, token]);
+  }, [activateDeferredDonation, applyExternalPlaybackTarget, applyIdlePlaylistConfig, applyPlaybackTarget, applyServerPlaybackPayload, applyVolume, getViewerApiBase, probeYouTubeDuration, resyncFromServer, startIdlePlayback, stopPlayer, token]);
 
   // Low-frequency drift guard for viewers that stay connected but whose YouTube iframe stalls.
   useEffect(() => {
