@@ -153,8 +153,13 @@ describe('quota-free YouTube video metadata', () => {
 
   test('recovers through the embed page when the watch page is blocked', () => {
     expect(result.blockedWatchFallback).toEqual({ title: 'Recovered title', durationSec: 91 });
-    expect(result.blockedWatchCalls.map((call) => call.method)).toEqual(['get', 'get', 'post']);
-    expect(result.blockedWatchCalls[1].url).toContain('/embed/quotaTest04');
+    const methods = result.blockedWatchCalls.map((call) => call.method);
+    const urls = result.blockedWatchCalls.map((call) => call.url);
+    expect(methods.filter((method) => method === 'post')).toHaveLength(1);
+    expect(urls.some((url) => url.includes('/embed/quotaTest04'))).toBe(true);
+    expect(urls.some((url) => url.includes('youtube-nocookie.com/embed/quotaTest04'))).toBe(true);
+    expect(urls.some((url) => url.includes('m.youtube.com/watch?'))).toBe(true);
+    expect(urls.some((url) => url.includes('/get_video_info?'))).toBe(true);
   });
 
   test('records bounded diagnostics when every duration lookup fails', () => {
@@ -162,6 +167,13 @@ describe('quota-free YouTube video metadata', () => {
     expect(result.failureLogs).toHaveLength(1);
     expect(result.failureLogs[0][0]).toBe('[YouTube video metadata] Duration lookup failed');
     expect(result.failureLogs[0][1]).toMatchObject({ videoId: 'quotaTest05' });
-    expect(result.failureLogs[0][1].attempts.map((attempt) => attempt.source)).toEqual(['watch', 'embed', 'oembed']);
+    expect(result.failureLogs[0][1].attempts.map((attempt) => attempt.source)).toEqual(expect.arrayContaining([
+      'watch',
+      'embed',
+      'embed_nocookie',
+      'watch_mobile',
+      'video_info',
+      'oembed',
+    ]));
   });
 });

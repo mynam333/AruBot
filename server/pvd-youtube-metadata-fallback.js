@@ -1,4 +1,4 @@
-const DEFAULT_METADATA_WAIT_MS = 8_500;
+const DEFAULT_METADATA_WAIT_MS = 15_500;
 
 function normalizeDurationSec(value) {
   const durationSec = Number(value);

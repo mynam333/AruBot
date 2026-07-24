@@ -58,6 +58,7 @@ describe('PVD viewer duration probe coordinator', () => {
       const timeoutCoordinator = createPvdDurationProbeCoordinator({
         timeoutMs: 500,
         createId: () => 'probe-timeout',
+        logger: () => {},
         scheduleTimeout: (callback) => {
           fireTimeout = callback;
           return { unref() {} };

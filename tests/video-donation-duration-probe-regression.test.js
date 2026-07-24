@@ -11,6 +11,10 @@ describe('영상 후원 자동 길이 조회 회귀 방지', () => {
     expect(serverIndex).toContain('durationProbeSid');
     expect(serverIndex).toContain('fetchViewerDuration: () => requestPvdViewerDurationProbe(durationProbeSid, parsed.provider, parsed.mediaId)');
     expect(serverIndex).toContain("message?.type === 'duration_probe_result'");
+    expect(serverIndex).toContain('durationProbes: pvdDurationProbeCoordinator.listPending(sid)');
+    expect(serverIndex).toContain('pvdDurationProbeCoordinator.dispatchPendingToSocket(sid, ws)');
+    expect(serverIndex).toContain('durationProbeSid: sid');
+    expect(viewer).toContain('if (isUnknownRecord(probe)) handleDurationProbe(probe)');
 
     const probeAwait = serverIndex.indexOf('fetchViewerDuration: () => requestPvdViewerDurationProbe(durationProbeSid, parsed.provider, parsed.mediaId)');
     const pointCost = serverIndex.indexOf('const cost = Math.ceil(pps * dur)', probeAwait);
@@ -30,9 +34,11 @@ describe('영상 후원 자동 길이 조회 회귀 방지', () => {
     expect(probeRunner).not.toContain('playerRef');
   });
 
-  test('조회 작업은 제한 시간 내 정리되고 성공 결과만 서버로 보내야 함', () => {
+  test('조회 작업은 제한 시간 내 정리되고 성공 또는 진단 결과를 서버로 보내야 함', () => {
     expect(probeRunner).toContain('const deadline = Date.now() + timeoutMs');
-    expect(probeRunner).toContain('window.setTimeout(() => jobs.get(probeId)?.(), timeoutMs)');
+    expect(probeRunner).toContain("failBeforePlayer('iframe_api_timeout')");
+    expect(probeRunner).toContain("errorCode: 'player_duration_timeout'");
+    expect(probeRunner).toContain('player?.cueVideoById?.(mediaId)');
     expect(probeRunner).toContain("type: 'duration_probe_result'");
     expect(probeRunner).toContain('jobs.delete(probeId)');
   });

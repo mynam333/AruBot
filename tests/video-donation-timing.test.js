@@ -29,6 +29,10 @@ describe('video donation start/end timing', () => {
         escapedWatchDuration: timing.extractYouTubeWatchDurationSec('{\\"videoDetails\\":{\\"lengthSeconds\\":\\"77\\"}}'),
         approximateDuration: timing.extractYouTubeWatchDurationSec('{"approxDurationMs":"1501"}'),
         isoDuration: timing.extractYouTubeWatchDurationSec('<meta itemprop="duration" content="PT2M3S">'),
+        durationSeconds: timing.extractYouTubeWatchDurationSec('{"durationSeconds":"84"}'),
+        durationMs: timing.extractYouTubeWatchDurationSec('{"durationMs":"84501"}'),
+        ogDuration: timing.extractYouTubeWatchDurationSec('<meta property="og:video:duration" content="85">'),
+        jsonLdDuration: timing.extractYouTubeWatchDurationSec('{"@type":"VideoObject","duration":"PT1M26S"}'),
       }));
     `;
     result = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '--eval', script], {
@@ -78,5 +82,9 @@ describe('video donation start/end timing', () => {
     expect(result.escapedWatchDuration).toBe(77);
     expect(result.approximateDuration).toBe(2);
     expect(result.isoDuration).toBe(123);
+    expect(result.durationSeconds).toBe(84);
+    expect(result.durationMs).toBe(85);
+    expect(result.ogDuration).toBe(85);
+    expect(result.jsonLdDuration).toBe(86);
   });
 });

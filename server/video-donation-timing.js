@@ -124,7 +124,18 @@ export function extractYouTubeWatchDurationSec(html) {
   const approximateMs = normalized.match(/"approxDurationMs"\s*:\s*"?(\d+)"?/i);
   if (approximateMs?.[1]) return Math.max(1, Math.ceil(Number(approximateMs[1]) / 1000));
 
+  const durationSeconds = normalized.match(/"(?:durationSeconds|duration_seconds)"\s*:\s*"?(\d+)"?/i);
+  if (durationSeconds?.[1]) return Number(durationSeconds[1]);
+
+  const durationMs = normalized.match(/"(?:durationMs|duration_ms)"\s*:\s*"?(\d+)"?/i);
+  if (durationMs?.[1]) return Math.max(1, Math.ceil(Number(durationMs[1]) / 1000));
+
+  const metaDurationSeconds = normalized.match(/(?:property|name)=["'](?:og:video:duration|video:duration)["'][^>]*content=["'](\d+)["']/i)
+    || normalized.match(/content=["'](\d+)["'][^>]*(?:property|name)=["'](?:og:video:duration|video:duration)["']/i);
+  if (metaDurationSeconds?.[1]) return Number(metaDurationSeconds[1]);
+
   const isoDuration = normalized.match(/itemprop=["']duration["'][^>]*content=["'](PT[^"']+)["']/i)
-    || normalized.match(/content=["'](PT[^"']+)["'][^>]*itemprop=["']duration["']/i);
+    || normalized.match(/content=["'](PT[^"']+)["'][^>]*itemprop=["']duration["']/i)
+    || normalized.match(/["']duration["']\s*:\s*["'](PT[^"']+)["']/i);
   return isoDuration?.[1] ? parseIso8601Duration(isoDuration[1]) : null;
 }

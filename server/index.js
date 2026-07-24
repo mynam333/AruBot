@@ -3453,6 +3453,7 @@ app.post('/api/video-donation/control-by-token', async (req, res) => {
         provider: req.body?.mediaProvider || req.body?.provider,
         mediaId: req.body?.mediaId,
         durationSec: req.body?.durationSec,
+        errorCode: req.body?.errorCode,
       });
       return res.json({ ok: result.accepted, ...result });
     }
@@ -6956,7 +6957,7 @@ app.get('/api/video-donation/resolve-title', rateLimiters.externalLookup, async 
     if (!q) return res.status(400).json({ error: 'url, id or q required' });
     const sid = await getPartitionId(req, res).catch(() => null);
     const settings = sid ? (await getBotSettings(sid).catch(() => ({})) || {}) : { videoDonationProviders: getDefaultPvdProviders() };
-    const info = await resolvePvdMedia(q, settings, { allowSearch: true });
+    const info = await resolvePvdMedia(q, settings, { allowSearch: true, durationProbeSid: sid });
     return res.json({
       provider: info.provider,
       mediaId: info.mediaId,
@@ -7256,6 +7257,7 @@ app.get('/api/video-donation/now-playing', async (req, res) => {
       atSec: getCurrentAtSec(sid),
       elapsedSec: getCurrentPvdElapsedSec(sid),
       volume: normalizePvdVolume(settings.videoDonationVolume ?? 100),
+      durationProbes: pvdDurationProbeCoordinator.listPending(sid),
       idlePlaylist: getPvdIdlePlaylistForViewer(settings.videoDonationIdlePlaylist),
       serverNow: Date.now()
     });
@@ -27012,6 +27014,14 @@ function registerPvdRoutes() {
       if (!set) { set = new Set(); pvdSidSockets.set(sid, set); }
       set.add(ws);
 
+      const dispatchedDurationProbes = pvdDurationProbeCoordinator.dispatchPendingToSocket(sid, ws);
+      if (dispatchedDurationProbes > 0) {
+        console.log('[PVD duration probe] Dispatched pending probes to connected viewer', {
+          sid,
+          count: dispatchedDurationProbes,
+        });
+      }
+
       console.log(`[PVD WS] Connected - Channel: ${channelId}, SID: ${sid}, Token: ${token.substring(0, 8)}..., IP: ${ip}`);
 
       // Log negotiated extensions if any
@@ -27032,6 +27042,7 @@ function registerPvdRoutes() {
               provider: message.mediaProvider || message.provider,
               mediaId: message.mediaId,
               durationSec: message.durationSec,
+              errorCode: message.errorCode,
             });
           }
         } catch { }

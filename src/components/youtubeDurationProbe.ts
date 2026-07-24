@@ -1,4 +1,5 @@
 type ProbePlayer = {
+  cueVideoById?: (videoId: string) => void;
   destroy?: () => void;
   getDuration?: () => number;
 };
@@ -20,7 +21,8 @@ export type YouTubeDurationProbeResult = {
   probeId: string;
   mediaProvider: 'youtube';
   mediaId: string;
-  durationSec: number;
+  durationSec?: number;
+  errorCode?: string;
 };
 
 export function createYouTubeDurationProbeRunner(
@@ -39,16 +41,31 @@ export function createYouTubeDurationProbeRunner(
     if (jobs.has(probeId)) return;
 
     const requestedTimeoutMs = Number(request.timeoutMs);
-    const timeoutMs = Math.min(10_000, Math.max(1_000, Number.isFinite(requestedTimeoutMs) ? requestedTimeoutMs : 8_000));
+    const timeoutMs = Math.min(12_000, Math.max(1_000, Number.isFinite(requestedTimeoutMs) ? requestedTimeoutMs : 10_000));
     const deadline = Date.now() + timeoutMs;
     let cancelled = false;
     let apiLoadTimer: number | null = null;
-    jobs.set(probeId, () => {
+
+    const baseResult = {
+      type: 'duration_probe_result' as const,
+      probeId,
+      mediaProvider: 'youtube' as const,
+      mediaId,
+    };
+    const disposeBeforePlayer = () => {
+      if (cancelled) return;
       cancelled = true;
       if (apiLoadTimer != null) window.clearTimeout(apiLoadTimer);
       jobs.delete(probeId);
-    });
-    apiLoadTimer = window.setTimeout(() => jobs.get(probeId)?.(), timeoutMs);
+    };
+    const failBeforePlayer = (errorCode: string) => {
+      if (cancelled) return;
+      disposeBeforePlayer();
+      report({ ...baseResult, errorCode });
+    };
+
+    jobs.set(probeId, disposeBeforePlayer);
+    apiLoadTimer = window.setTimeout(() => failBeforePlayer('iframe_api_timeout'), timeoutMs);
 
     void getYouTubeApi().then((YT) => {
       if (cancelled || !jobs.has(probeId) || !YT?.Player) return;
@@ -75,24 +92,24 @@ export function createYouTubeDurationProbeRunner(
         try { player?.destroy?.(); } catch {}
         host.remove();
       };
+      const complete = (result: { durationSec: number } | { errorCode: string }) => {
+        if (finished) return;
+        cleanup();
+        report({ ...baseResult, ...result });
+      };
 
       const readDuration = () => {
         if (finished) return;
         const duration = Number(player?.getDuration?.());
         if (!Number.isFinite(duration) || duration <= 0) return;
-        const durationSec = Math.ceil(duration);
-        cleanup();
-        report({
-          type: 'duration_probe_result',
-          probeId,
-          mediaProvider: 'youtube',
-          mediaId,
-          durationSec,
-        });
+        complete({ durationSec: Math.ceil(duration) });
       };
 
       jobs.set(probeId, cleanup);
-      timeoutTimer = window.setTimeout(cleanup, Math.max(250, deadline - Date.now()));
+      timeoutTimer = window.setTimeout(
+        () => complete({ errorCode: 'player_duration_timeout' }),
+        Math.max(250, deadline - Date.now()),
+      );
       pollTimer = window.setInterval(readDuration, 200);
 
       try {
@@ -107,16 +124,24 @@ export function createYouTubeDurationProbeRunner(
             origin: window.location.origin,
           },
           events: {
-            onReady: readDuration,
+            onReady: () => {
+              readDuration();
+              if (!finished && Number(player?.getDuration?.()) <= 0) {
+                try { player?.cueVideoById?.(mediaId); } catch {}
+              }
+            },
             onStateChange: readDuration,
-            onError: cleanup,
+            onError: (event: { data?: unknown }) => {
+              const errorCode = String(event?.data ?? 'unknown').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 20);
+              complete({ errorCode: `player_error_${errorCode || 'unknown'}` });
+            },
           },
         });
       } catch {
-        cleanup();
+        complete({ errorCode: 'player_create_failed' });
       }
     }).catch(() => {
-      jobs.get(probeId)?.();
+      failBeforePlayer('iframe_api_failed');
     });
   };
 
