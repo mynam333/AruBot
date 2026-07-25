@@ -131,6 +131,14 @@ function platformRuntimeError(item?: PlatformStatusItem | null) {
   if (normalizedError === 'not_live') return null;
   if (normalizedError.includes('live stream was not found') || normalizedError.includes('live_chat_not_found')) return null;
   if (item?.live === false && normalizedError === 'offline') return null;
+  if (
+    (item?.recovering || item?.streamConnected)
+    && (
+      /\bstatus code (?:408|425|429|500|502|503|504)\b/.test(normalizedError)
+      || normalizedError.includes('socket hang up')
+      || normalizedError.includes('network error')
+    )
+  ) return null;
   return error;
 }
 

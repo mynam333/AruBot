@@ -225,6 +225,9 @@ describe('YouTube live chat integration regression', () => {
     expect(serverIndex).toContain('extractYoutubeWebsubEntries');
     expect(serverIndex).toContain('YOUTUBE_WEBSUB_RETRY_DELAYS_MS');
     expect(serverIndex).toContain('scheduleYoutubeWebsubLiveRetry');
+    expect(serverIndex).toContain('retryYoutubeTransientRequest(() => axios.post(YOUTUBE_WEBSUB_HUB_URL');
+    expect(serverIndex).toContain("error.youtubeWebsubStatus = transient ? 'retry_pending' : 'subscribe_failed'");
+    expect(connectionPage).toContain("if (status === 'retry_pending') return '자동 재시도 대기'");
   });
 
   test('operational status and health include YouTube sessions', () => {

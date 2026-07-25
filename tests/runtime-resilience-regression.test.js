@@ -75,6 +75,27 @@ describe('runtime resilience regression', () => {
     expect(cimeClose).toMatch(/cime/i);
   });
 
+  test('treats a YouTube 503 as recoverable without surfacing a permanent attention error', () => {
+    const transientClassifier = topLevelFunctionSource('isYoutubeTransientError');
+    const reconnectDelay = topLevelFunctionSource('getYoutubeReconnectDelayForError');
+    const visibleError = topLevelFunctionSource('visibleYoutubeRuntimeError');
+    const adminRuntime = topLevelFunctionSource('enrichArubotAdminStreamerRuntime');
+    const statusRoute = sliceBetween(
+      "app.get('/api/platforms/status'",
+      "app.post('/api/cime/reset'",
+    );
+
+    expect(transientClassifier).toContain('503');
+    expect(reconnectDelay).toContain('15 * 1000');
+    expect(visibleError).toContain('options.recovering === true');
+    expect(visibleError).toContain('options.streamConnected === true');
+    expect(visibleError).toContain('isYoutubeTransientError(error)');
+    expect(adminRuntime).toContain("getProviderSessionRecoveryStatus(provider, ownerUserId)");
+    expect(adminRuntime).toContain("else if (recovering) status = 'checking'");
+    expect(statusRoute).toContain('recovering: !!youtubeRecovery');
+    expect(statusRoute).toContain('visibleYoutubeRuntimeError(youtubeRuntimeError');
+  });
+
   test('session validation and macro delivery have separate non-overlapping guards', () => {
     const sessionMarker = serverIndex.indexOf('[Session-Validation] Starting');
     expect(sessionMarker).toBeGreaterThanOrEqual(0);

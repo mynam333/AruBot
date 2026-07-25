@@ -69,9 +69,9 @@ function PlatformBadges({ platforms }: { platforms: AdminPlatformRuntime[] }) {
       {platforms.map((platform, index) => (
         <Badge
           key={`${platform.provider}-${platform.platformUserId || platform.channelId || index}`}
-          tone={platform.live === true ? 'mint' : platform.reauthRequired || platform.lastError ? 'amber' : 'neutral'}
+          tone={platform.live === true ? 'mint' : platform.recovering ? 'sky' : platform.reauthRequired || platform.lastError ? 'amber' : 'neutral'}
         >
-          {providerLabel(platform.provider)}{platform.live === true ? ' · LIVE' : ''}
+          {providerLabel(platform.provider)}{platform.live === true ? ' · LIVE' : platform.recovering ? ' · 복구 중' : ''}
         </Badge>
       ))}
     </div>
@@ -305,7 +305,7 @@ function StreamerInspector({
                   </div>
                   <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
                     <span>{platform.live === true ? '라이브 중' : platform.live === false ? '오프라인' : '라이브 상태 미확인'}</span>
-                    <span>{platform.streamConnected ? '채팅 연결됨' : platform.runtimeLeaseActive ? '실행 lease 감지됨 · 응답 확인 전' : '채팅 대기'}</span>
+                    <span>{platform.streamConnected ? '채팅 연결됨' : platform.recovering ? '채팅 자동 재연결 중' : platform.runtimeLeaseActive ? '실행 lease 감지됨 · 응답 확인 전' : '채팅 대기'}</span>
                     {platform.authorization === 'expired' ? <span className="text-amber-700 dark:text-amber-300">재인증 필요</span> : null}
                   </div>
                   {platform.provider === 'youtube' ? (
@@ -316,8 +316,8 @@ function StreamerInspector({
                   {platform.lastError ? <p className="mt-2 break-words text-xs text-destructive">{platform.lastError}</p> : null}
                 </div>
                 <StatusDot
-                  status={platform.lastError || platform.reauthRequired ? 'warning' : platform.streamConnected ? 'success' : platform.runtimeLeaseActive ? 'info' : 'neutral'}
-                  label={platform.lastError || platform.reauthRequired ? '점검 필요' : platform.streamConnected ? '응답 가능' : platform.runtimeLeaseActive ? '실행 정보 감지' : '대기'}
+                  status={platform.lastError || platform.reauthRequired ? 'warning' : platform.streamConnected ? 'success' : platform.recovering || platform.runtimeLeaseActive ? 'info' : 'neutral'}
+                  label={platform.lastError || platform.reauthRequired ? '점검 필요' : platform.streamConnected ? '응답 가능' : platform.recovering ? '자동 복구 중' : platform.runtimeLeaseActive ? '실행 정보 감지' : '대기'}
                 />
               </div>
             ))}

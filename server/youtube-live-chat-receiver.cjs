@@ -9,6 +9,75 @@ const RECEIVER_PAGE_HEADERS = Object.freeze({
 });
 const RECEIVER_PAGE_TIMEOUT_MS = 15000;
 const RECEIVER_CHAT_TIMEOUT_MS = 15000;
+const RECEIVER_TRANSIENT_RETRY_ATTEMPTS = 3;
+const RECEIVER_TRANSIENT_RETRY_BASE_MS = 750;
+const RECEIVER_TRANSIENT_RETRY_MAX_MS = 5000;
+const RECEIVER_TRANSIENT_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+const RECEIVER_TRANSIENT_CODES = new Set([
+  'ECONNABORTED',
+  'ECONNRESET',
+  'EAI_AGAIN',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'ETIMEDOUT',
+]);
+
+function receiverErrorStatus(error) {
+  return Number(error?.response?.status || error?.status || 0);
+}
+
+function isTransientReceiverRequestError(error) {
+  const status = receiverErrorStatus(error);
+  const code = String(error?.code || '').trim().toUpperCase();
+  const message = String(error?.message || error || '');
+  return RECEIVER_TRANSIENT_STATUSES.has(status)
+    || RECEIVER_TRANSIENT_CODES.has(code)
+    || /\bstatus code (?:408|425|429|500|502|503|504)\b/i.test(message);
+}
+
+function receiverRetryAfterMs(error) {
+  const headers = error?.response?.headers;
+  const value = headers?.get?.('retry-after') ?? headers?.['retry-after'] ?? headers?.['Retry-After'];
+  const text = String(Array.isArray(value) ? value[0] : value ?? '').trim();
+  if (!text) return null;
+  const seconds = Number(text);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1000);
+  const timestamp = Date.parse(text);
+  return Number.isFinite(timestamp) ? Math.max(0, timestamp - Date.now()) : null;
+}
+
+function receiverTransientRetryDelay(error, failedAttempt, options = {}) {
+  const baseDelayMs = Math.max(0, Number(options.baseDelayMs ?? RECEIVER_TRANSIENT_RETRY_BASE_MS));
+  const maxDelayMs = Math.max(baseDelayMs, Number(options.maxDelayMs ?? RECEIVER_TRANSIENT_RETRY_MAX_MS));
+  const retryAfterMs = receiverRetryAfterMs(error);
+  if (retryAfterMs != null) return retryAfterMs <= maxDelayMs ? retryAfterMs : null;
+  return Math.min(maxDelayMs, baseDelayMs * (2 ** Math.max(0, failedAttempt - 1)));
+}
+
+function waitForReceiverRetry(delayMs) {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+async function requestWithTransientRetry(request, options = {}) {
+  if (typeof request !== 'function') throw new TypeError('request must be a function');
+  const maxAttempts = Math.max(
+    1,
+    Math.min(5, Math.floor(Number(options.maxAttempts ?? RECEIVER_TRANSIENT_RETRY_ATTEMPTS))),
+  );
+  const wait = typeof options.wait === 'function' ? options.wait : waitForReceiverRetry;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await request(attempt);
+    } catch (error) {
+      if (attempt >= maxAttempts || !isTransientReceiverRequestError(error)) throw error;
+      const delayMs = receiverTransientRetryDelay(error, attempt, options);
+      if (delayMs == null) throw error;
+      await wait(delayMs);
+    }
+  }
+  throw new Error('Transient request retry exhausted');
+}
 
 function youtubePageValue(data, pattern, errorMessage) {
   const match = String(data || '').match(pattern);
@@ -205,10 +274,10 @@ async function resolveReceiverLiveId(id) {
 
   const lookupUrl = receiverLookupUrl(id);
   if (!lookupUrl) throw new TypeError('Required channelId or liveId or handle.');
-  const response = await axios.get(lookupUrl, {
+  const response = await requestWithTransientRetry(() => axios.get(lookupUrl, {
     headers: RECEIVER_PAGE_HEADERS,
     timeout: RECEIVER_PAGE_TIMEOUT_MS,
-  });
+  }));
   const resolvedUrl = String(response?.request?.res?.responseUrl || '');
   const redirectedLiveId = resolvedUrl ? new URL(resolvedUrl).searchParams.get('v') : '';
   const channelPageLiveIds = liveIdsFromChannelPage(response.data);
@@ -219,11 +288,11 @@ async function resolveReceiverLiveId(id) {
 
 async function fetchLivePageCompat(id) {
   const liveId = await resolveReceiverLiveId(id);
-  const response = await axios.get('https://www.youtube.com/live_chat', {
+  const response = await requestWithTransientRetry(() => axios.get('https://www.youtube.com/live_chat', {
     headers: RECEIVER_PAGE_HEADERS,
     params: { v: liveId, is_popout: '1', hl: 'en', gl: 'US' },
     timeout: RECEIVER_PAGE_TIMEOUT_MS,
-  });
+  }));
   return getOptionsFromLivePageCompat(response.data, liveId);
 }
 
@@ -263,11 +332,11 @@ async function fetchChatCompat(options = {}) {
   while (true) {
     const request = buildYoutubeChatRequest(options);
     try {
-      const response = await axios.post(
+      const response = await requestWithTransientRetry(() => axios.post(
         `https://www.youtube.com/youtubei/v1/live_chat/get_live_chat?key=${encodeURIComponent(String(options.apiKey || ''))}&prettyPrint=false`,
         request.body,
         { headers: request.headers, timeout: RECEIVER_CHAT_TIMEOUT_MS },
-      );
+      ));
       return youtubeChatParser.parseChatData(response.data);
     } catch (error) {
       const status = Number(error?.response?.status || 0);
@@ -379,6 +448,8 @@ module.exports = {
   fetchLivePageCompat,
   getOptionsFromLivePageCompat,
   liveIdsFromChannelPage,
+  isTransientReceiverRequestError,
+  requestWithTransientRetry,
   receiverMessageText,
   toYoutubeLiveChatItem,
 };

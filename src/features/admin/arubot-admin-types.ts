@@ -65,6 +65,10 @@ export type AdminPlatformRuntime = {
   streamConnected?: boolean;
   queueSize?: number;
   reauthRequired?: boolean;
+  recovering?: boolean;
+  recoveryAttempt?: number;
+  nextRetryAt?: number | null;
+  recoveryError?: string | null;
 };
 
 export type AdminFeatureCount = {
@@ -125,6 +129,7 @@ export type AdminStreamer = {
     streamConnected?: boolean;
     managedElsewhere?: boolean;
     runtimeLeaseActive?: boolean;
+    recovering?: boolean;
     responseAvailable?: boolean;
     lastError?: string | null;
     configurationRevision?: number;

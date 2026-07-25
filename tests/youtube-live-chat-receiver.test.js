@@ -192,6 +192,38 @@ describe('YouTube live chat receiver adapter', () => {
     }
   });
 
+  test('retries a transient 503 chat response before ending the receiver session', async () => {
+    const post = jest.spyOn(axios, 'post')
+      .mockRejectedValueOnce(Object.assign(new Error('Request failed with status code 503'), {
+        response: { status: 503, headers: { 'retry-after': '0' } },
+      }))
+      .mockResolvedValueOnce({
+        data: {
+          continuationContents: {
+            liveChatContinuation: {
+              actions: [],
+              continuations: [{ timedContinuationData: { continuation: 'recovered-token' } }],
+            },
+          },
+        },
+      });
+
+    try {
+      const [items, continuation] = await fetchChatCompat({
+        liveId: 'video123',
+        apiKey: 'api-key',
+        clientVersion: '2.20260725.00.00',
+        continuation: 'continuation-token',
+      });
+
+      expect(items).toEqual([]);
+      expect(continuation).toBe('recovered-token');
+      expect(post).toHaveBeenCalledTimes(2);
+    } finally {
+      post.mockRestore();
+    }
+  });
+
   test('creates an event receiver for a known broadcast without starting network work', () => {
     const receiver = createYoutubeLiveChatReceiver({ broadcastId: 'video123', intervalMs: 5000 });
 

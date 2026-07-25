@@ -16181,10 +16181,23 @@ async function subscribeYoutubeChannelWebsub(req, streamerChannel) {
   });
   if (YOUTUBE_WEBSUB_VERIFY_TOKEN) body.set('hub.verify_token', YOUTUBE_WEBSUB_VERIFY_TOKEN);
   body.set('hub.secret', websubSecret);
-  await axios.post(YOUTUBE_WEBSUB_HUB_URL, body.toString(), {
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    timeout: DEFAULT_TIMEOUT
-  });
+  try {
+    await retryYoutubeTransientRequest(() => axios.post(YOUTUBE_WEBSUB_HUB_URL, body.toString(), {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      timeout: DEFAULT_TIMEOUT
+    }));
+  } catch (error) {
+    const transient = isYoutubeTransientError(error);
+    error.youtubeWebsubStatus = transient ? 'retry_pending' : 'subscribe_failed';
+    await updateYoutubeStreamerChannelWebsub(streamerChannel.ownerUserId, {
+      websubStatus: error.youtubeWebsubStatus,
+      websubLeaseExpiresAt: null,
+      lastError: transient
+        ? null
+        : compactLogText(error?.response?.data?.error?.message || error?.message || 'websub_subscribe_failed', 320)
+    }).catch(() => null);
+    throw error;
+  }
   const expiresAt = new Date(Date.now() + leaseSeconds * 1000).toISOString();
   await updateYoutubeStreamerChannelWebsub(streamerChannel.ownerUserId, {
     websubStatus: 'subscribe_requested',
@@ -16232,12 +16245,11 @@ async function upsertYoutubeStreamerChannelFromOAuthProfile(req, ownerUserId, pr
     try {
       websub = await subscribeYoutubeChannelWebsub(req, streamerChannel);
     } catch (e) {
-      await updateYoutubeStreamerChannelWebsub(ownerUserId, {
-        websubStatus: 'subscribe_failed',
-        websubLeaseExpiresAt: null,
-        lastError: e?.response?.data || e?.message || 'websub_subscribe_failed'
-      }).catch(() => null);
-      websub = { ok: false, status: 'subscribe_failed', error: e?.message || 'websub_subscribe_failed' };
+      websub = {
+        ok: false,
+        status: e?.youtubeWebsubStatus || 'subscribe_failed',
+        error: e?.message || 'websub_subscribe_failed'
+      };
     }
   }
   return { channel: streamerChannel, websub };
@@ -16831,10 +16843,15 @@ app.get('/api/cime/live/me', async (req, res) => {
   }
 });
 
-function visibleArubotAdminRuntimeError(value) {
+function visibleArubotAdminRuntimeError(value, options = {}) {
   const text = compactLogText(value?.message || value || '', 320);
   const normalized = text.toLowerCase();
   if (!text || ['not_live', 'offline', 'not live'].includes(normalized)) return null;
+  if (
+    options.provider === 'youtube'
+    && (options.recovering === true || options.streamConnected === true)
+    && isYoutubeTransientError(value)
+  ) return null;
   return text;
 }
 
@@ -16852,6 +16869,10 @@ function enrichArubotAdminStreamerRuntime(streamer = {}) {
         : provider === 'youtube'
           ? youtubeSessionStore.get(ownerUserId) || null
           : null;
+    const recovery = ['cime', 'youtube'].includes(provider)
+      ? getProviderSessionRecoveryStatus(provider, ownerUserId)
+      : null;
+    const recovering = !!recovery;
     const localLive = provider === 'youtube'
       ? !!entry?.liveChatId
       : provider === 'chzzk' && entry?.connected
@@ -16861,13 +16882,14 @@ function enrichArubotAdminStreamerRuntime(streamer = {}) {
         : null;
     const aggregateLiveFallback = sourcePlatforms.length === 1 ? streamer?.live?.live === true : null;
     const diagnostic = provider === 'chzzk' ? chzzkRuntimeErrors.get(sid) || null : null;
+    const streamConnected = !!entry?.connected;
     const lastError = visibleArubotAdminRuntimeError(
-      diagnostic?.message || entry?.lastError || platform?.lastError || null
+      diagnostic?.message || entry?.lastError || platform?.lastError || null,
+      { provider, recovering, streamConnected }
     );
     const reauthRequired = platform?.authorization === 'expired'
       || diagnostic?.status === 401
       || (provider === 'youtube' && isYoutubeReauthRequired(entry));
-    const streamConnected = !!entry?.connected;
     const runtimeLeaseActive = platform?.runtimeLeaseActive === true;
     return {
       ...platform,
@@ -16878,6 +16900,10 @@ function enrichArubotAdminStreamerRuntime(streamer = {}) {
       reauthRequired,
       runtimeLeaseActive,
       runtimeLocation: streamConnected ? 'local' : 'none',
+      recovering,
+      recoveryAttempt: recovery?.attempt || 0,
+      nextRetryAt: recovery?.nextRetryAt || null,
+      recoveryError: recovery?.lastError || null,
     };
   });
 
@@ -16886,6 +16912,7 @@ function enrichArubotAdminStreamerRuntime(streamer = {}) {
   const aggregateLive = streamer?.live?.live === true;
   const runtimeObservedLive = aggregateLive || platforms.some((platform) => platform.live === true);
   const streamConnected = platforms.some((platform) => platform.streamConnected);
+  const recovering = platforms.some((platform) => platform.recovering);
   const runtimeLeaseActive = platforms.some((platform) => platform.runtimeLeaseActive === true);
   const managedElsewhere = false;
   const lastError = platforms.map((platform) => platform.lastError).find(Boolean) || null;
@@ -16897,6 +16924,7 @@ function enrichArubotAdminStreamerRuntime(streamer = {}) {
   else if (!platforms.length) status = 'unconfigured';
   else if (attentionRequired) status = 'attention';
   else if (streamConnected) status = 'running';
+  else if (recovering) status = 'checking';
   else if (runtimeObservedLive && !runtimeReadinessState.initialBootstrapCompleted) status = 'checking';
   else if (runtimeObservedLive) status = 'attention';
 
@@ -16909,6 +16937,7 @@ function enrichArubotAdminStreamerRuntime(streamer = {}) {
       streamConnected,
       managedElsewhere,
       runtimeLeaseActive,
+      recovering,
       responseAvailable: streamConnected,
       lastError,
       configurationRevision: getRuntimeConfigurationRevision(sid),
@@ -17446,12 +17475,11 @@ app.post('/api/youtube/streamer-channel', rateLimiters.userWrite, async (req, re
       try {
         websub = await subscribeYoutubeChannelWebsub(req, streamerChannel);
       } catch (e) {
-        await updateYoutubeStreamerChannelWebsub(ownerUserId, {
-          websubStatus: 'subscribe_failed',
-          websubLeaseExpiresAt: null,
-          lastError: e?.response?.data || e?.message || 'websub_subscribe_failed'
-        }).catch(() => null);
-        websub = { ok: false, status: 'subscribe_failed', error: e?.message || 'websub_subscribe_failed' };
+        websub = {
+          ok: false,
+          status: e?.youtubeWebsubStatus || 'subscribe_failed',
+          error: e?.message || 'websub_subscribe_failed'
+        };
       }
     }
     return res.json({
@@ -24100,9 +24128,76 @@ function scheduleYoutubeReconnect(ownerUserId, delayMs = null) {
   });
 }
 
+function youtubeErrorStatus(error) {
+  return Number(
+    error?.response?.status
+    || error?.status
+    || error?.lastStatus
+    || error?.response?.data?.error?.code
+    || 0
+  );
+}
+
+function youtubeErrorText(error) {
+  const responseError = error?.response?.data?.error;
+  return String(
+    error?.lastError
+    || responseError?.message
+    || (typeof responseError === 'string' ? responseError : '')
+    || error?.message
+    || error
+    || ''
+  ).trim();
+}
+
+function isYoutubeTransientError(error) {
+  const status = youtubeErrorStatus(error);
+  const code = String(error?.code || '').trim().toUpperCase();
+  const text = youtubeErrorText(error).toLowerCase();
+  return [408, 425, 429, 500, 502, 503, 504].includes(status)
+    || ['ECONNABORTED', 'ECONNRESET', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH', 'ETIMEDOUT'].includes(code)
+    || /\bstatus code (?:408|425|429|500|502|503|504)\b/.test(text)
+    || text.includes('socket hang up')
+    || text.includes('network error');
+}
+
+function getYoutubeRetryAfterMs(error, maxDelayMs = 6 * 60 * 60 * 1000) {
+  const headers = error?.response?.headers;
+  const value = headers?.get?.('retry-after') ?? headers?.['retry-after'] ?? headers?.['Retry-After'];
+  const text = String(Array.isArray(value) ? value[0] : value ?? '').trim();
+  if (!text) return null;
+  const seconds = Number(text);
+  const delayMs = Number.isFinite(seconds) && seconds >= 0
+    ? Math.ceil(seconds * 1000)
+    : Math.max(0, Date.parse(text) - Date.now());
+  if (!Number.isFinite(delayMs)) return null;
+  return Math.min(Math.max(0, delayMs), Math.max(0, Number(maxDelayMs) || 0));
+}
+
+async function retryYoutubeTransientRequest(request, options = {}) {
+  if (typeof request !== 'function') throw new TypeError('request must be a function');
+  const maxAttempts = Math.max(1, Math.min(5, Math.floor(Number(options.maxAttempts || 3))));
+  const baseDelayMs = Math.max(0, Number(options.baseDelayMs || 750));
+  const maxDelayMs = Math.max(baseDelayMs, Number(options.maxDelayMs || 5000));
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await request(attempt);
+    } catch (error) {
+      const status = youtubeErrorStatus(error);
+      if (attempt >= maxAttempts || !isYoutubeTransientError(error) || status === 429) throw error;
+      const retryAfterMs = getYoutubeRetryAfterMs(error);
+      if (retryAfterMs != null && retryAfterMs > maxDelayMs) throw error;
+      const delayMs = retryAfterMs ?? Math.min(maxDelayMs, baseDelayMs * (2 ** (attempt - 1)));
+      await sleep(delayMs);
+    }
+  }
+  throw new Error('YouTube transient request retry exhausted');
+}
+
 function isYoutubeNotLiveError(error) {
-  const status = Number(error?.response?.status || error?.status || error?.lastStatus || 0);
-  const text = String(error?.lastError || error?.message || error?.response?.data?.error || error || '').trim().toLowerCase();
+  const status = youtubeErrorStatus(error);
+  const text = youtubeErrorText(error).toLowerCase();
   return status === 404
     || text === 'not_live'
     || text.includes('live stream was not found')
@@ -24110,15 +24205,27 @@ function isYoutubeNotLiveError(error) {
     || text.includes('session_not_live');
 }
 
+function visibleYoutubeRuntimeError(error, options = {}) {
+  const text = compactLogText(youtubeErrorText(error), 320);
+  if (!text || isYoutubeNotLiveError(error)) return null;
+  if ((options.recovering === true || options.streamConnected === true) && isYoutubeTransientError(error)) return null;
+  return text;
+}
+
 function getYoutubeReconnectDelayForError(error) {
-  const status = Number(error?.response?.status || error?.status || error?.lastStatus || 0);
+  const status = youtubeErrorStatus(error);
+  const retryAfterMs = getYoutubeRetryAfterMs(error);
   if (status === 401) return null;
   if (isYoutubeQuotaExceededError(error)) return YOUTUBE_QUOTA_RETRY_MS;
   if (isYoutubeNotLiveError(error)) {
     return 60 * 1000;
   }
   if (status === 403) return 5 * 60 * 1000;
-  if (status === 429) return 60 * 1000;
+  if (status === 429) return retryAfterMs ?? 60 * 1000;
+  if (isYoutubeTransientError(error)) {
+    const serverFailure = status >= 500 || /\bstatus code (?:500|502|503|504)\b/i.test(youtubeErrorText(error));
+    return retryAfterMs ?? (serverFailure ? 15 * 1000 : 5 * 1000);
+  }
   return undefined;
 }
 
@@ -25738,10 +25845,15 @@ app.get('/api/platforms/status', async (req, res) => {
           return liveStatusCache.get(sid);
         })
       : liveStatusCache.get(sid);
-    const youtubeLastError = youtubeRefreshError || youtubeEntry?.lastError || null;
-    const visibleYoutubeLastError = isYoutubeNotLiveError(youtubeLastError) ? null : youtubeLastError;
     const cimeRecovery = getProviderSessionRecoveryStatus('cime', ownerUserId);
     const youtubeRecovery = getProviderSessionRecoveryStatus('youtube', ownerUserId);
+    const youtubeRuntimeError = youtubeRefreshError || (youtubeEntry?.lastError
+      ? { lastError: youtubeEntry.lastError, lastStatus: youtubeEntry.lastStatus }
+      : null);
+    const visibleYoutubeLastError = visibleYoutubeRuntimeError(youtubeRuntimeError, {
+      recovering: !!youtubeRecovery,
+      streamConnected: !!youtubeEntry?.connected,
+    });
 
     const items = [
       {
@@ -25796,7 +25908,9 @@ app.get('/api/platforms/status', async (req, res) => {
         recovering: !!youtubeRecovery,
         recoveryAttempt: youtubeRecovery?.attempt || 0,
         nextRetryAt: youtubeRecovery?.nextRetryAt || null,
-        recoveryError: youtubeRecovery?.lastError || null,
+        recoveryError: visibleYoutubeRuntimeError(youtubeRecovery?.lastError, {
+          recovering: !!youtubeRecovery,
+        }),
         botConfigured: !!youtubeBotProfile?.selectedChannelId,
         ignoredDonations: getYoutubeIgnoredDonationSummary(youtubeEntry)
       }

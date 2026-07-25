@@ -139,6 +139,22 @@ function normalizeProvider(provider?: string) {
   return provider?.toLowerCase() as ProviderId | undefined;
 }
 
+function youtubeWebsubStatusLabel(status?: string | null) {
+  if (status === 'verified') return '확인됨';
+  if (status === 'subscribe_requested') return '확인 대기';
+  if (status === 'retry_pending') return '자동 재시도 대기';
+  if (status === 'pending') return '등록 대기';
+  if (status === 'subscribe_failed') return '등록 실패';
+  return status || '미확인';
+}
+
+function youtubeWebsubStatusTone(status?: string | null) {
+  if (status === 'verified') return 'mint' as const;
+  if (status === 'subscribe_requested' || status === 'retry_pending') return 'sky' as const;
+  if (status === 'pending') return 'neutral' as const;
+  return 'amber' as const;
+}
+
 function formatYoutubeModeratorError(verification?: YoutubeModeratorVerification | null, fallback = '운영자 등록 완료 확인에 실패했습니다.') {
   if (!verification) return fallback;
   const parts = [verification.message || fallback];
@@ -507,8 +523,8 @@ export function ConnectionPage() {
                           <Badge tone={youtubeStreamerStatus.channel.lastLiveChatId ? 'mint' : 'neutral'}>
                             {youtubeStreamerStatus.channel.lastLiveChatId ? '라이브 채팅 감지됨' : '라이브 대기'}
                           </Badge>
-                          <Badge tone={youtubeStreamerStatus.channel.websubStatus === 'subscribe_requested' || youtubeStreamerStatus.channel.websubStatus === 'verified' ? 'sky' : 'amber'}>
-                            WebSub {youtubeStreamerStatus.channel.websubStatus || 'pending'}
+                          <Badge tone={youtubeWebsubStatusTone(youtubeStreamerStatus.channel.websubStatus)}>
+                            WebSub {youtubeWebsubStatusLabel(youtubeStreamerStatus.channel.websubStatus)}
                           </Badge>
                         </div>
                         {youtubeStreamerStatus.channel.lastError ? (
