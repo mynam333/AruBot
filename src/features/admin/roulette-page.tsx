@@ -670,7 +670,7 @@ export function RoulettePage() {
 
       <ViewerTokenPanel
         title="룰렛 화면 주소"
-        description="이 주소를 OBS 브라우저 소스에 넣으면 룰렛 결과가 방송 화면에 표시돼요."
+        description="이 주소를 OBS 브라우저 소스에 넣으면 실제 실행과 테스트 회전이 방송 여부와 관계없이 동일하게 표시돼요."
         endpoint="/api/roulette/viewer-url"
       />
 
@@ -679,7 +679,7 @@ export function RoulettePage() {
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <CardTitle>방송 이벤트로 실행할 룰렛</CardTitle>
-              <CardDescription>룰렛을 만들고 바로 테스트합니다.</CardDescription>
+              <CardDescription>방송 중이 아니어도 테스트할 수 있으며, 테스트 창과 연결된 OBS 오버레이가 함께 회전합니다.</CardDescription>
             </div>
             <div className="flex flex-wrap gap-2">
               <Badge tone="mint">{definitions.length}개</Badge>

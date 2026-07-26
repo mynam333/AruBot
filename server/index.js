@@ -20,6 +20,7 @@ import { appendVideoDonationQueueCount, countNonDurableVideoDonationItems, count
 import { fetchYouTubeVideoMetadata } from './youtube-video-metadata.js';
 import { createPvdDurationProbeCoordinator } from './pvd-duration-probe.js';
 import { resolvePvdYouTubeMetadata } from './pvd-youtube-metadata-fallback.js';
+import { createRouletteBroadcastDelivery } from './roulette-broadcast-delivery.js';
 import { getKstCalendarDate, resolveAttendanceDate } from './attendance-calendar.js';
 import { DEFAULT_ATTENDANCE_MESSAGE, renderAttendanceTemplate } from './attendance-message.js';
 import { executeAttendanceSpecialOperations, extractAttendanceSpecialVariables } from './attendance-special-variables.js';
@@ -5866,6 +5867,7 @@ app.post('/api/roulette/test', rateLimiters.userWrite, async (req, res) => {
       executeResultActions: false,
       testMode: true,
       targetConnectionId: testConnectionId,
+      mirrorTestToChannel: true,
       viewerToken: testAuthorization.token,
     });
     return res.json({ ok: true, roulette: definition.name, result });
@@ -10152,6 +10154,26 @@ async function startRouletteSpin(sid, rouletteName, userId, username, opts = {})
   const maxRetries = targetConnectionId ? 8 : 3;
   const spinDurationMs = opts?.instant === true ? 0 : ROULETTE_SPIN_MS;
   const spinStartedAt = Date.now();
+  const deliverRouletteBroadcast = createRouletteBroadcastDelivery({
+    mirrorTestToChannel: opts?.mirrorTestToChannel === true,
+    deliverToTest: ({ targetConnectionId, channelId, token: deliveryToken, message }) => (
+      broadcastToRouletteTestConnection(targetConnectionId, channelId, deliveryToken, message)
+    ),
+    deliverToChannel: ({ channelId, token: deliveryToken, message }) => (
+      broadcastToChannel(channelId, 'roulette', message, deliveryToken)
+    ),
+    onMirrorSettled: ({ result, error }) => {
+      if (error) {
+        console.warn(`[Roulette] OBS test mirror failed for channel ${channelContext.channelId}:`, error?.message || error);
+        return;
+      }
+      if (Number(result?.success || 0) > 0) {
+        console.log(`[Roulette] Mirrored test spin to ${result.success}/${result.total} OBS connection(s) in channel: ${channelContext.channelId}`);
+        return;
+      }
+      console.warn(`[Roulette] OBS test mirror unavailable for channel ${channelContext.channelId}: ${result?.error || 'NO_CONNECTIONS'}`);
+    },
+  });
 
   while (!broadcastSuccess && retryCount < maxRetries) {
     try {
@@ -10189,9 +10211,12 @@ async function startRouletteSpin(sid, rouletteName, userId, username, opts = {})
         if (opts?.testMode !== true && message.batchId) rouletteTokenLastBatch.set(token, { batchId: message.batchId, batchCount: message.batchCount });
       } catch { }
 
-      const channelResult = targetConnectionId
-        ? broadcastToRouletteTestConnection(targetConnectionId, channelContext.channelId, token, message)
-        : await broadcastToChannel(channelContext.channelId, 'roulette', message, token);
+      const channelResult = await deliverRouletteBroadcast({
+        targetConnectionId,
+        channelId: channelContext.channelId,
+        token,
+        message,
+      });
 
       console.log(`[Roulette] ${targetConnectionId ? 'Test connection' : 'Channel'} broadcast result for ${channelContext.channelId}: ${channelResult.success}/${channelResult.total} successful (token: ${token.substring(0, 8)}...)`);
 

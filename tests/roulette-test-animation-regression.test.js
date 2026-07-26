@@ -27,12 +27,15 @@ describe('룰렛 실제 회전 테스트 회귀 방지', () => {
     expect(adminRoute).toContain("req.body?.testConnectionId");
   });
 
-  test('관리자 테스트 연결은 실제 OBS 연결·과거 결과·운영 이력과 격리되어야 함', () => {
+  test('관리자 테스트는 운영 부작용과 과거 결과를 격리하면서 실제 OBS에도 같은 이벤트를 보내야 함', () => {
     expect(serverIndex).toContain('const rouletteTestConnections = new Map()');
     expect(serverIndex).toContain('const rouletteTestAuthorizations = new Map()');
     expect(serverIndex).toContain('MAX_ROULETTE_TEST_CONNECTIONS_PER_TOKEN = 4');
     expect(serverIndex).toContain("deliveredConnection.ws.close(1000, 'Test event delivered')");
     expect(serverIndex).toContain('broadcastToRouletteTestConnection(targetConnectionId');
+    expect(serverIndex).toContain("broadcastToChannel(channelId, 'roulette', message, deliveryToken)");
+    expect(serverIndex).toContain('mirrorTestToChannel: true');
+    expect(serverIndex).toContain('mirrorTestToChannel: opts?.mirrorTestToChannel === true');
     expect(serverIndex).toContain("if (!testConnectionId) {");
     expect(serverIndex).toContain("type: 'roulette:test-ready'");
     expect(serverIndex).toContain('if (opts?.testMode !== true) {');
@@ -64,6 +67,23 @@ describe('룰렛 실제 회전 테스트 회귀 방지', () => {
     expect(rouletteViewer).toContain('tryFinishSpinBarrier(barrier)');
     expect(rouletteViewer).toContain("wheel.addEventListener('transitionend', onTransitionEnd)");
     expect(rouletteViewer).toContain('startSpinAnimation(final, Array.isArray(payload.items) ? payload.items : null, payload)');
+    expect(rouletteViewer).toContain('createRouletteSpinRandom(resolveRouletteSpinSeed(meta, finalLabel))');
+    expect(rouletteViewer).toContain('const wheelTargetIndex = Math.floor(spinRandom() * wheelItemCount)');
+    expect(rouletteViewer).toContain('const wheelStopOffsetRatio = randomWheelStopOffsetRatio(spinRandom)');
+    expect(rouletteViewer).toContain('const rand = () => pool[Math.floor(spinRandom() * pool.length)]');
+  });
+
+  test('관리자 테스트는 방송 상태와 무관하며 오프라인 안내를 명확히 보여야 함', () => {
+    const adminStart = serverIndex.indexOf("app.post('/api/roulette/test'");
+    const adminEnd = serverIndex.indexOf('// Public: list roulette definitions', adminStart);
+    const adminRoute = serverIndex.slice(adminStart, adminEnd);
+
+    expect(adminRoute).not.toContain('liveStatusCache');
+    expect(adminRoute).not.toContain('isSidLive');
+    expect(adminRoute).not.toContain('isLiveAllowedForSid');
+    expect(adminRoute).not.toContain('not_live');
+    expect(roulettePage).toContain('방송 중이 아니어도 테스트할 수 있으며');
+    expect(roulettePage).toContain('실제 실행과 테스트 회전이 방송 여부와 관계없이 동일하게 표시돼요.');
   });
 
   test('테스트 회전은 홈페이지 iframe이 아니라 실제 오버레이 팝업에서 실행되어야 함', () => {

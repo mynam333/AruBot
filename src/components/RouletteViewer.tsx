@@ -1,4 +1,5 @@
 import React from 'react';
+import { createRouletteSpinRandom, resolveRouletteSpinSeed } from '@/components/roulette-spin-random';
 import { getBrowserApiBase } from '@/shared/api/http';
 import { RouletteThemeAtmosphere } from './rouletteThemeAtmosphere';
 import { getRouletteThemeMaterial } from './rouletteThemeMaterials';
@@ -468,9 +469,9 @@ function normalizeWheelResultLabel(value: unknown) {
   return String(value || '').trim().normalize('NFC');
 }
 
-function randomWheelStopOffsetRatio() {
+function randomWheelStopOffsetRatio(random = Math.random) {
   const maxOffset = 0.5 - WHEEL_STOP_EDGE_PADDING_RATIO;
-  return ((Math.random() * 2) - 1) * maxOffset;
+  return ((random() * 2) - 1) * maxOffset;
 }
 
 function wheelStopRotationForIndex(index: number, segmentCount: number, offsetRatio = 0) {
@@ -1382,10 +1383,11 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       setScrollIndex(0);
       const instantWheelIndex = 0;
       const instantWheelItems = buildWheelItemsForResult(poolRef.current, finalLabel, instantWheelIndex);
+      const spinRandom = createRouletteSpinRandom(resolveRouletteSpinSeed(meta, finalLabel));
       const instantWheelRotation = wheelStopRotationForIndex(
         instantWheelIndex,
         instantWheelItems.length,
-        randomWheelStopOffsetRatio(),
+        randomWheelStopOffsetRatio(spinRandom),
       );
       setWheelItemsState(instantWheelItems);
       setWheelSelectedIndex(instantWheelIndex);
@@ -1439,18 +1441,19 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     const cleaned = baseItems.map(s => String(s)).filter(s => s.length > 0);
     const pool = cleaned.length ? cleaned : [finalLabel].filter(Boolean);
     poolRef.current = pool.slice();
+    const spinRandom = createRouletteSpinRandom(resolveRouletteSpinSeed(meta, finalLabel));
     const finalAlreadyIncluded = pool.some((item) => normalizeWheelResultLabel(item) === normalizeWheelResultLabel(finalLabel));
     const wheelItemCount = Math.max(1, pool.length + (finalAlreadyIncluded ? 0 : 1));
-    const wheelTargetIndex = Math.floor(Math.random() * wheelItemCount);
+    const wheelTargetIndex = Math.floor(spinRandom() * wheelItemCount);
     const nextWheelItems = buildWheelItemsForResult(pool, finalLabel, wheelTargetIndex);
     setWheelItemsState(nextWheelItems);
     setWheelSettled(false);
-    const wheelStartRotation = wheelRotationRef.current;
-    const wheelStopOffsetRatio = randomWheelStopOffsetRatio();
+    const wheelStartRotation = spinRandom() * 360;
+    const wheelStopOffsetRatio = randomWheelStopOffsetRatio(spinRandom);
     const wheelFinalRotation = equivalentForwardRotation(
       wheelStartRotation,
       wheelStopRotationForIndex(wheelTargetIndex, nextWheelItems.length, wheelStopOffsetRatio),
-      6 + Math.floor(Math.random() * 3)
+      6 + Math.floor(spinRandom() * 3)
     );
     const wheelResolvedIndex = wheelIndexAtPointer(wheelFinalRotation, nextWheelItems.length);
     const wheelResolvedLabel = nextWheelItems[wheelResolvedIndex] || finalLabel;
@@ -1512,6 +1515,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       completed: false,
       finish: finishSpin,
     };
+    wheelRotationRef.current = wheelStartRotation;
     setWheelRotationDeg(wheelStartRotation);
     setWheelSpinPlan({
       id: wheelSpinPlanId,
@@ -1519,7 +1523,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       finalRotation: wheelFinalRotation,
       durationMs: spinDurationMs,
     });
-    const rand = () => pool[Math.floor(Math.random() * pool.length)];
+    const rand = () => pool[Math.floor(spinRandom() * pool.length)];
     const seq: string[] = [];
     // Initial head padding based on viewport
     const rowsHalf = computeRowsHalf();
