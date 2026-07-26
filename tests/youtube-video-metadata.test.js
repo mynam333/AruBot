@@ -132,6 +132,10 @@ describe('quota-free YouTube video metadata', () => {
       const embeddedTitle = metadata.extractYouTubeWatchTitle(
         '<script>ytInitialPlayerResponse={"videoDetails":{"title":"Embedded player title","lengthSeconds":"44"}}<\/script>',
       );
+      const misleadingLikeTitle = metadata.extractYouTubeWatchTitle(
+        '<script>{"videoDetails":{"lengthSeconds":"147"},"videoActions":{"buttonViewModel":{"title":"2만"}}}<\/script>'
+          + '<title>YouTube<\/title>',
+      );
       const genericTitle = metadata.extractYouTubeWatchTitle('<html><head><title>YouTube<\/title><\/head><\/html>');
       console.log(JSON.stringify({
         first,
@@ -150,6 +154,7 @@ describe('quota-free YouTube video metadata', () => {
         incompleteSecond,
         incompleteCalls,
         embeddedTitle,
+        misleadingLikeTitle,
         genericTitle,
       }));
     `;
@@ -179,6 +184,10 @@ describe('quota-free YouTube video metadata', () => {
 
   test('reads a title embedded in the watch page player response', () => {
     expect(result.embeddedTitle).toBe('Embedded player title');
+  });
+
+  test('does not cross the videoDetails boundary into a like-count title', () => {
+    expect(result.misleadingLikeTitle).toBeNull();
   });
 
   test('retries metadata lookup when only duration was cached previously', () => {

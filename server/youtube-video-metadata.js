@@ -46,14 +46,62 @@ function normalizeTitle(value) {
   return title && !/^youtube$/i.test(title) ? title : null;
 }
 
-function decodeJsonStringValue(value) {
-  const text = String(value || '');
-  if (!text) return '';
-  try {
-    return JSON.parse(`"${text}"`);
-  } catch {
-    return text;
+function parseBoundedJsonObject(source, startIndex, maxLength = 100_000) {
+  if (source[startIndex] !== '{') return null;
+  const limit = Math.min(source.length, startIndex + maxLength);
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = startIndex; index < limit; index += 1) {
+    const char = source[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+    } else if (char === '{') {
+      depth += 1;
+    } else if (char === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        try {
+          return JSON.parse(source.slice(startIndex, index + 1));
+        } catch {
+          return null;
+        }
+      }
+    }
   }
+  return null;
+}
+
+function extractEmbeddedVideoDetailsTitle(source) {
+  const key = '"videoDetails"';
+  let searchFrom = 0;
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const keyIndex = source.indexOf(key, searchFrom);
+    if (keyIndex < 0) break;
+    searchFrom = keyIndex + key.length;
+
+    let valueIndex = searchFrom;
+    while (/\s/.test(source[valueIndex] || '')) valueIndex += 1;
+    if (source[valueIndex] !== ':') continue;
+    valueIndex += 1;
+    while (/\s/.test(source[valueIndex] || '')) valueIndex += 1;
+
+    const videoDetails = parseBoundedJsonObject(source, valueIndex);
+    const title = normalizeTitle(videoDetails?.title);
+    if (title) return title;
+  }
+  return null;
 }
 
 function decodePageValue(value) {
@@ -127,10 +175,8 @@ export function extractYouTubeWatchTitle(html) {
     if (title) return title;
   }
 
-  const normalizedSource = decodeHtmlEntities(source);
-  const embeddedTitle = normalizedSource
-    .match(/"videoDetails"\s*:\s*\{[\s\S]{0,8000}?"title"\s*:\s*"((?:\\.|[^"\\])*)"/i)?.[1];
-  const playerTitle = normalizeTitle(decodeJsonStringValue(embeddedTitle));
+  const playerTitle = extractEmbeddedVideoDetailsTitle(source)
+    || extractEmbeddedVideoDetailsTitle(source.replace(/&quot;/gi, '"'));
   if (playerTitle) return playerTitle;
 
   const documentTitle = source.match(/<title>([\s\S]*?)<\/title>/i)?.[1];
