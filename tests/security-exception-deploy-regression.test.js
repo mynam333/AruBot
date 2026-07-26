@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { gzipSync } = require('zlib');
 
 const root = path.join(__dirname, '..');
 
@@ -51,6 +52,19 @@ function knownAuditReport() {
   };
 }
 
+function fallbackLock() {
+  return {
+    lockfileVersion: 3,
+    packages: {
+      '': { dependencies: { ws: '8.21.1' } },
+      'node_modules/axios': { version: '1.7.7' },
+      'node_modules/dev-only-package': { version: '1.0.0', dev: true },
+      'node_modules/engine.io-client/node_modules/ws': { version: '3.3.3' },
+      'node_modules/ws': { version: '8.21.1' },
+    },
+  };
+}
+
 describe('production security exception and deployment gates', () => {
   const audit = require('../scripts/audit-production-dependencies.cjs');
 
@@ -88,6 +102,112 @@ describe('production security exception and deployment gates', () => {
     };
     const result = audit.inspectAuditReport(changed);
     expect(result.blocking.map((item) => item.name)).toContain('axios');
+  });
+
+  test('npm audit error envelopes retain the registry failure detail', async () => {
+    const envelope = {
+      message: '400 Bad Request - POST https://registry.npmjs.org/-/npm/v1/security/audits/quick',
+      body: {
+        message: 'Invalid package tree, run npm install to rebuild your package-lock.json',
+      },
+      error: { summary: '', detail: '' },
+    };
+    expect(audit.describeNpmAuditFailure(envelope)).toContain('Invalid package tree');
+
+    const fallbackReport = { auditReportVersion: 2, vulnerabilities: {} };
+    const warning = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const bulkAuditRunner = jest.fn(async () => fallbackReport);
+    await expect(audit.resolveAuditReportWithFallback({
+      packageLock: fallbackLock(),
+      npmAuditRunner: async () => envelope,
+      bulkAuditRunner,
+    })).resolves.toBe(fallbackReport);
+    expect(bulkAuditRunner).toHaveBeenCalledTimes(1);
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('Invalid package tree'));
+    warning.mockRestore();
+  });
+
+  test('both compressed-without-header and plain bulk JSON responses decode', () => {
+    const json = Buffer.from(JSON.stringify({ ws: [] }));
+    expect(audit.decodeAuditResponseBody(gzipSync(json), {}).toString('utf8')).toBe(json.toString('utf8'));
+    expect(audit.decodeAuditResponseBody(json, {}).toString('utf8')).toBe(json.toString('utf8'));
+  });
+
+  test('bulk payload omits dev-only nodes but retains production versions', () => {
+    const { packageIndex, payload } = audit.buildBulkAuditPayload(fallbackLock());
+    expect(payload['dev-only-package']).toBeUndefined();
+    expect(payload.axios).toEqual(['1.7.7']);
+    expect(payload.ws).toEqual(['3.3.3', '8.21.1']);
+    expect(packageIndex.get('ws')).toEqual(expect.arrayContaining([
+      { node: 'node_modules/ws', version: '8.21.1' },
+      { node: 'node_modules/engine.io-client/node_modules/ws', version: '3.3.3' },
+    ]));
+  });
+
+  test('bulk advisories use semver ranges to preserve the exact nested ws exception node', () => {
+    const report = audit.convertBulkAdvisoriesToAuditReport({
+      ws: [
+        {
+          id: 1118731,
+          severity: 'high',
+          title: 'reviewed ws advisory one',
+          vulnerable_versions: '>=2.1.0 <5.2.4',
+        },
+        {
+          id: 1123262,
+          severity: 'high',
+          title: 'reviewed ws advisory two',
+          vulnerable_versions: '>=1.1.0 <5.2.5',
+        },
+      ],
+    }, fallbackLock());
+
+    expect(report.vulnerabilities.ws.nodes).toEqual(['node_modules/engine.io-client/node_modules/ws']);
+    expect(report.vulnerabilities.ws.via.map(({ source }) => source)).toEqual([1118731, 1123262]);
+    expect(audit.inspectAuditReport(report)).toEqual({
+      allowed: [{
+        name: 'ws',
+        severity: 'high',
+        nodes: ['node_modules/engine.io-client/node_modules/ws'],
+      }],
+      blocking: [],
+    });
+  });
+
+  test('bulk fallback blocks new production advisories and ignores non-matching ranges', () => {
+    const vulnerable = audit.convertBulkAdvisoriesToAuditReport({
+      axios: [{
+        id: 1234567,
+        severity: 'high',
+        title: 'new axios advisory',
+        vulnerable_versions: '<2.0.0',
+      }],
+    }, fallbackLock());
+    expect(audit.inspectAuditReport(vulnerable).blocking.map(({ name }) => name)).toEqual(['axios']);
+
+    const unaffected = audit.convertBulkAdvisoriesToAuditReport({
+      axios: [{
+        id: 1234567,
+        severity: 'high',
+        title: 'future axios advisory',
+        vulnerable_versions: '>=2.0.0',
+      }],
+    }, fallbackLock());
+    expect(audit.inspectAuditReport(unaffected)).toEqual({ allowed: [], blocking: [] });
+  });
+
+  test('bulk fallback remains fail-closed when both audit transports fail', async () => {
+    const warning = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    await expect(audit.resolveAuditReportWithFallback({
+      packageLock: fallbackLock(),
+      npmAuditRunner: async () => {
+        throw new Error('quick endpoint failed');
+      },
+      bulkAuditRunner: async () => {
+        throw new Error('bulk endpoint failed');
+      },
+    })).rejects.toThrow('bulk audit fallback also failed (bulk endpoint failed)');
+    warning.mockRestore();
   });
 
   test('deployment runs verification, release-aware smoke checks, and rollback', () => {
