@@ -46,6 +46,16 @@ function normalizeTitle(value) {
   return title && !/^youtube$/i.test(title) ? title : null;
 }
 
+function decodeJsonStringValue(value) {
+  const text = String(value || '');
+  if (!text) return '';
+  try {
+    return JSON.parse(`"${text}"`);
+  } catch {
+    return text;
+  }
+}
+
 function decodePageValue(value) {
   const text = String(value || '').trim();
   if (!text) return '';
@@ -116,6 +126,12 @@ export function extractYouTubeWatchTitle(html) {
     const title = normalizeTitle(content);
     if (title) return title;
   }
+
+  const normalizedSource = decodeHtmlEntities(source);
+  const embeddedTitle = normalizedSource
+    .match(/"videoDetails"\s*:\s*\{[\s\S]{0,8000}?"title"\s*:\s*"((?:\\.|[^"\\])*)"/i)?.[1];
+  const playerTitle = normalizeTitle(decodeJsonStringValue(embeddedTitle));
+  if (playerTitle) return playerTitle;
 
   const documentTitle = source.match(/<title>([\s\S]*?)<\/title>/i)?.[1];
   return normalizeTitle(documentTitle);
@@ -410,7 +426,7 @@ export async function fetchYouTubeVideoMetadata(videoId, options = {}) {
 
   const pending = fetchUncachedYouTubeVideoMetadata(id, httpGet, httpPost, logger)
     .then((value) => {
-      const ttlMs = value.durationSec != null ? cacheTtlMs : failureCacheTtlMs;
+      const ttlMs = value.durationSec != null && value.title ? cacheTtlMs : failureCacheTtlMs;
       if (ttlMs > 0) cacheMetadata(id, value, ttlMs, Date.now());
       return value;
     })

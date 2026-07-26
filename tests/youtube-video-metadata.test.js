@@ -99,6 +99,39 @@ describe('quota-free YouTube video metadata', () => {
         },
       });
 
+      const incompleteCalls = [];
+      let incompleteRound = 0;
+      const incompleteHttpGet = async (url) => {
+        incompleteCalls.push(url);
+        if (url.includes('/watch?')) {
+          incompleteRound += 1;
+          return {
+            status: 200,
+            data: '<script>ytInitialPlayerResponse={"videoDetails":{"lengthSeconds":"66"}}<\/script>',
+          };
+        }
+        if (url.includes('/oembed?') && incompleteRound === 1) {
+          const error = new Error('Request failed with status code 503');
+          error.response = { status: 503 };
+          throw error;
+        }
+        if (url.includes('/oembed?')) return { data: { title: 'Recovered cached title' } };
+        return { status: 200, data: '' };
+      };
+      const incompleteFirst = await metadata.fetchYouTubeVideoMetadata('quotaTest06', {
+        httpGet: incompleteHttpGet,
+        cacheTtlMs: 60000,
+        failureCacheTtlMs: 0,
+      });
+      const incompleteSecond = await metadata.fetchYouTubeVideoMetadata('quotaTest06', {
+        httpGet: incompleteHttpGet,
+        cacheTtlMs: 60000,
+        failureCacheTtlMs: 0,
+      });
+
+      const embeddedTitle = metadata.extractYouTubeWatchTitle(
+        '<script>ytInitialPlayerResponse={"videoDetails":{"title":"Embedded player title","lengthSeconds":"44"}}<\/script>',
+      );
       const genericTitle = metadata.extractYouTubeWatchTitle('<html><head><title>YouTube<\/title><\/head><\/html>');
       console.log(JSON.stringify({
         first,
@@ -113,6 +146,10 @@ describe('quota-free YouTube video metadata', () => {
         blockedWatchCalls,
         failed,
         failureLogs,
+        incompleteFirst,
+        incompleteSecond,
+        incompleteCalls,
+        embeddedTitle,
         genericTitle,
       }));
     `;
@@ -138,6 +175,17 @@ describe('quota-free YouTube video metadata', () => {
     expect(result.fallbackCalls).toHaveLength(2);
     expect(result.fallbackCalls.some((url) => url.includes('/oembed?'))).toBe(true);
     expect([...result.calls, ...result.fallbackCalls].some((url) => url.includes('googleapis.com/youtube/v3'))).toBe(false);
+  });
+
+  test('reads a title embedded in the watch page player response', () => {
+    expect(result.embeddedTitle).toBe('Embedded player title');
+  });
+
+  test('retries metadata lookup when only duration was cached previously', () => {
+    expect(result.incompleteFirst).toEqual({ title: null, durationSec: 66 });
+    expect(result.incompleteSecond).toEqual({ title: 'Recovered cached title', durationSec: 66 });
+    expect(result.incompleteCalls.filter((url) => url.includes('/watch?'))).toHaveLength(2);
+    expect(result.incompleteCalls.filter((url) => url.includes('/oembed?'))).toHaveLength(2);
   });
 
   test('does not treat a generic error-page title as video metadata', () => {

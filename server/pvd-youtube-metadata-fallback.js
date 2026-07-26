@@ -52,8 +52,10 @@ export async function resolvePvdYouTubeMetadata(options = {}) {
         return viewerDurationPromise.then((durationSec) => ({ ...metadata, durationSec }));
       }),
       viewerDurationPromise.then((durationSec) => {
-        if (durationSec != null) return { ...latestServerMetadata, durationSec };
-        return boundedServerMetadataPromise;
+        return boundedServerMetadataPromise.then((metadata) => ({
+          ...metadata,
+          durationSec: metadata.durationSec ?? durationSec,
+        }));
       }),
     ]);
   } finally {
