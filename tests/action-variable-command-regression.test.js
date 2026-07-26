@@ -16,4 +16,10 @@ describe('action variable command regression', () => {
     expect(serverIndex).toContain('function stripActionVariableTokens');
     expect(serverIndex).toContain('replace(/\\$\\{\\s*(?:action|automation|blueprint)::([^}]+)\\s*\\}/ig,');
   });
+
+  test('action variables resolve a published blueprint by id, slug, or display name', () => {
+    expect(serverIndex).toContain('let blueprint = await getActionBlueprint(owner, keyPart);');
+    expect(serverIndex).toContain('const blueprints = await listActionBlueprints(owner).catch(() => []);');
+    expect(serverIndex).toContain("String(candidate?.name || '').trim().toLocaleLowerCase('ko-KR') === normalizedReference");
+  });
 });

@@ -406,9 +406,12 @@ export function CommandsPage() {
                   첫 채팅 자동 출석과 지정 명령어 출석 중 선택할 수 있습니다. 출석 포인트는 시청자 포인트에 함께 적립됩니다.
                 </p>
               </div>
-              <Button type="button" variant="outline" size="icon" onClick={() => setAttendanceOpen(false)} aria-label="닫기">
-                <X className="h-4 w-4" />
-              </Button>
+              <div className="flex shrink-0 items-center gap-2">
+                <CommandVariableHelpButton scope="attendance" />
+                <Button type="button" variant="outline" size="icon" onClick={() => setAttendanceOpen(false)} aria-label="닫기">
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
             </div>
             <div className="grid min-h-0 gap-4 overflow-y-auto p-[clamp(1rem,2.4vw,1.5rem)]">
               <div className="grid gap-3 rounded-[var(--radius-control)] border bg-background/70 p-3">
@@ -452,7 +455,7 @@ export function CommandsPage() {
                 />
               </label>
               <div className="rounded-[var(--radius-control)] border bg-background/70 p-3 text-sm leading-6 text-muted-foreground">
-                사용 가능한 변수: <code>{'{user.name}'}</code>, <code>{'{user.id}'}</code>, <code>{'{attendance.streak}'}</code>, <code>{'{attendance.totalDays}'}</code>, <code>{'{attendance.points}'}</code>, <code>{'{attendance.date}'}</code>
+                출석 전용 변수와 시청자·출석·방송·채널 변수, 룰렛·실행 액션을 사용할 수 있습니다. 우측 상단의 변수 도움말에서 지원 플랫폼과 조회 조건을 확인할 수 있습니다.
               </div>
             </div>
             <div className="flex flex-col-reverse gap-2 border-t bg-background/64 p-[clamp(1rem,2.4vw,1.5rem)] sm:flex-row sm:justify-end">

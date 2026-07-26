@@ -21,6 +21,18 @@ type VariablesResponse = {
   variables?: BotVariable[];
 };
 
+type CommandVariableHelpButtonProps = {
+  scope?: 'command' | 'attendance';
+};
+
+const ATTENDANCE_VARIABLE_GROUPS = new Set(['시청자', '출석', '방송', '채널']);
+const ATTENDANCE_SPECIAL_VARIABLES = new Set([
+  '${roulette::룰렛이름}',
+  '${action::액션이름}',
+  '${automation::액션이름}',
+  '${blueprint::액션이름}',
+]);
+
 function providerTone(provider: string) {
   if (provider === 'youtube') return 'rose';
   return provider === 'cime' ? 'violet' : 'mint';
@@ -31,7 +43,7 @@ function providerLabel(provider: string) {
   return provider === 'cime' ? 'CIME' : 'CHZZK';
 }
 
-export function CommandVariableHelpButton() {
+export function CommandVariableHelpButton({ scope = 'command' }: CommandVariableHelpButtonProps) {
   const [open, setOpen] = useState(false);
   const [variables, setVariables] = useState<BotVariable[]>([]);
   const [failed, setFailed] = useState(false);
@@ -53,15 +65,27 @@ export function CommandVariableHelpButton() {
     });
   }, [isPending, loaded, open]);
 
+  const visibleVariables = useMemo(
+    () => scope === 'attendance'
+      ? variables.filter((variable) => (
+          ATTENDANCE_VARIABLE_GROUPS.has(variable.group)
+          || ATTENDANCE_SPECIAL_VARIABLES.has(variable.key)
+        ))
+      : variables,
+    [scope, variables]
+  );
+
   const groups = useMemo(() => {
     const map = new Map<string, BotVariable[]>();
-    for (const variable of variables) {
+    for (const variable of visibleVariables) {
       const list = map.get(variable.group) || [];
       list.push(variable);
       map.set(variable.group, list);
     }
     return Array.from(map.entries());
-  }, [variables]);
+  }, [visibleVariables]);
+
+  const isAttendanceScope = scope === 'attendance';
 
   const copyVariable = async (key: string) => {
     await navigator.clipboard?.writeText(key).catch(() => undefined);
@@ -71,7 +95,13 @@ export function CommandVariableHelpButton() {
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
       <Dialog.Trigger asChild>
-        <Button type="button" variant="outline" size="icon" aria-label="사용 가능한 변수 보기" className="shrink-0 bg-card/75">
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          aria-label={isAttendanceScope ? '출석 메시지 변수 보기' : '사용 가능한 변수 보기'}
+          className="shrink-0 bg-card/75"
+        >
           <CircleHelp className="h-[1em] w-[1em]" />
         </Button>
       </Dialog.Trigger>
@@ -89,13 +119,15 @@ export function CommandVariableHelpButton() {
                     <Tags className="h-[1em] w-[1em]" />
                   </span>
                   <Badge tone="sky">사용 가능한 변수</Badge>
-                  <Badge tone={variables.length ? 'mint' : 'neutral'}>{variables.length}개</Badge>
+                  <Badge tone={visibleVariables.length ? 'mint' : 'neutral'}>{visibleVariables.length}개</Badge>
                 </div>
                 <Dialog.Title className="break-keep text-[clamp(1.35rem,3vw,2rem)] font-semibold leading-tight">
-                  명령어 문구에 넣을 변수를 바로 확인하세요.
+                  {isAttendanceScope ? '출석 메시지에 넣을 변수를 확인하세요.' : '명령어 문구에 넣을 변수를 바로 확인하세요.'}
                 </Dialog.Title>
                 <Dialog.Description className="mt-2 max-w-[64ch] break-keep text-sm leading-7 text-muted-foreground">
-                  변수는 채팅 명령어 응답, 출석 메시지, 안내 문구에서 시청자와 방송 상태에 맞는 값으로 자동 치환됩니다.
+                  {isAttendanceScope
+                    ? '시청자·출석·방송·채널 변수는 실제 정보로 치환되며, 신규 출석 시 룰렛과 실행 액션도 한 번 실행할 수 있습니다.'
+                    : '변수는 채팅 명령어 응답, 출석 메시지, 안내 문구에서 시청자와 방송 상태에 맞는 값으로 자동 치환됩니다.'}
                 </Dialog.Description>
               </div>
               <Dialog.Close asChild>

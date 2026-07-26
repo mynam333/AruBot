@@ -21,6 +21,8 @@ import { fetchYouTubeVideoMetadata } from './youtube-video-metadata.js';
 import { createPvdDurationProbeCoordinator } from './pvd-duration-probe.js';
 import { resolvePvdYouTubeMetadata } from './pvd-youtube-metadata-fallback.js';
 import { getKstCalendarDate, resolveAttendanceDate } from './attendance-calendar.js';
+import { DEFAULT_ATTENDANCE_MESSAGE, renderAttendanceTemplate } from './attendance-message.js';
+import { executeAttendanceSpecialOperations, extractAttendanceSpecialVariables } from './attendance-special-variables.js';
 import {
   planLiveSessionTransition,
   primeProviderLiveObservations,
@@ -8264,7 +8266,16 @@ async function getRuntimeActionBlueprint(ownerUserId, idOrSlug) {
   if (!owner || !keyPart) return null;
   const sid = `user:${owner}`;
   const loadRunnableBlueprint = async () => {
-    const blueprint = await getActionBlueprint(owner, keyPart);
+    let blueprint = await getActionBlueprint(owner, keyPart);
+    if (!blueprint) {
+      const normalizedReference = keyPart.toLocaleLowerCase('ko-KR');
+      const blueprints = await listActionBlueprints(owner).catch(() => []);
+      blueprint = blueprints.find((candidate) => (
+        String(candidate?.id || '').trim() === keyPart
+        || String(candidate?.slug || '').trim().toLocaleLowerCase('ko-KR') === normalizedReference
+        || String(candidate?.name || '').trim().toLocaleLowerCase('ko-KR') === normalizedReference
+      )) || null;
+    }
     if (!blueprint || blueprint.version?.published) return blueprint;
     const versions = await listActionBlueprintVersions(owner, blueprint.id, 100).catch(() => []);
     const publishedVersion = versions.find((version) => version?.published === true) || null;
@@ -9825,6 +9836,16 @@ async function executeActionVariableTokens(sid, text, context = {}) {
           ok: runResult?.ok !== false,
           result: runResult,
         });
+      } else if (context.requirePublishedBlueprint === true) {
+        jobs.push({
+          kind: 'blueprint',
+          actionId,
+          blueprintId: blueprint?.id || null,
+          blueprintName: blueprint?.name || actionId,
+          runId: null,
+          ok: false,
+          error: blueprint ? 'blueprint_not_published' : 'blueprint_not_found',
+        });
       } else {
         const job = await queueAutomationJob(ownerUserId, {
           connectionId: null,
@@ -9842,6 +9863,17 @@ async function executeActionVariableTokens(sid, text, context = {}) {
       }
     } catch (error) {
       console.error('[Action Variable] failed to enqueue action job', actionId, error?.message || error);
+      if (context.requirePublishedBlueprint === true) {
+        jobs.push({
+          kind: 'blueprint',
+          actionId,
+          blueprintId: null,
+          blueprintName: actionId,
+          runId: null,
+          ok: false,
+          error: error?.message || 'action_execution_failed',
+        });
+      }
     }
   }
   return jobs;
@@ -9997,7 +10029,11 @@ async function startRouletteSpin(sid, rouletteName, userId, username, opts = {})
 
   const settings = await getBotSettings(sid) || {};
   const defs = getRouletteDefsFromSettings(settings);
-  const def = defs.find(d => String(d.name).toLowerCase() === String(rouletteName || '').toLowerCase());
+  const rouletteReference = String(rouletteName || '').trim().toLocaleLowerCase('ko-KR');
+  const def = defs.find((candidate) => (
+    String(candidate?.id || '').trim().toLocaleLowerCase('ko-KR') === rouletteReference
+    || String(candidate?.name || '').trim().toLocaleLowerCase('ko-KR') === rouletteReference
+  ));
 
   if (!def) {
     console.error(`[Roulette] Roulette not found: ${rouletteName} for channel: ${channelContext.channelId}`);
@@ -10714,6 +10750,7 @@ async function substituteAllPlaceholders(text, sid, userId, username, context = 
   if (!text) return text;
   let out = String(text);
   const provider = String(context?.provider || context?.platform || '').trim().toLowerCase();
+  const lookupOptions = { deadlineAt: Number(context?.lookupDeadlineAt || 0) };
   if (/\{live\.(?:title|category|viewers|startedAt|elapsed|elapsed_ko|channel)\}/.test(out)) {
     let liveInfo = await getLiveInfoForSid(sid, { provider });
     const providerScopedLiveInfo = filterLiveInfoByProvider(liveInfo, provider);
@@ -10748,14 +10785,16 @@ async function substituteAllPlaceholders(text, sid, userId, username, context = 
   // Channel followers count
   if (/\{channel\.followers\}/.test(out)) {
     try {
-      const count = await getChannelFollowersCountForSid(sid, provider);
+      const count = await getChannelFollowersCountForSid(sid, provider, lookupOptions);
       out = out.replace(/\{channel\.followers\}/g, count != null ? String(count) : '');
-    } catch { }
+    } catch {
+      out = out.replace(/\{channel\.followers\}/g, '');
+    }
   }
   // User followedAt
   if (userId && /\{user\.followedAt\}/.test(out)) {
     try {
-      const dt = await findUserFollowedAtForSid(sid, userId, username, provider);
+      const dt = await findUserFollowedAtForSid(sid, userId, username, provider, lookupOptions);
       out = out.replace(/\{user\.followedAt\}/g, dt || '확인할 수 없음');
     } catch {
       out = out.replace(/\{user\.followedAt\}/g, '확인할 수 없음');
@@ -10774,9 +10813,11 @@ async function substituteAllPlaceholders(text, sid, userId, username, context = 
   // User subscription months
   if (userId && /\{user\.subscriptionMonths\}/.test(out)) {
     try {
-      const months = await getUserSubscriptionMonthsForSid(sid, userId, provider);
+      const months = await getUserSubscriptionMonthsForSid(sid, userId, provider, lookupOptions);
       out = out.replace(/\{user\.subscriptionMonths\}/g, months != null ? String(months) : '');
-    } catch { }
+    } catch {
+      out = out.replace(/\{user\.subscriptionMonths\}/g, '');
+    }
   }
   // User channel points
   if (userId && (/{user\.points}/.test(out) || /{user\.channelPoints}/.test(out))) {
@@ -10795,7 +10836,9 @@ async function substituteAllPlaceholders(text, sid, userId, username, context = 
   // User total attendance days
   if (userId && /\{user\.attendanceDays\}/.test(out)) {
     try {
-      const days = await getUserAttendanceTotalDays(sid, userId);
+      const days = context?.attendanceDays != null
+        ? context.attendanceDays
+        : await getUserAttendanceTotalDays(sid, userId);
       out = out.replace(/\{user\.attendanceDays\}/g, days != null ? String(days) : '0');
     } catch {
       out = out.replace(/\{user\.attendanceDays\}/g, '0');
@@ -10804,7 +10847,7 @@ async function substituteAllPlaceholders(text, sid, userId, username, context = 
   // Days since follow (inclusive, follow day counts as 1)
   if (userId && /\{user\.followedDays\}/.test(out)) {
     try {
-      const followedAt = await findUserFollowedAtForSid(sid, userId, username, provider); // 'YYYY-MM-DD'
+      const followedAt = await findUserFollowedAtForSid(sid, userId, username, provider, lookupOptions); // 'YYYY-MM-DD'
       if (followedAt) {
         const todayKst = getKstDateString(); // 'YYYY-MM-DD'
         const start = new Date(`${followedAt}T00:00:00Z`).getTime();
@@ -10892,12 +10935,15 @@ function getFollowerItemDate(item = {}) {
   for (const source of objects) {
     const dt = source.createdDate || source.createdAt || source.followedAt || source.followDate || source.followedDate || source.timestamp || source.createdTime || source.followTime || null;
     if (dt) {
-      const numeric = typeof dt === 'number' || /^\d+$/.test(String(dt)) ? Number(dt) : null;
+      const text = String(dt || '').trim();
+      const numeric = typeof dt === 'number' || /^\d+$/.test(text) ? Number(dt) : null;
+      if (numeric == null && /^\d{4}-\d{2}-\d{2}/.test(text) && !/(?:z|[+-]\d{2}:?\d{2})$/i.test(text)) {
+        return text.slice(0, 10);
+      }
       const parsed = numeric != null && Number.isFinite(numeric)
         ? new Date(numeric < 10_000_000_000 ? numeric * 1000 : numeric)
         : new Date(dt);
-      if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
-      const text = String(dt || '').trim();
+      if (!Number.isNaN(parsed.getTime())) return getKstCalendarDate(parsed.getTime());
       if (/^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(0, 10);
     }
   }
@@ -11268,7 +11314,19 @@ async function getChannelUidsForSid(sid) {
   return resolveChzzkChannelUidsForSid(sid, settings);
 }
 
-async function getChannelFollowersCountForSid(sid, provider = '') {
+function lookupDeadlineExpired(options = {}) {
+  const deadlineAt = Number(options?.deadlineAt || 0);
+  return Number.isFinite(deadlineAt) && deadlineAt > 0 && Date.now() >= deadlineAt;
+}
+
+function lookupRequestTimeout(options = {}, fallbackMs = 8000) {
+  const fallback = Math.max(250, Number(fallbackMs) || 8000);
+  const deadlineAt = Number(options?.deadlineAt || 0);
+  if (!Number.isFinite(deadlineAt) || deadlineAt <= 0) return fallback;
+  return Math.max(1, Math.min(fallback, deadlineAt - Date.now()));
+}
+
+async function getChannelFollowersCountForSid(sid, provider = '', options = {}) {
   const normalizedProvider = String(provider || '').trim().toLowerCase();
   const cacheKey = normalizedProvider ? `${normalizedProvider}:${sid}` : String(sid);
   const cached = followersCountCache.get(cacheKey);
@@ -11276,6 +11334,7 @@ async function getChannelFollowersCountForSid(sid, provider = '') {
   if (cached && (now - cached.ts) < 5 * 60 * 1000) return cached.count;
   let count = null;
   if (!normalizedProvider || normalizedProvider === 'chzzk') {
+    if (lookupDeadlineExpired(options)) return null;
     const uids = await getChannelUidsForSid(sid);
     const channelId = uids[0] || null;
     if (channelId) {
@@ -11283,13 +11342,17 @@ async function getChannelFollowersCountForSid(sid, provider = '') {
         const accessToken = await getValidAccessToken(sid);
         const r1 = await axios.get(`${OPENAPI_BASE}/open/v1/channels/${encodeURIComponent(channelId)}/followers/count`, {
           headers: { Authorization: `Bearer ${accessToken}` },
+          timeout: lookupRequestTimeout(options, DEFAULT_TIMEOUT),
         });
         count = Number(r1?.data?.content?.totalCount ?? r1?.data?.totalCount ?? r1?.data?.count ?? NaN);
       } catch { }
     }
     if (channelId && (count == null || Number.isNaN(count))) {
       try {
-        const r2 = await axios.get(`https://api.chzzk.naver.com/service/v1/channels/${encodeURIComponent(channelId)}/followers/count`);
+        if (lookupDeadlineExpired(options)) return null;
+        const r2 = await axios.get(`https://api.chzzk.naver.com/service/v1/channels/${encodeURIComponent(channelId)}/followers/count`, {
+          timeout: lookupRequestTimeout(options, DEFAULT_TIMEOUT),
+        });
         count = Number(r2?.data?.content?.totalCount ?? r2?.data?.totalCount ?? r2?.data?.count ?? NaN);
       } catch { }
     }
@@ -11301,6 +11364,7 @@ async function getChannelFollowersCountForSid(sid, provider = '') {
   }
   if (normalizedProvider === 'youtube') return null;
   if (!normalizedProvider || normalizedProvider === 'cime') {
+    if (lookupDeadlineExpired(options)) return null;
     try {
       const cimeAccount = await getCimePlatformAccountForSid(sid);
       const publicProfile = cimeAccount?.metadata?.publicProfile || {};
@@ -11316,7 +11380,7 @@ async function getChannelFollowersCountForSid(sid, provider = '') {
 
 // (moved) API Key management endpoints are registered after app initialization
 
-async function findUserFollowedAtForSid(sid, userId, username = '', provider = '') {
+async function findUserFollowedAtForSid(sid, userId, username = '', provider = '', options = {}) {
   if (!userId) return null;
   const normalizedProvider = String(provider || '').trim().toLowerCase();
   const key = `${sid}:${normalizedProvider || 'auto'}:${userId}:${username}`;
@@ -11335,19 +11399,21 @@ async function findUserFollowedAtForSid(sid, userId, username = '', provider = '
       // Best-effort: paginate followers list to find the user
       const size = 50;
       for (let page = 1; page <= maxChzzkPages; page++) {
+        if (lookupDeadlineExpired(options)) return null;
         let data;
         try {
           const r = await axios.get(`${OPENAPI_BASE}/open/v1/channels/followers`, {
             params: { page, size },
             headers: { Authorization: `Bearer ${accessToken}` },
-            timeout: lookupTimeout,
+            timeout: lookupRequestTimeout(options, lookupTimeout),
           });
           data = r?.data?.content || r?.data || {};
         } catch {
           // Fallback to service API
+          if (lookupDeadlineExpired(options)) return null;
           const r2 = await axios.get(`https://api.chzzk.naver.com/service/v1/channels/${encodeURIComponent(channelId)}/followers`, {
             params: { page, size },
-            timeout: lookupTimeout,
+            timeout: lookupRequestTimeout(options, lookupTimeout),
           });
           data = r2?.data?.content || r2?.data || {};
         }
@@ -11364,6 +11430,7 @@ async function findUserFollowedAtForSid(sid, userId, username = '', provider = '
       }
     } catch (e) { console.error(e) }
   }
+  if (lookupDeadlineExpired(options)) return null;
   if (normalizedProvider === 'chzzk' || normalizedProvider === 'youtube') {
     userFollowedAtCache.set(key, { ts: now, date: '' });
     return null;
@@ -11374,10 +11441,11 @@ async function findUserFollowedAtForSid(sid, userId, username = '', provider = '
       const accessToken = await getValidCimeAccessToken(ownerUserId);
       const size = 100;
       for (let page = 0; page < maxCimePages; page++) {
+        if (lookupDeadlineExpired(options)) return null;
         const r = await axios.get(`${CIME_OPENAPI_BASE}/open/v1/channels/followers`, {
           params: { page, size },
           headers: { Authorization: `Bearer ${accessToken}` },
-          timeout: lookupTimeout,
+          timeout: lookupRequestTimeout(options, lookupTimeout),
         });
         const content = unwrapOpenApiContent(r);
         const list = Array.isArray(content?.data) ? content.data : (Array.isArray(content) ? content : []);
@@ -11399,11 +11467,11 @@ async function findUserFollowedAtForSid(sid, userId, username = '', provider = '
       return null;
     }
   }
-  userFollowedAtCache.set(key, { ts: now, date: '' });
+  if (!lookupDeadlineExpired(options)) userFollowedAtCache.set(key, { ts: now, date: '' });
   return null;
 }
 
-async function getUserSubscriptionMonthsForSid(sid, userId, provider = '') {
+async function getUserSubscriptionMonthsForSid(sid, userId, provider = '', options = {}) {
   if (!userId) return null;
   const normalizedProvider = String(provider || '').trim().toLowerCase();
   const key = `${sid}:${normalizedProvider || 'auto'}:${userId}`;
@@ -11429,17 +11497,21 @@ async function getUserSubscriptionMonthsForSid(sid, userId, provider = '') {
     // Try open subscriptions API
     const size = 100;
     for (let page = 1; page <= 50; page++) {
+      if (lookupDeadlineExpired(options)) return null;
       let data;
       try {
         const r = await axios.get(`${OPENAPI_BASE}/open/v1/channels/${encodeURIComponent(channelId)}/subscriptions`, {
           params: { page, size },
           headers: { Authorization: `Bearer ${accessToken}` },
+          timeout: lookupRequestTimeout(options, DEFAULT_TIMEOUT),
         });
         data = r?.data?.content || r?.data || {};
       } catch {
         // Fallback service API
+        if (lookupDeadlineExpired(options)) return null;
         const r2 = await axios.get(`https://api.chzzk.naver.com/service/v1/channels/${encodeURIComponent(channelId)}/subscriptions`, {
           params: { page, size },
+          timeout: lookupRequestTimeout(options, DEFAULT_TIMEOUT),
         });
         data = r2?.data?.content || r2?.data || {};
       }
@@ -11456,7 +11528,10 @@ async function getUserSubscriptionMonthsForSid(sid, userId, provider = '') {
       if (list.length < size) break;
     }
   } catch { }
-  if (normalizedProvider === 'chzzk') return null;
+  if (normalizedProvider === 'chzzk') {
+    if (!lookupDeadlineExpired(options)) userSubMonthsCache.set(key, { ts: now, months: null });
+    return null;
+  }
   const cimeCached = userSubMonthsCache.get(`${sid}:cime:${userId}`) || userSubMonthsCache.get(`${sid}:${userId}`);
   if (cimeCached && (now - cimeCached.ts) < 24 * 60 * 60 * 1000) return cimeCached.months;
   return null;
@@ -11842,7 +11917,10 @@ const liveInfoCache = new Map();
 const ownerInfoCache = new Map();
 // Attendance dedupe cache for current process: key `${sid}:${userId}:${date}` -> true
 const attendanceDedupe = new Set();
-const DEFAULT_ATTENDANCE_MESSAGE = '{user.name}님 출석체크 완료! (연속 {attendance.streak}일, 누적 {attendance.totalDays}일)';
+const ATTENDANCE_VARIABLE_LOOKUP_TIMEOUT_MS = (() => {
+  const configured = Number(process.env.ATTENDANCE_VARIABLE_LOOKUP_TIMEOUT_MS || 5000);
+  return Number.isFinite(configured) ? Math.max(500, Math.min(15000, configured)) : 5000;
+})();
 
 function normalizeAttendanceCommandKeyword(settings = {}) {
   return String(settings.attendanceCommandKeyword || '!출석').trim() || '!출석';
@@ -11861,23 +11939,86 @@ function isAttendanceCommandText(text = '', settings = {}) {
   return Boolean(findCommandKeywordMatch(text, [normalizeAttendanceCommandKeyword(settings)]));
 }
 
-function renderAttendanceMessage(template, context = {}) {
-  const source = String(template || DEFAULT_ATTENDANCE_MESSAGE).trim() || DEFAULT_ATTENDANCE_MESSAGE;
-  const replacements = {
-    '{user.name}': context.username || '',
-    '{user.id}': context.userId || '',
-    '{attendance.streak}': context.streak ?? 0,
-    '{attendance.totalDays}': context.totalDays ?? 0,
-    '{attendance.points}': context.points ?? 0,
-    '{attendance.date}': context.date || ''
-  };
-  return Object.entries(replacements).reduce(
-    (message, [token, value]) => message.split(token).join(String(value)),
-    source
-  ).slice(0, 100);
+async function renderAttendanceMessage(template, context = {}) {
+  const provider = String(context.provider || '').trim().toLowerCase();
+  const configuredTemplate = String(template ?? '').trim() || DEFAULT_ATTENDANCE_MESSAGE;
+  const specialPlan = extractAttendanceSpecialVariables(configuredTemplate);
+  const lookupDeadlineAt = Date.now() + ATTENDANCE_VARIABLE_LOOKUP_TIMEOUT_MS;
+  const rendered = await renderAttendanceTemplate(specialPlan.text, context, (message) =>
+    substituteAllPlaceholders(message, context.sid, context.userId, context.username, {
+      provider,
+      attendanceDays: context.totalDays,
+      lookupDeadlineAt,
+    }),
+    {
+      allowEmptyTemplate: true,
+      maxLength: null,
+      substitutionTimeoutMs: ATTENDANCE_VARIABLE_LOOKUP_TIMEOUT_MS,
+    }
+  );
+  const specialResult = await executeAttendanceSpecialOperations(specialPlan.operations, {
+    execute: context.executeSpecialVariables === true,
+    onRoulette: async ({ target }) => {
+      await enqueueRouletteSpin(context.sid, {
+        name: target,
+        userId: String(context.userId || ''),
+        username: String(context.username || ''),
+        chatPost: context.chatPost || null,
+        instant: false,
+        eventContext: {
+          source: 'attendance',
+          triggerName: context.triggerName || 'attendance',
+          attendanceDate: context.date || null,
+        },
+      });
+    },
+    onAction: async ({ type, target }) => {
+      const token = '${' + type + '::' + target + '}';
+      const jobs = await executeActionVariableTokens(context.sid, token, {
+        source: 'attendance',
+        requirePublishedBlueprint: true,
+        platform: provider,
+        trigger: {
+          message: context.triggerMessage || '',
+          keyword: context.triggerName || 'attendance',
+          platform: provider,
+        },
+        attendance: {
+          streak: context.streak ?? 0,
+          totalDays: context.totalDays ?? 0,
+          points: context.points ?? 0,
+          date: context.date || '',
+        },
+        user: { userId: context.userId, username: context.username },
+        chatPost: context.chatPost || null,
+        channelUid: context.channelUid || null,
+        channel: { channelUid: context.channelUid || null },
+      });
+      const failed = jobs.find((job) => job?.ok === false || job?.result?.ok === false);
+      if (failed) {
+        throw new Error(failed.error || failed.result?.error || 'attendance_action_failed');
+      }
+    },
+  });
+  for (const failure of specialResult.errors) {
+    console.warn(`[Attendance] ${failure.type} variable execution failed:`, failure.target, failure.error?.message || failure.error);
+  }
+  return String(rendered || '').trim().slice(0, 100);
 }
 
-async function recordAttendanceFromCommand({ sid, settings, userId, username, channelUid = null, isOwner = false, isBotSelf = false } = {}) {
+async function recordAttendanceFromCommand({
+  sid,
+  settings,
+  userId,
+  username,
+  channelUid = null,
+  provider = '',
+  chatPost = null,
+  triggerName = '',
+  triggerMessage = '',
+  isOwner = false,
+  isBotSelf = false,
+} = {}) {
   if (!sid || !userId || !attendanceFeatureEnabled(settings)) return null;
   const resolvedUserId = String(userId);
   if (isOwner || isBotSelf) return null;
@@ -11895,24 +12036,35 @@ async function recordAttendanceFromCommand({ sid, settings, userId, username, ch
   let totalDays = 0;
   try { totalDays = await getUserAttendanceTotalDays(sid, resolvedUserId); } catch { }
   const attendanceBonus = Math.max(0, Number(settings.channelPointsPerAttendance || 0));
+  let awardedPoints = 0;
   if (result?.isNew && attendanceBonus > 0) {
-    const pointChannelUid = channelUid || await resolveStreamerUidForSid(sid).catch(() => null);
-    if (pointChannelUid && !(await isChannelPointExcluded(settings, resolvedUserId))) {
-      await incrChannelPoints(pointChannelUid, resolvedUserId, username || resolvedUserId, attendanceBonus).catch(() => { });
-    }
+    try {
+      const pointChannelUid = channelUid || await resolveStreamerUidForSid(sid, provider).catch(() => null);
+      if (pointChannelUid && !(await isChannelPointExcluded(settings, resolvedUserId))) {
+        await incrChannelPoints(pointChannelUid, resolvedUserId, username || resolvedUserId, attendanceBonus);
+        awardedPoints = attendanceBonus;
+      }
+    } catch { }
   }
   return {
     ...result,
     totalDays,
-    points: attendanceBonus,
+    points: awardedPoints,
     date: attendDate,
-    response: renderAttendanceMessage(settings.attendanceMessage, {
+    response: await renderAttendanceMessage(settings.attendanceMessage, {
+      sid,
+      provider,
       username,
       userId: resolvedUserId,
       streak: result?.streak || 0,
       totalDays,
-      points: attendanceBonus,
+      points: awardedPoints,
       date: attendDate,
+      channelUid,
+      chatPost,
+      triggerName: triggerName || normalizeAttendanceCommandKeyword(settings),
+      triggerMessage,
+      executeSpecialVariables: result?.isNew === true,
     }),
   };
 }
@@ -19537,9 +19689,9 @@ const BOT_VARIABLES = [
   { key: '{attendance.totalDays}', label: '누적 출석일', description: '출석 메시지에서 사용할 수 있는 전체 출석일입니다.', group: '출석', providers: BOT_VARIABLE_PROVIDERS },
   { key: '{attendance.points}', label: '출석 포인트', description: '출석 체크로 지급되는 포인트입니다.', group: '출석', providers: BOT_VARIABLE_PROVIDERS },
   { key: '{attendance.date}', label: '출석 날짜', description: '한국 표준시(KST) 기준 출석 날짜입니다.', group: '출석', providers: BOT_VARIABLE_PROVIDERS },
-  { key: '{user.followedAt}', label: '팔로우 시작일', description: '플랫폼에서 팔로우 날짜를 제공하는 경우 시청자가 팔로우를 시작한 날짜입니다.', group: '시청자', providers: BOT_VARIABLE_PROVIDERS },
-  { key: '{user.followedDays}', label: '팔로우 일수', description: '팔로우한 날을 1일째로 계산한 팔로우 일수입니다.', group: '시청자', providers: BOT_VARIABLE_PROVIDERS },
-  { key: '{user.subscriptionMonths}', label: '구독 개월', description: '구독 이벤트나 구독 목록에서 확인 가능한 시청자의 구독 개월 수입니다.', group: '시청자', providers: BOT_VARIABLE_PROVIDERS, caveat: '씨미와 YouTube는 구독/멤버십 이벤트를 수신한 시청자부터 채워집니다.' },
+  { key: '{user.followedAt}', label: '팔로우 시작일', description: '플랫폼에서 팔로우 날짜를 제공하는 경우 시청자가 팔로우를 시작한 날짜입니다.', group: '시청자', providers: ['chzzk', 'cime'], caveat: 'YouTube 채팅에서는 팔로우 날짜를 제공하지 않아 확인할 수 없음으로 표시됩니다.' },
+  { key: '{user.followedDays}', label: '팔로우 일수', description: '팔로우한 날을 1일째로 계산한 팔로우 일수입니다.', group: '시청자', providers: ['chzzk', 'cime'], caveat: 'YouTube 채팅에서는 팔로우 날짜를 제공하지 않아 0일로 표시됩니다.' },
+  { key: '{user.subscriptionMonths}', label: '구독 개월', description: '구독 이벤트나 구독 목록에서 확인 가능한 시청자의 구독 개월 수입니다.', group: '시청자', providers: ['chzzk', 'cime'], caveat: '씨미는 수신한 구독 이벤트에 저장된 값을 사용하며, YouTube 멤버십 개월은 현재 제공하지 않습니다.' },
   { key: '{live.title}', label: '방송 제목', description: '현재 방송 제목입니다.', group: '방송', providers: BOT_VARIABLE_PROVIDERS },
   { key: '{live.category}', label: '방송 카테고리', description: '현재 방송 카테고리입니다.', group: '방송', providers: BOT_VARIABLE_PROVIDERS },
   { key: '{live.viewers}', label: '시청자 수', description: '확인 가능한 현재 시청자 수입니다.', group: '방송', providers: BOT_VARIABLE_PROVIDERS },
@@ -19551,8 +19703,8 @@ const BOT_VARIABLES = [
   { key: '${live.title_change}', label: '방송 제목 변경', description: '명령어 뒤에 입력한 전체 문장으로 현재 플랫폼의 방송 제목을 변경합니다.', group: '특수 실행', providers: ['chzzk', 'cime'], caveat: '스트리머 또는 매니저만 실행할 수 있으며 채팅에는 출력되지 않습니다. 명령어 인자가 없으면 실행하지 않고, 제거 후 응답이 비어 있으면 채팅도 보내지 않습니다.' },
   { key: '${live.game_change}', label: '방송 카테고리 변경', description: '명령어 뒤에 입력한 전체 문장으로 현재 플랫폼의 카테고리를 검색해 변경합니다.', group: '특수 실행', providers: ['chzzk', 'cime'], caveat: '스트리머 또는 매니저만 실행할 수 있으며 채팅에는 출력되지 않습니다. 명령어 인자가 없으면 실행하지 않고, 제거 후 응답이 비어 있으면 채팅도 보내지 않습니다.' },
   { key: '${video_donation}', label: '영상 후원 신청 실행', description: '명령어 인자로 받은 주소를 영상 후원 대기열에 넣고 실제 재생 구간만큼 포인트를 차감합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, caveat: '사용법: <주소> [<시작초>] [<종료초>] · 시작초와 종료초는 초 또는 분:초(예: 1:23 = 83초) 형식으로 입력합니다. 시작초 기본값은 0초이며, 종료초를 생략하면 영상 마지막까지 재생합니다. 설정된 최대 재생 시간은 항상 적용되며, 이 변수는 채팅에 출력되지 않습니다.' },
-  { key: '${roulette::룰렛이름}', label: '룰렛 실행', description: '지정한 룰렛을 즉시 실행하고 결과를 채팅/오버레이 흐름에 반영합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, caveat: '룰렛 이름 또는 ID를 :: 뒤에 입력하세요. 예: ${roulette::오늘의 벌칙}' },
-  { key: '${action::액션이름}', label: '블루프린트 실행', description: '게시된 실행 액션 블루프린트를 명령어 응답 중 실행합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, caveat: '채팅으로 출력되지 않고 액션이 실행됩니다. 액션 이름, slug 또는 ID를 사용할 수 있습니다.' },
+  { key: '${roulette::룰렛이름}', label: '룰렛 실행', description: '지정한 룰렛을 즉시 실행하고 결과를 채팅/오버레이 흐름에 반영합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, caveat: '룰렛 이름 또는 ID를 :: 뒤에 입력하세요. 출석 메시지에서는 신규 출석에만 무료로 1회 실행됩니다. 예: ${roulette::오늘의 벌칙}' },
+  { key: '${action::액션이름}', label: '블루프린트 실행', description: '게시된 실행 액션 블루프린트를 명령어 응답 또는 출석 메시지에서 실행합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, caveat: '채팅으로 출력되지 않고 액션이 실행됩니다. 출석 메시지에서는 신규 출석에만 한 번 실행되며, 액션 이름, slug 또는 ID를 사용할 수 있습니다.' },
   { key: '${automation::액션이름}', label: '블루프린트 실행 별칭', description: '${action::...}과 같은 방식으로 게시된 실행 액션을 실행합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS },
   { key: '${blueprint::액션이름}', label: '블루프린트 실행 별칭', description: '${action::...}과 같은 방식으로 게시된 실행 액션을 실행합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS },
   { key: '{trigger.message}', label: '트리거 메시지', description: '블루프린트를 실행시킨 채팅 메시지나 입력 문구입니다.', group: '블루프린트 컨텍스트', providers: BOT_VARIABLE_PROVIDERS },
@@ -21904,7 +22056,8 @@ async function getValidAccessToken(sid) {
       clientSecret: CHZZK_CLIENT_SECRET
     };
     const r = await axios.post(`${OPENAPI_BASE}/auth/v1/token`, body, {
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 'Content-Type': 'application/json' },
+      timeout: DEFAULT_TIMEOUT,
     });
     const rPayload = (r?.data && r.data.content) ? r.data.content : r?.data || {};
     const { accessToken, refreshToken, tokenType, expiresIn } = rPayload;
@@ -22201,40 +22354,43 @@ async function ensureSession(sid, channelId) {
                   if (result && result.isNew) {
                     const shouldAnnounce = settings.attendanceAnnounce !== false; // default true
                     const attendanceBonus = Math.max(0, Number(settings.channelPointsPerAttendance || 0));
-                    if (shouldAnnounce) {
-                      const accessToken = await getValidAccessToken(sid);
-                      if (entry.sessionKey && accessToken) {
-                        const url = `${OPENAPI_BASE}/open/v1/chats/send`;
-                        let totalDays = 0;
-                        try { totalDays = await getUserAttendanceTotalDays(sid, resolvedUserId); } catch { }
-                        const text = renderAttendanceMessage(settings.attendanceMessage, {
-                          username: resolvedUsername,
-                          userId: resolvedUserId,
-                          streak: result.streak,
-                          totalDays,
-                          points: attendanceBonus,
-                          date: attendDate
-                        });
-                        await axios.post(url, { message: text }, {
-                          params: { sessionKey: entry.sessionKey },
-                          headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }
-                        }).catch(() => { });
-                        rememberOutboundMessage(entry, text);
-                      }
-                    }
-                    // Attendance bonus channel points
+                    let awardedPoints = 0;
+                    let attendanceChannelUid = null;
+                    // Apply the attendance bonus before resolving {user.points}.
                     try {
-                      const bonus = attendanceBonus;
-                      if (bonus > 0) {
-                        // Resolve streamer channel UID
-                        let channelUid = null;
-                        const uids = await resolveChzzkChannelUidsForSid(sid, settings);
-                        if (uids.length) channelUid = uids[0];
-                        if (channelUid && !(await isChannelPointExcluded(settings, resolvedUserId))) {
-                          try { await incrChannelPoints(channelUid, resolvedUserId, resolvedUsername, bonus); } catch { }
+                      const uids = await resolveChzzkChannelUidsForSid(sid, settings);
+                      attendanceChannelUid = uids[0] || null;
+                      if (attendanceBonus > 0 && attendanceChannelUid) {
+                        if (!(await isChannelPointExcluded(settings, resolvedUserId))) {
+                          await incrChannelPoints(attendanceChannelUid, resolvedUserId, resolvedUsername, attendanceBonus);
+                          awardedPoints = attendanceBonus;
                         }
                       }
                     } catch { }
+                    const attendanceAccessToken = await getValidAccessToken(sid).catch(() => null);
+                    const attendanceText = await renderAttendanceMessage(settings.attendanceMessage, {
+                      sid,
+                      provider: 'chzzk',
+                      username: resolvedUsername,
+                      userId: resolvedUserId,
+                      streak: result.streak,
+                      totalDays,
+                      points: awardedPoints,
+                      date: attendDate,
+                      channelUid: attendanceChannelUid || liveState.channelId || entry.channelId || null,
+                      chatPost: makeChzzkChatPost(entry.sessionKey, attendanceAccessToken, resolvedUsername, { liveManageActorId: resolvedUserId }),
+                      triggerName: 'first_chat',
+                      triggerMessage: text,
+                      executeSpecialVariables: result?.isNew === true,
+                    });
+                    if (shouldAnnounce && entry.sessionKey && attendanceAccessToken && attendanceText) {
+                      const url = `${OPENAPI_BASE}/open/v1/chats/send`;
+                      await axios.post(url, { message: attendanceText }, {
+                        params: { sessionKey: entry.sessionKey },
+                        headers: { Authorization: `Bearer ${attendanceAccessToken}`, 'Content-Type': 'application/json' }
+                      }).catch(() => { });
+                      rememberOutboundMessage(entry, attendanceText);
+                    }
                   }
                 }
               }
@@ -22313,17 +22469,15 @@ async function ensureSession(sid, channelId) {
                 userId: resolvedUserId,
                 username: resolvedUsername,
                 channelUid: liveState.channelId || null,
+                provider: 'chzzk',
+                chatPost: makeChzzkChatPost(entry.sessionKey, null, resolvedUsername, { liveManageActorId: resolvedUserId }),
+                triggerName: normalizeAttendanceCommandKeyword(commandSettings),
+                triggerMessage: text,
                 isOwner,
                 isBotSelf,
               });
-              const reply = attendanceResult?.response || renderAttendanceMessage(commandSettings.attendanceMessage, {
-                username: resolvedUsername,
-                userId: resolvedUserId,
-                streak: 0,
-                totalDays: 0,
-                points: Math.max(0, Number(commandSettings.channelPointsPerAttendance || 0)),
-                date: await getAttendanceDate(sid),
-              });
+              if (!attendanceResult) return;
+              const reply = attendanceResult.response;
               const accessToken = await getValidAccessToken(sid);
               if (entry.sessionKey && accessToken && reply) {
                 await axios.post(`${OPENAPI_BASE}/open/v1/chats/send`, { message: reply }, {
@@ -22389,11 +22543,15 @@ async function ensureSession(sid, channelId) {
                   userId: resolvedUserId,
                   username: resolvedUsername,
                   channelUid: liveState.channelId || null,
+                  provider: 'chzzk',
+                  chatPost: makeChzzkChatPost(entry.sessionKey, null, resolvedUsername, { liveManageActorId: resolvedUserId }),
+                  triggerName: matchedKeyword || normalizeAttendanceCommandKeyword(commandSettings),
+                  triggerMessage: text,
                   isOwner,
                   isBotSelf,
                 });
-                if (attendanceResult?.response) {
-                  response = attendanceResult.response;
+                if (attendanceResult) {
+                  response = attendanceResult.response || '';
                   commandFeatures.push('attendance');
                 }
               } catch { }
@@ -23799,23 +23957,35 @@ async function processYoutubeChatAutomation(entry, ev) {
         if (!attendanceDedupe.has(attKey) && !isOwner && !isBotSelf && !excludedSet.has(resolvedUserId)) {
           const result = await recordAttendanceAndGetStreak(sid, resolvedUserId, resolvedUsername, attendDate);
           attendanceDedupe.add(attKey);
-          if (result?.isNew && settings.attendanceAnnounce !== false) {
+          const bonus = result?.isNew ? Math.max(0, Number(settings.channelPointsPerAttendance || 0)) : 0;
+          let awardedPoints = 0;
+          try {
+            if (bonus > 0 && entry.channelId && !(await isChannelPointExcluded(settings, resolvedUserId))) {
+              await incrChannelPoints(entry.channelId, resolvedUserId, resolvedUsername, bonus);
+              awardedPoints = bonus;
+            }
+          } catch { }
+          if (result?.isNew) {
             let totalDays = 0;
             try { totalDays = await getUserAttendanceTotalDays(sid, resolvedUserId); } catch { }
-            const attendanceBonus = Math.max(0, Number(settings.channelPointsPerAttendance || 0));
-            const reply = renderAttendanceMessage(settings.attendanceMessage, {
+            const reply = await renderAttendanceMessage(settings.attendanceMessage, {
+              sid,
+              provider: 'youtube',
               username: resolvedUsername,
               userId: resolvedUserId,
               streak: result.streak,
               totalDays,
-              points: attendanceBonus,
-              date: attendDate
+              points: awardedPoints,
+              date: attendDate,
+              channelUid: entry.channelId || null,
+              chatPost: makeYoutubeChatPost(ownerUserId, entry.liveChatId, resolvedUsername),
+              triggerName: 'first_chat',
+              triggerMessage: text,
+              executeSpecialVariables: result?.isNew === true,
             });
-            await sendYoutubeChat(ownerUserId, entry.liveChatId, reply).catch(() => { });
-          }
-          const bonus = result?.isNew ? Math.max(0, Number(settings.channelPointsPerAttendance || 0)) : 0;
-          if (bonus > 0 && entry.channelId && !(await isChannelPointExcluded(settings, resolvedUserId))) {
-            await incrChannelPoints(entry.channelId, resolvedUserId, resolvedUsername, bonus).catch(() => { });
+            if (settings.attendanceAnnounce !== false && reply) {
+              await sendYoutubeChat(ownerUserId, entry.liveChatId, reply).catch(() => { });
+            }
           }
         }
       } catch { }
@@ -23855,17 +24025,15 @@ async function processYoutubeChatAutomation(entry, ev) {
           userId: resolvedUserId,
           username: resolvedUsername,
           channelUid: entry.channelId || null,
+          provider: 'youtube',
+          chatPost: makeYoutubeChatPost(ownerUserId, entry.liveChatId, resolvedUsername),
+          triggerName: normalizeAttendanceCommandKeyword(settings),
+          triggerMessage: text,
           isOwner,
           isBotSelf,
         });
-        const reply = attendanceResult?.response || renderAttendanceMessage(settings.attendanceMessage, {
-          username: resolvedUsername,
-          userId: resolvedUserId,
-          streak: 0,
-          totalDays: 0,
-          points: Math.max(0, Number(settings.channelPointsPerAttendance || 0)),
-          date: await getAttendanceDate(sid),
-        });
+        if (!attendanceResult) return;
+        const reply = attendanceResult.response;
         if (reply) await sendYoutubeChat(ownerUserId, entry.liveChatId, reply).catch(() => { });
         return;
       } catch { }
@@ -23910,11 +24078,15 @@ async function processYoutubeChatAutomation(entry, ev) {
             userId: resolvedUserId,
             username: resolvedUsername,
             channelUid: entry.channelId || null,
+            provider: 'youtube',
+            chatPost: makeYoutubeChatPost(ownerUserId, entry.liveChatId, resolvedUsername),
+            triggerName: matchedKeyword || normalizeAttendanceCommandKeyword(settings),
+            triggerMessage: text,
             isOwner,
             isBotSelf,
           });
-          if (attendanceResult?.response) {
-            response = attendanceResult.response;
+          if (attendanceResult) {
+            response = attendanceResult.response || '';
             commandFeatures.push('attendance');
           }
         } catch { }
@@ -24912,25 +25084,37 @@ async function processCimeChatAutomation(entry, ev) {
         if (!attendanceDedupe.has(attKey) && !isOwner && !excludedSet.has(resolvedUserId)) {
           const result = await recordAttendanceAndGetStreak(sid, resolvedUserId, resolvedUsername, attendDate);
           attendanceDedupe.add(attKey);
-          if (result?.isNew && settings.attendanceAnnounce !== false) {
+          const bonus = result?.isNew ? Math.max(0, Number(settings.channelPointsPerAttendance || 0)) : 0;
+          let awardedPoints = 0;
+          try {
+            if (bonus > 0 && pointChannelUid && !(await isChannelPointExcluded(settings, resolvedUserId))) {
+              await incrChannelPoints(pointChannelUid, resolvedUserId, resolvedUsername, bonus);
+              awardedPoints = bonus;
+            }
+          } catch (error) {
+            console.warn('[CIME] Attendance point award failed:', error?.message || error);
+          }
+          if (result?.isNew) {
             let totalDays = 0;
             try { totalDays = await getUserAttendanceTotalDays(sid, resolvedUserId); } catch { }
-            const attendanceBonus = Math.max(0, Number(settings.channelPointsPerAttendance || 0));
-            const text = renderAttendanceMessage(settings.attendanceMessage, {
+            const attendanceText = await renderAttendanceMessage(settings.attendanceMessage, {
+              sid,
+              provider: 'cime',
               username: resolvedUsername,
               userId: resolvedUserId,
               streak: result.streak,
               totalDays,
-              points: attendanceBonus,
-              date: attendDate
+              points: awardedPoints,
+              date: attendDate,
+              channelUid: pointChannelUid || entry.channelId || null,
+              chatPost: makeCimeChatPost(ownerUserId, resolvedUsername, { liveManageActorId: resolvedUserId }),
+              triggerName: 'first_chat',
+              triggerMessage: text,
+              executeSpecialVariables: result?.isNew === true,
             });
-            await sendCimeChat(ownerUserId, text).catch(() => { });
-          }
-          const bonus = result?.isNew ? Math.max(0, Number(settings.channelPointsPerAttendance || 0)) : 0;
-          if (bonus > 0 && pointChannelUid && !(await isChannelPointExcluded(settings, resolvedUserId))) {
-            await incrChannelPoints(pointChannelUid, resolvedUserId, resolvedUsername, bonus).catch((error) => {
-              console.warn('[CIME] Attendance point award failed:', error?.message || error);
-            });
+            if (settings.attendanceAnnounce !== false && attendanceText) {
+              await sendCimeChat(ownerUserId, attendanceText).catch(() => { });
+            }
           }
         }
       } catch { }
@@ -24972,17 +25156,15 @@ async function processCimeChatAutomation(entry, ev) {
           userId: resolvedUserId,
           username: resolvedUsername,
           channelUid: pointChannelUid || entry.channelId || null,
+          provider: 'cime',
+          chatPost: makeCimeChatPost(ownerUserId, resolvedUsername, { liveManageActorId: resolvedUserId }),
+          triggerName: normalizeAttendanceCommandKeyword(settings),
+          triggerMessage: text,
           isOwner,
           isBotSelf,
         });
-        const reply = attendanceResult?.response || renderAttendanceMessage(settings.attendanceMessage, {
-          username: resolvedUsername,
-          userId: resolvedUserId,
-          streak: 0,
-          totalDays: 0,
-          points: Math.max(0, Number(settings.channelPointsPerAttendance || 0)),
-          date: await getAttendanceDate(sid),
-        });
+        if (!attendanceResult) return;
+        const reply = attendanceResult.response;
         if (reply) await sendCimeChat(ownerUserId, reply).catch(() => { });
         return;
       } catch { }
@@ -25046,11 +25228,15 @@ async function processCimeChatAutomation(entry, ev) {
             userId: resolvedUserId,
             username: resolvedUsername,
             channelUid: pointChannelUid || entry.channelId || null,
+            provider: 'cime',
+            chatPost: makeCimeChatPost(ownerUserId, resolvedUsername, { liveManageActorId: resolvedUserId }),
+            triggerName: matchedKeyword || normalizeAttendanceCommandKeyword(settings),
+            triggerMessage: text,
             isOwner,
             isBotSelf,
           });
-          if (attendanceResult?.response) {
-            response = attendanceResult.response;
+          if (attendanceResult) {
+            response = attendanceResult.response || '';
             commandFeatures.push('attendance');
           }
         } catch { }
