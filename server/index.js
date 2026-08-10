@@ -21,6 +21,7 @@ import { fetchYouTubeVideoMetadata } from './youtube-video-metadata.js';
 import { createPvdDurationProbeCoordinator } from './pvd-duration-probe.js';
 import { resolvePvdYouTubeMetadata } from './pvd-youtube-metadata-fallback.js';
 import { createRouletteBroadcastDelivery } from './roulette-broadcast-delivery.js';
+import { calculateDonationPointAward, normalizePointAward, resolveViewerPointEarningPolicy } from './point-earning-policy.js';
 import { getKstCalendarDate, resolveAttendanceDate } from './attendance-calendar.js';
 import { DEFAULT_ATTENDANCE_MESSAGE, renderAttendanceTemplate } from './attendance-message.js';
 import { executeAttendanceSpecialOperations, extractAttendanceSpecialVariables } from './attendance-special-variables.js';
@@ -217,6 +218,7 @@ function singleFlight(key, fn) {
 }
 
 const realtimeResponseCache = new Map();
+const viewerPointPolicyCache = new Map();
 const REALTIME_CACHE_SWEEP_MS = 60 * 1000;
 const REALTIME_CACHE_MAX_AGE_MS = 2 * 60 * 1000;
 
@@ -269,6 +271,7 @@ async function readRealtimeCached(key, options, loader) {
 }
 
 function invalidateRealtimePointCaches(channelUid) {
+  viewerPointPolicyCache.clear();
   const uid = String(channelUid || '').trim();
   for (const key of realtimeResponseCache.keys()) {
     if (key.startsWith('viewer:points:') || (uid && key.includes(`:points:${uid}:`))) {
@@ -290,6 +293,9 @@ setInterval(() => {
     if (!entry?.promise && (!entry?.updatedAt || now - entry.updatedAt > REALTIME_CACHE_MAX_AGE_MS)) {
       realtimeResponseCache.delete(key);
     }
+  }
+  for (const [sid, entry] of viewerPointPolicyCache.entries()) {
+    if (!entry?.expiresAt || entry.expiresAt <= now) viewerPointPolicyCache.delete(sid);
   }
 }, REALTIME_CACHE_SWEEP_MS).unref?.();
 
@@ -5523,6 +5529,7 @@ app.post('/api/donation/settings', async (req, res) => {
     const pointsPerK = Math.max(0, Number(req.body?.settings?.pointsPerK ?? 10));
     const next = { ...s, donation: { ...(s.donation || {}), pointsPerK } };
     await setBotSettings(sid, next);
+    invalidateRealtimePointCaches();
     return res.json({ ok: true, settings: next.donation });
   } catch { return res.status(500).json({ error: 'failed' }); }
 });
@@ -5746,8 +5753,8 @@ app.post('/api/setup/templates/apply', rateLimiters.userWrite, async (req, res) 
       attendanceCommandKeyword: normalizeAttendanceCommandKeyword(settings),
       attendanceAnnounce: settings.attendanceAnnounce ?? true,
       attendanceMessage: settings.attendanceMessage || '{user.name}님 출석체크 완료! (연속 {attendance.streak}일, 누적 {attendance.totalDays}일)',
-      channelPointsPerChat: Number.isFinite(Number(settings.channelPointsPerChat)) ? Number(settings.channelPointsPerChat) : 1,
-      channelPointsPerAttendance: Number.isFinite(Number(settings.channelPointsPerAttendance)) ? Number(settings.channelPointsPerAttendance) : 50,
+      channelPointsPerChat: normalizePointAward(settings.channelPointsPerChat, 1),
+      channelPointsPerAttendance: normalizePointAward(settings.channelPointsPerAttendance, 50),
       videoDonationAcceptEnabled: settings.videoDonationAcceptEnabled === true,
       videoDonationPointsPerSecond: Number.isFinite(Number(settings.videoDonationPointsPerSecond)) ? Number(settings.videoDonationPointsPerSecond) : 1,
       videoDonationMaxDurationSec: Number.isFinite(Number(settings.videoDonationMaxDurationSec)) ? Number(settings.videoDonationMaxDurationSec) : 600,
@@ -5762,6 +5769,7 @@ app.post('/api/setup/templates/apply', rateLimiters.userWrite, async (req, res) 
       },
     };
     await setBotSettings(sid, nextSettings);
+    invalidateRealtimePointCaches();
     try { macroCache.delete(sid); } catch { }
 
     return res.json({
@@ -12060,7 +12068,7 @@ async function recordAttendanceFromCommand({
   attendanceDedupe.add(attKey);
   let totalDays = 0;
   try { totalDays = await getUserAttendanceTotalDays(sid, resolvedUserId); } catch { }
-  const attendanceBonus = Math.max(0, Number(settings.channelPointsPerAttendance || 0));
+  const attendanceBonus = normalizePointAward(settings.channelPointsPerAttendance, 0);
   let awardedPoints = 0;
   if (result?.isNew && attendanceBonus > 0) {
     try {
@@ -18320,6 +18328,49 @@ async function listStationChannelsForViewerBalance(balance) {
   return fallback ? [fallback] : [];
 }
 
+const VIEWER_POINT_POLICY_CONCURRENCY = Math.max(1, Math.min(8, Number(process.env.VIEWER_POINT_POLICY_CONCURRENCY || 4)));
+const VIEWER_POINT_POLICY_TIMEOUT_MS = Math.max(250, Math.min(5000, Number(process.env.VIEWER_POINT_POLICY_TIMEOUT_MS || 2000)));
+const VIEWER_POINT_POLICY_CACHE_MS = Math.max(5000, Math.min(5 * 60 * 1000, Number(process.env.VIEWER_POINT_POLICY_CACHE_MS || 60_000)));
+
+async function waitForViewerPointPolicy(promise) {
+  let timeoutId;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((resolve) => {
+        timeoutId = setTimeout(() => resolve(null), VIEWER_POINT_POLICY_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
+async function loadViewerPointEarningPolicy(balance) {
+  const sid = String(balance?.pointSettingsSid || '').trim();
+  if (!sid) return null;
+
+  const now = Date.now();
+  const cached = viewerPointPolicyCache.get(sid);
+  if (cached?.expiresAt > now && Object.hasOwn(cached, 'value')) return cached.value;
+  if (cached?.expiresAt > now && cached.promise) return waitForViewerPointPolicy(cached.promise);
+  if (cached) viewerPointPolicyCache.delete(sid);
+
+  const request = resolveViewerPointEarningPolicy(balance, { getSettings: getBotSettings })
+    .catch(() => null);
+  const entry = { promise: request, expiresAt: now + VIEWER_POINT_POLICY_CACHE_MS };
+  viewerPointPolicyCache.set(sid, entry);
+  request.then((value) => {
+    if (viewerPointPolicyCache.get(sid) === entry) {
+      viewerPointPolicyCache.set(sid, {
+        value,
+        expiresAt: Date.now() + VIEWER_POINT_POLICY_CACHE_MS,
+      });
+    }
+  });
+  return waitForViewerPointPolicy(request);
+}
+
 app.get('/api/viewer/points', async (req, res) => {
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
@@ -18329,20 +18380,26 @@ app.get('/api/viewer/points', async (req, res) => {
       const platforms = await listPlatformAccounts(ownerUserId).catch(() => []);
       const identityKeys = collectViewerPointIdentityKeys(ownerUserId, platforms);
       const balances = await listViewerPointBalancesForUserIds(identityKeys);
-      const stationChannelEntries = await Promise.all(
-        balances.map(async (balance) => [balance.channelUid, await listStationChannelsForViewerBalance(balance)])
-      );
-      const stationChannelsByChannel = new Map(stationChannelEntries);
-      const normalizedBalances = balances.map((balance) => ({
-        ...balance,
-        stationChannels: stationChannelsByChannel.get(balance.channelUid) || [],
-        publicLinks: {
-          home: `/c/${encodeURIComponent(balance.channelUid)}`,
-          commands: `/c/${encodeURIComponent(balance.channelUid)}/commands`,
-          points: `/c/${encodeURIComponent(balance.channelUid)}/points`,
-          roulette: `/c/${encodeURIComponent(balance.channelUid)}/roulette`,
-        },
-      }));
+      const normalizedBalances = new Array(balances.length);
+      await forEachWithConcurrency(balances, VIEWER_POINT_POLICY_CONCURRENCY, async (balance, index) => {
+        const [stationChannels, pointEarning] = await Promise.all([
+          listStationChannelsForViewerBalance(balance).catch(() => []),
+          loadViewerPointEarningPolicy(balance),
+        ]);
+        const publicBalance = { ...balance };
+        delete publicBalance.pointSettingsSid;
+        normalizedBalances[index] = {
+          ...publicBalance,
+          stationChannels,
+          pointEarning,
+          publicLinks: {
+            home: `/c/${encodeURIComponent(balance.channelUid)}`,
+            commands: `/c/${encodeURIComponent(balance.channelUid)}/commands`,
+            points: `/c/${encodeURIComponent(balance.channelUid)}/points`,
+            roulette: `/c/${encodeURIComponent(balance.channelUid)}/roulette`,
+          },
+        };
+      });
 
       return {
         userId: ownerUserId,
@@ -19695,8 +19752,15 @@ app.post('/api/bot/settings', async (req, res) => {
   const sid = await getPartitionId(req, res);
   if (!sid) return res.status(401).json({ error: 'Login required' });
   const body = req.body || {};
-  const settings = body.settings || {};
+  const settings = { ...(body.settings || {}) };
+  if (Object.hasOwn(settings, 'channelPointsPerChat')) {
+    settings.channelPointsPerChat = normalizePointAward(settings.channelPointsPerChat, 1);
+  }
+  if (Object.hasOwn(settings, 'channelPointsPerAttendance')) {
+    settings.channelPointsPerAttendance = normalizePointAward(settings.channelPointsPerAttendance, 0);
+  }
   await setBotSettings(sid, settings);
+  invalidateRealtimePointCaches();
   const runtimeRevision = markRuntimeConfigurationChanged(sid, 'bot_settings_saved');
   return res.json({ ok: true, runtimeRevision });
 });
@@ -20117,8 +20181,8 @@ async function buildChannelPointListPayload(rows, settings = {}, options = {}) {
     limit,
     totalPages,
     settings: {
-      channelPointsPerChat: Math.max(0, Number(settings.channelPointsPerChat ?? 1)),
-      channelPointsPerAttendance: Math.max(0, Number(settings.channelPointsPerAttendance || 0)),
+      channelPointsPerChat: normalizePointAward(settings.channelPointsPerChat, 1),
+      channelPointsPerAttendance: normalizePointAward(settings.channelPointsPerAttendance, 0),
       channelPointsExcludeUserIdsText: typeof settings.channelPointsExcludeUserIdsText === 'string' ? settings.channelPointsExcludeUserIdsText : '',
     },
   };
@@ -20145,8 +20209,8 @@ async function buildChannelPointPagedListPayload(pageResult, settings = {}, opti
     limit,
     totalPages,
     settings: {
-      channelPointsPerChat: Math.max(0, Number(settings.channelPointsPerChat ?? 1)),
-      channelPointsPerAttendance: Math.max(0, Number(settings.channelPointsPerAttendance || 0)),
+      channelPointsPerChat: normalizePointAward(settings.channelPointsPerChat, 1),
+      channelPointsPerAttendance: normalizePointAward(settings.channelPointsPerAttendance, 0),
       channelPointsExcludeUserIdsText: typeof settings.channelPointsExcludeUserIdsText === 'string' ? settings.channelPointsExcludeUserIdsText : '',
     },
   };
@@ -22378,7 +22442,7 @@ async function ensureSession(sid, channelId) {
                   });
                   if (result && result.isNew) {
                     const shouldAnnounce = settings.attendanceAnnounce !== false; // default true
-                    const attendanceBonus = Math.max(0, Number(settings.channelPointsPerAttendance || 0));
+                    const attendanceBonus = normalizePointAward(settings.channelPointsPerAttendance, 0);
                     let awardedPoints = 0;
                     let attendanceChannelUid = null;
                     // Apply the attendance bonus before resolving {user.points}.
@@ -22438,7 +22502,7 @@ async function ensureSession(sid, channelId) {
                 let pointSettings = {};
                 try {
                   pointSettings = await getBotSettings(sid) || {};
-                  perChat = Math.max(0, Number(pointSettings.channelPointsPerChat ?? 1));
+                  perChat = normalizePointAward(pointSettings.channelPointsPerChat, 1);
                 } catch { }
                 // Skip awarding to owner or bot self
                 let ownerUserId = null;
@@ -22956,7 +23020,7 @@ async function ensureSession(sid, channelId) {
           try {
             const settings = await getBotSettings(sid) || {};
             const pointsPerK = Math.max(0, Number(settings?.donation?.pointsPerK ?? 10));
-            const award = Math.floor((amount / 1000) * pointsPerK);
+            const award = calculateDonationPointAward(amount, pointsPerK);
             if (award > 0) {
               // Resolve streamer channel UID
               let channelUid = null;
@@ -23865,7 +23929,7 @@ async function processYoutubeDonationAutomation(entry, ev) {
     const donorMessage = String(ev.message || '');
 
     const pointsPerK = Math.max(0, Number(settings?.donation?.pointsPerK ?? 10));
-    const award = Math.floor((amount / 1000) * pointsPerK);
+    const award = calculateDonationPointAward(amount, pointsPerK);
     if (award > 0 && entry.channelId && !(await isChannelPointExcluded(settings, donorId))) {
       await incrChannelPoints(entry.channelId, donorId, donorName, award).catch(() => { });
     }
@@ -23982,7 +24046,7 @@ async function processYoutubeChatAutomation(entry, ev) {
         if (!attendanceDedupe.has(attKey) && !isOwner && !isBotSelf && !excludedSet.has(resolvedUserId)) {
           const result = await recordAttendanceAndGetStreak(sid, resolvedUserId, resolvedUsername, attendDate);
           attendanceDedupe.add(attKey);
-          const bonus = result?.isNew ? Math.max(0, Number(settings.channelPointsPerAttendance || 0)) : 0;
+          const bonus = result?.isNew ? normalizePointAward(settings.channelPointsPerAttendance, 0) : 0;
           let awardedPoints = 0;
           try {
             if (bonus > 0 && entry.channelId && !(await isChannelPointExcluded(settings, resolvedUserId))) {
@@ -24017,7 +24081,7 @@ async function processYoutubeChatAutomation(entry, ev) {
       }
 
       try {
-        const perChat = Math.max(0, Number(settings.channelPointsPerChat ?? 1));
+        const perChat = normalizePointAward(settings.channelPointsPerChat, 1);
         if (entry.channelId && perChat > 0 && !isOwner && !isBotSelf && !(await isChannelPointExcluded(settings, resolvedUserId))) {
           await incrChannelPoints(entry.channelId, resolvedUserId, resolvedUsername, perChat).catch(() => { });
         }
@@ -25109,7 +25173,7 @@ async function processCimeChatAutomation(entry, ev) {
         if (!attendanceDedupe.has(attKey) && !isOwner && !excludedSet.has(resolvedUserId)) {
           const result = await recordAttendanceAndGetStreak(sid, resolvedUserId, resolvedUsername, attendDate);
           attendanceDedupe.add(attKey);
-          const bonus = result?.isNew ? Math.max(0, Number(settings.channelPointsPerAttendance || 0)) : 0;
+          const bonus = result?.isNew ? normalizePointAward(settings.channelPointsPerAttendance, 0) : 0;
           let awardedPoints = 0;
           try {
             if (bonus > 0 && pointChannelUid && !(await isChannelPointExcluded(settings, resolvedUserId))) {
@@ -25146,7 +25210,7 @@ async function processCimeChatAutomation(entry, ev) {
       }
 
       try {
-        const perChat = Math.max(0, Number(settings.channelPointsPerChat ?? 1));
+        const perChat = normalizePointAward(settings.channelPointsPerChat, 1);
         if (pointChannelUid && perChat > 0 && !isOwner && !(await isChannelPointExcluded(settings, resolvedUserId))) {
           await incrChannelPoints(pointChannelUid, resolvedUserId, resolvedUsername, perChat).catch((error) => {
             console.warn('[CIME] Chat point award failed:', error?.message || error);
@@ -25456,7 +25520,7 @@ async function processCimeDonationAutomation(entry, ev) {
     const donorMessage = String(ev.message || '');
 
     const pointsPerK = Math.max(0, Number(settings?.donation?.pointsPerK ?? 10));
-    const award = Math.floor((amount / 1000) * pointsPerK);
+    const award = calculateDonationPointAward(amount, pointsPerK);
     if (award > 0 && entry.channelId && !(await isChannelPointExcluded(settings, donorId))) {
       await incrChannelPoints(entry.channelId, donorId, donorName, award).catch(() => { });
     }

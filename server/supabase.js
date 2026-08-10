@@ -1086,6 +1086,7 @@ export async function listViewerPointBalancesForUserIds(userIds) {
   return withPgClient(async (pg) => {
     const balancesByChannel = new Map();
     const tableUidLookup = new Map();
+    let platformMetadataLoaded = false;
     try {
       const knownChannels = await pg.query(`
         select distinct user_id, provider, platform_user_id, channel_id, channel_name, avatar_url
@@ -1099,6 +1100,9 @@ export async function listViewerPointBalancesForUserIds(userIds) {
         const lookup = {
           channelUid,
           canonicalChannelUid,
+          pointSettingsSid: canonicalChannelUid.startsWith('user:')
+            ? canonicalChannelUid
+            : `user:${canonicalChannelUid}`,
           channelName: row.channel_name || null,
           avatarUrl: row.avatar_url || null,
           provider: row.provider || null,
@@ -1118,6 +1122,7 @@ export async function listViewerPointBalancesForUserIds(userIds) {
           }
         }
       }
+      platformMetadataLoaded = true;
     } catch {
       // Platform account metadata is an optimization for nicer public links.
     }
@@ -1156,9 +1161,13 @@ export async function listViewerPointBalancesForUserIds(userIds) {
       }));
       const channelUid = lookup?.channelUid || table.replace(/^channelpoint_/, '');
       const channelKey = lookup?.canonicalChannelUid || channelUid;
+      const pointSettingsSid = lookup?.pointSettingsSid || (platformMetadataLoaded
+        ? (channelUid.startsWith('user:') ? channelUid : `user:${channelUid}`)
+        : null);
       const existing = balancesByChannel.get(channelKey) || {
         channelUid,
         canonicalChannelUid: channelKey,
+        pointSettingsSid,
         channelName: lookup?.channelName || null,
         avatarUrl: lookup?.avatarUrl || null,
         provider: lookup?.provider || null,
@@ -1171,6 +1180,7 @@ export async function listViewerPointBalancesForUserIds(userIds) {
         existing.avatarUrl = lookup?.avatarUrl || existing.avatarUrl;
         existing.provider = lookup?.provider || existing.provider;
       }
+      if (lookup?.pointSettingsSid) existing.pointSettingsSid = lookup.pointSettingsSid;
       existing.points += pointRows.reduce((sum, row) => sum + row.points, 0);
       existing.identities.push(...pointRows);
       balancesByChannel.set(channelKey, existing);
@@ -1190,9 +1200,13 @@ export async function listViewerPointBalancesForUserIds(userIds) {
           if (!channelUid) continue;
           const lookup = tableUidLookup.get(`channelpoint_${sanitizeTableNameSuffix(channelUid)}`);
           const channelKey = lookup?.canonicalChannelUid || channelUid;
+          const pointSettingsSid = lookup?.pointSettingsSid || (platformMetadataLoaded
+            ? (channelUid.startsWith('user:') ? channelUid : `user:${channelUid}`)
+            : null);
           const existing = balancesByChannel.get(channelKey) || {
             channelUid,
             canonicalChannelUid: channelKey,
+            pointSettingsSid,
             channelName: lookup?.channelName || null,
             avatarUrl: lookup?.avatarUrl || null,
             provider: lookup?.provider || null,
@@ -1205,6 +1219,7 @@ export async function listViewerPointBalancesForUserIds(userIds) {
             existing.avatarUrl = lookup?.avatarUrl || existing.avatarUrl;
             existing.provider = lookup?.provider || existing.provider;
           }
+          if (lookup?.pointSettingsSid) existing.pointSettingsSid = lookup.pointSettingsSid;
           const userId = String(row.user_id || '');
           if (!existing.identities.some((identity) => String(identity.userId || '') === userId)) {
             const points = Number(row.points || 0);
@@ -4410,9 +4425,13 @@ export async function updateTokens(sid, tokensOrNull) {
   await upsertTokens(sid, { accessToken, refreshToken, tokenType, expiresAt });
 }
 
+let platformIdentityTablesReadyPromise = null;
+
 async function ensurePlatformIdentityTables() {
   if (!getDbUrl()) return;
-  await withPgClient(async (pg) => {
+  if (platformIdentityTablesReadyPromise) return platformIdentityTablesReadyPromise;
+
+  const request = withPgClient(async (pg) => {
     await pg.query(`
       create table if not exists app_users (
         id text primary key,
@@ -4475,6 +4494,13 @@ async function ensurePlatformIdentityTables() {
       create index if not exists idx_sessions_account_last_seen_active on sessions(account_user_id, last_seen desc) where revoked = false;
     `);
   });
+  platformIdentityTablesReadyPromise = request;
+  try {
+    await request;
+  } catch (error) {
+    if (platformIdentityTablesReadyPromise === request) platformIdentityTablesReadyPromise = null;
+    throw error;
+  }
 }
 
 export async function getAppUserAdminStatus(userId) {

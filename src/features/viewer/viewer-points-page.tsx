@@ -4,9 +4,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import * as Dialog from '@radix-ui/react-dialog';
 import {
+  CalendarCheck2,
   Coins,
   ExternalLink,
+  Gift,
   Loader2,
+  MessageCircle,
   Radio,
   RefreshCw,
   Search,
@@ -63,6 +66,7 @@ type ViewerBalance = {
   avatarUrl?: string | null;
   provider?: string | null;
   points: number;
+  pointEarning?: PointEarningPolicy | null;
   identities?: Array<{ userId?: string; username?: string | null; points?: number }>;
   stationChannels?: StationChannel[];
   publicLinks?: {
@@ -90,6 +94,18 @@ type ViewerPointsResponse = {
   totalPoints?: number;
   updatedAt?: string;
   error?: string;
+};
+
+type PointEarningPolicy = {
+  chatPointsPerMessage?: number;
+  attendancePoints?: number;
+  attendanceEnabled?: boolean;
+  attendanceOperational?: boolean;
+  attendanceMode?: 'first_chat' | 'command' | 'disabled';
+  attendanceUnavailableReason?: 'bot_disabled' | string | null;
+  attendanceCommandKeyword?: string | null;
+  donationPointsPer1000Won?: number;
+  donationRounding?: 'floor_total' | string;
 };
 
 const VIEWER_POINTS_PAGE_SIZE = 10;
@@ -162,6 +178,76 @@ function BalanceAvatar({ balance }: { balance: ViewerBalance }) {
     <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-pastel-mint/70 text-primary">
       <Coins className="h-5 w-5" />
     </span>
+  );
+}
+
+function normalizePointRate(value: unknown) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? Math.max(0, numeric) : 0;
+}
+
+function pointRewardLabel(value: unknown) {
+  const points = normalizePointRate(value);
+  return points > 0 ? `+${formatNumber(points)}P` : '0P';
+}
+
+function PointEarningSummary({ policy }: { policy?: PointEarningPolicy | null }) {
+  if (!policy) return null;
+
+  const chatPoints = normalizePointRate(policy.chatPointsPerMessage);
+  const attendancePoints = normalizePointRate(policy.attendancePoints);
+  const donationPoints = normalizePointRate(policy.donationPointsPer1000Won);
+  const attendanceEnabled = policy.attendanceEnabled !== false && policy.attendanceMode !== 'disabled';
+  const attendanceOperational = attendanceEnabled && policy.attendanceOperational !== false;
+  const attendanceDetail = !attendanceEnabled
+    ? `설정값 ${formatNumber(attendancePoints)}P`
+    : !attendanceOperational && policy.attendanceUnavailableReason === 'bot_disabled'
+      ? `봇이 꺼져 있어 명령어 출석 일시 중지 · 설정값 ${formatNumber(attendancePoints)}P`
+    : policy.attendanceMode === 'command'
+      ? `방송 중 · 하루 한 번 · ${policy.attendanceCommandKeyword || '출석 명령어'} 입력`
+      : '방송 중 · 하루 한 번 · 첫 채팅 자동 출석';
+
+  return (
+    <section aria-label="포인트 적립 기준" className="mt-4 rounded-[var(--radius-card)] border bg-background/55 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-xs font-semibold text-foreground">포인트 적립 기준</h3>
+        <Badge tone="mint">스트리머 설정</Badge>
+      </div>
+      <dl className="mt-3 grid gap-2 sm:grid-cols-3">
+        <div className="rounded-[var(--radius-control)] border bg-card/72 p-3">
+          <dt className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+            <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-pastel-sky/75 text-sky-700 dark:text-sky-100">
+              <MessageCircle aria-hidden="true" className="h-3.5 w-3.5" />
+            </span>
+            방송 중 채팅 1회
+          </dt>
+          <dd className="mt-2 text-lg font-semibold tabular-nums">{pointRewardLabel(chatPoints)}</dd>
+          <dd className="mt-1 text-xs leading-5 text-muted-foreground">일반·명령어 채팅 기준</dd>
+        </div>
+        <div className="rounded-[var(--radius-control)] border bg-card/72 p-3">
+          <dt className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+            <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-pastel-mint/75 text-emerald-700 dark:text-emerald-100">
+              <CalendarCheck2 aria-hidden="true" className="h-3.5 w-3.5" />
+            </span>
+            출석 완료 1회
+          </dt>
+          <dd className="mt-2 text-lg font-semibold tabular-nums">
+            {!attendanceEnabled ? '사용 안 함' : attendanceOperational ? pointRewardLabel(attendancePoints) : '일시 중지'}
+          </dd>
+          <dd className="mt-1 break-words text-xs leading-5 text-muted-foreground">{attendanceDetail}</dd>
+        </div>
+        <div className="rounded-[var(--radius-control)] border bg-card/72 p-3">
+          <dt className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+            <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-pastel-lemon/80 text-amber-700 dark:text-amber-100">
+              <Gift aria-hidden="true" className="h-3.5 w-3.5" />
+            </span>
+            후원 1,000원 기준
+          </dt>
+          <dd className="mt-2 text-lg font-semibold tabular-nums">{pointRewardLabel(donationPoints)}</dd>
+          <dd className="mt-1 text-xs leading-5 text-muted-foreground">총액 비례 계산 후 소수점 내림</dd>
+        </div>
+      </dl>
+    </section>
   );
 }
 
@@ -693,6 +779,7 @@ export function ViewerPointsPage() {
                       </div>
                     </div>
                   </div>
+                  <PointEarningSummary policy={balance.pointEarning} />
                   <div className="mt-4 flex flex-wrap gap-2">
                     <LinkButton href={balance.publicLinks?.home || `/c/${balance.channelUid}`} variant="ghost">
                       공개 페이지

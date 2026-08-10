@@ -197,8 +197,8 @@ export function PointsPage() {
       await postJson('/api/bot/settings', {
         settings: {
           ...(current?.settings || {}),
-          channelPointsPerChat: Math.max(0, Number(pointsPerChat || 0)),
-          channelPointsPerAttendance: Math.max(0, Number(pointsPerAttendance || 0)),
+          channelPointsPerChat: Math.floor(Math.max(0, Number(pointsPerChat || 0))),
+          channelPointsPerAttendance: Math.floor(Math.max(0, Number(pointsPerAttendance || 0))),
           channelPointsExcludeUserIdsText: excludeText,
         },
       });
