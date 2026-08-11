@@ -1,15 +1,12 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import * as Dialog from '@radix-ui/react-dialog';
 import {
-  CalendarCheck2,
   Coins,
   ExternalLink,
-  Gift,
   Loader2,
-  MessageCircle,
   Radio,
   RefreshCw,
   Search,
@@ -61,12 +58,12 @@ type StationChannel = {
 
 type ViewerBalance = {
   channelUid: string;
+  publicUid?: string | null;
   canonicalChannelUid?: string | null;
   channelName?: string | null;
   avatarUrl?: string | null;
   provider?: string | null;
   points: number;
-  pointEarning?: PointEarningPolicy | null;
   identities?: Array<{ userId?: string; username?: string | null; points?: number }>;
   stationChannels?: StationChannel[];
   publicLinks?: {
@@ -96,22 +93,11 @@ type ViewerPointsResponse = {
   error?: string;
 };
 
-type PointEarningPolicy = {
-  chatPointsPerMessage?: number;
-  attendancePoints?: number;
-  attendanceEnabled?: boolean;
-  attendanceOperational?: boolean;
-  attendanceMode?: 'first_chat' | 'command' | 'disabled';
-  attendanceUnavailableReason?: 'bot_disabled' | string | null;
-  attendanceCommandKeyword?: string | null;
-  donationPointsPer1000Won?: number;
-  donationRounding?: 'floor_total' | string;
-};
-
 const VIEWER_POINTS_PAGE_SIZE = 10;
 const VIEWER_POINTS_REFRESH_MS = 9000;
 const VIEWER_LIVE_REFRESH_MS = 8000;
 const VIEWER_LIVE_CHANNEL_LIMIT = 40;
+const VIEWER_LIVE_FETCH_CONCURRENCY = 6;
 
 function providerLabel(provider?: string | null) {
   const value = String(provider || '').toLowerCase();
@@ -151,6 +137,21 @@ function ViewerShell({ children }: { children: React.ReactNode }) {
   );
 }
 
+function viewerBalancePublicUid(balance: ViewerBalance) {
+  const explicitUid = String(balance.publicUid || '').trim();
+  if (explicitUid) return explicitUid;
+  const channelUid = String(balance.channelUid || '').trim();
+  const provider = String(balance.provider || '').trim().toLowerCase();
+  if (['chzzk', 'cime', 'youtube'].includes(provider) && !/^(chzzk|cime|youtube):/i.test(channelUid)) {
+    return `${provider}:${channelUid}`;
+  }
+  return channelUid;
+}
+
+function viewerBalanceKey(balance: ViewerBalance) {
+  return [viewerBalancePublicUid(balance), balance.canonicalChannelUid || ''].join(':');
+}
+
 function AccountPill({ account }: { account: PlatformAccount }) {
   const imageUrl = account.profile_image_url || account.avatar_url;
   return (
@@ -178,76 +179,6 @@ function BalanceAvatar({ balance }: { balance: ViewerBalance }) {
     <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-pastel-mint/70 text-primary">
       <Coins className="h-5 w-5" />
     </span>
-  );
-}
-
-function normalizePointRate(value: unknown) {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? Math.max(0, numeric) : 0;
-}
-
-function pointRewardLabel(value: unknown) {
-  const points = normalizePointRate(value);
-  return points > 0 ? `+${formatNumber(points)}P` : '0P';
-}
-
-function PointEarningSummary({ policy }: { policy?: PointEarningPolicy | null }) {
-  if (!policy) return null;
-
-  const chatPoints = normalizePointRate(policy.chatPointsPerMessage);
-  const attendancePoints = normalizePointRate(policy.attendancePoints);
-  const donationPoints = normalizePointRate(policy.donationPointsPer1000Won);
-  const attendanceEnabled = policy.attendanceEnabled !== false && policy.attendanceMode !== 'disabled';
-  const attendanceOperational = attendanceEnabled && policy.attendanceOperational !== false;
-  const attendanceDetail = !attendanceEnabled
-    ? `설정값 ${formatNumber(attendancePoints)}P`
-    : !attendanceOperational && policy.attendanceUnavailableReason === 'bot_disabled'
-      ? `봇이 꺼져 있어 명령어 출석 일시 중지 · 설정값 ${formatNumber(attendancePoints)}P`
-    : policy.attendanceMode === 'command'
-      ? `방송 중 · 하루 한 번 · ${policy.attendanceCommandKeyword || '출석 명령어'} 입력`
-      : '방송 중 · 하루 한 번 · 첫 채팅 자동 출석';
-
-  return (
-    <section aria-label="포인트 적립 기준" className="mt-4 rounded-[var(--radius-card)] border bg-background/55 p-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-xs font-semibold text-foreground">포인트 적립 기준</h3>
-        <Badge tone="mint">스트리머 설정</Badge>
-      </div>
-      <dl className="mt-3 grid gap-2 sm:grid-cols-3">
-        <div className="rounded-[var(--radius-control)] border bg-card/72 p-3">
-          <dt className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-            <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-pastel-sky/75 text-sky-700 dark:text-sky-100">
-              <MessageCircle aria-hidden="true" className="h-3.5 w-3.5" />
-            </span>
-            방송 중 채팅 1회
-          </dt>
-          <dd className="mt-2 text-lg font-semibold tabular-nums">{pointRewardLabel(chatPoints)}</dd>
-          <dd className="mt-1 text-xs leading-5 text-muted-foreground">일반·명령어 채팅 기준</dd>
-        </div>
-        <div className="rounded-[var(--radius-control)] border bg-card/72 p-3">
-          <dt className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-            <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-pastel-mint/75 text-emerald-700 dark:text-emerald-100">
-              <CalendarCheck2 aria-hidden="true" className="h-3.5 w-3.5" />
-            </span>
-            출석 완료 1회
-          </dt>
-          <dd className="mt-2 text-lg font-semibold tabular-nums">
-            {!attendanceEnabled ? '사용 안 함' : attendanceOperational ? pointRewardLabel(attendancePoints) : '일시 중지'}
-          </dd>
-          <dd className="mt-1 break-words text-xs leading-5 text-muted-foreground">{attendanceDetail}</dd>
-        </div>
-        <div className="rounded-[var(--radius-control)] border bg-card/72 p-3">
-          <dt className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-            <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-pastel-lemon/80 text-amber-700 dark:text-amber-100">
-              <Gift aria-hidden="true" className="h-3.5 w-3.5" />
-            </span>
-            후원 1,000원 기준
-          </dt>
-          <dd className="mt-2 text-lg font-semibold tabular-nums">{pointRewardLabel(donationPoints)}</dd>
-          <dd className="mt-1 text-xs leading-5 text-muted-foreground">총액 비례 계산 후 소수점 내림</dd>
-        </div>
-      </dl>
-    </section>
   );
 }
 
@@ -309,20 +240,52 @@ function getStationChannels(balance: ViewerBalance | null) {
   });
 }
 
-function PlatformLiveBadges({ balance, liveStatus, className }: { balance: ViewerBalance; liveStatus?: LiveStatus; className?: string }) {
+function stationChannelPublicUid(balance: ViewerBalance, channel: StationChannel) {
+  const channelId = String(channel.channelId || channel.channel_id || channel.platformUserId || channel.platform_user_id || '').trim();
+  const provider = String(channel.provider || balance.provider || '').trim().toLowerCase();
+  if (!channelId) return viewerBalancePublicUid(balance);
+  if (/^(chzzk|cime|youtube):/i.test(channelId)) return channelId;
+  return ['chzzk', 'cime', 'youtube'].includes(provider) ? `${provider}:${channelId}` : channelId;
+}
+
+function viewerBalanceLiveKeys(balance: ViewerBalance) {
+  return Array.from(new Set([
+    viewerBalancePublicUid(balance),
+    ...getStationChannels(balance).map((channel) => stationChannelPublicUid(balance, channel)),
+  ].filter(Boolean)));
+}
+
+function viewerBalanceLiveStatus(balance: ViewerBalance, liveByChannel: Record<string, LiveStatus>) {
+  const statuses = viewerBalanceLiveKeys(balance)
+    .map((key) => liveByChannel[key])
+    .filter(Boolean);
+  return statuses.find((status) => status.live === true)
+    || statuses.find((status) => typeof status.live === 'boolean');
+}
+
+function viewerBalanceIsLive(balance: ViewerBalance, liveByChannel: Record<string, LiveStatus>) {
+  return viewerBalanceLiveStatus(balance, liveByChannel)?.live === true
+    || getStationChannels(balance).some((channel) => channel.live === true);
+}
+
+function PlatformLiveBadges({ balance, liveByChannel, className }: { balance: ViewerBalance; liveByChannel: Record<string, LiveStatus>; className?: string }) {
   const channels = getStationChannels(balance);
   if (!channels.length) return null;
   return (
     <div className={cn('flex flex-wrap gap-1.5', className)}>
       {channels.map((channel) => {
         const provider = channel.provider || balance.provider || 'chzzk';
-        const channelId = String(channel.channelId || channel.channel_id || channel.platformUserId || channel.platform_user_id || '').trim();
-        const isPrimaryChannel = !channelId || channelId === balance.channelUid;
-        const live = channel.live === true || (isPrimaryChannel && liveStatus?.live === true);
-        const label = `${providerLabel(provider)} ${live ? '라이브' : '오프라인'}`;
+        const refreshedStatus = liveByChannel[stationChannelPublicUid(balance, channel)];
+        const hasLiveStatus = typeof refreshedStatus?.live === 'boolean' || typeof channel.live === 'boolean';
+        const live = typeof refreshedStatus?.live === 'boolean'
+          ? refreshedStatus.live
+          : channel.live === true;
+        const label = hasLiveStatus
+          ? `${providerLabel(provider)} ${live ? '라이브' : '오프라인'}`
+          : `${providerLabel(provider)} 상태 확인 불가`;
         return (
-          <Badge key={`${provider}:${channel.channelId || channel.url}`} tone={live ? 'rose' : providerTone(provider)}>
-            <Radio className="mr-1 h-3 w-3" />
+          <Badge key={`${provider}:${channel.channelId || channel.url}`} tone={live ? 'rose' : (hasLiveStatus ? providerTone(provider) : 'amber')}>
+            <Radio aria-hidden="true" className="mr-1 h-3 w-3" />
             {label}
           </Badge>
         );
@@ -431,11 +394,13 @@ export function ViewerPointsPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [unauthorized, setUnauthorized] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [query, setQuery] = useState('');
   const [sortBy, setSortBy] = useState<'points' | 'name' | 'live'>('points');
   const [page, setPage] = useState(1);
   const [liveByChannel, setLiveByChannel] = useState<Record<string, LiveStatus>>({});
   const [stationBalance, setStationBalance] = useState<ViewerBalance | null>(null);
+  const liveRefreshInFlightRef = useRef(false);
 
   const load = useCallback(async (options: { silent?: boolean; showRefreshing?: boolean } = {}) => {
     const silent = options.silent === true;
@@ -448,14 +413,20 @@ export function ViewerPointsPage() {
       });
       if (response.status === 401) {
         setUnauthorized(true);
+        setLoadError(false);
         setData(null);
+        return;
+      }
+      if (!response.ok) {
+        setLoadError(true);
         return;
       }
       const payload = (await response.json().catch(() => null)) as ViewerPointsResponse | null;
       setUnauthorized(false);
+      setLoadError(false);
       setData(payload || { platforms: [], balances: [], totalPoints: 0 });
     } catch {
-      if (!silent) setData(null);
+      setLoadError(true);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -495,7 +466,7 @@ export function ViewerPointsPage() {
       : balances;
     return [...filtered].sort((a, b) => {
       if (sortBy === 'name') return String(a.channelName || a.channelUid).localeCompare(String(b.channelName || b.channelUid), 'ko-KR');
-      if (sortBy === 'live') return Number(liveByChannel[b.channelUid]?.live === true) - Number(liveByChannel[a.channelUid]?.live === true) || Number(b.points || 0) - Number(a.points || 0);
+      if (sortBy === 'live') return Number(viewerBalanceIsLive(b, liveByChannel)) - Number(viewerBalanceIsLive(a, liveByChannel)) || Number(b.points || 0) - Number(a.points || 0);
       return Number(b.points || 0) - Number(a.points || 0);
     });
   }, [balances, liveByChannel, query, sortBy]);
@@ -509,7 +480,7 @@ export function ViewerPointsPage() {
   const connectedProviders = new Set(platforms.map((account) => String(account.provider || '').toLowerCase()));
   const hasBothPlatforms = connectedProviders.has('chzzk') && connectedProviders.has('cime');
   const hasArubotIdentity = Boolean(data?.viewerIdentity?.arubotUuid);
-  const liveBalances = useMemo(() => balances.filter((balance) => liveByChannel[balance.channelUid]?.live === true), [balances, liveByChannel]);
+  const liveBalances = useMemo(() => balances.filter((balance) => viewerBalanceIsLive(balance, liveByChannel)), [balances, liveByChannel]);
   const topBalance = useMemo(() => (
     balances.reduce<ViewerBalance | null>((best, current) => (
       !best || Number(current.points || 0) > Number(best.points || 0) ? current : best
@@ -525,26 +496,43 @@ export function ViewerPointsPage() {
   }, [page, totalPages]);
 
   const refreshLiveStatuses = useCallback(async (signal?: AbortSignal) => {
-    const channels = balances.map((balance) => balance.channelUid).filter(Boolean).slice(0, VIEWER_LIVE_CHANNEL_LIMIT);
-    if (!channels.length) {
-      setLiveByChannel({});
-      return;
-    }
-    const entries = await Promise.all(channels.map(async (channelUid) => {
-      try {
-        const response = await fetch(apiUrl(`/api/public/${encodeURIComponent(channelUid)}/live`), {
-          signal,
-          cache: 'no-store',
-        });
-        if (!response.ok) return [channelUid, { live: false }] as const;
-        const payload = (await response.json().catch(() => null)) as LiveStatus | null;
-        return [channelUid, payload || { live: false }] as const;
-      } catch {
-        return [channelUid, { live: false }] as const;
+    if (liveRefreshInFlightRef.current) return;
+    liveRefreshInFlightRef.current = true;
+    try {
+      const channels = Array.from(new Set(balances.flatMap(viewerBalanceLiveKeys).filter(Boolean))).slice(0, VIEWER_LIVE_CHANNEL_LIMIT);
+      if (!channels.length) {
+        setLiveByChannel({});
+        return;
       }
-    }));
-    if (signal?.aborted) return;
-    setLiveByChannel(Object.fromEntries(entries));
+      const entries: Array<readonly [string, LiveStatus] | null> = new Array(channels.length).fill(null);
+      let nextIndex = 0;
+      await Promise.all(Array.from({ length: Math.min(VIEWER_LIVE_FETCH_CONCURRENCY, channels.length) }, async () => {
+        while (nextIndex < channels.length) {
+          const index = nextIndex;
+          nextIndex += 1;
+          const channelUid = channels[index];
+          try {
+            const response = await fetch(apiUrl(`/api/public/${encodeURIComponent(channelUid)}/live`), {
+              signal,
+              cache: 'no-store',
+            });
+            if (!response.ok) continue;
+            const payload = (await response.json().catch(() => null)) as LiveStatus | null;
+            if (typeof payload?.live === 'boolean') entries[index] = [channelUid, payload] as const;
+          } catch {
+            // Keep the last known value when a platform lookup is temporarily unavailable.
+          }
+        }
+      }));
+      if (signal?.aborted) return;
+      const freshStatuses = new Map(entries.filter((entry): entry is readonly [string, LiveStatus] => entry !== null));
+      setLiveByChannel((current) => Object.fromEntries(channels.flatMap((channelUid) => {
+        const status = freshStatuses.get(channelUid) || current[channelUid];
+        return status ? [[channelUid, status]] : [];
+      })));
+    } finally {
+      liveRefreshInFlightRef.current = false;
+    }
   }, [balances]);
 
   useEffect(() => {
@@ -610,9 +598,36 @@ export function ViewerPointsPage() {
     );
   }
 
+  if (loadError && !data) {
+    return (
+      <ViewerShell>
+        <section className="mx-auto mt-[clamp(3rem,8vw,6rem)] max-w-2xl">
+          <Card className="bg-card/90">
+            <CardHeader>
+              <Badge tone="amber" className="w-fit">일시적인 조회 오류</Badge>
+              <CardTitle className="pt-2">포인트 정보를 불러오지 못했습니다.</CardTitle>
+              <CardDescription>잠시 후 다시 시도해 주세요. 저장된 포인트는 변경되지 않습니다.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button type="button" onClick={() => load()}>
+                <RefreshCw aria-hidden="true" className="h-4 w-4" />
+                다시 불러오기
+              </Button>
+            </CardContent>
+          </Card>
+        </section>
+      </ViewerShell>
+    );
+  }
+
   return (
     <ViewerShell>
       <section className="mx-auto mt-[clamp(2rem,6vw,4rem)] max-w-7xl">
+        {loadError ? (
+          <div role="status" className="mb-3 rounded-[var(--radius-control)] border border-amber-300/60 bg-amber-50/85 px-4 py-3 text-sm text-amber-950 dark:border-amber-500/30 dark:bg-amber-950/35 dark:text-amber-100">
+            최신 정보를 불러오지 못해 이전에 확인한 포인트를 표시하고 있습니다.
+          </div>
+        ) : null}
         <div className="rounded-[var(--radius-panel)] border bg-card p-[clamp(1.25rem,3.5vw,2.5rem)] shadow-soft">
           <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(28%,0.38fr)] lg:items-end">
             <div>
@@ -732,8 +747,9 @@ export function ViewerPointsPage() {
           <Card className="bg-card/85">
             <CardContent className="grid gap-3 p-[clamp(1rem,2vw,1.25rem)] md:grid-cols-[minmax(0,1fr)_minmax(0,0.46fr)] md:items-center">
               <div className="relative min-w-0">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <input
+                  aria-label="스트리머 이름 또는 채널 ID 검색"
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
                   placeholder="스트리머 이름이나 채널 ID로 검색"
@@ -746,8 +762,8 @@ export function ViewerPointsPage() {
                   ['live', '라이브 우선'],
                   ['name', '이름순'],
                 ] as const).map(([value, label]) => (
-                  <Button key={value} type="button" variant={sortBy === value ? 'soft' : 'outline'} size="sm" onClick={() => setSortBy(value)}>
-                    <SlidersHorizontal className="h-4 w-4" />
+                  <Button key={value} type="button" aria-pressed={sortBy === value} variant={sortBy === value ? 'soft' : 'outline'} size="sm" onClick={() => setSortBy(value)}>
+                    <SlidersHorizontal aria-hidden="true" className="h-4 w-4" />
                     {label}
                   </Button>
                 ))}
@@ -757,9 +773,9 @@ export function ViewerPointsPage() {
 
           {visibleBalances.length ? (
             paginatedBalances.map((balance, index) => {
-              const live = liveByChannel[balance.channelUid];
+              const live = viewerBalanceLiveStatus(balance, liveByChannel);
               return (
-              <Card key={balance.channelUid} className="animate-fade-up overflow-hidden bg-card/85" style={{ animationDelay: `${index * 45}ms` }}>
+              <Card key={viewerBalanceKey(balance)} className="animate-fade-up overflow-hidden bg-card/85" style={{ animationDelay: `${index * 45}ms` }}>
                 <CardContent className="p-[clamp(1rem,2vw,1.4rem)]">
                   <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                     <div className="flex min-w-0 items-center gap-3">
@@ -767,7 +783,7 @@ export function ViewerPointsPage() {
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
                           <h2 className="truncate text-lg font-semibold">{balance.channelName || balance.channelUid}</h2>
-                          <PlatformLiveBadges balance={balance} liveStatus={live} />
+                          <PlatformLiveBadges balance={balance} liveByChannel={liveByChannel} />
                         </div>
                         <p className="mt-1 truncate text-sm text-muted-foreground">{live?.live && live.title ? live.title : balance.channelUid}</p>
                       </div>
@@ -779,7 +795,6 @@ export function ViewerPointsPage() {
                       </div>
                     </div>
                   </div>
-                  <PointEarningSummary policy={balance.pointEarning} />
                   <div className="mt-4 flex flex-wrap gap-2">
                     <LinkButton href={balance.publicLinks?.home || `/c/${balance.channelUid}`} variant="ghost">
                       공개 페이지

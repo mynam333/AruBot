@@ -2,12 +2,14 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
-describe('시청자 페이지 스트리머별 포인트 적립 기준', () => {
+describe('스트리머별 포인트 적립 기준', () => {
   let policyResult;
   const serverIndex = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
   const policySource = fs.readFileSync(path.join(__dirname, '..', 'server', 'point-earning-policy.js'), 'utf8');
   const databaseSource = fs.readFileSync(path.join(__dirname, '..', 'server', 'supabase.js'), 'utf8');
   const viewerPointsPage = fs.readFileSync(path.join(__dirname, '..', 'src', 'features', 'viewer', 'viewer-points-page.tsx'), 'utf8');
+  const publicChannelPage = fs.readFileSync(path.join(__dirname, '..', 'src', 'features', 'public', 'public-channel-page.tsx'), 'utf8');
+  const publicPointSummary = fs.readFileSync(path.join(__dirname, '..', 'src', 'features', 'public', 'public-point-earning-summary.tsx'), 'utf8');
 
   beforeAll(() => {
     const moduleUrl = new URL(
@@ -277,34 +279,49 @@ describe('시청자 페이지 스트리머별 포인트 적립 기준', () => {
     expect(policySource).not.toContain('rouletteViewerToken');
   });
 
-  test('기존 인증 응답 안에서 제한된 병렬 처리로 정책을 결합하고 설정 저장 시 캐시를 비운다', () => {
+  test('개인 포인트 응답은 설정을 다시 읽지 않고 기존 잔액과 방송국 정보만 유지한다', () => {
     const routeStart = serverIndex.indexOf("app.get('/api/viewer/points'");
     const routeEnd = serverIndex.indexOf("app.post('/api/account/platforms/refresh'", routeStart);
     const viewerRoute = serverIndex.slice(routeStart, routeEnd);
     expect(viewerRoute.indexOf('getCurrentSessionUserId(req)')).toBeLessThan(viewerRoute.indexOf('readRealtimeCached('));
-    expect(viewerRoute).toContain('forEachWithConcurrency(balances, VIEWER_POINT_POLICY_CONCURRENCY');
-    expect(viewerRoute).toContain('const [stationChannels, pointEarning] = await Promise.all([');
-    expect(viewerRoute).toContain('loadViewerPointEarningPolicy(balance)');
-    expect(viewerRoute).toContain('pointEarning,');
+    expect(viewerRoute).toContain('listPlatformAccountsForUserIds(settingsOwnerIds)');
+    expect(viewerRoute).toContain('const normalizedBalances = balances.map((balance) =>');
+    expect(viewerRoute).toContain('listStationChannelsForViewerBalance(balance, stationAccountsByOwner.get(settingsOwnerId) || [])');
+    expect(viewerRoute).not.toContain('getViewerPlatformLiveState');
     expect(viewerRoute).toContain('delete publicBalance.pointSettingsSid');
-    expect(serverIndex).toContain('viewerPointPolicyCache.get(sid)');
-    expect(serverIndex).toContain('viewerPointPolicyCache.delete(sid)');
-    expect(serverIndex).toContain('setTimeout(() => resolve(null), VIEWER_POINT_POLICY_TIMEOUT_MS)');
+    expect(viewerRoute).toContain('publicUid,');
+    expect(viewerRoute).toContain('home: `/c/${encodedPublicUid}`');
+    expect(viewerRoute).not.toContain('pointEarning');
+    expect(viewerRoute).not.toContain('getBotSettings');
+    expect(viewerRoute).not.toContain('loadPublicPointEarningPolicy');
     expect(viewerRoute).not.toContain('resolvePublicChannelSid');
     expect(databaseSource).toContain('if (platformIdentityTablesReadyPromise) return platformIdentityTablesReadyPromise');
     expect(databaseSource).toContain('pointSettingsSid: canonicalChannelUid.startsWith');
-    expect(serverIndex.match(/invalidateRealtimePointCaches\(\);/g)?.length || 0).toBeGreaterThanOrEqual(2);
+    expect(serverIndex.match(/invalidatePublicPointPolicyCache\(sid\);/g)?.length || 0).toBeGreaterThanOrEqual(3);
   });
 
-  test('방송 카드 안에 모바일 친화적인 세 가지 적립 기준을 표시한다', () => {
-    expect(viewerPointsPage).toContain('function PointEarningSummary');
-    expect(viewerPointsPage).toContain('<PointEarningSummary policy={balance.pointEarning} />');
-    expect(viewerPointsPage).toContain('방송 중 채팅 1회');
-    expect(viewerPointsPage).toContain('출석 완료 1회');
-    expect(viewerPointsPage).toContain('후원 1,000원 기준');
-    expect(viewerPointsPage).toContain('총액 비례 계산 후 소수점 내림');
-    expect(viewerPointsPage).toContain('grid gap-2 sm:grid-cols-3');
-    expect(viewerPointsPage).toContain("attendanceOperational ? pointRewardLabel(attendancePoints) : '일시 중지'");
+  test('공개 채널 홈에만 모바일 친화적인 세 가지 적립 기준을 표시한다', () => {
+    expect(publicChannelPage).toContain('const pointEarning = readPublicPointEarningPolicy(data.points)');
+    expect(publicChannelPage).toContain('<PublicPointEarningSummary policy={pointEarning} />');
+    expect(publicChannelPage).toContain('<Link href="/" className="mb-4 inline-flex items-center gap-2 text-sm font-semibold">');
+    expect(publicChannelPage).not.toContain('<Link href={`/c/${channelUid}`} className="mb-4 inline-flex items-center gap-2 text-sm font-semibold">');
+    expect(publicChannelPage).toContain('aria-label={`${channelName} 공개 채널 메뉴`}');
+    expect(publicChannelPage).toContain("aria-current={selected ? 'page' : undefined}");
+    expect(publicPointSummary).toContain('방송 중 채팅 1회');
+    expect(publicPointSummary).toContain('출석 완료 1회');
+    expect(publicPointSummary).toContain('후원 1,000원 기준');
+    expect(publicPointSummary).toContain('후원 금액에 비례해 계산한 뒤 소수점 내림');
+    expect(publicPointSummary).toContain('grid gap-3 sm:grid-cols-3');
+    expect(publicPointSummary).toContain("attendanceOperational ? pointRewardLabel(attendancePoints) : '일시 중지'");
+    expect(publicPointSummary.match(/aria-hidden="true"/g)).toHaveLength(3);
+    expect(publicPointSummary).toContain('break-words');
+    expect(viewerPointsPage).not.toContain('PointEarningSummary');
+    expect(viewerPointsPage).not.toContain('pointEarning');
+    expect(viewerPointsPage).toContain('viewerBalanceLiveStatus(balance, liveByChannel)');
+    expect(viewerPointsPage).toContain('stationChannelPublicUid(balance, channel)');
+    expect(viewerPointsPage).toContain('key={viewerBalanceKey(balance)}');
+    expect(viewerPointsPage).toContain('aria-label="스트리머 이름 또는 채널 ID 검색"');
+    expect(viewerPointsPage).toContain('aria-pressed={sortBy === value}');
     expect(viewerPointsPage).toContain('공개 페이지');
     expect(viewerPointsPage).toContain('방송국 바로가기');
   });

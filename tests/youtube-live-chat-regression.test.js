@@ -100,7 +100,8 @@ describe('YouTube live chat integration regression', () => {
     expect(liveInfoBody).toContain('youtubeSessionStore.get(ownerUserId)');
     expect(liveInfoBody).toContain('buildYoutubeLiveLookupContext');
     expect(liveInfoBody).toContain('fetchYoutubeVideoLiveDetails(broadcastId)');
-    expect(liveInfoBody).toContain('allowOwnerFallback: true');
+    expect(liveInfoBody).toContain('fetchYoutubeOwnedActiveLive(ownerUserId)');
+    expect(liveInfoBody).toContain('confirmedOffline = !ownedLive');
     expect(liveInfoBody).toContain('buildYoutubeLiveInfoFallback(lookup)');
     expect(refreshBody).toContain('broadcastId: cached.broadcastId || null');
     expect(refreshBody).toContain("title: cached.title || ''");

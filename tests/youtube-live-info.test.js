@@ -24,6 +24,8 @@ describe('YouTube provider-scoped live info', () => {
         contaminatedFallback: live.buildYoutubeLiveInfoFallback(contaminated),
         youtubeCached,
         youtubeFallback: live.buildYoutubeLiveInfoFallback(youtubeCached),
+        youtubeOffline: live.buildYoutubeOfflineLiveInfo({ hasIdentity: true, channel: 'YouTube 채널', channelId: 'yt-channel' }),
+        missingOffline: live.buildYoutubeOfflineLiveInfo({ hasIdentity: false }),
       }));
     `;
     result = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '--eval', script], {
@@ -44,5 +46,15 @@ describe('YouTube provider-scoped live info', () => {
     expect(result.youtubeCached.broadcastIds).toEqual(['current-video', 'older-video']);
     expect(result.youtubeFallback.title).toBe('현재 YouTube 제목');
     expect(result.youtubeFallback.startedAtTs).toBe(1000);
+  });
+
+  test('represents a successful no-active-broadcast lookup as not_live', () => {
+    expect(result.youtubeOffline).toMatchObject({
+      provider: 'youtube',
+      status: 'not_live',
+      channel: 'YouTube 채널',
+      live: false,
+    });
+    expect(result.missingOffline).toBeNull();
   });
 });

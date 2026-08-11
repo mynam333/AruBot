@@ -71,3 +71,19 @@ export function buildYoutubeLiveInfoFallback(context = {}) {
     raw: { source: 'youtube_provider_cache' },
   };
 }
+
+export function buildYoutubeOfflineLiveInfo(context = {}) {
+  if (!context.hasIdentity) return null;
+  return {
+    provider: 'youtube',
+    status: 'not_live',
+    title: '',
+    category: '',
+    viewers: 0,
+    startedAt: '',
+    startedAtTs: null,
+    channel: firstText(context.channel, context.channelId),
+    live: false,
+    raw: { source: 'youtube_channel_lookup' },
+  };
+}

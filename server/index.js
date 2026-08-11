@@ -9,19 +9,26 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
-import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, revokeSession, getSessionUserId, listChannelPoints, listChannelPointsPage, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, deductChannelPointsIfEnough, getChannelPoints, getChannelPointBalanceSummary, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, issueApiWebSocketTicket, consumeApiWebSocketTicket, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, findSidByChannelViewerTokenSupabase, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, findAppUserIdByChannelUid, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, markPlatformTokenValidated, deletePlatformTokens, deletePlatformAccount, getAppUserAdminStatus, getArubotAdminConsoleSnapshot, getArubotAdminStreamerFeatureDetails, getYoutubeBotProfile, upsertYoutubeBotProfile, updateYoutubeBotProfileTokens, markYoutubeBotProfileStatus, deleteYoutubeBotProfile, getYoutubeStreamerChannel, upsertYoutubeStreamerChannel, markYoutubeStreamerChannelModeratorRegistered, deleteYoutubeStreamerChannel, listYoutubeStreamerChannelsByYoutubeChannelId, updateYoutubeStreamerChannelLive, updateYoutubeStreamerChannelWebsub, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, claimBotRuleCooldown, enqueueDurableRuntimeJob, enqueuePaidDurableRuntimeJob, claimDurableRuntimeJobs, completeDurableRuntimeJob, failDurableRuntimeJob, claimRuntimeLease, releaseRuntimeLease, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps, recordBotEventLog, listBotEventLogs, getBotEventLog, insertDrawingDonationItem, listDrawingDonationItems, getDrawingDonationItem, getCurrentDrawingDonationItem, updateDrawingDonationItemStatus, deleteDrawingDonationItem, reorderDrawingDonationItems, uploadDrawingDonationObject, deleteDrawingDonationObjectKeys, deleteAccountData, cleanupPrivacyRetentionData, validateSecretEncryptionConfig, getPgPoolStatus, checkDatabaseReady, closeDatabaseConnections } from './supabase.js';
+import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, getBotSettingsStrict, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, revokeSession, getSessionUserId, listChannelPoints, listChannelPointsPage, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, deductChannelPointsIfEnough, getChannelPoints, getChannelPointBalanceSummary, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, issueApiWebSocketTicket, consumeApiWebSocketTicket, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, findSidByChannelViewerTokenSupabase, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, listPlatformAccountsForUserIds, findAppUserIdByChannelUid, findExactPublicChannelIdentity, getPublicChannelPointsSnapshot, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, markPlatformTokenValidated, deletePlatformTokens, deletePlatformAccount, getAppUserAdminStatus, getArubotAdminConsoleSnapshot, getArubotAdminStreamerFeatureDetails, getYoutubeBotProfile, upsertYoutubeBotProfile, updateYoutubeBotProfileTokens, markYoutubeBotProfileStatus, deleteYoutubeBotProfile, getYoutubeStreamerChannel, upsertYoutubeStreamerChannel, markYoutubeStreamerChannelModeratorRegistered, deleteYoutubeStreamerChannel, listYoutubeStreamerChannelsByYoutubeChannelId, updateYoutubeStreamerChannelLive, updateYoutubeStreamerChannelWebsub, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, claimBotRuleCooldown, enqueueDurableRuntimeJob, enqueuePaidDurableRuntimeJob, claimDurableRuntimeJobs, completeDurableRuntimeJob, failDurableRuntimeJob, claimRuntimeLease, releaseRuntimeLease, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps, recordBotEventLog, listBotEventLogs, getBotEventLog, insertDrawingDonationItem, listDrawingDonationItems, getDrawingDonationItem, getCurrentDrawingDonationItem, updateDrawingDonationItemStatus, deleteDrawingDonationItem, reorderDrawingDonationItems, uploadDrawingDonationObject, deleteDrawingDonationObjectKeys, deleteAccountData, cleanupPrivacyRetentionData, validateSecretEncryptionConfig, getPgPoolStatus, checkDatabaseReady, closeDatabaseConnections } from './supabase.js';
 import { confirmPlatformTokenConsent, confirmYoutubeBotProfileConsent, countActiveDurableRuntimeJobs, touchPlatformTokenUsed, touchYoutubeBotProfileUsed } from './supabase.js';
 import { createPlatformProfileService } from './platform-profiles.js';
 import { executeAndStripLiveChangeTokens, filterLiveInfoByProvider, selectCategorySearchResult } from './live-command-actions.js';
 import { canManageLiveSettings, createLiveManagerRoleResolver, getLiveRoleLevel } from './live-command-permissions.js';
-import { buildYoutubeLiveInfoFallback, buildYoutubeLiveLookupContext } from './youtube-live-info.js';
+import { buildYoutubeLiveInfoFallback, buildYoutubeLiveLookupContext, buildYoutubeOfflineLiveInfo } from './youtube-live-info.js';
 import { resolveVideoDonationTiming } from './video-donation-timing.js';
 import { appendVideoDonationQueueCount, countNonDurableVideoDonationItems, countVideoDonationQueueIncludingItem } from './video-donation-queue.js';
 import { fetchYouTubeVideoMetadata } from './youtube-video-metadata.js';
 import { createPvdDurationProbeCoordinator } from './pvd-duration-probe.js';
 import { resolvePvdYouTubeMetadata } from './pvd-youtube-metadata-fallback.js';
 import { createRouletteBroadcastDelivery } from './roulette-broadcast-delivery.js';
-import { calculateDonationPointAward, normalizePointAward, resolveViewerPointEarningPolicy } from './point-earning-policy.js';
+import { buildPointEarningPolicy, calculateDonationPointAward, normalizePointAward } from './point-earning-policy.js';
+import { installChzzkSocketIo2ParserGuard } from './chzzk-socket-io2-guard.js';
+import {
+  attachInternalPointSettingsSid,
+  createBoundedOperationRunner,
+  findViewerDrawingStreamer,
+  publicChannelUidForBalance,
+} from './public-channel-routing.js';
 import { getKstCalendarDate, resolveAttendanceDate } from './attendance-calendar.js';
 import { DEFAULT_ATTENDANCE_MESSAGE, renderAttendanceTemplate } from './attendance-message.js';
 import { executeAttendanceSpecialOperations, extractAttendanceSpecialVariables } from './attendance-special-variables.js';
@@ -218,9 +225,473 @@ function singleFlight(key, fn) {
 }
 
 const realtimeResponseCache = new Map();
-const viewerPointPolicyCache = new Map();
+const publicPointPolicyCache = new Map();
+const publicPointPolicyInflight = new Map();
+const publicPointPolicyCacheGenerations = new Map();
+const publicChannelCacheAliasesByOwner = new Map();
+const publicChannelIdentityGenerations = new Map();
+const publicChannelIdentityActiveCacheKeys = new Map();
+let publicPointPolicyGlobalGeneration = 0;
 const REALTIME_CACHE_SWEEP_MS = 60 * 1000;
 const REALTIME_CACHE_MAX_AGE_MS = 2 * 60 * 1000;
+
+function readBoundedIntegerEnv(name, fallback, minimum, maximum) {
+  const parsed = Number(process.env[name]);
+  const value = Number.isFinite(parsed) ? Math.trunc(parsed) : fallback;
+  return Math.max(minimum, Math.min(maximum, value));
+}
+
+const REALTIME_RESPONSE_CACHE_MAX_ENTRIES = readBoundedIntegerEnv(
+  'REALTIME_RESPONSE_CACHE_MAX_ENTRIES',
+  2_000,
+  100,
+  20_000,
+);
+const PUBLIC_POINT_POLICY_UID_MAX_LENGTH = 160;
+const PUBLIC_POINT_POLICY_UID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+const PUBLIC_POINT_POLICY_PROVIDERS = new Set(['chzzk', 'cime', 'youtube']);
+const PUBLIC_POINT_POLICY_POSITIVE_CACHE_MS = readBoundedIntegerEnv(
+  'PUBLIC_POINT_POLICY_POSITIVE_CACHE_MS',
+  60_000,
+  5_000,
+  5 * 60_000,
+);
+const PUBLIC_POINT_POLICY_NEGATIVE_CACHE_MS = readBoundedIntegerEnv(
+  'PUBLIC_POINT_POLICY_NEGATIVE_CACHE_MS',
+  10_000,
+  1_000,
+  60_000,
+);
+const PUBLIC_POINT_POLICY_TIMEOUT_MS = readBoundedIntegerEnv(
+  'PUBLIC_POINT_POLICY_TIMEOUT_MS',
+  1_500,
+  250,
+  5_000,
+);
+const PUBLIC_POINT_POLICY_CACHE_MAX_ENTRIES = readBoundedIntegerEnv(
+  'PUBLIC_POINT_POLICY_CACHE_MAX_ENTRIES',
+  512,
+  32,
+  5_000,
+);
+const PUBLIC_POINT_POLICY_MAX_INFLIGHT = readBoundedIntegerEnv(
+  'PUBLIC_POINT_POLICY_MAX_INFLIGHT',
+  32,
+  4,
+  128,
+);
+const PUBLIC_CHANNEL_IDENTITY_TIMEOUT_MS = readBoundedIntegerEnv(
+  'PUBLIC_CHANNEL_IDENTITY_TIMEOUT_MS',
+  1_500,
+  250,
+  5_000,
+);
+const PUBLIC_CHANNEL_IDENTITY_MAX_INFLIGHT = readBoundedIntegerEnv(
+  'PUBLIC_CHANNEL_IDENTITY_MAX_INFLIGHT',
+  32,
+  4,
+  128,
+);
+const PUBLIC_CHANNEL_IDENTITY_GENERATION_MAX_ENTRIES = readBoundedIntegerEnv(
+  'PUBLIC_CHANNEL_IDENTITY_GENERATION_MAX_ENTRIES',
+  2_000,
+  100,
+  20_000,
+);
+let publicChannelIdentityActiveLoads = 0;
+const PUBLIC_LIVE_LOOKUP_TIMEOUT_MS = readBoundedIntegerEnv(
+  'PUBLIC_LIVE_LOOKUP_TIMEOUT_MS',
+  5_000,
+  1_000,
+  10_000,
+);
+const PUBLIC_LIVE_LOOKUP_MAX_INFLIGHT = readBoundedIntegerEnv(
+  'PUBLIC_LIVE_LOOKUP_MAX_INFLIGHT',
+  32,
+  4,
+  128,
+);
+let publicLiveLookupActiveLoads = 0;
+const PUBLIC_POINTS_SNAPSHOT_TIMEOUT_MS = readBoundedIntegerEnv(
+  'PUBLIC_POINTS_SNAPSHOT_TIMEOUT_MS',
+  4_500,
+  1_000,
+  10_000,
+);
+const PUBLIC_POINTS_SNAPSHOT_MAX_INFLIGHT = readBoundedIntegerEnv(
+  'PUBLIC_POINTS_SNAPSHOT_MAX_INFLIGHT',
+  32,
+  4,
+  128,
+);
+let publicPointsSnapshotActiveLoads = 0;
+const PUBLIC_ROULETTE_LOGS_MAX_INFLIGHT = readBoundedIntegerEnv(
+  'PUBLIC_ROULETTE_LOGS_MAX_INFLIGHT',
+  32,
+  4,
+  128,
+);
+const PUBLIC_ROULETTE_LOGS_TIMEOUT_MS = readBoundedIntegerEnv(
+  'PUBLIC_ROULETTE_LOGS_TIMEOUT_MS',
+  5_000,
+  1_000,
+  10_000,
+);
+const runPublicRouletteLogsOperation = createBoundedOperationRunner({
+  maxInFlight: PUBLIC_ROULETTE_LOGS_MAX_INFLIGHT,
+  timeoutMs: PUBLIC_ROULETTE_LOGS_TIMEOUT_MS,
+});
+
+function parsePublicPointPolicyUid(value) {
+  const raw = String(value || '').trim();
+  if (!raw || raw.length > PUBLIC_POINT_POLICY_UID_MAX_LENGTH || /^user:/i.test(raw)) return null;
+
+  const qualified = /^(chzzk|cime|youtube):(.+)$/i.exec(raw);
+  const provider = qualified ? qualified[1].toLowerCase() : null;
+  const channelUid = qualified ? qualified[2] : raw;
+  if (
+    (provider && !PUBLIC_POINT_POLICY_PROVIDERS.has(provider))
+    || !PUBLIC_POINT_POLICY_UID_PATTERN.test(channelUid)
+  ) {
+    return null;
+  }
+
+  return {
+    provider,
+    channelUid,
+    cacheKey: provider ? `${provider}:${channelUid}` : `raw:${channelUid}`,
+  };
+}
+
+async function resolveVerifiedPublicChannelIdentity(value) {
+  const parsed = parsePublicPointPolicyUid(value);
+  if (!parsed) return null;
+  publicChannelIdentityActiveCacheKeys.set(
+    parsed.cacheKey,
+    Number(publicChannelIdentityActiveCacheKeys.get(parsed.cacheKey) || 0) + 1,
+  );
+  const generation = Number(publicChannelIdentityGenerations.get(parsed.cacheKey) || 0);
+  const load = readRealtimeCached(
+    `public:identity:${parsed.cacheKey}`,
+    { ttlMs: 30_000, staleMs: 60_000 },
+    async () => {
+      if (publicChannelIdentityActiveLoads >= PUBLIC_CHANNEL_IDENTITY_MAX_INFLIGHT) {
+        const error = new Error('public_channel_identity_overloaded');
+        error.code = 'public_channel_identity_overloaded';
+        error.status = 503;
+        throw error;
+      }
+      publicChannelIdentityActiveLoads += 1;
+      try {
+        const identity = await findExactPublicChannelIdentity(parsed.provider, parsed.channelUid);
+        return { identity: identity || null };
+      } finally {
+        publicChannelIdentityActiveLoads = Math.max(0, publicChannelIdentityActiveLoads - 1);
+      }
+    },
+  );
+
+  let timeoutId;
+  try {
+    const envelope = await Promise.race([
+      load,
+      new Promise((_, reject) => {
+        timeoutId = setTimeout(() => {
+          const error = new Error('public_channel_identity_timeout');
+          error.code = 'public_channel_identity_timeout';
+          error.status = 503;
+          reject(error);
+        }, PUBLIC_CHANNEL_IDENTITY_TIMEOUT_MS);
+      }),
+    ]);
+    if (generation !== Number(publicChannelIdentityGenerations.get(parsed.cacheKey) || 0)) return null;
+    const identity = envelope?.identity || null;
+    if (identity?.ownerUserId) rememberPublicChannelCacheAlias(identity.ownerUserId, value, parsed.cacheKey);
+    return identity;
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+    const activeCount = Number(publicChannelIdentityActiveCacheKeys.get(parsed.cacheKey) || 0) - 1;
+    if (activeCount > 0) publicChannelIdentityActiveCacheKeys.set(parsed.cacheKey, activeCount);
+    else publicChannelIdentityActiveCacheKeys.delete(parsed.cacheKey);
+  }
+}
+
+async function loadVerifiedPublicLiveInfo(identity) {
+  if (!identity?.ownerUserId || !identity.provider) return null;
+  if (publicLiveLookupActiveLoads >= PUBLIC_LIVE_LOOKUP_MAX_INFLIGHT) {
+    const error = new Error('public_live_lookup_overloaded');
+    error.code = 'public_live_lookup_overloaded';
+    error.status = 503;
+    throw error;
+  }
+  publicLiveLookupActiveLoads += 1;
+  const operation = Promise.resolve()
+    .then(() => getLiveInfoForSid(`user:${identity.ownerUserId}`, { provider: identity.provider }))
+    .finally(() => {
+      publicLiveLookupActiveLoads = Math.max(0, publicLiveLookupActiveLoads - 1);
+    });
+  let timeoutId;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise((_, reject) => {
+        timeoutId = setTimeout(() => {
+          const error = new Error('public_live_lookup_timeout');
+          error.code = 'public_live_lookup_timeout';
+          error.status = 503;
+          reject(error);
+        }, PUBLIC_LIVE_LOOKUP_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
+async function getPublicBotSettingsStrict(sid) {
+  try {
+    return await getBotSettingsStrict(sid);
+  } catch (error) {
+    error.status = 503;
+    throw error;
+  }
+}
+
+async function loadVerifiedPublicPointsSnapshot(publicIdentity, verifiedIdentity, limit) {
+  if (!verifiedIdentity?.ownerUserId) return null;
+  if (publicPointsSnapshotActiveLoads >= PUBLIC_POINTS_SNAPSHOT_MAX_INFLIGHT) {
+    const error = new Error('public_points_snapshot_overloaded');
+    error.code = 'public_points_snapshot_overloaded';
+    error.status = 503;
+    throw error;
+  }
+  publicPointsSnapshotActiveLoads += 1;
+  const operation = Promise.resolve()
+    .then(() => getPublicChannelPointsSnapshot(
+      publicIdentity.provider,
+      publicIdentity.channelUid,
+      { limit, verifiedIdentity },
+    ))
+    .finally(() => {
+      publicPointsSnapshotActiveLoads = Math.max(0, publicPointsSnapshotActiveLoads - 1);
+    });
+  let timeoutId;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise((_, reject) => {
+        timeoutId = setTimeout(() => {
+          const error = new Error('public_points_snapshot_timeout');
+          error.code = 'public_points_snapshot_timeout';
+          error.status = 503;
+          reject(error);
+        }, PUBLIC_POINTS_SNAPSHOT_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
+function rememberPublicChannelCacheAlias(ownerUserId, publicUid, identityCacheKey) {
+  const owner = String(ownerUserId || '').replace(/^user:/, '').trim();
+  const uid = String(publicUid || '').trim();
+  if (!owner || !uid) return;
+  let aliases = publicChannelCacheAliasesByOwner.get(owner);
+  if (!aliases) {
+    while (publicChannelCacheAliasesByOwner.size >= REALTIME_RESPONSE_CACHE_MAX_ENTRIES) {
+      const oldestOwner = publicChannelCacheAliasesByOwner.keys().next().value;
+      if (oldestOwner == null) break;
+      publicChannelCacheAliasesByOwner.delete(oldestOwner);
+    }
+    aliases = new Map();
+    publicChannelCacheAliasesByOwner.set(owner, aliases);
+  } else {
+    publicChannelCacheAliasesByOwner.delete(owner);
+    publicChannelCacheAliasesByOwner.set(owner, aliases);
+  }
+  aliases.delete(uid);
+  aliases.set(uid, String(identityCacheKey || ''));
+  while (aliases.size > 24) aliases.delete(aliases.keys().next().value);
+}
+
+function bumpPublicChannelIdentityGeneration(identityCacheKey) {
+  const cacheKey = String(identityCacheKey || '').trim();
+  if (!cacheKey) return;
+  const nextGeneration = Number(publicChannelIdentityGenerations.get(cacheKey) || 0) + 1;
+  publicChannelIdentityGenerations.delete(cacheKey);
+  publicChannelIdentityGenerations.set(cacheKey, nextGeneration);
+  while (publicChannelIdentityGenerations.size > PUBLIC_CHANNEL_IDENTITY_GENERATION_MAX_ENTRIES) {
+    const removableKey = Array.from(publicChannelIdentityGenerations.keys())
+      .find((key) => !publicChannelIdentityActiveCacheKeys.has(key));
+    if (!removableKey) break;
+    publicChannelIdentityGenerations.delete(removableKey);
+  }
+}
+
+function invalidatePublicChannelConfigurationCaches(ownerUserId) {
+  const owner = String(ownerUserId || '').replace(/^user:/, '').trim();
+  const aliases = owner ? publicChannelCacheAliasesByOwner.get(owner) : null;
+  if (!aliases) return;
+  for (const uid of aliases.keys()) {
+    realtimeResponseCache.delete(`public:rules:${uid}`);
+    realtimeResponseCache.delete(`public:roulette-defs:${uid}`);
+  }
+}
+
+function invalidatePublicChannelIdentityCaches(ownerUserId, additionalAliases = []) {
+  const owner = String(ownerUserId || '').replace(/^user:/, '').trim();
+  const cachedAliases = owner ? publicChannelCacheAliasesByOwner.get(owner) : null;
+  const aliases = new Map(cachedAliases ? Array.from(cachedAliases.entries()) : []);
+  for (const value of Array.isArray(additionalAliases) ? additionalAliases : [additionalAliases]) {
+    const uid = String(value || '').trim();
+    const parsed = parsePublicPointPolicyUid(uid);
+    if (parsed) aliases.set(uid, parsed.cacheKey);
+  }
+
+  for (const [uid, identityCacheKey] of aliases) {
+    if (identityCacheKey) {
+      bumpPublicChannelIdentityGeneration(identityCacheKey);
+      realtimeResponseCache.delete(`public:identity:${identityCacheKey}`);
+    }
+    realtimeResponseCache.delete(`public:live:${uid}`);
+    realtimeResponseCache.delete(`public:rules:${uid}`);
+    realtimeResponseCache.delete(`public:roulette-defs:${uid}`);
+    for (const key of realtimeResponseCache.keys()) {
+      if (key.startsWith(`public:points:${uid}:`)) realtimeResponseCache.delete(key);
+    }
+  }
+  if (owner) publicChannelCacheAliasesByOwner.delete(owner);
+}
+
+function prunePublicPointPolicyCache(now = Date.now()) {
+  for (const [key, entry] of publicPointPolicyCache.entries()) {
+    if (!entry?.expiresAt || entry.expiresAt <= now) publicPointPolicyCache.delete(key);
+  }
+  while (publicPointPolicyCache.size > PUBLIC_POINT_POLICY_CACHE_MAX_ENTRIES) {
+    const oldestKey = publicPointPolicyCache.keys().next().value;
+    if (oldestKey == null) break;
+    publicPointPolicyCache.delete(oldestKey);
+  }
+}
+
+function setPublicPointPolicyCache(key, value, ttlMs) {
+  prunePublicPointPolicyCache();
+  publicPointPolicyCache.delete(key);
+  while (publicPointPolicyCache.size >= PUBLIC_POINT_POLICY_CACHE_MAX_ENTRIES) {
+    const oldestKey = publicPointPolicyCache.keys().next().value;
+    if (oldestKey == null) break;
+    publicPointPolicyCache.delete(oldestKey);
+  }
+  publicPointPolicyCache.set(key, { value, expiresAt: Date.now() + ttlMs });
+}
+
+function publicPointPolicyGeneration(cacheKey) {
+  return {
+    global: publicPointPolicyGlobalGeneration,
+    owner: Number(publicPointPolicyCacheGenerations.get(cacheKey) || 0),
+  };
+}
+
+function prunePublicPointPolicyGenerations() {
+  while (publicPointPolicyCacheGenerations.size > PUBLIC_POINT_POLICY_CACHE_MAX_ENTRIES) {
+    const removableKey = Array.from(publicPointPolicyCacheGenerations.keys())
+      .find((key) => !publicPointPolicyInflight.has(key));
+    if (!removableKey) break;
+    publicPointPolicyCacheGenerations.delete(removableKey);
+  }
+}
+
+function invalidatePublicPointPolicyCache(sid) {
+  const rawSid = String(sid || '').trim();
+  if (!rawSid) {
+    publicPointPolicyGlobalGeneration += 1;
+    publicPointPolicyCache.clear();
+    publicPointPolicyInflight.clear();
+    publicPointPolicyCacheGenerations.clear();
+    return;
+  }
+  const cacheKey = rawSid.startsWith('user:') ? rawSid : `user:${rawSid}`;
+  invalidatePublicChannelConfigurationCaches(cacheKey);
+  const nextGeneration = Number(publicPointPolicyCacheGenerations.get(cacheKey) || 0) + 1;
+  publicPointPolicyCacheGenerations.delete(cacheKey);
+  publicPointPolicyCacheGenerations.set(cacheKey, nextGeneration);
+  publicPointPolicyCache.delete(cacheKey);
+  publicPointPolicyInflight.delete(cacheKey);
+  prunePublicPointPolicyGenerations();
+}
+
+async function waitForPublicPointPolicy(promise) {
+  let timeoutId;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((resolve) => {
+        timeoutId = setTimeout(() => resolve(null), PUBLIC_POINT_POLICY_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
+function loadPublicPointEarningPolicy(ownerUserId) {
+  const owner = String(ownerUserId || '').trim();
+  if (!owner) return Promise.resolve(null);
+  const sid = owner.startsWith('user:') ? owner : `user:${owner}`;
+  const cacheKey = sid;
+
+  const now = Date.now();
+  const cached = publicPointPolicyCache.get(cacheKey);
+  if (cached?.expiresAt > now) {
+    publicPointPolicyCache.delete(cacheKey);
+    publicPointPolicyCache.set(cacheKey, cached);
+    return Promise.resolve(cached.value);
+  }
+  if (cached) publicPointPolicyCache.delete(cacheKey);
+
+  const existing = publicPointPolicyInflight.get(cacheKey);
+  if (existing?.promise) return waitForPublicPointPolicy(existing.promise);
+  if (publicPointPolicyInflight.size >= PUBLIC_POINT_POLICY_MAX_INFLIGHT) return Promise.resolve(null);
+
+  const generation = publicPointPolicyGeneration(cacheKey);
+  const operation = Promise.resolve()
+    .then(async () => buildPointEarningPolicy(await getBotSettingsStrict(sid)))
+    .catch(() => null);
+  const entry = { promise: operation, generation };
+  publicPointPolicyInflight.set(cacheKey, entry);
+  operation
+    .then((value) => {
+      if (
+        publicPointPolicyGlobalGeneration === generation.global
+        && Number(publicPointPolicyCacheGenerations.get(cacheKey) || 0) === generation.owner
+        && publicPointPolicyInflight.get(cacheKey) === entry
+      ) {
+        setPublicPointPolicyCache(
+          cacheKey,
+          value,
+          value ? PUBLIC_POINT_POLICY_POSITIVE_CACHE_MS : PUBLIC_POINT_POLICY_NEGATIVE_CACHE_MS,
+        );
+      }
+    })
+    .finally(() => {
+      if (publicPointPolicyInflight.get(cacheKey) === entry) {
+        publicPointPolicyInflight.delete(cacheKey);
+      }
+      prunePublicPointPolicyGenerations();
+    });
+  return waitForPublicPointPolicy(operation);
+}
+
+function setRealtimeResponseCacheEntry(key, entry) {
+  realtimeResponseCache.delete(key);
+  while (realtimeResponseCache.size >= REALTIME_RESPONSE_CACHE_MAX_ENTRIES) {
+    const oldestKey = realtimeResponseCache.keys().next().value;
+    if (oldestKey == null) break;
+    realtimeResponseCache.delete(oldestKey);
+  }
+  realtimeResponseCache.set(key, entry);
+}
 
 function cloneRealtimePayload(payload) {
   if (!payload || typeof payload !== 'object') return payload;
@@ -233,6 +704,7 @@ async function readRealtimeCached(key, options, loader) {
   const now = Date.now();
   const existing = realtimeResponseCache.get(key);
   if (existing?.value && now - existing.updatedAt <= ttlMs) {
+    setRealtimeResponseCacheEntry(key, existing);
     return cloneRealtimePayload(existing.value);
   }
   if (existing?.promise) {
@@ -240,41 +712,70 @@ async function readRealtimeCached(key, options, loader) {
     return cloneRealtimePayload(await existing.promise);
   }
   if (existing?.value && now - existing.updatedAt <= staleMs) {
+    let refreshEntry;
     const refresh = Promise.resolve()
       .then(loader)
       .then((value) => {
-        realtimeResponseCache.set(key, { value, updatedAt: Date.now() });
+        if (realtimeResponseCache.get(key) === refreshEntry) {
+          setRealtimeResponseCacheEntry(key, { value, updatedAt: Date.now() });
+        }
         return value;
       })
       .catch((error) => {
-        realtimeResponseCache.set(key, { value: existing.value, updatedAt: existing.updatedAt });
+        if (realtimeResponseCache.get(key) === refreshEntry) {
+          setRealtimeResponseCacheEntry(key, { value: existing.value, updatedAt: existing.updatedAt });
+        }
         console.warn('[Realtime Cache] background refresh failed:', key, error?.message || error);
         return existing.value;
       });
-    realtimeResponseCache.set(key, { ...existing, promise: refresh });
+    refreshEntry = { ...existing, promise: refresh };
+    setRealtimeResponseCacheEntry(key, refreshEntry);
     refresh.catch(() => { });
     return cloneRealtimePayload(existing.value);
   }
+  let requestEntry;
   const request = Promise.resolve()
     .then(loader)
     .then((value) => {
-      realtimeResponseCache.set(key, { value, updatedAt: Date.now() });
+      if (realtimeResponseCache.get(key) === requestEntry) {
+        setRealtimeResponseCacheEntry(key, { value, updatedAt: Date.now() });
+      }
       return value;
     })
     .catch((error) => {
-      if (existing?.value) realtimeResponseCache.set(key, { value: existing.value, updatedAt: existing.updatedAt });
-      else realtimeResponseCache.delete(key);
+      if (realtimeResponseCache.get(key) === requestEntry) {
+        if (existing?.value) setRealtimeResponseCacheEntry(key, { value: existing.value, updatedAt: existing.updatedAt });
+        else realtimeResponseCache.delete(key);
+      }
       throw error;
     });
-  realtimeResponseCache.set(key, { value: existing?.value, updatedAt: existing?.updatedAt || 0, promise: request });
+  requestEntry = { value: existing?.value, updatedAt: existing?.updatedAt || 0, promise: request };
+  setRealtimeResponseCacheEntry(key, requestEntry);
   return cloneRealtimePayload(await request);
 }
 
 function invalidateRealtimePointCaches(channelUid) {
-  viewerPointPolicyCache.clear();
   const uid = String(channelUid || '').trim();
+  const parsedUid = parsePublicPointPolicyUid(uid);
+  const affectedPublicUids = new Set(uid ? [uid] : []);
+  if (uid) {
+    for (const aliases of publicChannelCacheAliasesByOwner.values()) {
+      const matchesOwner = Array.from(aliases.keys()).some((publicUid) => {
+        const parsedPublicUid = parsePublicPointPolicyUid(publicUid);
+        return publicUid === uid
+          || (parsedUid && parsedPublicUid?.channelUid === parsedUid.channelUid);
+      });
+      if (matchesOwner) {
+        for (const publicUid of aliases.keys()) affectedPublicUids.add(publicUid);
+      }
+    }
+  }
   for (const key of realtimeResponseCache.keys()) {
-    if (key.startsWith('viewer:points:') || (uid && key.includes(`:points:${uid}:`))) {
+    if (
+      key.startsWith('viewer:points:')
+      || (!uid && key.startsWith('public:points:'))
+      || (uid && Array.from(affectedPublicUids).some((publicUid) => key.startsWith(`public:points:${publicUid}:`)))
+    ) {
       realtimeResponseCache.delete(key);
     }
   }
@@ -294,9 +795,7 @@ setInterval(() => {
       realtimeResponseCache.delete(key);
     }
   }
-  for (const [sid, entry] of viewerPointPolicyCache.entries()) {
-    if (!entry?.expiresAt || entry.expiresAt <= now) viewerPointPolicyCache.delete(sid);
-  }
+  prunePublicPointPolicyCache(now);
 }, REALTIME_CACHE_SWEEP_MS).unref?.();
 
 function rejectUntrustedBrowserOrigin(req, res, next) {
@@ -2098,7 +2597,6 @@ const drawingTokenToSid = new Map(); // token -> sid (in-memory reverse index)
 const drawingOverlaySockets = new Map(); // sid -> Set<WebSocket>
 const drawingAdminSockets = new Map(); // sid -> Set<WebSocket>
 const drawingLivePlaybackCache = new Map(); // key -> { expiresAt, value }
-const viewerPlatformLiveCache = new Map(); // key -> { expiresAt, value }
 
 // =============================
 // =============================
@@ -5521,7 +6019,7 @@ app.get('/api/donation/settings', async (req, res) => {
 });
 
 // POST settings
-app.post('/api/donation/settings', async (req, res) => {
+app.post('/api/donation/settings', rateLimiters.userWrite, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
@@ -5529,7 +6027,7 @@ app.post('/api/donation/settings', async (req, res) => {
     const pointsPerK = Math.max(0, Number(req.body?.settings?.pointsPerK ?? 10));
     const next = { ...s, donation: { ...(s.donation || {}), pointsPerK } };
     await setBotSettings(sid, next);
-    invalidateRealtimePointCaches();
+    invalidatePublicPointPolicyCache(sid);
     return res.json({ ok: true, settings: next.donation });
   } catch { return res.status(500).json({ error: 'failed' }); }
 });
@@ -5769,7 +6267,7 @@ app.post('/api/setup/templates/apply', rateLimiters.userWrite, async (req, res) 
       },
     };
     await setBotSettings(sid, nextSettings);
-    invalidateRealtimePointCaches();
+    invalidatePublicPointPolicyCache(sid);
     try { macroCache.delete(sid); } catch { }
 
     return res.json({
@@ -5825,7 +6323,8 @@ app.post('/api/roulette/definitions/upsert', async (req, res) => {
     else definitions.push(definition);
 
     await setBotSettings(sid, { ...settings, rouletteDefs: definitions });
-    return res.json({ ok: true, definition });
+    const runtimeRevision = markRuntimeConfigurationChanged(sid, 'roulette_definition_saved');
+    return res.json({ ok: true, definition, runtimeRevision });
   } catch (e) {
     console.error('[roulette:definitions:upsert] error', e?.message || e);
     return res.status(500).json({ error: 'Failed to save roulette definition' });
@@ -5843,7 +6342,8 @@ app.post('/api/roulette/definitions/delete', async (req, res) => {
     const definitions = (Array.isArray(settings.rouletteDefs) ? settings.rouletteDefs : [])
       .filter((item) => String(item?.id || '') !== id && String(item?.name || '').trim().toLowerCase() !== name);
     await setBotSettings(sid, { ...settings, rouletteDefs: definitions });
-    return res.json({ ok: true });
+    const runtimeRevision = markRuntimeConfigurationChanged(sid, 'roulette_definition_deleted');
+    return res.json({ ok: true, runtimeRevision });
   } catch (e) {
     console.error('[roulette:definitions:delete] error', e?.message || e);
     return res.status(500).json({ error: 'Failed to delete roulette definition' });
@@ -5891,46 +6391,51 @@ app.get('/api/public/:uid/roulette-defs', async (req, res) => {
   try {
     const uid = String(req.params.uid || '').trim();
     if (!uid) return res.status(400).json({ error: 'uid required' });
-    const sid = `user:${uid}`;
-    const settings = await getBotSettings(sid) || {};
-    const defs = Array.isArray(settings.rouletteDefs) ? settings.rouletteDefs : [];
-    // Normalize shapes and compute probabilities for weighted roulette
-    const result = defs.map((def) => {
-      const type = String(def?.type || 'items');
-      const items = Array.isArray(def?.items) ? def.items : [];
-      if (type === 'probability') {
-        // Ensure numeric probability field 0..100; compute probDecimal
-        const outItems = items.map((it) => {
-          const p = Number(it?.probability ?? 0);
-          const pct = Number.isFinite(p) ? p : 0;
-          const dec = pct > 1 ? (pct / 100) : pct; // accept 0..100 or 0..1
+    if (!parsePublicPointPolicyUid(uid)) return res.status(400).json({ error: 'invalid uid' });
+    const result = await readRealtimeCached(`public:roulette-defs:${uid}`, { ttlMs: 5_000, staleMs: 15_000 }, async () => {
+      const identity = await resolveVerifiedPublicChannelIdentity(uid);
+      if (!identity?.ownerUserId) return [];
+      const sid = `user:${identity.ownerUserId}`;
+      const settings = await getPublicBotSettingsStrict(sid);
+      const defs = Array.isArray(settings.rouletteDefs) ? settings.rouletteDefs : [];
+      // Normalize shapes and compute probabilities for weighted roulette
+      return defs.map((def) => {
+        const type = String(def?.type || 'items');
+        const items = Array.isArray(def?.items) ? def.items : [];
+        if (type === 'probability') {
+          // Ensure numeric probability field 0..100; compute probDecimal
+          const outItems = items.map((it) => {
+            const p = Number(it?.probability ?? 0);
+            const pct = Number.isFinite(p) ? p : 0;
+            const dec = pct > 1 ? (pct / 100) : pct; // accept 0..100 or 0..1
+            return {
+              label: String(it?.label || ''),
+              value: it?.value ?? null,
+              probabilityPercent: +((dec * 100).toFixed(3)),
+              weight: Number.isFinite(it?.weight) ? Number(it.weight) : null,
+            };
+          });
+          return { name: String(def?.name || ''), type: 'probability', theme: def?.theme || null, items: outItems };
+        }
+        // Weighted/items type: compute approximate probability from weights
+        let sum = 0;
+        const weights = items.map((it) => { const w = Math.max(0, Number(it?.weight ?? 0)); sum += w; return w; });
+        const outItems = items.map((it, idx) => {
+          const w = weights[idx];
+          const prob = sum > 0 ? (w / sum) : 0;
           return {
             label: String(it?.label || ''),
             value: it?.value ?? null,
-            probabilityPercent: +((dec * 100).toFixed(3)),
-            weight: Number.isFinite(it?.weight) ? Number(it.weight) : null,
+            weight: w,
+            probabilityPercent: +((prob * 100).toFixed(3)),
           };
         });
-        return { name: String(def?.name || ''), type: 'probability', theme: def?.theme || null, items: outItems };
-      }
-      // Weighted/items type: compute approximate probability from weights
-      let sum = 0;
-      const weights = items.map((it) => { const w = Math.max(0, Number(it?.weight ?? 0)); sum += w; return w; });
-      const outItems = items.map((it, idx) => {
-        const w = weights[idx];
-        const prob = sum > 0 ? (w / sum) : 0;
-        return {
-          label: String(it?.label || ''),
-          value: it?.value ?? null,
-          weight: w,
-          probabilityPercent: +((prob * 100).toFixed(3)),
-        };
+        return { name: String(def?.name || ''), type: 'items', theme: def?.theme || null, items: outItems };
       });
-      return { name: String(def?.name || ''), type: 'items', theme: def?.theme || null, items: outItems };
     });
     return res.json({ ok: true, defs: result, definitions: result, total: result.length, updatedAt: new Date().toISOString() });
   } catch (e) {
-    return res.status(500).json({ error: 'failed' });
+    return res.status(e?.status === 503 ? 503 : 500).json({ error: 'failed' });
   }
 });
 
@@ -7778,7 +8283,8 @@ app.get('/api/viewer/drawing-donation/streamers/:channelUid', async (req, res) =
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
     const channelUid = decodeURIComponent(String(req.params.channelUid || '')).trim();
     const data = await collectViewerDrawingDonationStreamers(ownerUserId);
-    const streamer = data.streamers.find((item) => item.channelUid === channelUid || item.canonicalChannelUid === channelUid);
+    const identity = await resolveVerifiedPublicChannelIdentity(channelUid);
+    const streamer = findViewerDrawingStreamer(data.streamers, channelUid, identity);
     if (!streamer) return res.status(404).json({ error: 'not_available' });
     return res.json({ ...data, streamer });
   } catch (e) {
@@ -7793,7 +8299,8 @@ app.post('/api/drawing-donation/submit', rateLimiters.userWrite, async (req, res
     const channelUid = String(req.body?.channelUid || '').trim();
     if (!channelUid) return res.status(400).json({ error: 'channelUid required' });
     const data = await collectViewerDrawingDonationStreamers(ownerUserId);
-    const streamer = data.streamers.find((item) => item.channelUid === channelUid || item.canonicalChannelUid === channelUid);
+    const identity = await resolveVerifiedPublicChannelIdentity(channelUid);
+    const streamer = findViewerDrawingStreamer(data.streamers, channelUid, identity);
     if (!streamer) return res.status(404).json({ error: 'not_available' });
     const resolved = await resolveDrawingDonationSettingsForBalance(streamer);
     if (!resolved?.drawing?.enabled) return res.status(400).json({ error: 'drawing_donation_disabled' });
@@ -7905,8 +8412,10 @@ app.get('/api/roulette/resolve-token', rateLimiters.externalLookup, async (req, 
   try {
     const uid = String(req.query.uid || '').trim();
     if (!uid) return res.status(400).json({ error: 'uid required' });
-    const sid = `user:${uid}`;
-    const settings = await getBotSettings(sid) || {};
+    const identity = await resolveVerifiedPublicChannelIdentity(uid);
+    if (!identity?.ownerUserId) return res.status(404).json({ error: 'not_found' });
+    const sid = `user:${identity.ownerUserId}`;
+    const settings = await getPublicBotSettingsStrict(sid);
     const token = typeof settings.rouletteViewerToken === 'string' && settings.rouletteViewerToken.trim()
       ? String(settings.rouletteViewerToken).trim()
       : '';
@@ -7914,7 +8423,7 @@ app.get('/api/roulette/resolve-token', rateLimiters.externalLookup, async (req, 
     try { rouletteTokenToSid.set(token, sid); } catch { }
     return res.json({ token, path: `/roulette/${encodeURIComponent(token)}` });
   } catch (e) {
-    return res.status(500).json({ error: 'Failed to resolve token' });
+    return res.status(e?.status === 503 ? 503 : 500).json({ error: 'Failed to resolve token' });
   }
 });
 
@@ -7938,32 +8447,48 @@ async function resolveCurrentViewerRouletteUserIds(req) {
 app.get('/api/roulette/logs', async (req, res) => {
   try {
     const uid = String(req.query.uid || '').trim();
-    if (!uid) return res.status(400).json({ error: 'uid required' });
-    const sid = `user:${uid}`;
-    const settings = await getBotSettings(sid) || {};
-    const token = settings.rouletteViewerToken;
-    if (!token) return res.status(404).json({ error: 'not_found' });
-    const q = req.query?.q ? String(req.query.q) : '';
-    const rouletteName = req.query?.roulette ? String(req.query.roulette) : '';
-    const mine = ['1', 'true', 'yes'].includes(String(req.query?.mine || '').toLowerCase());
-    const viewerUserIds = mine ? await resolveCurrentViewerRouletteUserIds(req) : [];
-    const limit = req.query?.limit ? Math.max(1, Math.min(200, parseInt(String(req.query.limit)))) : 50;
-    const offset = req.query?.offset ? Math.max(0, parseInt(String(req.query.offset))) : 0;
-    const rows = mine && viewerUserIds.length === 0
-      ? []
-      : await listRouletteSessionsByToken(token, { q, rouletteName, userIds: viewerUserIds, limit, offset });
-    return res.json({
-      items: rows,
-      limit,
-      offset,
-      q,
-      roulette: rouletteName,
-      mine,
-      viewerKnown: mine ? viewerUserIds.length > 0 : null,
-      updatedAt: new Date().toISOString()
+    if (!parsePublicPointPolicyUid(uid)) return res.status(400).json({ error: 'uid required' });
+    const payload = await runPublicRouletteLogsOperation(async () => {
+      const identity = await resolveVerifiedPublicChannelIdentity(uid);
+      if (!identity?.ownerUserId) {
+        const error = new Error('not_found');
+        error.code = 'not_found';
+        error.status = 404;
+        throw error;
+      }
+      const sid = `user:${identity.ownerUserId}`;
+      const settings = await getPublicBotSettingsStrict(sid);
+      const token = settings.rouletteViewerToken;
+      if (!token) {
+        const error = new Error('not_found');
+        error.code = 'not_found';
+        error.status = 404;
+        throw error;
+      }
+      const q = req.query?.q ? String(req.query.q) : '';
+      const rouletteName = req.query?.roulette ? String(req.query.roulette) : '';
+      const mine = ['1', 'true', 'yes'].includes(String(req.query?.mine || '').toLowerCase());
+      const viewerUserIds = mine ? await resolveCurrentViewerRouletteUserIds(req) : [];
+      const limit = req.query?.limit ? Math.max(1, Math.min(200, parseInt(String(req.query.limit)))) : 50;
+      const offset = req.query?.offset ? Math.max(0, parseInt(String(req.query.offset))) : 0;
+      const rows = mine && viewerUserIds.length === 0
+        ? []
+        : await listRouletteSessionsByToken(token, { q, rouletteName, userIds: viewerUserIds, limit, offset });
+      return {
+        items: rows,
+        limit,
+        offset,
+        q,
+        roulette: rouletteName,
+        mine,
+        viewerKnown: mine ? viewerUserIds.length > 0 : null,
+        updatedAt: new Date().toISOString(),
+      };
     });
+    return res.json(payload);
   } catch (e) {
-    return res.status(500).json({ error: 'failed' });
+    const status = e?.status === 404 ? 404 : (e?.status === 503 ? 503 : 500);
+    return res.status(status).json({ error: status === 404 ? 'not_found' : (status === 503 ? 'temporarily_unavailable' : 'failed') });
   }
 });
 
@@ -9502,19 +10027,11 @@ async function deleteDrawingItemForSid(sid, id) {
 }
 
 async function resolveDrawingDonationSettingsForBalance(balance) {
-  const rawCandidates = [
-    balance?.canonicalChannelUid,
-    balance?.channelUid,
-    String(balance?.canonicalChannelUid || '').replace(/^user:/, ''),
-    String(balance?.channelUid || '').replace(/^user:/, ''),
-  ].map((value) => String(value || '').trim()).filter(Boolean);
-  const candidates = Array.from(new Set(rawCandidates.flatMap((value) => [value, value.startsWith('user:') ? value : `user:${value}`])));
-  for (const sid of candidates) {
-    const settings = await getBotSettings(sid).catch(() => null);
-    const drawing = normalizeDrawingDonationSettings(settings?.drawingDonation);
-    if (drawing.enabled) return { sid, settings, drawing };
-  }
-  return null;
+  const sid = String(balance?.pointSettingsSid || '').trim();
+  if (!sid || !sid.startsWith('user:')) return null;
+  const settings = await getBotSettings(sid).catch(() => null);
+  const drawing = normalizeDrawingDonationSettings(settings?.drawingDonation);
+  return drawing.enabled ? { sid, settings, drawing } : null;
 }
 
 async function collectViewerDrawingDonationStreamers(ownerUserId) {
@@ -9527,8 +10044,9 @@ async function collectViewerDrawingDonationStreamers(ownerUserId) {
     if (!resolved) continue;
     const blocked = findBlockedBotUser(resolved.settings, ownerUserId, null, identityKeys);
     const liveSurfaces = await collectDrawingLiveSurfacesForSid(resolved.sid).catch(() => []);
-    entries.push({
+    const entry = {
       channelUid: balance.channelUid,
+      publicUid: publicChannelUidForBalance(balance),
       canonicalChannelUid: balance.canonicalChannelUid || null,
       channelName: balance.channelName || balance.channelUid,
       avatarUrl: balance.avatarUrl || null,
@@ -9548,7 +10066,8 @@ async function collectViewerDrawingDonationStreamers(ownerUserId) {
         blocked: !!blocked,
         blockReason: blocked?.reason || null,
       },
-    });
+    };
+    entries.push(attachInternalPointSettingsSid(entry, resolved.sid));
   }
   return { platforms, identityKeys, streamers: entries };
 }
@@ -11320,10 +11839,19 @@ async function fetchYoutubeLiveInfoForSid(sid) {
     }
   }
   if (!info) {
-    info = await fetchYoutubeActiveLive(ownerUserId, {
-      allowOwnerFallback: true,
-      allowSearch: lookup.live && lookup.broadcastIds.length === 0,
-    }).catch(() => null);
+    const registeredLive = await refreshYoutubeLiveFromRegisteredChannel(ownerUserId, { allowSearch: false }).catch(() => null);
+    if (registeredLive?.live === true || registeredLive?.liveChatId) info = registeredLive;
+  }
+  let confirmedOffline = false;
+  let ownerLookupError = null;
+  if (!info) {
+    try {
+      const ownedLive = await fetchYoutubeOwnedActiveLive(ownerUserId);
+      confirmedOffline = !ownedLive;
+      if (ownedLive) info = ownedLive;
+    } catch (error) {
+      ownerLookupError = error;
+    }
   }
   if (info?.live === true || info?.liveChatId) {
     return {
@@ -11339,7 +11867,11 @@ async function fetchYoutubeLiveInfoForSid(sid) {
       provider: 'youtube'
     };
   }
-  return buildYoutubeLiveInfoFallback(lookup);
+  const cachedFallback = buildYoutubeLiveInfoFallback(lookup);
+  if (cachedFallback) return cachedFallback;
+  if (confirmedOffline) return buildYoutubeOfflineLiveInfo(lookup);
+  if (ownerLookupError) throw ownerLookupError;
+  return null;
 }
 
 async function getChannelUidsForSid(sid) {
@@ -11622,6 +12154,8 @@ async function getIoClient() {
     // @ts-ignore
     if (globalThis.WebSocket) delete globalThis.WebSocket;
   } catch { }
+  const parserModule = await import('socket.io-parser');
+  installChzzkSocketIo2ParserGuard(parserModule);
   const mod = await import('socket.io-client');
   return mod.default || mod;
 }
@@ -12443,6 +12977,7 @@ async function wakeConnectedProviderRuntimes(sid, reason = 'configuration_change
 function markRuntimeConfigurationChanged(sid, reason = 'configuration_changed') {
   const normalizedSid = String(sid || '').trim();
   if (!normalizedSid) return 0;
+  invalidatePublicChannelConfigurationCaches(normalizedSid);
   const revision = getRuntimeConfigurationRevision(normalizedSid) + 1;
   runtimeConfigurationRevisions.set(normalizedSid, revision);
   activeSids.set(normalizedSid, Date.now());
@@ -16688,6 +17223,12 @@ app.get('/api/auth/youtube/callback', async (req, res) => {
 
     const preferredUserId = await getCurrentSessionUserId(req);
     const { userId } = await upsertPlatformIdentity('youtube', profile, preferredUserId);
+    invalidatePublicChannelIdentityCaches(userId, [
+      profile.platformUserId,
+      profile.channelId,
+      profile.platformUserId ? `youtube:${profile.platformUserId}` : null,
+      profile.channelId ? `youtube:${profile.channelId}` : null,
+    ]);
     await upsertPlatformTokens('youtube', userId, profile.platformUserId, {
       ...tokens,
       consentGrantedAt,
@@ -16785,6 +17326,10 @@ async function deleteYoutubeAuthorizedData(ownerUserId, platformUserId = null, r
   if (!owner) return { tokensDeleted: 0, accountsDeleted: 0, streamerChannelDeleted: false };
   const streamerChannelDeleted = await deleteYoutubeStreamerChannel(owner).catch(() => false);
   const deleted = await deletePlatformAccount('youtube', owner, platformUserId);
+  invalidatePublicChannelIdentityCaches(owner, [
+    platformUserId,
+    platformUserId ? `youtube:${platformUserId}` : null,
+  ]);
   disconnectProviderRuntimeState(owner, 'youtube', platformUserId, reason);
   return { ...deleted, streamerChannelDeleted };
 }
@@ -16900,6 +17445,12 @@ app.get('/api/auth/cime/callback', async (req, res) => {
 
     const preferredUserId = await getCurrentSessionUserId(req);
     const { userId } = await upsertPlatformIdentity('cime', profile, preferredUserId);
+    invalidatePublicChannelIdentityCaches(userId, [
+      profile.platformUserId,
+      profile.channelId,
+      profile.platformUserId ? `cime:${profile.platformUserId}` : null,
+      profile.channelId ? `cime:${profile.channelId}` : null,
+    ]);
     await upsertPlatformTokens('cime', userId, profile.platformUserId, {
       accessToken,
       refreshToken,
@@ -16959,6 +17510,10 @@ app.post('/api/auth/cime/revoke', async (req, res) => {
       await deletePlatformTokens('cime', ownerUserId);
     }
     try { await deletePlatformAccount('cime', ownerUserId, platformUserId); } catch { }
+    invalidatePublicChannelIdentityCaches(ownerUserId, [
+      platformUserId,
+      platformUserId ? `cime:${platformUserId}` : null,
+    ]);
     const runtime = disconnectProviderRuntimeState(ownerUserId, 'cime', platformUserId, 'revoked');
     const platforms = await listPlatformAccounts(ownerUserId).catch(() => []);
     return res.json({ ok: true, platforms, runtime });
@@ -17640,6 +18195,7 @@ app.post('/api/youtube/streamer-channel', rateLimiters.userWrite, async (req, re
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const previousStreamerChannel = await getYoutubeStreamerChannel(ownerUserId).catch(() => null);
     const botProfile = await getYoutubeBotProfile(YOUTUBE_BOT_PROFILE_ID);
     if (!botProfile?.selectedChannelId || botProfile.status === 'reauth_required') {
       return res.status(409).json({ error: 'YouTube central bot is not configured', code: 'youtube_bot_not_configured' });
@@ -17654,6 +18210,12 @@ app.post('/api/youtube/streamer-channel', rateLimiters.userWrite, async (req, re
       websubStatus: resolved.youtubeChannelId ? 'pending' : 'unresolved_channel',
       lastError: resolved.youtubeChannelId ? null : 'channel_id_required_for_websub'
     });
+    invalidatePublicChannelIdentityCaches(ownerUserId, [
+      previousStreamerChannel?.youtubeChannelId,
+      previousStreamerChannel?.youtubeChannelId ? `youtube:${previousStreamerChannel.youtubeChannelId}` : null,
+      streamerChannel?.youtubeChannelId,
+      streamerChannel?.youtubeChannelId ? `youtube:${streamerChannel.youtubeChannelId}` : null,
+    ]);
     markProviderRuntimeConnected(ownerUserId, 'youtube');
     let websub = { ok: false, status: 'unresolved_channel' };
     if (streamerChannel.youtubeChannelId) {
@@ -17730,7 +18292,12 @@ app.delete('/api/youtube/streamer-channel', rateLimiters.userWrite, async (req, 
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const previousStreamerChannel = await getYoutubeStreamerChannel(ownerUserId).catch(() => null);
     await deleteYoutubeStreamerChannel(ownerUserId);
+    invalidatePublicChannelIdentityCaches(ownerUserId, [
+      previousStreamerChannel?.youtubeChannelId,
+      previousStreamerChannel?.youtubeChannelId ? `youtube:${previousStreamerChannel.youtubeChannelId}` : null,
+    ]);
     const runtime = disconnectProviderRuntimeState(ownerUserId, 'youtube', null, 'streamer_channel_deleted');
     return res.json({ ok: true, runtime });
   } catch (e) {
@@ -18079,9 +18646,6 @@ function clearDeletedAccountRuntimeState(ownerUserId) {
   deleteRuntimeMapEntriesBySid(pvdTokenToSid, sid);
   deleteRuntimeMapEntriesBySid(rouletteTokenToSid, sid);
   deleteRuntimeMapEntriesBySid(drawingTokenToSid, sid);
-  for (const key of Array.from(viewerPlatformLiveCache.keys())) {
-    if (String(key).startsWith(`${owner}:`)) viewerPlatformLiveCache.delete(key);
-  }
   let soundFilesDeleted = false;
   try { soundFilesDeleted = deleteAutomationSoundDirectory(owner); } catch (error) {
     console.warn('[Privacy] Automation sound directory cleanup failed:', error?.message || error);
@@ -18162,9 +18726,30 @@ app.delete('/api/account', rateLimiters.userWrite, async (req, res) => {
     if (confirmation !== 'delete-account') {
       return res.status(400).json({ error: 'Deletion confirmation required', requiredConfirm: 'delete-account' });
     }
+    const [previousPlatforms, previousYoutubeChannel] = await Promise.all([
+      listPlatformAccounts(ownerUserId).catch(() => []),
+      getYoutubeStreamerChannel(ownerUserId).catch(() => null),
+    ]);
     const revoked = await revokeExternalAccountGrants(ownerUserId);
     await prepareAccountRuntimeDeletion(ownerUserId);
     const result = await deleteAccountData(ownerUserId, { reason: 'self_service_delete' });
+    const deletedPublicAliases = previousPlatforms.flatMap((account) => {
+      const provider = String(account.provider || '').trim().toLowerCase();
+      const platformUserId = String(account.platform_user_id || '').trim();
+      const channelId = String(account.channel_id || '').trim();
+      return [
+        platformUserId,
+        channelId,
+        platformUserId && provider ? `${provider}:${platformUserId}` : null,
+        channelId && provider ? `${provider}:${channelId}` : null,
+      ];
+    });
+    deletedPublicAliases.push(
+      previousYoutubeChannel?.youtubeChannelId,
+      previousYoutubeChannel?.youtubeChannelId ? `youtube:${previousYoutubeChannel.youtubeChannelId}` : null,
+    );
+    invalidatePublicChannelIdentityCaches(ownerUserId, deletedPublicAliases);
+    invalidatePublicPointPolicyCache(`user:${ownerUserId}`);
     const runtime = clearDeletedAccountRuntimeState(ownerUserId);
     clearManagedCookie(res, 'oauth_state');
     clearManagedCookie(res, 'oauth_state_cime');
@@ -18248,77 +18833,19 @@ function normalizeStationChannel(account, fallbackProvider = null) {
   };
 }
 
-async function getViewerPlatformLiveState(ownerUserId, account = {}) {
-  const provider = String(account?.provider || '').toLowerCase();
-  const channelId = String(account?.channel_id || account?.channelId || account?.platform_user_id || account?.platformUserId || '').trim();
-  if (!ownerUserId || !provider || !channelId) return null;
-  const key = `${ownerUserId}:${provider}:${channelId}`;
-  const cached = viewerPlatformLiveCache.get(key);
-  if (cached && cached.expiresAt > Date.now()) return cached.value;
-
-  let value = null;
-  const sid = `user:${ownerUserId}`;
-  try {
-    if (provider === 'chzzk') {
-      const state = await refreshChzzkLiveStatusForSid(sid, { channelUids: [channelId], ttlMs: 15_000 }).catch(() => null);
-      value = state ? { live: state.live === true, title: state.title || null, provider, channelId } : null;
-    } else if (provider === 'cime') {
-      const live = await refreshCimeLiveStatus(ownerUserId, sid, channelId).catch(() => null);
-      const state = liveStatusCache.get(sid);
-      value = live == null ? null : { live: live === true, title: state?.provider === 'cime' ? state.title || null : null, provider, channelId };
-    } else if (provider === 'youtube') {
-      const state = await refreshYoutubeLiveStatus(ownerUserId, sid, { force: false }).catch(() => null);
-      value = state ? { live: state.live === true, title: state.title || null, provider, channelId } : null;
-    }
-  } catch {
-    value = null;
+function listStationChannelsForViewerBalance(balance, accounts = []) {
+  const filteredChannels = (Array.isArray(accounts) ? accounts : [])
+    .map((account) => normalizeStationChannel(account))
+    .filter(Boolean);
+  if (filteredChannels.length) {
+    const seen = new Set();
+    return filteredChannels.filter((channel) => {
+      const key = `${channel.provider}:${channel.channelId || channel.url}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   }
-  const metadata = account?.metadata && typeof account.metadata === 'object' ? account.metadata : {};
-  const publicProfile = metadata.publicProfile && typeof metadata.publicProfile === 'object' ? metadata.publicProfile : {};
-  if (!value && publicProfile.isLive === true) {
-    value = { live: true, title: publicProfile.liveTitle || publicProfile.title || null, provider, channelId };
-  }
-  viewerPlatformLiveCache.set(key, { expiresAt: Date.now() + 15_000, value });
-  if (viewerPlatformLiveCache.size > 500) {
-    for (const [cacheKey, entry] of viewerPlatformLiveCache) {
-      if (entry.expiresAt <= Date.now() || viewerPlatformLiveCache.size > 420) viewerPlatformLiveCache.delete(cacheKey);
-    }
-  }
-  return value;
-}
-
-async function listStationChannelsForViewerBalance(balance) {
-  const ownerCandidates = Array.from(new Set([
-    balance?.canonicalChannelUid,
-    balance?.channelUid,
-    String(balance?.canonicalChannelUid || '').replace(/^user:/, ''),
-    String(balance?.channelUid || '').replace(/^user:/, ''),
-  ].map((value) => String(value || '').trim()).filter(Boolean)));
-
-  for (const ownerId of ownerCandidates) {
-    const accounts = await listPlatformAccounts(ownerId).catch(() => []);
-    const channels = await Promise.all((accounts || []).map(async (account) => {
-      const channel = normalizeStationChannel(account);
-      if (!channel) return null;
-      const liveState = await getViewerPlatformLiveState(ownerId, account).catch(() => null);
-      return {
-        ...channel,
-        live: liveState?.live ?? channel.live ?? false,
-        liveTitle: liveState?.title || channel.liveTitle || null,
-      };
-    }));
-    const filteredChannels = channels.filter(Boolean);
-    if (filteredChannels.length) {
-      const seen = new Set();
-      return filteredChannels.filter((channel) => {
-        const key = `${channel.provider}:${channel.channelId || channel.url}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-    }
-  }
-
   const fallback = normalizeStationChannel({
     provider: balance?.provider || 'chzzk',
     channel_id: balance?.channelUid,
@@ -18326,49 +18853,6 @@ async function listStationChannelsForViewerBalance(balance) {
     avatar_url: balance?.avatarUrl,
   });
   return fallback ? [fallback] : [];
-}
-
-const VIEWER_POINT_POLICY_CONCURRENCY = Math.max(1, Math.min(8, Number(process.env.VIEWER_POINT_POLICY_CONCURRENCY || 4)));
-const VIEWER_POINT_POLICY_TIMEOUT_MS = Math.max(250, Math.min(5000, Number(process.env.VIEWER_POINT_POLICY_TIMEOUT_MS || 2000)));
-const VIEWER_POINT_POLICY_CACHE_MS = Math.max(5000, Math.min(5 * 60 * 1000, Number(process.env.VIEWER_POINT_POLICY_CACHE_MS || 60_000)));
-
-async function waitForViewerPointPolicy(promise) {
-  let timeoutId;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise((resolve) => {
-        timeoutId = setTimeout(() => resolve(null), VIEWER_POINT_POLICY_TIMEOUT_MS);
-      }),
-    ]);
-  } finally {
-    if (timeoutId) clearTimeout(timeoutId);
-  }
-}
-
-async function loadViewerPointEarningPolicy(balance) {
-  const sid = String(balance?.pointSettingsSid || '').trim();
-  if (!sid) return null;
-
-  const now = Date.now();
-  const cached = viewerPointPolicyCache.get(sid);
-  if (cached?.expiresAt > now && Object.hasOwn(cached, 'value')) return cached.value;
-  if (cached?.expiresAt > now && cached.promise) return waitForViewerPointPolicy(cached.promise);
-  if (cached) viewerPointPolicyCache.delete(sid);
-
-  const request = resolveViewerPointEarningPolicy(balance, { getSettings: getBotSettings })
-    .catch(() => null);
-  const entry = { promise: request, expiresAt: now + VIEWER_POINT_POLICY_CACHE_MS };
-  viewerPointPolicyCache.set(sid, entry);
-  request.then((value) => {
-    if (viewerPointPolicyCache.get(sid) === entry) {
-      viewerPointPolicyCache.set(sid, {
-        value,
-        expiresAt: Date.now() + VIEWER_POINT_POLICY_CACHE_MS,
-      });
-    }
-  });
-  return waitForViewerPointPolicy(request);
 }
 
 app.get('/api/viewer/points', async (req, res) => {
@@ -18380,23 +18864,33 @@ app.get('/api/viewer/points', async (req, res) => {
       const platforms = await listPlatformAccounts(ownerUserId).catch(() => []);
       const identityKeys = collectViewerPointIdentityKeys(ownerUserId, platforms);
       const balances = await listViewerPointBalancesForUserIds(identityKeys);
-      const normalizedBalances = new Array(balances.length);
-      await forEachWithConcurrency(balances, VIEWER_POINT_POLICY_CONCURRENCY, async (balance, index) => {
-        const [stationChannels, pointEarning] = await Promise.all([
-          listStationChannelsForViewerBalance(balance).catch(() => []),
-          loadViewerPointEarningPolicy(balance),
-        ]);
+      const settingsOwnerIds = Array.from(new Set(balances
+        .map((balance) => String(balance?.pointSettingsSid || '').replace(/^user:/, '').trim())
+        .filter(Boolean)));
+      const stationAccounts = await listPlatformAccountsForUserIds(settingsOwnerIds).catch(() => []);
+      const stationAccountsByOwner = new Map();
+      for (const account of stationAccounts) {
+        const accountOwnerId = String(account?.user_id || '').trim();
+        if (!accountOwnerId) continue;
+        if (!stationAccountsByOwner.has(accountOwnerId)) stationAccountsByOwner.set(accountOwnerId, []);
+        stationAccountsByOwner.get(accountOwnerId).push(account);
+      }
+      const normalizedBalances = balances.map((balance) => {
+        const settingsOwnerId = String(balance?.pointSettingsSid || '').replace(/^user:/, '').trim();
+        const stationChannels = listStationChannelsForViewerBalance(balance, stationAccountsByOwner.get(settingsOwnerId) || []);
         const publicBalance = { ...balance };
         delete publicBalance.pointSettingsSid;
-        normalizedBalances[index] = {
+        const publicUid = publicChannelUidForBalance(balance);
+        const encodedPublicUid = encodeURIComponent(publicUid);
+        return {
           ...publicBalance,
+          publicUid,
           stationChannels,
-          pointEarning,
           publicLinks: {
-            home: `/c/${encodeURIComponent(balance.channelUid)}`,
-            commands: `/c/${encodeURIComponent(balance.channelUid)}/commands`,
-            points: `/c/${encodeURIComponent(balance.channelUid)}/points`,
-            roulette: `/c/${encodeURIComponent(balance.channelUid)}/roulette`,
+            home: `/c/${encodedPublicUid}`,
+            commands: `/c/${encodedPublicUid}/commands`,
+            points: `/c/${encodedPublicUid}/points`,
+            roulette: `/c/${encodedPublicUid}/roulette`,
           },
         };
       });
@@ -18421,7 +18915,7 @@ app.get('/api/viewer/points', async (req, res) => {
   }
 });
 
-app.post('/api/account/platforms/refresh', async (req, res) => {
+app.post('/api/account/platforms/refresh', rateLimiters.userWrite, async (req, res) => {
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
@@ -18470,7 +18964,23 @@ app.post('/api/account/platforms/refresh', async (req, res) => {
           };
         }
         const updated = await updatePlatformAccountProfile(provider, ownerUserId, account.platform_user_id, enriched);
-        if (updated) refreshed.push(updated);
+        if (updated) {
+          refreshed.push(updated);
+          const identityChanged = String(account.platform_user_id || '') !== String(updated.platform_user_id || '')
+            || String(account.channel_id || '') !== String(updated.channel_id || '');
+          if (identityChanged) {
+            invalidatePublicChannelIdentityCaches(ownerUserId, [
+              account.platform_user_id,
+              account.channel_id,
+              updated.platform_user_id,
+              updated.channel_id,
+              account.platform_user_id ? `${provider}:${account.platform_user_id}` : null,
+              account.channel_id ? `${provider}:${account.channel_id}` : null,
+              updated.platform_user_id ? `${provider}:${updated.platform_user_id}` : null,
+              updated.channel_id ? `${provider}:${updated.channel_id}` : null,
+            ]);
+          }
+        }
       } catch (error) {
         errors.push({ provider, platformUserId: account.platform_user_id, error: error?.message || 'refresh_failed' });
       }
@@ -19678,24 +20188,35 @@ app.delete('/api/automations/assets/sounds/:fileId', rateLimiters.userWrite, asy
 app.get('/api/public/:uid/live', async (req, res) => {
   const uid = String(req.params.uid || '').trim();
   if (!uid) return res.status(400).json({ error: 'uid required' });
+  if (!parsePublicPointPolicyUid(uid)) return res.status(400).json({ error: 'invalid uid' });
   try {
     const payload = await readRealtimeCached(`public:live:${uid}`, { ttlMs: 8000, staleMs: 30000 }, async () => {
-      const r = await axiosGetWithRetry(`https://api.chzzk.naver.com/service/v2/channels/${encodeURIComponent(uid)}/live-detail`);
-      const content = r?.data?.content || r?.data || {};
-      const status = String(content?.status || '').toLowerCase();
-      const channelName = content?.channel?.channelName || content?.channel?.name || '';
-      const title = content?.liveTitle || content?.title || '';
-      const category = content?.liveCategoryValue || content?.liveCategory?.categoryValue || content?.liveCategoryName || content?.liveCategory?.categoryType || content?.categoryType || '';
-      const viewers = Number(content?.concurrentUserCount || content?.currentViewerCount || 0);
-      const startedCandidate = content?.startedAt || content?.started_at || content?.openDate || content?.openTime || content?.openedAt || content?.liveStartAt || content?.startTime || content?.createdAt || null;
-      const startedAtTs = parseChzzkLiveTimestamp(startedCandidate, null);
-      const startedAt = startedAtTs ? new Date(startedAtTs + 9 * 60 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 16) : '';
-      return { live: isChzzkLiveDetailOpen(content), status, channelName, title, category, viewers, startedAt, startedAtTs, updatedAt: new Date().toISOString() };
+      const identity = await resolveVerifiedPublicChannelIdentity(uid);
+      if (!identity?.ownerUserId || !identity.provider) return { live: false, updatedAt: new Date().toISOString() };
+      const info = await loadVerifiedPublicLiveInfo(identity);
+      if (!info) {
+        const error = new Error('public_live_lookup_unavailable');
+        error.code = 'public_live_lookup_unavailable';
+        error.status = 503;
+        throw error;
+      }
+      return {
+        live: info.live === true,
+        status: String(info.status || '').toLowerCase(),
+        provider: identity.provider,
+        channelName: String(info.channel || ''),
+        title: String(info.title || ''),
+        category: String(info.category || ''),
+        viewers: Math.max(0, Number(info.viewers || 0)),
+        startedAt: String(info.startedAt || ''),
+        startedAtTs: Number(info.startedAtTs || 0) || null,
+        updatedAt: new Date().toISOString(),
+      };
     });
     res.setHeader('Cache-Control', 'no-store');
     return res.json(payload);
   } catch (e) {
-    return res.json({ live: false });
+    return res.status(503).json({ error: 'Live status temporarily unavailable' });
   }
 });
 
@@ -19748,7 +20269,7 @@ app.get('/api/bot/settings', async (req, res) => {
   return res.json({ settings });
 });
 
-app.post('/api/bot/settings', async (req, res) => {
+app.post('/api/bot/settings', rateLimiters.userWrite, async (req, res) => {
   const sid = await getPartitionId(req, res);
   if (!sid) return res.status(401).json({ error: 'Login required' });
   const body = req.body || {};
@@ -19760,7 +20281,7 @@ app.post('/api/bot/settings', async (req, res) => {
     settings.channelPointsPerAttendance = normalizePointAward(settings.channelPointsPerAttendance, 0);
   }
   await setBotSettings(sid, settings);
-  invalidateRealtimePointCaches();
+  invalidatePublicPointPolicyCache(sid);
   const runtimeRevision = markRuntimeConfigurationChanged(sid, 'bot_settings_saved');
   return res.json({ ok: true, runtimeRevision });
 });
@@ -20868,57 +21389,23 @@ function toPublicCommandRule(rule) {
   };
 }
 
-function settingsIncludesPublicUid(settings, uid) {
-  const target = String(uid || '').trim();
-  if (!target) return false;
-  const withoutPrefix = target.replace(/^(user:|cime:|chzzk:|youtube:)/, '');
-  const candidates = new Set([target, withoutPrefix]);
-  const source = settings || {};
-  const configured = Array.isArray(source.channelUids)
-    ? source.channelUids
-    : (typeof source.channelUidsText === 'string' ? source.channelUidsText.split(',') : []);
-  return configured.map((value) => String(value || '').trim()).some((value) => candidates.has(value));
-}
-
-async function resolvePublicChannelSid(uid) {
-  const raw = String(uid || '').trim();
-  if (!raw) return null;
-  const withoutPrefix = raw.replace(/^(user:|cime:|chzzk:|youtube:)/, '');
-  if (raw.startsWith('user:')) return raw;
-  if (withoutPrefix) {
-    const accounts = await listPlatformAccounts(withoutPrefix).catch(() => []);
-    if (accounts?.length) return `user:${withoutPrefix}`;
-  }
-
-  const ownerUserId = await findAppUserIdByChannelUid(raw).catch(() => null);
-  if (ownerUserId) return `user:${ownerUserId}`;
-
-  const legacySids = Array.from(new Set([
-    ...Array.from(activeSids.keys()),
-    ...await listAllSidsWithTokens().catch(() => []),
-  ].filter(Boolean)));
-  for (const sid of legacySids) {
-    const settings = await getBotSettings(sid).catch(() => ({}));
-    if (settingsIncludesPublicUid(settings, raw)) return sid;
-  }
-  return null;
-}
-
 // Public API: list rules for streamer by channel UID
 app.get('/api/public/:uid/rules', async (req, res) => {
   const uid = String(req.params.uid || '').trim();
   if (!uid) return res.status(400).json({ error: 'uid required' });
+  if (!parsePublicPointPolicyUid(uid)) return res.status(400).json({ error: 'invalid uid' });
   try {
-    const rules = await singleFlight(`public:rules:${uid}`, async () => {
-      const sid = await resolvePublicChannelSid(uid);
-      if (!sid) return [];
-      const channelRules = await getBotRulesWithDefaults(sid);
+    const rules = await readRealtimeCached(`public:rules:${uid}`, { ttlMs: 5_000, staleMs: 15_000 }, async () => {
+      const identity = await resolveVerifiedPublicChannelIdentity(uid);
+      if (!identity?.ownerUserId) return [];
+      const sid = `user:${identity.ownerUserId}`;
+      const channelRules = await getBotRules(sid);
       return (channelRules || []).map(toPublicCommandRule).filter(Boolean);
     });
     return res.json({ uid, rules });
   } catch (e) {
     console.error('[Public Rules] failed:', e?.message || e);
-    return res.status(500).json({ error: 'Failed to load rules', rules: [] });
+    return res.status(e?.status === 503 ? 503 : 500).json({ error: 'Failed to load rules', rules: [] });
   }
 });
 
@@ -20926,35 +21413,38 @@ app.get('/api/public/:uid/rules', async (req, res) => {
 app.get('/api/public/:uid/points', async (req, res) => {
   const uid = String(req.params.uid || '').trim();
   if (!uid) return res.status(400).json({ error: 'uid required' });
+  const publicIdentity = parsePublicPointPolicyUid(uid);
+  if (!publicIdentity) return res.status(400).json({ error: 'invalid uid' });
   try {
+    const verifiedIdentity = await resolveVerifiedPublicChannelIdentity(uid);
     const requestedLimit = Number(req.query.limit || 0) || 0;
-    const limit = requestedLimit > 0 ? Math.max(1, Math.min(500, requestedLimit)) : 0;
-    const payload = await readRealtimeCached(`public:points:${uid}:${limit || 'all'}`, { ttlMs: 5000, staleMs: 30000 }, async () => {
-      if (limit > 0) {
-        const page = await listChannelPointsPage(uid, { offset: 0, limit });
-        return {
-          uid,
-          points: page.rows || [],
-          total: Number(page.total || 0),
-          totalPoints: Number(page.totalPoints || 0),
-          offset: 0,
-          limit,
-          updatedAt: new Date().toISOString(),
-        };
-      }
-      const rows = await listChannelPoints(uid);
+    const limit = Math.max(1, Math.min(100, requestedLimit > 0 ? requestedLimit : 100));
+    const rankingPayload = await readRealtimeCached(`public:points:${uid}:${limit}`, { ttlMs: 5000, staleMs: 30000 }, async () => {
+      const snapshot = await loadVerifiedPublicPointsSnapshot(publicIdentity, verifiedIdentity, limit);
+      const rows = (snapshot?.rows || []).map((row) => ({
+        username: String(row?.username || '익명 시청자'),
+        points: Number(row?.points || 0),
+      }));
       return {
         uid,
         points: rows,
-        total: rows.length,
-        totalPoints: rows.reduce((sum, row) => sum + Number(row?.points || 0), 0),
+        total: Number(snapshot?.total || 0),
+        totalPoints: Number(snapshot?.totalPoints || 0),
+        offset: 0,
+        limit,
         updatedAt: new Date().toISOString(),
+        pointSettingsOwnerUserId: snapshot?.ownerUserId || null,
       };
     });
+    const pointEarning = rankingPayload.pointSettingsOwnerUserId
+      ? await loadPublicPointEarningPolicy(rankingPayload.pointSettingsOwnerUserId)
+      : null;
+    const payload = { ...rankingPayload, pointEarning };
+    delete payload.pointSettingsOwnerUserId;
     res.setHeader('Cache-Control', 'no-store');
     return res.json(payload);
   } catch (e) {
-    return res.status(500).json({ error: 'Failed to load points' });
+    return res.status(e?.status === 503 ? 503 : 500).json({ error: 'Failed to load points' });
   }
 });
 
@@ -21102,6 +21592,12 @@ app.get('/api/auth/chzzk/callback', async (req, res) => {
           });
           const identity = await upsertPlatformIdentity('chzzk', profile, preferredUserId || platformUserId);
           accountUserId = identity?.userId || accountUserId;
+          invalidatePublicChannelIdentityCaches(accountUserId, [
+            profile.platformUserId,
+            profile.channelId,
+            profile.platformUserId ? `chzzk:${profile.platformUserId}` : null,
+            profile.channelId ? `chzzk:${profile.channelId}` : null,
+          ]);
           markProviderRuntimeConnected(accountUserId, 'chzzk');
         } catch { }
         if (oldSid) { try { await migrateSidToUserPid(oldSid, accountUserId); } catch { } }
@@ -21282,6 +21778,14 @@ app.post('/api/auth/chzzk/revoke', async (req, res) => {
         try { await updateTokens(sid, null); } catch { }
       }
       try { await deletePlatformAccount('chzzk', ownerUserId, requestedPlatformUserId || chzzkAccount?.platform_user_id || null); } catch { }
+      invalidatePublicChannelIdentityCaches(ownerUserId, [
+        requestedPlatformUserId,
+        chzzkAccount?.platform_user_id,
+        chzzkAccount?.channel_id,
+        requestedPlatformUserId ? `chzzk:${requestedPlatformUserId}` : null,
+        chzzkAccount?.platform_user_id ? `chzzk:${chzzkAccount.platform_user_id}` : null,
+        chzzkAccount?.channel_id ? `chzzk:${chzzkAccount.channel_id}` : null,
+      ]);
       const runtime = disconnectProviderRuntimeState(ownerUserId, 'chzzk', requestedPlatformUserId || chzzkAccount?.platform_user_id || null, 'revoked');
       const platforms = await listPlatformAccounts(ownerUserId).catch(() => []);
       return res.json({ ok: true, platforms, runtime });

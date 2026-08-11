@@ -13,8 +13,6 @@ import type { PublicChannelKind } from '@/shared/api/public';
 import { cn, compactDateTime, formatNumber } from '@/shared/lib/utils';
 
 type PointRow = {
-  user_id?: string;
-  userId?: string;
   username?: string | null;
   points?: number;
 };
@@ -132,11 +130,7 @@ function rouletteLogUser(row: RouletteLogRow) {
 }
 
 function pointName(row: PointRow) {
-  return String(row.username || row.userId || row.user_id || '익명 시청자');
-}
-
-function pointUserId(row: PointRow) {
-  return String(row.userId || row.user_id || '');
+  return String(row.username || '익명 시청자');
 }
 
 function buildEndpoint(channelUid: string, kind: PublicChannelKind) {
@@ -237,13 +231,12 @@ function PublicPointsRanking({ data }: { data: unknown }) {
                 </thead>
                 <tbody>
                   {points.map((row, index) => (
-                    <tr key={`${pointUserId(row) || pointName(row)}-${index}`} className="border-t bg-background/45">
+                    <tr key={`${pointName(row)}-${index}`} className="border-t bg-background/45">
                       <td className="px-[clamp(0.75rem,1.4vw,1rem)] py-3">
                         <Badge tone={index < 3 ? 'lemon' : 'neutral'}>{index + 1}위</Badge>
                       </td>
                       <td className="min-w-0 px-[clamp(0.75rem,1.4vw,1rem)] py-3">
                         <div className="truncate font-semibold">{pointName(row)}</div>
-                        {pointUserId(row) ? <div className="mt-1 truncate text-xs text-muted-foreground">{pointUserId(row)}</div> : null}
                       </td>
                       <td className="px-[clamp(0.75rem,1.4vw,1rem)] py-3 text-right font-semibold">{formatNumber(Number(row.points || 0))}P</td>
                     </tr>

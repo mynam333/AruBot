@@ -1077,6 +1077,44 @@ export async function listChannelPointsPage(streamerUid, options = {}) {
   });
 }
 
+const VIEWER_POINT_TABLE_QUERY_BATCH_SIZE = (() => {
+  const configured = Number(process.env.VIEWER_POINT_TABLE_QUERY_BATCH_SIZE || 32);
+  return Math.max(4, Math.min(64, Number.isFinite(configured) ? Math.trunc(configured) : 32));
+})();
+
+export async function queryViewerPointTablesForUserIds(pg, tables, userIds) {
+  const safeTables = (Array.isArray(tables) ? tables : [])
+    .map((table) => String(table || ''))
+    .filter((table) => /^channelpoint_[A-Za-z0-9_]+$/.test(table));
+
+  const queryBatch = async (batch) => {
+    if (!batch.length) return [];
+    const query = batch.map((table) => (
+      `select '${table}'::text as point_table, user_id, username, points from ${quoteChannelPointsTable(table)} where user_id = any($1::text[])`
+    )).join('\nunion all\n');
+    try {
+      const result = await pg.query(query, [userIds]);
+      return result.rows || [];
+    } catch (error) {
+      if (error?.code !== '42P01') throw error;
+      if (batch.length === 1) {
+        console.warn(`[Viewer Points] Skipping unreadable point table ${batch[0]}:`, error?.message || error);
+        return [];
+      }
+      const midpoint = Math.ceil(batch.length / 2);
+      const left = await queryBatch(batch.slice(0, midpoint));
+      const right = await queryBatch(batch.slice(midpoint));
+      return [...left, ...right];
+    }
+  };
+
+  const rows = [];
+  for (let index = 0; index < safeTables.length; index += VIEWER_POINT_TABLE_QUERY_BATCH_SIZE) {
+    rows.push(...await queryBatch(safeTables.slice(index, index + VIEWER_POINT_TABLE_QUERY_BATCH_SIZE)));
+  }
+  return rows;
+}
+
 export async function listViewerPointBalancesForUserIds(userIds) {
   const ids = Array.from(
     new Set((Array.isArray(userIds) ? userIds : []).map((id) => String(id || '').trim()).filter(Boolean))
@@ -1086,6 +1124,21 @@ export async function listViewerPointBalancesForUserIds(userIds) {
   return withPgClient(async (pg) => {
     const balancesByChannel = new Map();
     const tableUidLookup = new Map();
+    const tableLookupCandidates = new Map();
+    const addTableLookupCandidate = (table, lookup) => {
+      const tableName = String(table || '');
+      const owner = String(lookup?.canonicalChannelUid || '').trim();
+      if (!tableName || !owner) return;
+      let candidates = tableLookupCandidates.get(tableName);
+      if (!candidates) {
+        candidates = new Map();
+        tableLookupCandidates.set(tableName, candidates);
+      }
+      const current = candidates.get(owner);
+      if (!current || (lookup?.provider === 'chzzk' && current?.provider !== 'chzzk')) {
+        candidates.set(owner, lookup);
+      }
+    };
     let platformMetadataLoaded = false;
     try {
       const knownChannels = await pg.query(`
@@ -1108,23 +1161,33 @@ export async function listViewerPointBalancesForUserIds(userIds) {
           provider: row.provider || null,
         };
         const channelTable = `channelpoint_${sanitizeTableNameSuffix(channelUid)}`;
-        tableUidLookup.set(channelTable, lookup);
-        if (!tableUidLookup.has(channelTable.toLowerCase()) || row.provider === 'chzzk') {
-          tableUidLookup.set(channelTable.toLowerCase(), lookup);
-        }
+        addTableLookupCandidate(channelTable, lookup);
+        addTableLookupCandidate(channelTable.toLowerCase(), lookup);
         if (canonicalChannelUid) {
           const canonicalTable = `channelpoint_${sanitizeTableNameSuffix(canonicalChannelUid)}`;
-          if (!tableUidLookup.has(canonicalTable) || row.provider === 'chzzk') {
-            tableUidLookup.set(canonicalTable, lookup);
-          }
-          if (!tableUidLookup.has(canonicalTable.toLowerCase()) || row.provider === 'chzzk') {
-            tableUidLookup.set(canonicalTable.toLowerCase(), lookup);
-          }
+          addTableLookupCandidate(canonicalTable, lookup);
+          addTableLookupCandidate(canonicalTable.toLowerCase(), lookup);
         }
       }
       platformMetadataLoaded = true;
     } catch {
       // Platform account metadata is an optimization for nicer public links.
+    }
+
+    let pointTableOwnerIndex = { ownersByTable: new Map(), overflow: true };
+    try {
+      pointTableOwnerIndex = await loadPublicPointTableOwnerIndex(pg);
+    } catch (error) {
+      console.warn('[Viewer Points] Failed to verify point table ownership:', error?.message || error);
+    }
+    if (!pointTableOwnerIndex.overflow) {
+      for (const [table, candidates] of tableLookupCandidates) {
+        const owners = pointTableOwnerIndex.ownersByTable.get(table);
+        if (owners?.size !== 1 || candidates.size !== 1) continue;
+        const owner = owners.values().next().value;
+        const lookup = candidates.get(owner);
+        if (lookup) tableUidLookup.set(table, lookup);
+      }
     }
 
     const { rows: tableRows } = await pg.query(`
@@ -1137,24 +1200,33 @@ export async function listViewerPointBalancesForUserIds(userIds) {
     `);
 
     const balances = [];
-    for (const tableRow of tableRows || []) {
-      const table = String(tableRow.table_name || '');
-      if (!/^channelpoint_[A-Za-z0-9_]+$/.test(table)) continue;
-
-      let result;
-      try {
-        result = await pg.query(
-          `select user_id, username, points from ${quoteChannelPointsTable(table)} where user_id = any($1::text[])`,
-          [ids]
-        );
-      } catch (error) {
-        if (error?.code === '42P01') continue;
-        throw error;
+    const readableTables = (tableRows || [])
+      .map((row) => String(row.table_name || ''))
+      .filter((table) => {
+        if (!/^channelpoint_[A-Za-z0-9_]+$/.test(table) || pointTableOwnerIndex.overflow) return false;
+        const owners = pointTableOwnerIndex.ownersByTable.get(table);
+        if (!owners) return true;
+        return owners.size === 1 && tableUidLookup.has(table);
+      });
+    const readableTableSet = new Set(readableTables);
+    const queriedRows = await queryViewerPointTablesForUserIds(pg, readableTables, ids);
+    const pointRowsByTable = new Map();
+    for (const row of queriedRows) {
+      const table = String(row.point_table || '');
+      if (!readableTableSet.has(table)) continue;
+      let rows = pointRowsByTable.get(table);
+      if (!rows) {
+        rows = [];
+        pointRowsByTable.set(table, rows);
       }
-      if (!result.rows?.length) continue;
+      rows.push(row);
+    }
 
+    for (const table of readableTables) {
+      const tableRowsForViewer = pointRowsByTable.get(table) || [];
+      if (!tableRowsForViewer.length) continue;
       const lookup = tableUidLookup.get(table);
-      const pointRows = result.rows.map((row) => ({
+      const pointRows = tableRowsForViewer.map((row) => ({
         userId: row.user_id,
         username: row.username,
         points: Number(row.points || 0),
@@ -1198,7 +1270,10 @@ export async function listViewerPointBalancesForUserIds(userIds) {
         for (const row of result.rows || []) {
           const channelUid = String(row.channel_uid || '').trim();
           if (!channelUid) continue;
-          const lookup = tableUidLookup.get(`channelpoint_${sanitizeTableNameSuffix(channelUid)}`);
+          const tableKey = `channelpoint_${sanitizeTableNameSuffix(channelUid)}`;
+          const lookup = tableUidLookup.get(tableKey);
+          const owners = pointTableOwnerIndex.ownersByTable.get(tableKey);
+          if (pointTableOwnerIndex.overflow || (owners && (owners.size !== 1 || !lookup))) continue;
           const channelKey = lookup?.canonicalChannelUid || channelUid;
           const pointSettingsSid = lookup?.pointSettingsSid || (platformMetadataLoaded
             ? (channelUid.startsWith('user:') ? channelUid : `user:${channelUid}`)
@@ -3145,6 +3220,7 @@ export async function deleteAccountData(ownerUserId, options = {}) {
   });
   summary.objectKeysDeleted = objectDelete.deleted || 0;
   summary.objectKeysSkipped = objectDelete.skipped || 0;
+  invalidatePublicPointTableOwnerIndex();
   return summary;
 }
 
@@ -5356,6 +5432,7 @@ export async function upsertPlatformIdentity(provider, profile, preferredUserId 
     );
     account = upserted.rows[0] || null;
   });
+  invalidatePublicPointTableOwnerIndex();
   return { userId, account };
 }
 
@@ -5369,6 +5446,25 @@ export async function listPlatformAccounts(userId) {
        where user_id = $1
        order by provider asc`,
       [String(userId).replace(/^user:/, '')]
+    );
+    return rows || [];
+  });
+}
+
+export async function listPlatformAccountsForUserIds(userIds) {
+  const ids = Array.from(new Set((Array.isArray(userIds) ? userIds : [])
+    .map((userId) => String(userId || '').replace(/^user:/, '').trim())
+    .filter(Boolean)))
+    .slice(0, 1_000);
+  if (!ids.length) return [];
+  await ensurePlatformIdentityTables();
+  return withPgClient(async (pg) => {
+    const { rows } = await pg.query(
+      `select user_id, provider, platform_user_id, channel_id, channel_name, channel_handle, avatar_url, avatar_url as profile_image_url, metadata, connected_at, last_login_at
+       from platform_accounts
+       where user_id = any($1::text[])
+       order by user_id asc, provider asc`,
+      [ids]
     );
     return rows || [];
   });
@@ -5424,6 +5520,307 @@ export async function findAppUserIdByChannelUid(channelUid) {
 
     return null;
   }).catch(() => null);
+}
+
+const EXACT_PUBLIC_CHANNEL_PROVIDERS = new Set(['chzzk', 'cime', 'youtube']);
+const EXACT_PUBLIC_CHANNEL_UID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+const PUBLIC_POINT_TABLE_OWNER_INDEX_TTL_MS = 60 * 1000;
+const PUBLIC_POINT_TABLE_OWNER_INDEX_MAX_ENTRIES = Math.max(
+  1_000,
+  Math.min(250_000, Number(process.env.PUBLIC_POINT_TABLE_OWNER_INDEX_MAX_ENTRIES) || 100_000),
+);
+let publicPointTableOwnerIndexCache = null;
+let publicPointTableOwnerIndexPromise = null;
+let publicPointTableOwnerIndexGeneration = 0;
+
+function normalizeExactPublicChannelIdentity(provider, channelUid) {
+  const normalizedProvider = normalizeProvider(provider);
+  const exactChannelUid = String(channelUid || '').trim();
+  if (
+    (normalizedProvider && !EXACT_PUBLIC_CHANNEL_PROVIDERS.has(normalizedProvider))
+    || !EXACT_PUBLIC_CHANNEL_UID_PATTERN.test(exactChannelUid)
+  ) {
+    return null;
+  }
+  return { normalizedProvider, exactChannelUid };
+}
+
+function addExactPublicChannelIdentityCandidate(candidates, ownerUserId, provider) {
+  const owner = String(ownerUserId || '').trim();
+  const normalizedProvider = normalizeProvider(provider);
+  if (!owner || !EXACT_PUBLIC_CHANNEL_PROVIDERS.has(normalizedProvider)) return;
+  candidates.set(`${normalizedProvider}\u0000${owner}`, {
+    ownerUserId: owner,
+    provider: normalizedProvider,
+  });
+}
+
+async function findExactPublicChannelIdentityWithClient(pg, normalizedProvider, exactChannelUid) {
+  const candidates = new Map();
+  const platformMatches = normalizedProvider
+    ? await pg.query(
+      `select distinct user_id, provider
+         from platform_accounts
+        where provider = $1
+          and (channel_id = $2 or platform_user_id = $2)
+          and nullif(user_id, '') is not null
+        limit 2`,
+      [normalizedProvider, exactChannelUid]
+    )
+    : await pg.query(
+      `select distinct user_id, provider
+         from platform_accounts
+        where provider = any($1::text[])
+          and (channel_id = $2 or platform_user_id = $2)
+          and nullif(user_id, '') is not null
+        limit 2`,
+      [Array.from(EXACT_PUBLIC_CHANNEL_PROVIDERS), exactChannelUid]
+    );
+  for (const row of platformMatches.rows || []) {
+    addExactPublicChannelIdentityCandidate(candidates, row.user_id, row.provider);
+  }
+  if (normalizedProvider && normalizedProvider !== 'youtube') {
+    const matches = Array.from(candidates.values());
+    return matches.length === 1 ? { ...matches[0], channelUid: exactChannelUid } : null;
+  }
+
+  const youtubeTable = await pg.query(`select to_regclass('public.youtube_streamer_channels') as table_name`);
+  if (youtubeTable.rows?.[0]?.table_name) {
+    const youtubeMatches = await pg.query(
+      `select distinct owner_user_id
+         from youtube_streamer_channels
+        where youtube_channel_id = $1
+          and nullif(owner_user_id, '') is not null
+        limit 2`,
+      [exactChannelUid]
+    );
+    for (const row of youtubeMatches.rows || []) {
+      addExactPublicChannelIdentityCandidate(candidates, row.owner_user_id, 'youtube');
+    }
+  }
+
+  const matches = Array.from(candidates.values());
+  return matches.length === 1 ? { ...matches[0], channelUid: exactChannelUid } : null;
+}
+
+export async function findExactPublicChannelIdentity(provider, channelUid) {
+  const identity = normalizeExactPublicChannelIdentity(provider, channelUid);
+  if (!identity || !getDbUrl()) return null;
+
+  await ensurePlatformIdentityTables();
+  return withPgClient((pg) => findExactPublicChannelIdentityWithClient(
+    pg,
+    identity.normalizedProvider,
+    identity.exactChannelUid,
+  ));
+}
+
+export async function findExactAppUserIdByPublicChannelUid(provider, channelUid) {
+  const identity = await findExactPublicChannelIdentity(provider, channelUid);
+  return identity?.ownerUserId || null;
+}
+
+function pointTableCandidatesForAliases(channelAliases) {
+  const candidates = uniqueNonEmpty(channelAliases).flatMap((channelUid) => {
+    const table = `channelpoint_${sanitizeTableNameSuffix(channelUid)}`;
+    const lowercaseTable = table.toLowerCase();
+    return lowercaseTable === table ? [table] : [table, lowercaseTable];
+  });
+  return uniqueNonEmpty(candidates);
+}
+
+function invalidatePublicPointTableOwnerIndex() {
+  publicPointTableOwnerIndexGeneration += 1;
+  publicPointTableOwnerIndexCache = null;
+}
+
+function addPublicPointTableOwner(index, ownerUserId, aliases) {
+  const owner = String(ownerUserId || '').trim();
+  if (!owner || index.overflow) return;
+  for (const table of pointTableCandidatesForAliases(aliases)) {
+    let owners = index.ownersByTable.get(table);
+    if (!owners) {
+      if (index.ownersByTable.size >= PUBLIC_POINT_TABLE_OWNER_INDEX_MAX_ENTRIES) {
+        index.overflow = true;
+        index.ownersByTable.clear();
+        return;
+      }
+      owners = new Set();
+      index.ownersByTable.set(table, owners);
+    }
+    owners.add(owner);
+  }
+}
+
+async function loadPublicPointTableOwnerIndex(pg) {
+  const now = Date.now();
+  if (publicPointTableOwnerIndexCache?.expiresAt > now) return publicPointTableOwnerIndexCache.value;
+  if (publicPointTableOwnerIndexPromise) {
+    await publicPointTableOwnerIndexPromise.catch(() => null);
+    return loadPublicPointTableOwnerIndex(pg);
+  }
+
+  const generation = publicPointTableOwnerIndexGeneration;
+  const operation = (async () => {
+    const index = { ownersByTable: new Map(), overflow: false };
+    const accounts = await pg.query(
+      `select user_id, provider, platform_user_id, channel_id
+         from platform_accounts
+        where provider = any($1::text[])
+          and nullif(user_id, '') is not null`,
+      [Array.from(EXACT_PUBLIC_CHANNEL_PROVIDERS)]
+    );
+    for (const account of accounts.rows || []) {
+      const provider = normalizeProvider(account.provider);
+      addPublicPointTableOwner(index, account.user_id, [
+        account.user_id,
+        `user:${account.user_id}`,
+        account.platform_user_id,
+        account.channel_id,
+        account.platform_user_id ? `${provider}:${account.platform_user_id}` : null,
+        account.channel_id ? `${provider}:${account.channel_id}` : null,
+      ]);
+      if (index.overflow) break;
+    }
+
+    if (!index.overflow) {
+      const youtubeTable = await pg.query(`select to_regclass('public.youtube_streamer_channels') as table_name`);
+      if (youtubeTable.rows?.[0]?.table_name) {
+        const youtubeRows = await pg.query(
+          `select owner_user_id, youtube_channel_id
+             from youtube_streamer_channels
+            where nullif(owner_user_id, '') is not null`
+        );
+        for (const row of youtubeRows.rows || []) {
+          addPublicPointTableOwner(index, row.owner_user_id, [
+            row.owner_user_id,
+            `user:${row.owner_user_id}`,
+            row.youtube_channel_id,
+            row.youtube_channel_id ? `youtube:${row.youtube_channel_id}` : null,
+          ]);
+          if (index.overflow) break;
+        }
+      }
+    }
+    return index;
+  })();
+  publicPointTableOwnerIndexPromise = operation;
+  try {
+    const index = await operation;
+    if (generation !== publicPointTableOwnerIndexGeneration) {
+      return { ownersByTable: new Map(), overflow: true };
+    }
+    publicPointTableOwnerIndexCache = {
+      value: index,
+      expiresAt: Date.now() + PUBLIC_POINT_TABLE_OWNER_INDEX_TTL_MS,
+    };
+    return index;
+  } finally {
+    if (publicPointTableOwnerIndexPromise === operation) publicPointTableOwnerIndexPromise = null;
+  }
+}
+
+async function listOwnedExistingPointTablesForAliases(channelAliases, ownerUserId, pg) {
+  const uniqueCandidates = pointTableCandidatesForAliases(channelAliases);
+  const owner = String(ownerUserId || '').trim();
+  if (!uniqueCandidates.length || !owner) return [];
+  const ownershipIndex = await loadPublicPointTableOwnerIndex(pg);
+  if (ownershipIndex.overflow) return [];
+  const ownedCandidates = uniqueCandidates.filter((table) => {
+    const tableOwners = ownershipIndex.ownersByTable.get(table);
+    return tableOwners?.size === 1 && tableOwners.has(owner);
+  });
+  if (!ownedCandidates.length) return [];
+
+  const existing = await pg.query(
+    `select table_name
+       from information_schema.tables
+      where table_schema = 'public'
+        and table_type = 'BASE TABLE'
+        and table_name = any($1::text[])`,
+    [ownedCandidates]
+  );
+  const existingNames = new Set((existing.rows || []).map((row) => String(row.table_name || '')).filter(Boolean));
+  return ownedCandidates.filter((table) => existingNames.has(table));
+}
+
+export async function getPublicChannelPointsSnapshot(provider, channelUid, options = {}) {
+  const identity = normalizeExactPublicChannelIdentity(provider, channelUid);
+  if (!identity || !getDbUrl()) return null;
+  const requestedLimit = Number(options.limit || 0) || 0;
+  const limit = requestedLimit > 0 ? Math.max(1, Math.min(500, Math.trunc(requestedLimit))) : 0;
+
+  await ensurePlatformIdentityTables();
+  return withPgClient(async (pg) => {
+    const suppliedIdentity = options.verifiedIdentity;
+    const suppliedProvider = normalizeProvider(suppliedIdentity?.provider);
+    const suppliedOwner = String(suppliedIdentity?.ownerUserId || '').trim();
+    const suppliedChannelUid = String(suppliedIdentity?.channelUid || '').trim();
+    const suppliedIdentityMatches = suppliedOwner
+      && suppliedChannelUid === identity.exactChannelUid
+      && EXACT_PUBLIC_CHANNEL_PROVIDERS.has(suppliedProvider)
+      && (!identity.normalizedProvider || suppliedProvider === identity.normalizedProvider);
+    const publicIdentity = suppliedIdentityMatches
+      ? { ownerUserId: suppliedOwner, provider: suppliedProvider, channelUid: suppliedChannelUid }
+      : await findExactPublicChannelIdentityWithClient(
+        pg,
+        identity.normalizedProvider,
+        identity.exactChannelUid,
+      );
+    const ownerUserId = publicIdentity?.ownerUserId || null;
+    if (!ownerUserId) return null;
+
+    const accounts = await pg.query(
+      `select provider, user_id, platform_user_id, channel_id
+         from platform_accounts
+        where user_id = $1`,
+      [ownerUserId]
+    );
+    const rawAliases = [identity.exactChannelUid];
+    const qualifiedAliases = [];
+    for (const account of accounts.rows || []) {
+      rawAliases.push(account.platform_user_id, account.channel_id);
+      const accountProvider = normalizeProvider(account.provider);
+      if (accountProvider) {
+        if (account.platform_user_id) qualifiedAliases.push(`${accountProvider}:${account.platform_user_id}`);
+        if (account.channel_id) qualifiedAliases.push(`${accountProvider}:${account.channel_id}`);
+      }
+    }
+    const aliases = [ownerUserId, `user:${ownerUserId}`, ...qualifiedAliases, ...rawAliases];
+
+    const tables = await listOwnedExistingPointTablesForAliases(aliases, ownerUserId, pg);
+    if (!tables.length) {
+      return { ownerUserId, rows: [], total: 0, totalPoints: 0, offset: 0, limit };
+    }
+
+    const cte = buildChannelPointPageCte(tables, true);
+    const totals = await pg.query(`
+      ${cte}
+      select count(*)::integer as total, coalesce(sum(points), 0)::bigint as total_points
+      from grouped
+    `);
+    const total = Number(totals.rows?.[0]?.total || 0);
+    const totalPoints = Number(totals.rows?.[0]?.total_points || 0);
+    if (!total) return { ownerUserId, rows: [], total: 0, totalPoints, offset: 0, limit };
+
+    const orderedRowsSql = `
+      ${cte}
+      select user_id, username, points::double precision as points
+      from grouped
+      order by points desc, coalesce(username, '') asc, user_id asc`;
+    const page = limit > 0
+      ? await pg.query(`${orderedRowsSql}\nlimit $1`, [limit])
+      : await pg.query(orderedRowsSql);
+
+    return {
+      ownerUserId,
+      rows: page.rows || [],
+      total,
+      totalPoints,
+      offset: 0,
+      limit,
+    };
+  });
 }
 
 function makeArubotViewerUuid(value) {
@@ -5566,8 +5963,16 @@ export async function updatePlatformAccountProfile(provider, userId, platformUse
   const p = normalizeProvider(provider);
   if (!p || !userId || !platformUserId) throw new Error('provider, userId and platformUserId are required');
   await ensurePlatformIdentityTables();
-  return withPgClient(async (pg) => {
+  let identityChanged = false;
+  const account = await withPgClient(async (pg) => {
     const normalizedUserId = String(userId).replace(/^user:/, '');
+    const previous = await pg.query(
+      `select channel_id
+         from platform_accounts
+        where provider = $1 and user_id = $2 and platform_user_id = $3
+        limit 1`,
+      [p, normalizedUserId, String(platformUserId)]
+    );
     await pg.query(
       `update app_users
        set display_name = coalesce($2, display_name),
@@ -5601,8 +6006,11 @@ export async function updatePlatformAccountProfile(provider, userId, platformUse
         JSON.stringify(profile?.metadata || {})
       ]
     );
+    identityChanged = String(previous.rows?.[0]?.channel_id || '') !== String(rows[0]?.channel_id || '');
     return rows[0] || null;
   });
+  if (identityChanged) invalidatePublicPointTableOwnerIndex();
+  return account;
 }
 
 export async function upsertPlatformTokens(provider, userId, platformUserId, {
@@ -5790,7 +6198,7 @@ export async function deletePlatformAccount(provider, userId, platformUserId = n
   if (!p || !userId) return { tokensDeleted: 0, accountsDeleted: 0 };
   if (!getDbUrl()) return { tokensDeleted: 0, accountsDeleted: 0 };
   await ensurePlatformIdentityTables();
-  return withPgClient(async (pg) => {
+  const deleted = await withPgClient(async (pg) => {
     const normalizedUserId = String(userId).replace(/^user:/, '');
     const tokenResult = platformUserId
       ? await pg.query(
@@ -5819,6 +6227,8 @@ export async function deletePlatformAccount(provider, userId, platformUserId = n
       accountsDeleted: accountResult.rowCount || 0
     };
   });
+  invalidatePublicPointTableOwnerIndex();
+  return deleted;
 }
 
 async function ensureYoutubeCentralBotTables() {
@@ -6085,7 +6495,15 @@ export async function upsertYoutubeStreamerChannel(ownerUserId, channel) {
   const ownerId = String(ownerUserId || '').replace(/^user:/, '');
   if (!ownerId) throw new Error('ownerUserId is required');
   await ensureYoutubeCentralBotTables();
-  return withPgClient(async (pg) => {
+  let identityChanged = false;
+  const streamerChannel = await withPgClient(async (pg) => {
+    const previous = await pg.query(
+      `select youtube_channel_id
+         from youtube_streamer_channels
+        where owner_user_id = $1
+        limit 1`,
+      [ownerId]
+    );
     await pg.query(
       `insert into app_users (id, primary_provider, primary_platform_user_id, display_name, metadata)
        values ($1, 'youtube-central', $1, $2, '{}'::jsonb)
@@ -6130,8 +6548,11 @@ export async function upsertYoutubeStreamerChannel(ownerUserId, channel) {
         channel.resetModeratorRegistered !== false,
       ]
     );
+    identityChanged = String(previous.rows?.[0]?.youtube_channel_id || '') !== String(rows[0]?.youtube_channel_id || '');
     return normalizeYoutubeStreamerChannelRow(rows[0]);
   });
+  if (identityChanged) invalidatePublicPointTableOwnerIndex();
+  return streamerChannel;
 }
 
 export async function getYoutubeStreamerChannel(ownerUserId) {
@@ -6225,10 +6646,12 @@ export async function deleteYoutubeStreamerChannel(ownerUserId) {
   const ownerId = String(ownerUserId || '').replace(/^user:/, '');
   if (!ownerId) return false;
   await ensureYoutubeCentralBotTables();
-  return withPgClient(async (pg) => {
+  const deleted = await withPgClient(async (pg) => {
     await pg.query(`delete from youtube_streamer_channels where owner_user_id = $1`, [ownerId]);
     return true;
   });
+  invalidatePublicPointTableOwnerIndex();
+  return deleted;
 }
 
 // ---------------- Automation Action Builder ----------------
@@ -7308,6 +7731,18 @@ export function getBotSettings(sid) {
       // settings is stored as jsonb
       try { return data.settings || {}; } catch { return {}; }
     });
+}
+
+export async function getBotSettingsStrict(sid) {
+  ensure();
+  const { data, error } = await supabase
+    .from('bot_settings')
+    .select('settings')
+    .eq('sid', String(sid || '').trim())
+    .maybeSingle();
+  if (error) throw error;
+  const settings = data?.settings;
+  return settings && typeof settings === 'object' && !Array.isArray(settings) ? settings : {};
 }
 
 export async function setBotSettings(sid, settingsObj) {

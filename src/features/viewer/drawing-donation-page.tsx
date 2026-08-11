@@ -15,6 +15,7 @@ import { formatNumber } from '@/shared/lib/utils';
 
 type Streamer = {
   channelUid: string;
+  publicUid?: string | null;
   canonicalChannelUid?: string | null;
   channelName?: string | null;
   avatarUrl?: string | null;
@@ -118,10 +119,10 @@ function ViewerShell({ children }: { children: React.ReactNode }) {
   );
 }
 
-async function loadStreamers() {
-  const response = await fetch(apiUrl('/api/viewer/drawing-donation/streamers'), { credentials: 'include', cache: 'no-store' });
+async function loadStreamer(channelUid: string) {
+  const response = await fetch(apiUrl(`/api/viewer/drawing-donation/streamers/${encodeURIComponent(channelUid)}`), { credentials: 'include', cache: 'no-store' });
   if (!response.ok) throw new Error('load failed');
-  return response.json() as Promise<{ streamers: Streamer[] }>;
+  return response.json() as Promise<{ streamer: Streamer }>;
 }
 
 async function loadLivePlayback(surface: LiveSurface) {
@@ -483,9 +484,9 @@ export function DrawingDonationEditorPage({ channelUid }: { channelUid: string }
   }, []);
 
   useEffect(() => {
-    loadStreamers()
+    loadStreamer(channelUid)
       .then((data) => {
-        const found = (data.streamers || []).find((item) => item.channelUid === channelUid || item.canonicalChannelUid === channelUid);
+        const found = data.streamer || null;
         setStreamer(found || null);
         const surfaces = found?.liveSurfaces || [];
         const preferred = surfaces.find((surface) => surface.live === true) || surfaces[0];
@@ -646,7 +647,7 @@ export function DrawingDonationEditorPage({ channelUid }: { channelUid: string }
           method: 'POST',
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ channelUid: streamer.channelUid, strokes, previewImage }),
+          body: JSON.stringify({ channelUid: streamer.publicUid || streamer.channelUid, strokes, previewImage }),
         });
         const payload = await response.json().catch(() => null);
         if (!response.ok) throw new Error(payload?.message || payload?.error || 'submit failed');

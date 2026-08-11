@@ -36,10 +36,14 @@ describe('PostgreSQL channel point identifier regression', () => {
   });
 
   test('only skips a table that disappeared after enumeration', () => {
+    const batchStart = points.indexOf('export async function queryViewerPointTablesForUserIds');
     const viewerStart = points.indexOf('export async function listViewerPointBalancesForUserIds');
+    const batch = points.slice(batchStart, viewerStart);
     const viewerEnd = points.indexOf('function uniqueNonEmpty', viewerStart);
     const viewer = points.slice(viewerStart, viewerEnd);
-    expect(viewer).toContain("if (error?.code === '42P01') continue");
-    expect(viewer).toContain('throw error');
+    expect(batch).toContain("if (error?.code !== '42P01') throw error");
+    expect(batch).toContain('if (batch.length === 1)');
+    expect(batch).toContain('return []');
+    expect(viewer).toContain('queryViewerPointTablesForUserIds(pg, readableTables, ids)');
   });
 });

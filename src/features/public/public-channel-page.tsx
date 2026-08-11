@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { ErrorState } from '@/components/ui/page';
 import { cn } from '@/shared/lib/utils';
 import { readPublicChannelData, readPublicChannelHub, type PublicChannelKind } from '@/shared/api/public';
+import { PublicPointEarningSummary, type PublicPointEarningPolicy } from './public-point-earning-summary';
 import { PublicRealtimeDataView } from './public-realtime-data-view';
 
 const meta = {
@@ -48,6 +49,12 @@ function publicItemCount(data: unknown) {
     if (Number.isFinite(total) && total >= 0) return total;
   }
   return pickRows(data).length;
+}
+
+function readPublicPointEarningPolicy(data: unknown): PublicPointEarningPolicy | null {
+  if (!data || typeof data !== 'object') return null;
+  const policy = (data as Record<string, unknown>).pointEarning;
+  return policy && typeof policy === 'object' ? policy as PublicPointEarningPolicy : null;
 }
 
 function channelLabel(data: unknown, channelUid: string) {
@@ -126,7 +133,7 @@ function PublicShell({
         <section className="border-b pb-5">
           <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
             <div>
-              <Link href={`/c/${channelUid}`} className="mb-4 inline-flex items-center gap-2 text-sm font-semibold">
+              <Link href="/" className="mb-4 inline-flex items-center gap-2 text-sm font-semibold">
                 <span className="grid aspect-square w-[calc(var(--icon-box)*0.9)] place-items-center overflow-hidden rounded-[var(--radius-control)] bg-card shadow-subtle ring-1 ring-border">
                   <img
                     src="/files/logo.png"
@@ -143,7 +150,7 @@ function PublicShell({
                 명령어, 포인트, 룰렛, 라이브 정보를 모바일에서도 빠르게 열어볼 수 있어요.
               </p>
             </div>
-            <nav className="flex flex-wrap gap-2 text-sm font-semibold">
+            <nav aria-label={`${channelName} 공개 채널 메뉴`} className="flex flex-wrap gap-2 text-sm font-semibold">
               {tabs.map((tab) => {
                 const Icon = tab.icon;
                 const href = `/c/${channelUid}/${tab.href}`;
@@ -152,12 +159,13 @@ function PublicShell({
                   <Link
                     key={tab.href}
                     href={href}
+                    aria-current={selected ? 'page' : undefined}
                     className={cn(
                       'inline-flex items-center gap-2 rounded-[var(--radius-control)] border bg-background/75 px-[clamp(0.75rem,1.4vw,1rem)] py-[clamp(0.5rem,1vw,0.75rem)] transition hover:bg-muted',
                       selected && 'border-primary/35 bg-primary/10 text-primary',
                     )}
                   >
-                    <Icon className="h-4 w-4 text-primary" />
+                    <Icon aria-hidden="true" className="h-4 w-4 text-primary" />
                     {tab.label}
                   </Link>
                 );
@@ -210,8 +218,10 @@ export async function PublicChannelPage({ channelUid, kind }: { channelUid: stri
 
 export async function PublicChannelHub({ channelUid }: { channelUid: string }) {
   const data = await readPublicChannelHub(channelUid);
+  const pointEarning = readPublicPointEarningPolicy(data.points);
+  const drawingPath = `/viewer/drawing/${encodeURIComponent(channelUid)}`;
   const cards = [
-    { href: `/viewer/login?returnTo=${encodeURIComponent(`/viewer/drawing/${channelUid}`)}`, title: '그림 후원', body: '로그인하고 방송 화면 위에 내 그림을 그려요.', count: 1, icon: ImagePlus, tone: 'mint', direct: true },
+    { href: `/viewer/login?returnTo=${encodeURIComponent(drawingPath)}`, title: '그림 후원', body: '로그인하고 방송 화면 위에 내 그림을 그려요.', count: 1, icon: ImagePlus, tone: 'mint', direct: true },
     { href: 'commands', title: '명령어', body: '채팅에 입력할 수 있는 말을 바로 찾아요.', count: pickRows(data.commands).length, icon: ListChecks, tone: 'sky', direct: false },
     { href: 'points', title: '포인트', body: '내 참여가 얼마나 쌓였는지 살펴봐요.', count: publicItemCount(data.points), icon: Coins, tone: 'mint', direct: false },
     { href: 'roulette', title: '룰렛', body: '참여 가능한 룰렛과 당첨 항목을 봐요.', count: pickRows(data.roulette).length, icon: Sparkles, tone: 'lemon', direct: false },
@@ -221,6 +231,7 @@ export async function PublicChannelHub({ channelUid }: { channelUid: string }) {
   return (
     <PublicShell channelUid={channelUid} channelName={channelLabel(data.live, channelUid)} active="hub">
       {Object.values(data).every((value) => value == null) ? <ErrorState description="채널 참여 정보를 불러오지 못했습니다. 잠시 후 다시 열어 주세요." /> : null}
+      <PublicPointEarningSummary policy={pointEarning} />
       <section className="grid gap-4 sm:grid-cols-2">
         {cards.map((card) => {
           const Icon = card.icon;

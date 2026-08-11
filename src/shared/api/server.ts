@@ -13,6 +13,8 @@ export function serverApiUrl(path: string, base = getInternalApiBase()) {
   return `${base}${path.startsWith('/') ? '' : '/'}${path}`;
 }
 
+const SERVER_API_READ_TIMEOUT_MS = 6_000;
+
 export async function readServerJson<T>(
   path: string,
   init?: RequestInit & { next?: { revalidate?: number } },
@@ -22,6 +24,7 @@ export async function readServerJson<T>(
     const response = await fetch(serverApiUrl(path), {
       ...init,
       cache,
+      signal: init?.signal ?? AbortSignal.timeout(SERVER_API_READ_TIMEOUT_MS),
     });
     if (!response.ok) return null;
     return (await response.json()) as T;
