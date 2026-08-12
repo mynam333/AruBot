@@ -44,6 +44,6 @@ describe('후원 반응 금액 조건 회귀 방지', () => {
 
     expect(adminActionDialogs).toContain("import { CommandVariableHelpButton } from '@/features/admin/command-variable-help'");
     expect(dialog).toContain('title="후원 조건에 맞는 반응을 만들어요."');
-    expect(dialog).toContain('headerAction={<CommandVariableHelpButton />}');
+    expect(dialog).toContain('headerAction={<CommandVariableHelpButton scope="donation" />}');
   });
 });

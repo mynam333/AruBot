@@ -71,7 +71,7 @@ describe('action blueprint node editor regressions', () => {
 
     expect(blueprintPage).toContain("import { CommandVariableHelpButton } from '@/features/admin/command-variable-help'");
     expect(conditionEditor).toContain("node.type === 'condition'");
-    expect(conditionEditor).toContain('<CommandVariableHelpButton />');
+    expect(conditionEditor).toContain('<CommandVariableHelpButton scope="blueprint" />');
     expect(conditionEditor).toContain('조건에 사용할 변수');
   });
 });

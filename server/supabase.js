@@ -929,6 +929,63 @@ async function withPgClient(fn, retries = 2) {
   throw lastErr;
 }
 
+const BOT_COUNTER_SCOPES = new Set(['user', 'global']);
+const BOT_COUNTER_NAME_RE = /^[\p{L}\p{N}_. -]+$/u;
+
+function normalizeBotCounterName(value) {
+  const normalized = String(value || '').normalize('NFKC').trim().replace(/\s+/g, ' ');
+  if (!normalized || Array.from(normalized).length > 64 || !BOT_COUNTER_NAME_RE.test(normalized)) {
+    const error = new Error('Counter name must contain 1-64 letters, numbers, spaces, periods, underscores, or hyphens');
+    error.code = 'invalid_counter_name';
+    throw error;
+  }
+  return normalized;
+}
+
+/**
+ * Atomically increments one bot counter and returns the exact bigint value as text.
+ * Automatic retries are disabled because replaying a committed increment after a lost
+ * connection response could count one invocation twice.
+ */
+export async function incrementBotCounter({ sid, counterName, scope, subjectKey = '' } = {}) {
+  const ownerSid = String(sid || '').trim();
+  const counterScope = String(scope || '').trim().toLowerCase();
+  const name = normalizeBotCounterName(counterName);
+  if (!ownerSid || ownerSid.length > 512) {
+    const error = new Error('A valid counter owner sid is required');
+    error.code = 'invalid_counter_sid';
+    throw error;
+  }
+  if (!BOT_COUNTER_SCOPES.has(counterScope)) {
+    const error = new Error('Counter scope must be user or global');
+    error.code = 'invalid_counter_scope';
+    throw error;
+  }
+  const subject = counterScope === 'global' ? '' : String(subjectKey || '').trim();
+  if (counterScope === 'user' && (!subject || subject.length > 512)) {
+    const error = new Error('A valid counter subject is required for user counters');
+    error.code = 'invalid_counter_subject';
+    throw error;
+  }
+
+  return withPgClient(async (pg) => {
+    const result = await pg.query(
+      `insert into public.bot_counter_values as stored (
+         sid, counter_name, counter_scope, subject_key, value
+       ) values ($1, $2, $3, $4, 1)
+       on conflict (sid, counter_name, counter_scope, subject_key)
+       do update set
+         value = stored.value + 1,
+         updated_at = now()
+       returning value::text as value`,
+      [ownerSid, name, counterScope, subject]
+    );
+    const value = result.rows?.[0]?.value;
+    if (value == null) throw new Error('Counter increment did not return a value');
+    return String(value);
+  }, 0);
+}
+
 function isUndefinedDbFunctionError(error, functionName) {
   const message = String(error?.message || error?.toString?.() || '');
   return error?.code === '42883' && (!functionName || message.includes(functionName));
@@ -3116,6 +3173,14 @@ export async function deleteAccountData(ownerUserId, options = {}) {
         { column: 'channel_uid', values: scope.channelAliases },
         { column: 'user_id', values: scope.identityKeys },
       ]);
+      await deleteRowsWhere(
+        pg,
+        summary,
+        'public.bot_counter_values',
+        `sid = any($1::text[])
+         or (counter_scope = 'user' and subject_key = any($2::text[]))`,
+        [scope.channelAliases, scope.identityKeys]
+      );
       await deleteDynamicChannelPointRows(pg, summary, scope);
       await deleteRowsByColumnValues(pg, summary, 'public.automation_jobs', [
         { column: 'owner_user_id', values: [scope.owner] },
@@ -4124,6 +4189,30 @@ export async function ensureSchema() {
       alter table bot_rules add column if not exists points_cost integer default 0;
       alter table bot_rules add column if not exists cooldown integer default 1000;
       alter table bot_rules add column if not exists last_used bigint default 0;
+
+      create table if not exists bot_counter_values (
+        sid text not null,
+        counter_name text not null,
+        counter_scope text not null,
+        subject_key text not null default '',
+        value bigint not null default 0,
+        created_at timestamptz not null default now(),
+        updated_at timestamptz not null default now(),
+        primary key (sid, counter_name, counter_scope, subject_key),
+        constraint bot_counter_values_name_ck check (
+          counter_name = btrim(counter_name)
+          and char_length(counter_name) between 1 and 64
+        ),
+        constraint bot_counter_values_scope_ck check (counter_scope in ('user', 'global')),
+        constraint bot_counter_values_subject_ck check (
+          (counter_scope = 'global' and subject_key = '')
+          or (counter_scope = 'user' and subject_key <> '' and char_length(subject_key) <= 512)
+        ),
+        constraint bot_counter_values_nonnegative_ck check (value >= 0)
+      );
+      create index if not exists idx_bot_counter_values_user_subject
+        on bot_counter_values (subject_key, sid)
+        where counter_scope = 'user';
       -- Backfill from legacy camelCase columns
       do $$ begin
         if exists (select 1 from information_schema.columns where table_name='bot_rules' and column_name='adminonly') then
@@ -8872,12 +8961,72 @@ export async function getDurableRuntimeJob(jobId) {
   return normalizeDurableRuntimeJob(response.data);
 }
 
+async function mergeBotCountersToSid(oldSids, newSid) {
+  if (!getDbUrl()) return;
+  const sources = uniqueNonEmpty(oldSids).filter((sid) => sid !== newSid).sort();
+  if (!sources.length) return;
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await withPgClient(async (pg) => {
+        await pg.query('begin');
+        try {
+          // Multiple OAuth callbacks can attempt the same legacy-to-owner migration.
+          // Serialize them by destination without locking unrelated streamers.
+          await pg.query(
+            'select pg_advisory_xact_lock(hashtextextended($1, 0))',
+            [`bot-counter-sid-migration:${newSid}`]
+          );
+          for (const oldSid of sources) {
+            await pg.query(
+              `with moved as (
+                 delete from public.bot_counter_values
+                  where sid = $1
+                  returning counter_name, counter_scope, subject_key, value, created_at, updated_at
+               )
+               insert into public.bot_counter_values as target (
+                 sid, counter_name, counter_scope, subject_key, value, created_at, updated_at
+               )
+               select $2, counter_name, counter_scope, subject_key, value, created_at, updated_at
+                 from moved
+               on conflict (sid, counter_name, counter_scope, subject_key)
+               do update set
+                 value = target.value + excluded.value,
+                 created_at = least(target.created_at, excluded.created_at),
+                 updated_at = greatest(target.updated_at, excluded.updated_at)`,
+              [oldSid, newSid]
+            );
+          }
+          await pg.query('commit');
+        } catch (error) {
+          try { await pg.query('rollback'); } catch {}
+          if (error?.code !== '42P01') throw error;
+        }
+      }, 0);
+      return;
+    } catch (error) {
+      const retryable = error?.code === '40P01' || error?.code === '40001';
+      if (!retryable || attempt >= maxAttempts) {
+        console.error('[Counter Variable] SID counter migration failed:', {
+          newSid,
+          sourceCount: sources.length,
+          code: error?.code || null,
+          message: error?.message || String(error),
+        });
+        throw error;
+      }
+      await sleep(100 * attempt);
+    }
+  }
+}
+
 // Migrate data from cookie-based sid partition to user-id based partition
 export async function migrateSidToUserPid(oldSid, userId) {
   ensure();
   if (!oldSid || !userId) return;
   const oldPidCandidates = [String(oldSid), `sid:${oldSid}`];
   const newPid = `user:${userId}`;
+  await mergeBotCountersToSid(oldPidCandidates, newPid);
   const tables = ['tokens', 'bot_settings', 'bot_stats', 'bot_rules', 'live_days', 'attendance', 'attendance_state', 'attendance_integrity_archive'];
   for (const t of tables) {
     try {

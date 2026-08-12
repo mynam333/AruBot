@@ -181,7 +181,7 @@ describe('attendance message variables', () => {
     expect(serverIndex).toContain('executeActionVariableTokens(context.sid, token, {');
     expect(serverIndex).toContain('requirePublishedBlueprint: true');
     expect(serverIndex).toContain("throw new Error(failed.error || failed.result?.error || 'attendance_action_failed');");
-    expect(serverIndex).toContain("return String(rendered || '').trim().slice(0, 100);");
+    expect(serverIndex).toContain("return stripUnplannedCounterVariables(String(rendered || '')).trim().slice(0, 100);");
     expect(serverIndex).toContain('const blueprints = await listActionBlueprints(owner).catch(() => []);');
     expect(serverIndex).toContain("String(candidate?.name || '').trim().toLocaleLowerCase('ko-KR') === normalizedReference");
     expect(serverIndex).toContain("String(candidate?.id || '').trim().toLocaleLowerCase('ko-KR') === rouletteReference");
@@ -211,7 +211,7 @@ describe('attendance message variables', () => {
     expect(commandsPage).toContain('시청자·출석·방송·채널 변수');
     expect(commandsPage).toContain('룰렛·실행 액션');
     expect(commandsPage).not.toContain('사용 가능한 변수: <code>');
-    expect(variableHelp).toContain("scope?: 'command' | 'attendance'");
+    expect(variableHelp).toContain("type VariableContext = 'command' | 'attendance' | 'donation' | 'blueprint'");
     expect(variableHelp).toContain("ATTENDANCE_VARIABLE_GROUPS.has(variable.group)");
     expect(variableHelp).toContain('ATTENDANCE_SPECIAL_VARIABLES.has(variable.key)');
   });

@@ -469,6 +469,7 @@ jobs:
           ensure_native_build_tools
           npm ci --omit=dev
           npm run db:migrate
+          npm run db:provider-smoke
 
           if ! command -v pm2 >/dev/null 2>&1; then
             npm install -g pm2 || {

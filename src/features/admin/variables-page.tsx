@@ -13,8 +13,11 @@ type BotVariable = {
   description: string;
   group: string;
   providers?: string[];
+  contexts?: VariableContext[];
   caveat?: string;
 };
+
+type VariableContext = 'command' | 'attendance' | 'donation' | 'blueprint';
 
 type VariablesResponse = {
   variables: BotVariable[];
@@ -28,6 +31,20 @@ function providerTone(provider: string) {
 function providerLabel(provider: string) {
   if (provider === 'youtube') return 'YouTube';
   return provider === 'cime' ? 'CIME' : 'CHZZK';
+}
+
+function contextLabel(context: VariableContext) {
+  if (context === 'attendance') return '출석';
+  if (context === 'donation') return '후원';
+  if (context === 'blueprint') return '블루프린트';
+  return '명령어';
+}
+
+function groupDescription(group: string, count: number) {
+  if (group === '카운트') {
+    return '사용할 때마다 1씩 증가하고, 증가한 현재 값이 변수 자리에 표시됩니다. 유저별 카운트와 모든 유저 합산 카운트를 따로 쓸 수 있어요.';
+  }
+  return `채팅 문구에 넣으면 ${count}가지 상황을 자동으로 채워줘요.`;
 }
 
 export function VariablesPage() {
@@ -65,8 +82,8 @@ export function VariablesPage() {
       <section className="border-b pb-5">
         <div className="max-w-3xl">
           <div className="mb-4 flex flex-wrap items-center gap-2">
-            <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-primary/12 text-primary">
-              <Tags className="h-5 w-5" />
+            <span aria-hidden="true" className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-primary/12 text-primary">
+              <Tags aria-hidden="true" className="h-5 w-5" />
             </span>
             <Badge tone="sky">치환 변수</Badge>
             <Badge tone={variables.length ? 'mint' : 'neutral'}>{variables.length}개</Badge>
@@ -84,24 +101,32 @@ export function VariablesPage() {
             <Card key={group}>
               <CardHeader>
                 <CardTitle>{group}</CardTitle>
-                <CardDescription>채팅 문구에 넣으면 {items.length}가지 상황을 자동으로 채워줘요.</CardDescription>
+                <CardDescription>{groupDescription(group, items.length)}</CardDescription>
               </CardHeader>
-              <CardContent className="grid gap-3">
+              <CardContent className="grid min-w-0 gap-3">
                 {items.map((item) => (
                   <button
                     key={item.key}
                     type="button"
                     onClick={() => copy(item.key)}
-                    className="group grid gap-2 rounded-[var(--radius-card)] border bg-background/65 p-4 text-left transition hover:-translate-y-0.5 hover:border-primary/35 hover:bg-pastel-sky/35 hover:shadow-subtle"
+                    aria-label={`${item.label} ${item.key} 변수 복사`}
+                    className="group grid min-w-0 overflow-hidden gap-2 rounded-[var(--radius-card)] border bg-background/65 p-4 text-left transition hover:-translate-y-0.5 hover:border-primary/35 hover:bg-pastel-sky/35 hover:shadow-subtle"
                   >
-                    <div className="flex items-center justify-between gap-3">
-                      <code className="rounded-[var(--radius-control)] bg-muted px-2.5 py-1 text-sm font-bold text-foreground">{item.key}</code>
-                      <Copy className="h-4 w-4 shrink-0 text-muted-foreground transition group-hover:text-primary" />
+                    <div className="flex min-w-0 items-start justify-between gap-3">
+                      <code className="block min-w-0 max-w-full break-all whitespace-normal rounded-[var(--radius-control)] bg-muted px-2.5 py-1 text-sm font-bold leading-6 text-foreground">{item.key}</code>
+                      <Copy aria-hidden="true" className="mt-1 h-4 w-4 shrink-0 text-muted-foreground transition group-hover:text-primary" />
                     </div>
                     {item.providers?.length ? (
                       <div className="flex flex-wrap gap-1.5">
                         {item.providers.map((provider) => (
                           <Badge key={provider} tone={providerTone(provider)}>{providerLabel(provider)}</Badge>
+                        ))}
+                      </div>
+                    ) : null}
+                    {item.contexts?.length ? (
+                      <div className="flex flex-wrap gap-1.5" aria-label="사용 위치">
+                        {item.contexts.map((context) => (
+                          <Badge key={context} tone="cyan">{contextLabel(context)}</Badge>
                         ))}
                       </div>
                     ) : null}

@@ -710,7 +710,7 @@ export function DonationRuleCreateDialog({ variant = 'secondary', label = '반�
       submitLabel="반응 추가"
       pending={isPending}
       onSubmit={submit}
-      headerAction={<CommandVariableHelpButton />}
+      headerAction={<CommandVariableHelpButton scope="donation" />}
       variant={variant}
       label={label}
       className={className}

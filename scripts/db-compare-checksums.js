@@ -5,6 +5,7 @@ const DEFAULT_CHECKSUM_TABLES = [
   'sessions',
   'bot_settings',
   'bot_rules',
+  'bot_counter_values',
   'channel_tokens',
   'channel_viewer_tokens',
   'channel_points_balances',

@@ -3187,7 +3187,7 @@ function ConfigFields({
               <div className="text-sm font-extrabold">조건에 사용할 변수</div>
               <div className="text-xs font-medium leading-5 text-muted-foreground">좌변이나 우변에 넣을 수 있는 치환 변수를 모아봅니다.</div>
             </div>
-            <CommandVariableHelpButton />
+            <CommandVariableHelpButton scope="blueprint" />
           </div>
         ) : null}
         <Field label="좌변" value={String(cfg.left || '')} onChange={(value) => onChange('left', value)} />

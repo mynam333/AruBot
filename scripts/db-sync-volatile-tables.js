@@ -1,6 +1,6 @@
 import { tableExists, withPgClient } from './db-common.js';
 
-const DEFAULT_VOLATILE_TABLES = ['platform_tokens'];
+const DEFAULT_VOLATILE_TABLES = ['platform_tokens', 'bot_counter_values'];
 const BATCH_SIZE = 200;
 
 function parseListArg(name, fallback = []) {

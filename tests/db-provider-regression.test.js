@@ -117,7 +117,7 @@ describe('database provider regression', () => {
   });
 
   test('cutover syncs volatile token tables before checksum comparison', () => {
-    expect(syncVolatileTables).toContain("const DEFAULT_VOLATILE_TABLES = ['platform_tokens']");
+    expect(syncVolatileTables).toContain("const DEFAULT_VOLATILE_TABLES = ['platform_tokens', 'bot_counter_values']");
     expect(syncVolatileTables).toContain('replaceTargetRows');
     expect(syncVolatileTables).toContain('::text as');
     expect(syncVolatileTables).toContain("set time zone 'UTC'");

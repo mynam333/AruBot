@@ -9,7 +9,7 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
-import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, getBotSettingsStrict, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, revokeSession, getSessionUserId, listChannelPoints, listChannelPointsPage, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, deductChannelPointsIfEnough, getChannelPoints, getChannelPointBalanceSummary, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, issueApiKey, revokeApiKey, getOwnerPidForApiKey, issueApiWebSocketTicket, consumeApiWebSocketTicket, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, findSidByChannelViewerTokenSupabase, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, listPlatformAccountsForUserIds, findAppUserIdByChannelUid, findExactPublicChannelIdentity, getPublicChannelPointsSnapshot, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, markPlatformTokenValidated, deletePlatformTokens, deletePlatformAccount, getAppUserAdminStatus, getArubotAdminConsoleSnapshot, getArubotAdminStreamerFeatureDetails, getYoutubeBotProfile, upsertYoutubeBotProfile, updateYoutubeBotProfileTokens, markYoutubeBotProfileStatus, deleteYoutubeBotProfile, getYoutubeStreamerChannel, upsertYoutubeStreamerChannel, markYoutubeStreamerChannelModeratorRegistered, deleteYoutubeStreamerChannel, listYoutubeStreamerChannelsByYoutubeChannelId, updateYoutubeStreamerChannelLive, updateYoutubeStreamerChannelWebsub, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, claimBotRuleCooldown, enqueueDurableRuntimeJob, enqueuePaidDurableRuntimeJob, claimDurableRuntimeJobs, completeDurableRuntimeJob, failDurableRuntimeJob, claimRuntimeLease, releaseRuntimeLease, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps, recordBotEventLog, listBotEventLogs, getBotEventLog, insertDrawingDonationItem, listDrawingDonationItems, getDrawingDonationItem, getCurrentDrawingDonationItem, updateDrawingDonationItemStatus, deleteDrawingDonationItem, reorderDrawingDonationItems, uploadDrawingDonationObject, deleteDrawingDonationObjectKeys, deleteAccountData, cleanupPrivacyRetentionData, validateSecretEncryptionConfig, getPgPoolStatus, checkDatabaseReady, closeDatabaseConnections } from './supabase.js';
+import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, getBotSettingsStrict, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, revokeSession, getSessionUserId, listChannelPoints, listChannelPointsPage, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, deductChannelPointsIfEnough, getChannelPoints, getChannelPointBalanceSummary, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, incrementBotCounter, issueApiKey, revokeApiKey, getOwnerPidForApiKey, issueApiWebSocketTicket, consumeApiWebSocketTicket, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, findSidByChannelViewerTokenSupabase, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, listPlatformAccountsForUserIds, findAppUserIdByChannelUid, findExactPublicChannelIdentity, getPublicChannelPointsSnapshot, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, markPlatformTokenValidated, deletePlatformTokens, deletePlatformAccount, getAppUserAdminStatus, getArubotAdminConsoleSnapshot, getArubotAdminStreamerFeatureDetails, getYoutubeBotProfile, upsertYoutubeBotProfile, updateYoutubeBotProfileTokens, markYoutubeBotProfileStatus, deleteYoutubeBotProfile, getYoutubeStreamerChannel, upsertYoutubeStreamerChannel, markYoutubeStreamerChannelModeratorRegistered, deleteYoutubeStreamerChannel, listYoutubeStreamerChannelsByYoutubeChannelId, updateYoutubeStreamerChannelLive, updateYoutubeStreamerChannelWebsub, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, claimBotRuleCooldown, enqueueDurableRuntimeJob, enqueuePaidDurableRuntimeJob, claimDurableRuntimeJobs, completeDurableRuntimeJob, failDurableRuntimeJob, claimRuntimeLease, releaseRuntimeLease, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps, recordBotEventLog, listBotEventLogs, getBotEventLog, insertDrawingDonationItem, listDrawingDonationItems, getDrawingDonationItem, getCurrentDrawingDonationItem, updateDrawingDonationItemStatus, deleteDrawingDonationItem, reorderDrawingDonationItems, uploadDrawingDonationObject, deleteDrawingDonationObjectKeys, deleteAccountData, cleanupPrivacyRetentionData, validateSecretEncryptionConfig, getPgPoolStatus, checkDatabaseReady, closeDatabaseConnections } from './supabase.js';
 import { confirmPlatformTokenConsent, confirmYoutubeBotProfileConsent, countActiveDurableRuntimeJobs, touchPlatformTokenUsed, touchYoutubeBotProfileUsed } from './supabase.js';
 import { createPlatformProfileService } from './platform-profiles.js';
 import { executeAndStripLiveChangeTokens, filterLiveInfoByProvider, selectCategorySearchResult } from './live-command-actions.js';
@@ -32,6 +32,7 @@ import {
 import { getKstCalendarDate, resolveAttendanceDate } from './attendance-calendar.js';
 import { DEFAULT_ATTENDANCE_MESSAGE, renderAttendanceTemplate } from './attendance-message.js';
 import { executeAttendanceSpecialOperations, extractAttendanceSpecialVariables } from './attendance-special-variables.js';
+import { prepareCounterVariablePlan, resolveCounterVariablePlan, stripUnplannedCounterVariables } from './counter-variables.js';
 import {
   planLiveSessionTransition,
   primeProviderLiveObservations,
@@ -10926,7 +10927,8 @@ async function executeRouletteResultCommand(sid, commandText, userId, username, 
       const vdRe = /\$\{\s*video_donation\s*\}/i;
       const rlRe = /\$\{\s*roulette::([^}]+)\s*\}/i;
 
-      let responseToSend = response;
+      const counterPlan = prepareCounterVariablePlan(response);
+      let responseToSend = counterPlan.text;
       let ruleUsed = false;
       const argsText = commandMatch.argsText;
 
@@ -10966,10 +10968,10 @@ async function executeRouletteResultCommand(sid, commandText, userId, username, 
                 userId: String(userId || ''),
                 username: String(username || ''),
                 chatPost: isCimeChatPost
-                  ? makeCimeChatPost(chatPost.ownerUserId, username, { suppressResultChat: false, liveManageActorId: chatPost?.liveManageActorId || null })
+                  ? makeCimeChatPost(chatPost.ownerUserId, username, { suppressResultChat: false, liveManageActorId: chatPost?.liveManageActorId || null, counterUserId: chatPost?.counterUserId ?? userId })
                   : isYoutubeChatPost
-                    ? makeYoutubeChatPost(chatPost.ownerUserId, chatPost.liveChatId, username, { suppressResultChat: false })
-                    : makeChzzkChatPost(entry.sessionKey, accessToken, username, { suppressResultChat: false, liveManageActorId: chatPost?.liveManageActorId || null })
+                    ? makeYoutubeChatPost(chatPost.ownerUserId, chatPost.liveChatId, username, { suppressResultChat: false, counterUserId: chatPost?.counterUserId ?? userId })
+                    : makeChzzkChatPost(entry.sessionKey, accessToken, username, { suppressResultChat: false, liveManageActorId: chatPost?.liveManageActorId || null, counterUserId: chatPost?.counterUserId ?? userId })
               };
 
               console.log(`[Roulette Command] Enqueueing nested roulette: ${name}`);
@@ -11064,8 +11066,14 @@ async function executeRouletteResultCommand(sid, commandText, userId, username, 
         }
       }
 
-      if (responseToSend && String(responseToSend).length > 0) {
+      if (allowExecute && responseToSend && String(responseToSend).length > 0) {
         try {
+          responseToSend = await resolveCommandCounterVariables(counterPlan, responseToSend, {
+            sid,
+            provider: chatPostProvider || 'chzzk',
+            userId: chatPost?.counterUserId ?? userId,
+          });
+          if (!String(responseToSend || '').trim()) break;
           const finalMsg = '[룰렛 결과] ' + String(responseToSend);
           const post = (isCimeChatPost || isYoutubeChatPost) ? chatPost : makeChzzkChatPost(entry.sessionKey, await getValidAccessToken(sid), username);
           await sendChatByPost(sid, post, finalMsg, { timeout: 5000 });
@@ -11415,6 +11423,26 @@ async function substituteAllPlaceholders(text, sid, userId, username, context = 
     }
   }
   return out;
+}
+
+async function resolveCommandCounterVariables(plan, renderedText, { sid, provider, userId } = {}) {
+  const result = await resolveCounterVariablePlan(plan, renderedText, {
+    provider,
+    userId,
+    incrementCounter: ({ scope, name, subject }) => incrementBotCounter({
+      sid,
+      counterName: name,
+      scope,
+      subjectKey: subject || '',
+    }),
+  });
+  for (const failure of result.errors || []) {
+    console.warn(
+      `[Counter Variable] ${failure.scope}:${failure.name} increment failed:`,
+      failure.error?.message || failure.error
+    );
+  }
+  return result.text;
 }
 
 // --- Channel followers and user relationship helpers (best-effort, cached) ---
@@ -12570,7 +12598,7 @@ async function renderAttendanceMessage(template, context = {}) {
   for (const failure of specialResult.errors) {
     console.warn(`[Attendance] ${failure.type} variable execution failed:`, failure.target, failure.error?.message || failure.error);
   }
-  return String(rendered || '').trim().slice(0, 100);
+  return stripUnplannedCounterVariables(String(rendered || '')).trim().slice(0, 100);
 }
 
 async function recordAttendanceFromCommand({
@@ -20310,6 +20338,8 @@ const BOT_VARIABLES = [
   { key: '{live.elapsed_ko}', label: '방송 진행 시간', description: '한국어 형식으로 표시되는 방송 진행 시간입니다.', group: '방송', providers: BOT_VARIABLE_PROVIDERS },
   { key: '{live.channel}', label: '방송 채널', description: '현재 방송 채널 이름 또는 식별자입니다.', group: '방송', providers: BOT_VARIABLE_PROVIDERS },
   { key: '{channel.followers}', label: '팔로워 수', description: '확인 가능한 현재 채널 팔로워 수입니다.', group: '채널', providers: ['chzzk', 'cime'], caveat: '씨미는 프로필 동기화로 저장된 공개 수치를 사용합니다.' },
+  { key: '${counter::user::변수명}', label: '시청자별 카운트', description: '명령어를 호출한 시청자마다 별도로 값을 1 올린 뒤, 증가한 숫자를 이 위치에 표시합니다.', group: '카운트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command'], effect: 'increment', caveat: '변수명을 원하는 이름으로 바꿔 사용하세요. 첫 호출은 1이며, 같은 응답에 동일 변수를 여러 번 넣어도 한 번만 증가합니다. 응답 하나에는 서로 다른 카운트를 최대 16개까지 사용할 수 있습니다. 예: ${counter::user::도전}' },
+  { key: '${counter::global::변수명}', label: '전체 합산 카운트', description: '이 스트리머의 모든 시청자 호출을 변수명별로 합산해 값을 1 올린 뒤, 증가한 숫자를 이 위치에 표시합니다.', group: '카운트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command'], effect: 'increment', caveat: '변수명을 원하는 이름으로 바꿔 사용하세요. 첫 호출은 1이며, 시청자별 카운트와 전체 합산 카운트는 서로 독립적으로 저장됩니다. 응답 하나에는 서로 다른 카운트를 최대 16개까지 사용할 수 있습니다. 예: ${counter::global::도전}' },
   { key: '${live.title_change}', label: '방송 제목 변경', description: '명령어 뒤에 입력한 전체 문장으로 현재 플랫폼의 방송 제목을 변경합니다.', group: '특수 실행', providers: ['chzzk', 'cime'], caveat: '스트리머 또는 매니저만 실행할 수 있으며 채팅에는 출력되지 않습니다. 명령어 인자가 없으면 실행하지 않고, 제거 후 응답이 비어 있으면 채팅도 보내지 않습니다.' },
   { key: '${live.game_change}', label: '방송 카테고리 변경', description: '명령어 뒤에 입력한 전체 문장으로 현재 플랫폼의 카테고리를 검색해 변경합니다.', group: '특수 실행', providers: ['chzzk', 'cime'], caveat: '스트리머 또는 매니저만 실행할 수 있으며 채팅에는 출력되지 않습니다. 명령어 인자가 없으면 실행하지 않고, 제거 후 응답이 비어 있으면 채팅도 보내지 않습니다.' },
   { key: '${video_donation}', label: '영상 후원 신청 실행', description: '명령어 인자로 받은 주소를 영상 후원 대기열에 넣고 실제 재생 구간만큼 포인트를 차감합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, caveat: '사용법: <주소> [<시작초>] [<종료초>] · 시작초와 종료초는 초 또는 분:초(예: 1:23 = 83초) 형식으로 입력합니다. 시작초 기본값은 0초이며, 종료초를 생략하면 영상 마지막까지 재생합니다. 설정된 최대 재생 시간은 항상 적용되며, 이 변수는 채팅에 출력되지 않습니다.' },
@@ -22873,9 +22903,8 @@ async function ensureSession(sid, channelId) {
 
           // Identify user and username once (prefer numeric/string userId from profile)
           const resolvedUsername = String(msg?.profile?.nickname || ev.user || 'Unknown');
-          const resolvedUserId = String(
-            (msg?.senderChannelId ?? msg?.profile?.userId ?? '') || resolvedUsername || 'unknown_user'
-          );
+          const counterUserId = firstNonEmptyText(msg?.senderChannelId, msg?.profile?.userId);
+          const resolvedUserId = String(counterUserId || resolvedUsername || 'unknown_user');
 
           // Determine if author is the channel owner; do not abort handler (owner should be able to trigger commands)
           let isOwner = false;
@@ -22971,7 +23000,7 @@ async function ensureSession(sid, channelId) {
                       points: awardedPoints,
                       date: attendDate,
                       channelUid: attendanceChannelUid || liveState.channelId || entry.channelId || null,
-                      chatPost: makeChzzkChatPost(entry.sessionKey, attendanceAccessToken, resolvedUsername, { liveManageActorId: resolvedUserId }),
+                      chatPost: makeChzzkChatPost(entry.sessionKey, attendanceAccessToken, resolvedUsername, { liveManageActorId: resolvedUserId, counterUserId }),
                       triggerName: 'first_chat',
                       triggerMessage: text,
                       executeSpecialVariables: result?.isNew === true,
@@ -23063,7 +23092,7 @@ async function ensureSession(sid, channelId) {
                 username: resolvedUsername,
                 channelUid: liveState.channelId || null,
                 provider: 'chzzk',
-                chatPost: makeChzzkChatPost(entry.sessionKey, null, resolvedUsername, { liveManageActorId: resolvedUserId }),
+                chatPost: makeChzzkChatPost(entry.sessionKey, null, resolvedUsername, { liveManageActorId: resolvedUserId, counterUserId }),
                 triggerName: normalizeAttendanceCommandKeyword(commandSettings),
                 triggerMessage: text,
                 isOwner,
@@ -23137,7 +23166,7 @@ async function ensureSession(sid, channelId) {
                   username: resolvedUsername,
                   channelUid: liveState.channelId || null,
                   provider: 'chzzk',
-                  chatPost: makeChzzkChatPost(entry.sessionKey, null, resolvedUsername, { liveManageActorId: resolvedUserId }),
+                  chatPost: makeChzzkChatPost(entry.sessionKey, null, resolvedUsername, { liveManageActorId: resolvedUserId, counterUserId }),
                   triggerName: matchedKeyword || normalizeAttendanceCommandKeyword(commandSettings),
                   triggerMessage: text,
                   isOwner,
@@ -23182,7 +23211,8 @@ async function ensureSession(sid, channelId) {
             const restForVd = commandMatch.argsText;
             const argsVd = restForVd.length ? restForVd.split(/\s+/).map(String) : [];
 
-            let responseToSend = response;
+            const counterPlan = prepareCounterVariablePlan(response);
+            let responseToSend = counterPlan.text;
             let ruleUsed = false; // mark when this rule executed (even if no chat message output)
             if (allowExecute && typeof responseToSend === 'string') {
               const liveChangeResult = await executeCommandLiveChangeTokens(sid, responseToSend, {
@@ -23328,8 +23358,8 @@ async function ensureSession(sid, channelId) {
                         username: String(resolvedUsername || ''),
                         // For batches (count>1), suppress per-spin chat and tag batch meta; for single spin, allow per-spin chat
                         chatPost: count > 1
-                          ? makeChzzkChatPost(entry.sessionKey, accessToken, resolvedUsername, { liveManageActorId: resolvedUserId, suppressResultChat: true, batchId: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, batchCount: count })
-                          : makeChzzkChatPost(entry.sessionKey, accessToken, resolvedUsername, { liveManageActorId: resolvedUserId })
+                          ? makeChzzkChatPost(entry.sessionKey, accessToken, resolvedUsername, { liveManageActorId: resolvedUserId, counterUserId, suppressResultChat: true, batchId: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, batchCount: count })
+                          : makeChzzkChatPost(entry.sessionKey, accessToken, resolvedUsername, { liveManageActorId: resolvedUserId, counterUserId })
                       };
 
                       console.log(`[Roulette] Enqueueing ${count} spins for roulette: ${name}, user: ${resolvedUsername}`);
@@ -23354,7 +23384,9 @@ async function ensureSession(sid, channelId) {
                         console.log(`[Roulette] Spin ${i + 1} enqueued at position: ${pos}`);
                       }
 
-                      responseToSend = '';
+                      // Keep any remaining text (including a planned counter) so
+                      // mixed roulette + counter responses can still display it.
+                      responseToSend = String(responseToSend || '').trim();
                       commandFeatures.push('roulette');
 
                     } catch (e) {
@@ -23444,7 +23476,7 @@ async function ensureSession(sid, channelId) {
             const accessToken = await getValidAccessToken(sid);
             const url = `${OPENAPI_BASE}/open/v1/chats/send`;
             try {
-              const finalMsg = responseToSend;
+              let finalMsg = responseToSend;
               // Guard: ensure we reply only once per source chat
               if (!entry.sentReplies) entry.sentReplies = new Set();
               const replyKey = makeCommandReplyKey(msg || ev || {}, r, matchedKeyword || '', text, resolvedUserId);
@@ -23459,10 +23491,21 @@ async function ensureSession(sid, channelId) {
               }
               if (finalMsg && String(finalMsg).length > 0 && !entry.sentReplies.has(replyKey) && !alreadyGlobal) {
                 entry.sentReplies.add(replyKey);
-                await axios.post(url, { message: finalMsg }, {
-                  params: { sessionKey: entry.sessionKey },
-                  headers: { Authorization: `Bearer ${accessToken}` }
-                });
+                finalMsg = allowExecute
+                  ? String(await resolveCommandCounterVariables(counterPlan, finalMsg, {
+                      sid,
+                      provider: 'chzzk',
+                      userId: counterUserId,
+                    }) || '').trim()
+                  : stripUnplannedCounterVariables(finalMsg).trim();
+                if (finalMsg) {
+                  await axios.post(url, { message: finalMsg }, {
+                    params: { sessionKey: entry.sessionKey },
+                    headers: { Authorization: `Bearer ${accessToken}` }
+                  });
+                }
+              } else {
+                finalMsg = stripUnplannedCounterVariables(finalMsg).trim();
               }
               await recordCommandExecutionLog(sid, {
                 executed: allowExecute && (ruleUsed || (finalMsg && String(finalMsg).length > 0)),
@@ -24532,7 +24575,8 @@ async function processYoutubeChatAutomation(entry, ev) {
       : await refreshYoutubeLiveStatus(ownerUserId, sid, { ttlMs: 30 * 1000 });
     if (settings.onlyWhenLive && !liveState.live) return;
 
-    const resolvedUserId = String(ev.userId || ev.user || 'unknown_user');
+    const counterUserId = String(ev.userId || '').trim();
+    const resolvedUserId = String(counterUserId || ev.user || 'unknown_user');
     const resolvedUsername = String(ev.user || 'Unknown');
     const isOwner = ev.role?.owner === true || String(resolvedUserId) === String(entry.channelId || '');
     const isBotSelf = isLikelyYoutubeSelfEcho(entry, ev);
@@ -24571,7 +24615,7 @@ async function processYoutubeChatAutomation(entry, ev) {
               points: awardedPoints,
               date: attendDate,
               channelUid: entry.channelId || null,
-              chatPost: makeYoutubeChatPost(ownerUserId, entry.liveChatId, resolvedUsername),
+              chatPost: makeYoutubeChatPost(ownerUserId, entry.liveChatId, resolvedUsername, { counterUserId }),
               triggerName: 'first_chat',
               triggerMessage: text,
               executeSpecialVariables: result?.isNew === true,
@@ -24619,7 +24663,7 @@ async function processYoutubeChatAutomation(entry, ev) {
           username: resolvedUsername,
           channelUid: entry.channelId || null,
           provider: 'youtube',
-          chatPost: makeYoutubeChatPost(ownerUserId, entry.liveChatId, resolvedUsername),
+          chatPost: makeYoutubeChatPost(ownerUserId, entry.liveChatId, resolvedUsername, { counterUserId }),
           triggerName: normalizeAttendanceCommandKeyword(settings),
           triggerMessage: text,
           isOwner,
@@ -24672,7 +24716,7 @@ async function processYoutubeChatAutomation(entry, ev) {
             username: resolvedUsername,
             channelUid: entry.channelId || null,
             provider: 'youtube',
-            chatPost: makeYoutubeChatPost(ownerUserId, entry.liveChatId, resolvedUsername),
+            chatPost: makeYoutubeChatPost(ownerUserId, entry.liveChatId, resolvedUsername, { counterUserId }),
             triggerName: matchedKeyword || normalizeAttendanceCommandKeyword(settings),
             triggerMessage: text,
             isOwner,
@@ -24704,7 +24748,8 @@ async function processYoutubeChatAutomation(entry, ev) {
       const cmd = matchedKeyword || '';
       const argsText = commandMatch.argsText;
       const args = argsText.split(/\s+/).map(String).filter(Boolean);
-      let cleaned = String(response || '');
+      const counterPlan = prepareCounterVariablePlan(response);
+      let cleaned = counterPlan.text;
       if (allowExecute) {
         const liveChangeResult = await executeCommandLiveChangeTokens(sid, cleaned, {
           provider: 'youtube',
@@ -24786,8 +24831,8 @@ async function processYoutubeChatAutomation(entry, ev) {
               userId: resolvedUserId,
               username: resolvedUsername,
               chatPost: count > 1
-                ? makeYoutubeChatPost(ownerUserId, entry.liveChatId, resolvedUsername, { suppressResultChat: true, batchId: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, batchCount: count })
-                : makeYoutubeChatPost(ownerUserId, entry.liveChatId, resolvedUsername)
+                ? makeYoutubeChatPost(ownerUserId, entry.liveChatId, resolvedUsername, { counterUserId, suppressResultChat: true, batchId: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, batchCount: count })
+                : makeYoutubeChatPost(ownerUserId, entry.liveChatId, resolvedUsername, { counterUserId })
             };
             await enqueueRouletteSpin(sid, {
               ...base,
@@ -24801,7 +24846,8 @@ async function processYoutubeChatAutomation(entry, ev) {
               },
             });
             for (let i = 1; i < count; i++) await enqueueRouletteSpin(sid, { ...base, instant: true, eventContext: { source: 'youtube-live-chat-command', triggerName: matchedKeyword || '' } });
-            cleaned = '';
+            // Preserve non-roulette content such as a planned counter value.
+            cleaned = String(cleaned || '').trim();
             commandFeatures.push('roulette');
           }
         } catch {
@@ -24830,12 +24876,23 @@ async function processYoutubeChatAutomation(entry, ev) {
       const replyKey = makeCommandReplyKey(ev, r, matchedKeyword || '', text, resolvedUserId);
       if (cleaned && !entry.sentReplies.has(replyKey)) {
         entry.sentReplies.add(replyKey);
+        cleaned = allowExecute
+          ? String(await resolveCommandCounterVariables(counterPlan, cleaned, {
+              sid,
+              provider: 'youtube',
+              userId: counterUserId,
+            }) || '').trim()
+          : stripUnplannedCounterVariables(cleaned).trim();
         if (entry.sentReplies.size > 1000) {
           let i = 0; for (const key of entry.sentReplies) { entry.sentReplies.delete(key); if (++i >= 100) break; }
         }
-        await sendYoutubeChat(ownerUserId, entry.liveChatId, cleaned).catch((e) => {
-          console.error('[YouTube] Auto-reply send error', e?.response?.data || e.message);
-        });
+        if (cleaned) {
+          await sendYoutubeChat(ownerUserId, entry.liveChatId, cleaned).catch((e) => {
+            console.error('[YouTube] Auto-reply send error', e?.response?.data || e.message);
+          });
+        }
+      } else {
+        cleaned = stripUnplannedCounterVariables(cleaned).trim();
       }
       await recordCommandExecutionLog(sid, {
         executed: allowExecute,
@@ -25653,7 +25710,8 @@ async function processCimeChatAutomation(entry, ev) {
     const currentlyLive = await refreshCimeLiveStatus(ownerUserId, sid, entry.channelId);
     if (settings.onlyWhenLive && !currentlyLive) return;
     const resolvedUsername = String(ev.user || 'Unknown');
-    let resolvedUserId = String(ev.userId || '').trim();
+    const counterUserId = String(ev.userId || '').trim();
+    let resolvedUserId = counterUserId;
     if (!resolvedUserId && resolvedUsername && resolvedUsername !== 'Unknown') {
       resolvedUserId = `cime:nickname:${crypto.createHash('sha256').update(resolvedUsername).digest('hex').slice(0, 16)}`;
     }
@@ -25700,7 +25758,7 @@ async function processCimeChatAutomation(entry, ev) {
               points: awardedPoints,
               date: attendDate,
               channelUid: pointChannelUid || entry.channelId || null,
-              chatPost: makeCimeChatPost(ownerUserId, resolvedUsername, { liveManageActorId: resolvedUserId }),
+              chatPost: makeCimeChatPost(ownerUserId, resolvedUsername, { liveManageActorId: resolvedUserId, counterUserId }),
               triggerName: 'first_chat',
               triggerMessage: text,
               executeSpecialVariables: result?.isNew === true,
@@ -25750,7 +25808,7 @@ async function processCimeChatAutomation(entry, ev) {
           username: resolvedUsername,
           channelUid: pointChannelUid || entry.channelId || null,
           provider: 'cime',
-          chatPost: makeCimeChatPost(ownerUserId, resolvedUsername, { liveManageActorId: resolvedUserId }),
+          chatPost: makeCimeChatPost(ownerUserId, resolvedUsername, { liveManageActorId: resolvedUserId, counterUserId }),
           triggerName: normalizeAttendanceCommandKeyword(settings),
           triggerMessage: text,
           isOwner,
@@ -25822,7 +25880,7 @@ async function processCimeChatAutomation(entry, ev) {
             username: resolvedUsername,
             channelUid: pointChannelUid || entry.channelId || null,
             provider: 'cime',
-            chatPost: makeCimeChatPost(ownerUserId, resolvedUsername, { liveManageActorId: resolvedUserId }),
+            chatPost: makeCimeChatPost(ownerUserId, resolvedUsername, { liveManageActorId: resolvedUserId, counterUserId }),
             triggerName: matchedKeyword || normalizeAttendanceCommandKeyword(settings),
             triggerMessage: text,
             isOwner,
@@ -25854,7 +25912,8 @@ async function processCimeChatAutomation(entry, ev) {
       const cmd = matchedKeyword || '';
       const argsText = commandMatch.argsText;
       const args = argsText.split(/\s+/).map(String).filter(Boolean);
-      let cleaned = String(response || '');
+      const counterPlan = prepareCounterVariablePlan(response);
+      let cleaned = counterPlan.text;
       if (allowExecute) {
         const liveChangeResult = await executeCommandLiveChangeTokens(sid, cleaned, {
           provider: 'cime',
@@ -25938,8 +25997,8 @@ async function processCimeChatAutomation(entry, ev) {
               userId: resolvedUserId,
               username: resolvedUsername,
               chatPost: count > 1
-                ? makeCimeChatPost(ownerUserId, resolvedUsername, { liveManageActorId: resolvedUserId, suppressResultChat: true, batchId: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, batchCount: count })
-                : makeCimeChatPost(ownerUserId, resolvedUsername, { liveManageActorId: resolvedUserId })
+                ? makeCimeChatPost(ownerUserId, resolvedUsername, { liveManageActorId: resolvedUserId, counterUserId, suppressResultChat: true, batchId: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, batchCount: count })
+                : makeCimeChatPost(ownerUserId, resolvedUsername, { liveManageActorId: resolvedUserId, counterUserId })
             };
             await enqueueRouletteSpin(sid, {
               ...base,
@@ -25953,7 +26012,8 @@ async function processCimeChatAutomation(entry, ev) {
               },
             });
             for (let i = 1; i < count; i++) await enqueueRouletteSpin(sid, { ...base, instant: true, eventContext: { source: 'cime-chat-command', triggerName: matchedKeyword || '' } });
-            cleaned = '';
+            // Preserve non-roulette content such as a planned counter value.
+            cleaned = String(cleaned || '').trim();
             commandFeatures.push('roulette');
           }
         } catch (e) {
@@ -25980,12 +26040,23 @@ async function processCimeChatAutomation(entry, ev) {
       const replyKey = makeCommandReplyKey(ev, r, matchedKeyword || '', text, resolvedUserId);
       if (cleaned && !entry.sentReplies.has(replyKey)) {
         entry.sentReplies.add(replyKey);
+        cleaned = allowExecute
+          ? String(await resolveCommandCounterVariables(counterPlan, cleaned, {
+              sid,
+              provider: 'cime',
+              userId: counterUserId,
+            }) || '').trim()
+          : stripUnplannedCounterVariables(cleaned).trim();
         if (entry.sentReplies.size > 1000) {
           let i = 0; for (const key of entry.sentReplies) { entry.sentReplies.delete(key); if (++i >= 100) break; }
         }
-        await sendCimeChat(ownerUserId, cleaned).catch((e) => {
-          console.error('[CIME] Auto-reply send error', e?.response?.data || e.message);
-        });
+        if (cleaned) {
+          await sendCimeChat(ownerUserId, cleaned).catch((e) => {
+            console.error('[CIME] Auto-reply send error', e?.response?.data || e.message);
+          });
+        }
+      } else {
+        cleaned = stripUnplannedCounterVariables(cleaned).trim();
       }
       await recordCommandExecutionLog(sid, {
         executed: allowExecute,
