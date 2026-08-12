@@ -20,7 +20,7 @@ describe('qualified public channel route regression', () => {
   test('roulette definitions, tokens, and logs all resolve the verified owner', () => {
     const definitions = sourceBetween(serverIndex, "app.get('/api/public/:uid/roulette-defs'", "app.post('/api/chzzk/send'");
     const token = sourceBetween(serverIndex, "app.get('/api/roulette/resolve-token'", 'async function resolveCurrentViewerRouletteUserIds');
-    const logs = sourceBetween(serverIndex, "app.get('/api/roulette/logs'", 'function getPathValue');
+    const logs = sourceBetween(serverIndex, "app.get('/api/roulette/logs'", 'function blueprintInputPorts');
 
     for (const route of [definitions, token, logs]) {
       expect(route).toContain('resolveVerifiedPublicChannelIdentity(uid)');
@@ -64,7 +64,7 @@ describe('qualified public channel route regression', () => {
 
   test('drawing entry and submit keep the qualified UID and authoritative settings owner', () => {
     const drawingResolver = sourceBetween(serverIndex, 'async function resolveDrawingDonationSettingsForBalance', 'async function collectViewerDrawingDonationStreamers');
-    const drawingRoutes = sourceBetween(serverIndex, "app.get('/api/viewer/drawing-donation/streamers/:channelUid'", "function getPathValue");
+    const drawingRoutes = sourceBetween(serverIndex, "app.get('/api/viewer/drawing-donation/streamers/:channelUid'", 'function blueprintInputPorts');
     expect(drawingResolver).toContain("const sid = String(balance?.pointSettingsSid || '').trim()");
     expect(drawingResolver).not.toContain('balance?.channelUid');
     expect(drawingRoutes.match(/findViewerDrawingStreamer\(data\.streamers, channelUid, identity\)/g)).toHaveLength(2);

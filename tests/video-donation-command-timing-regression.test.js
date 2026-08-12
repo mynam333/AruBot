@@ -6,11 +6,12 @@ describe('video donation command timing integration regression', () => {
   const youtubeMetadata = fs.readFileSync(path.join(__dirname, '..', 'server', 'youtube-video-metadata.js'), 'utf8');
   const viewer = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'PvdViewer.tsx'), 'utf8');
 
-  test('all three chat platforms use the shared video donation command path', () => {
-    expect(serverIndex.match(/await enqueueVideoDonationFromArgs\(\{/g)).toHaveLength(3);
+  test('all three chat platforms and the blueprint command node use the shared video donation command path', () => {
+    expect(serverIndex.match(/await enqueueVideoDonationFromArgs\(\{/g)).toHaveLength(4);
     expect(serverIndex).toContain("source: 'chat-command'");
     expect(serverIndex).toContain("source: 'youtube-live-chat-command'");
     expect(serverIndex).toContain("source: 'cime-chat-command'");
+    expect(serverIndex).toContain("source: 'blueprint-command'");
   });
 
   test('successful receipts end with the active queue total including the accepted request', () => {

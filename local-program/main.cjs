@@ -1358,12 +1358,20 @@ async function discoverObs(options = {}) {
         enabled: true,
       })),
     ].filter((source, index, array) => source.name && array.findIndex((item) => item.name === source.name && item.sceneName === source.sceneName) === index);
-    const filterRows = await Promise.all(sources.slice(0, 120).map(async (source) => {
-      const response = await sendObsRequest(ws, 'GetSourceFilterList', { sourceName: source.name }, options.timeoutMs).catch(() => ({ filters: [] }));
+    const filterTargets = [
+      ...scenes.slice(0, 80).map((scene) => ({ name: scene.name, targetType: 'scene' })),
+      ...sources
+        .filter((source, index, array) => array.findIndex((item) => item.name === source.name) === index)
+        .slice(0, 120)
+        .map((source) => ({ name: source.name, targetType: 'source' })),
+    ].filter((target, index, array) => target.name && array.findIndex((item) => item.name === target.name && item.targetType === target.targetType) === index);
+    const filterRows = await Promise.all(filterTargets.map(async (target) => {
+      const response = await sendObsRequest(ws, 'GetSourceFilterList', { sourceName: target.name }, options.timeoutMs).catch(() => ({ filters: [] }));
       return (response.filters || []).map((filter) => ({
         id: String(filter.filterUuid || filter.filterName || ''),
         name: String(filter.filterName || ''),
-        sourceName: source.name,
+        sourceName: target.name,
+        targetType: target.targetType,
         kind: String(filter.filterKind || ''),
         enabled: filter.filterEnabled !== false,
       })).filter((filter) => filter.name);
@@ -1456,9 +1464,10 @@ async function runObsAction(payload = {}) {
       }, payload.timeoutMs);
     }
     if (action === 'filter.enabled' || action === 'filter.on' || action === 'filter.off' || action === 'filter.toggle') {
-      const sourceName = inputName;
+      const filterTargetType = payload.filterTargetType === 'scene' ? 'scene' : 'source';
+      const sourceName = String(payload.filterTargetName || (filterTargetType === 'scene' ? payload.sceneName : payload.sourceName) || payload.sourceName || '').trim();
       const filterName = String(payload.filterName || '').trim();
-      if (!sourceName || !filterName) throw new Error('OBS 소스와 필터를 선택해 주세요.');
+      if (!sourceName || !filterName) throw new Error('OBS 필터 대상과 필터를 선택해 주세요.');
       let filterEnabled = payload.enabled !== false;
       if (action === 'filter.on') filterEnabled = true;
       if (action === 'filter.off') filterEnabled = false;

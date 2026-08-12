@@ -66,7 +66,7 @@ type AutomationConnection = {
     currentModel?: { loaded?: boolean; id?: string; name?: string };
     scenes?: Array<{ id?: string; name: string; current?: boolean }>;
     sources?: Array<{ id?: string; name: string; sceneName?: string; inputKind?: string; enabled?: boolean }>;
-    filters?: Array<{ id?: string; name: string; sourceName?: string; kind?: string; enabled?: boolean }>;
+    filters?: Array<{ id?: string; name: string; sourceName?: string; targetType?: 'source' | 'scene'; kind?: string; enabled?: boolean }>;
     fetchedAt?: string;
   };
   lastStatus?: string | null;
@@ -312,6 +312,7 @@ export function AutomationsPage() {
   const [selectedObsScene, setSelectedObsScene] = useState('');
   const [selectedObsSource, setSelectedObsSource] = useState('');
   const [selectedObsFilter, setSelectedObsFilter] = useState('');
+  const [selectedObsFilterTargetType, setSelectedObsFilterTargetType] = useState<'source' | 'scene'>('source');
   const [selectedObsAction, setSelectedObsAction] = useState('scene.switch');
   const [controlLabel, setControlLabel] = useState('방송 액션 실행');
   const [controlUrl, setControlUrl] = useState('');
@@ -347,6 +348,12 @@ export function AutomationsPage() {
   const obsScenes = useMemo(() => obsConnection?.discoveryCache?.scenes || [], [obsConnection]);
   const obsSources = useMemo(() => obsConnection?.discoveryCache?.sources || [], [obsConnection]);
   const obsFilters = useMemo(() => obsConnection?.discoveryCache?.filters || [], [obsConnection]);
+  const selectedObsFilterTargetName = selectedObsFilterTargetType === 'scene' ? selectedObsScene : selectedObsSource;
+  const availableObsFilters = useMemo(
+    () => obsFilters.filter((filter) => (filter.targetType || 'source') === selectedObsFilterTargetType)
+      .filter((filter) => !selectedObsFilterTargetName || filter.sourceName === selectedObsFilterTargetName),
+    [obsFilters, selectedObsFilterTargetName, selectedObsFilterTargetType],
+  );
   const publishedBlueprints = useMemo(
     () => blueprints.filter((item) => item.enabled !== false && item.version?.published),
     [blueprints],
@@ -404,8 +411,13 @@ export function AutomationsPage() {
   useEffect(() => {
     if (!selectedObsScene && obsScenes[0]?.name) setSelectedObsScene(obsScenes[0].name);
     if (!selectedObsSource && obsSources[0]?.name) setSelectedObsSource(obsSources[0].name);
-    if (!selectedObsFilter && obsFilters[0]?.name) setSelectedObsFilter(obsFilters[0].name);
-  }, [obsFilters, obsScenes, obsSources, selectedObsFilter, selectedObsScene, selectedObsSource]);
+  }, [obsScenes, obsSources, selectedObsScene, selectedObsSource]);
+
+  useEffect(() => {
+    if (!availableObsFilters.some((filter) => filter.name === selectedObsFilter)) {
+      setSelectedObsFilter(availableObsFilters[0]?.name || '');
+    }
+  }, [availableObsFilters, selectedObsFilter]);
 
   const saveSettings = async () => {
     setSaving(true);
@@ -590,6 +602,8 @@ export function AutomationsPage() {
           action: selectedObsAction,
           sceneName: selectedObsScene || source?.sceneName || '',
           sourceName: selectedObsSource,
+          filterTargetType: selectedObsFilterTargetType,
+          filterTargetName: selectedObsFilterTargetName,
           filterName: selectedObsFilter,
           enabled: true,
         },
@@ -929,10 +943,18 @@ export function AutomationsPage() {
               {obsSources.map((source) => <option key={`${source.sceneName || 'global'}:${source.name}`} value={source.name}>{source.name}{source.sceneName ? ` · ${source.sceneName}` : ''}</option>)}
             </select>
           </Field>
+          {selectedObsAction.startsWith('filter.') ? (
+            <Field label="필터 대상 종류">
+              <select value={selectedObsFilterTargetType} onChange={(event) => setSelectedObsFilterTargetType(event.target.value === 'scene' ? 'scene' : 'source')} className="min-h-[var(--control-height)] w-full min-w-0 rounded-[var(--radius-control)] border bg-background px-[clamp(0.75rem,1.4vw,1rem)] text-sm">
+                <option value="source">소스</option>
+                <option value="scene">장면</option>
+              </select>
+            </Field>
+          ) : null}
           <Field label="필터">
             <select value={selectedObsFilter} onChange={(event) => setSelectedObsFilter(event.target.value)} className="min-h-[var(--control-height)] w-full min-w-0 rounded-[var(--radius-control)] border bg-background px-[clamp(0.75rem,1.4vw,1rem)] text-sm">
               <option value="">필터 선택</option>
-              {obsFilters.map((filter) => <option key={`${filter.sourceName || 'source'}:${filter.name}`} value={filter.name}>{filter.name}{filter.sourceName ? ` · ${filter.sourceName}` : ''}</option>)}
+              {availableObsFilters.map((filter) => <option key={`${filter.targetType || 'source'}:${filter.sourceName || 'source'}:${filter.name}`} value={filter.name}>{filter.name}{filter.sourceName ? ` · ${filter.sourceName}` : ''}</option>)}
             </select>
           </Field>
           <Button type="button" onClick={runObsAction} disabled={busyAction === 'obs.action'}>

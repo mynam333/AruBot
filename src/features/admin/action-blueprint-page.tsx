@@ -153,6 +153,7 @@ type NodeType =
   | 'start'
   | 'end'
   | 'chat'
+  | 'commandExecute'
   | 'wait'
   | 'condition'
   | 'setVariable'
@@ -251,7 +252,7 @@ type AutomationDiscoveryCache = {
   parameters?: Array<{ id: string; name: string; min?: number | null; max?: number | null; defaultValue?: number | null }>;
   scenes?: Array<{ id?: string; name: string; current?: boolean }>;
   sources?: Array<{ id?: string; name: string; sceneName?: string; inputKind?: string; enabled?: boolean }>;
-  filters?: Array<{ id?: string; name: string; sourceName?: string; kind?: string; enabled?: boolean }>;
+  filters?: Array<{ id?: string; name: string; sourceName?: string; targetType?: 'source' | 'scene'; kind?: string; enabled?: boolean }>;
   requests?: Array<{ id: string; name: string; group?: string }>;
   transitions?: Array<{ id?: string; name: string; current?: boolean }>;
   currentModel?: { loaded?: boolean; id?: string; name?: string };
@@ -403,6 +404,16 @@ const obsInputActions = new Set(['input.mute', 'input.unmute', 'input.toggleMute
 const obsMediaActions = new Set(['media.play', 'media.pause', 'media.stop', 'media.restart', 'media.next', 'media.previous']);
 const obsSupportedActions = new Set([...OBS_ACTION_OPTIONS.map((item) => item.value), 'source.visibility', 'filter.enabled']);
 
+const COMMAND_PLATFORM_OPTIONS = [
+  { value: 'chzzk', label: '치지직' },
+  { value: 'cime', label: '씨미' },
+  { value: 'youtube', label: 'YouTube' },
+] as const;
+
+function commandPlatformLabel(value: unknown) {
+  return COMMAND_PLATFORM_OPTIONS.find((item) => item.value === value)?.label || '플랫폼 미선택';
+}
+
 const nodeCatalog: Array<{
   type: NodeType;
   title: string;
@@ -416,6 +427,7 @@ const nodeCatalog: Array<{
   { type: 'start', title: '시작', body: '액션의 첫 순간', group: '필수', icon: Play, tone: 'mint', config: {} },
   { type: 'end', title: '종료', body: '마무리 응답', group: '필수', icon: BadgeCheck, tone: 'coral', config: { status: 'success', message: '완료' } },
   { type: 'chat', title: '채팅 전송', body: '채팅에 바로 말하기', group: '기본', icon: MessageSquare, tone: 'sky', config: { message: '{user.username}님, 실행되었습니다.' } },
+  { type: 'commandExecute', title: '명령어 직접 실행', body: '채팅 입력 없이 명령 결과 실행', group: '기본', icon: Code2, tone: 'violet', config: { platform: 'chzzk', command: '!명령어' } },
   { type: 'wait', title: '대기', body: '잠깐 쉬어가기', group: '기본', icon: CalendarClock, tone: 'neutral', config: { seconds: 1 } },
   { type: 'condition', title: '조건문', body: '상황에 따라 나누기', group: '기본', icon: GitBranch, tone: 'lemon', config: { left: '{user.points}', operator: 'gte', right: '1000' } },
   { type: 'setVariable', title: '임시 변수', body: '값을 잠시 보관', group: '기본', icon: Braces, tone: 'amber', config: { key: 'bonusPoint', mode: 'set', value: '100' } },
@@ -445,7 +457,7 @@ const nodeCatalog: Array<{
   { type: 'overlayHide', title: '오버레이 숨김', body: '표시 중인 오버레이 닫기', group: '연출', icon: Layers3, tone: 'neutral', config: { overlayId: '{node.overlay.overlayId}' } },
   { type: 'tts', title: 'TTS', body: '말할 내용 입력', group: '연출', icon: Volume2, tone: 'coral', config: { text: '{user.name}님 축하합니다!', voice: '', rate: 1, pitch: 1 } },
   { type: 'fx', title: 'FX 오버레이', body: '이미지/스티커/비디오/사운드', group: '연출', icon: Volume2, tone: 'coral', config: { kind: 'image', assetId: '', x: 50, y: 50, width: 28, height: 28, xUnit: '%', yUnit: '%', widthUnit: '%', heightUnit: '%', durationMs: 4000, enterCss: '', exitCss: '', chromaKey: false, chromaKeyColor: '#00ff00', volume: 1 } },
-  { type: 'obs', title: 'OBS', body: '장면/소스/필터 제어', group: '연동', icon: Radio, tone: 'mint', config: { connectionId: '', action: 'scene.switch', sceneName: '', sourceName: '', filterName: '', enabled: true } },
+  { type: 'obs', title: 'OBS', body: '장면/소스/필터 제어', group: '연동', icon: Radio, tone: 'mint', config: { connectionId: '', action: 'scene.switch', sceneName: '', sourceName: '', filterTargetType: 'source', filterTargetName: '', filterName: '', enabled: true } },
   { type: 'http', title: 'HTTP 요청', body: '외부 도구 깨우기', group: '연동', icon: Network, tone: 'neutral', config: { method: 'POST', url: '', body: '{}' } },
   { type: 'websocket', title: 'WebSocket', body: '로컬 도구에 메시지', group: '연동', icon: Network, tone: 'neutral', config: { url: '', message: '{}', timeoutMs: 8000 } },
   { type: 'udp', title: 'UDP', body: '장비/효과 실행', group: '연동', icon: Network, tone: 'neutral', config: { host: '127.0.0.1', port: 0, message: '' } },
@@ -618,6 +630,11 @@ function requiredConfigErrors(node: BlueprintNode) {
     if (!Number.isFinite(value) || value < min || value > max) errors.push(`${label}: ${field} 값이 올바른 숫자여야 합니다.`);
   };
   if (node.type === 'chat') need('message', '메시지');
+  if (node.type === 'commandExecute') {
+    need('platform', '실행 플랫폼');
+    need('command', '채팅 명령어');
+    if (!COMMAND_PLATFORM_OPTIONS.some((item) => item.value === cfg.platform)) errors.push(`${label}: 지원하지 않는 실행 플랫폼입니다.`);
+  }
   if (node.type === 'readVariable') need('path', '읽을 변수');
   if (node.type === 'condition' || node.type === 'rouletteCompare') {
     need('left', '좌변');
@@ -684,7 +701,9 @@ function requiredConfigErrors(node: BlueprintNode) {
       need('sourceName', '소스 이름');
     }
     if (obsFilterActions.has(action)) {
-      need('sourceName', '소스 이름');
+      const filterTargetType = String(cfg.filterTargetType || 'source');
+      if (!['source', 'scene'].includes(filterTargetType)) errors.push(`${label}: 필터 대상 종류가 올바르지 않습니다.`);
+      if (isBlank(cfg.filterTargetName) && isBlank(cfg.sourceName)) errors.push(`${label}: 필터 대상이 필요합니다.`);
       need('filterName', '필터 이름');
     }
     if (obsInputActions.has(action) || obsMediaActions.has(action)) need('sourceName', '소스/입력 이름');
@@ -882,6 +901,7 @@ function paletteIconClass(item: (typeof nodeCatalog)[number]) {
 function nodePreview(node: BlueprintNode) {
   if (node.type === 'condition' || node.type === 'rouletteCompare') return `${String(node.config.left || '')} ${String(node.config.operator || '')} ${String(node.config.right || '')}`.trim();
   if (node.type === 'chat') return String(node.config.message || '').slice(0, 54);
+  if (node.type === 'commandExecute') return `${commandPlatformLabel(node.config.platform)} · ${String(node.config.command || '명령어 미설정')}`;
   if (node.type === 'tts') return String(node.config.text || '').slice(0, 54);
   if (node.type === 'wait') return `${String(node.config.seconds || 0)}초 대기`;
   if (node.type === 'loop') return `${String(node.config.count || 1)}회 반복`;
@@ -890,7 +910,7 @@ function nodePreview(node: BlueprintNode) {
   if (node.type === 'websocket') return String(node.config.url || 'WSS URL 미설정');
   if (node.type === 'udp') return `${String(node.config.host || '127.0.0.1')}:${String(node.config.port || '포트 미설정')}`;
   if (node.type === 'obs') {
-    const parts = [String(node.config.action || 'scene.switch'), node.config.sceneName, node.config.sourceName, node.config.filterName]
+    const parts = [String(node.config.action || 'scene.switch'), node.config.sceneName, node.config.filterTargetName || node.config.sourceName, node.config.filterName]
       .map((item) => String(item || '').trim())
       .filter(Boolean);
     return parts.join(' · ') || 'OBS 동작 미설정';
@@ -923,6 +943,7 @@ function nodeOutputHints(node: Pick<BlueprintNode, 'id' | 'type'>) {
   const byType: Partial<Record<NodeType, string[]>> = {
     start: ['context}'],
     chat: ['sent}', 'platform}', 'text}'],
+    commandExecute: ['executed}', 'platform}', 'matchedKeyword}', 'ruleName}', 'response}'],
     wait: ['waitedMs}'],
     timer: ['delayMs}', 'queued}'],
     condition: ['passed}', 'left}', 'right}'],
@@ -968,6 +989,10 @@ const outputHintDescriptions: Record<string, { title: string; description: strin
   sent: { title: '전송 여부', description: '채팅 메시지를 실제 플랫폼으로 전송했는지 나타냅니다.' },
   platform: { title: '플랫폼', description: '이 노드가 대상으로 삼은 플랫폼 이름입니다.' },
   text: { title: '텍스트', description: '노드가 전송하거나 표시한 최종 문구입니다.' },
+  executed: { title: '실행 여부', description: '저장된 명령어를 찾아 결과 동작을 실행했는지 나타냅니다.' },
+  matchedKeyword: { title: '일치한 명령어', description: '입력값과 일치한 저장 명령어 키워드입니다.' },
+  ruleName: { title: '명령어 이름', description: '실행된 명령어 규칙의 관리용 이름입니다.' },
+  response: { title: '명령 결과 문구', description: '특수 동작을 처리한 뒤 남은 일반 응답 문구입니다. 채팅 전송 노드에서 사용할 수 있습니다.' },
   waitedMs: { title: '대기 시간', description: '대기 노드가 기다린 밀리초 값입니다.' },
   delayMs: { title: '예약 시간', description: '예약 또는 타이머로 밀린 시간입니다.' },
   queued: { title: '대기열 등록', description: '로컬 프로그램 또는 오버레이 작업 대기열에 들어갔는지 나타냅니다.' },
@@ -3238,6 +3263,22 @@ function ConfigFields({
     );
   }
   if (node.type === 'chat') return <LongField label="메시지" value={String(cfg.message || '')} onChange={(value) => onChange('message', value)} />;
+  if (node.type === 'commandExecute') {
+    return (
+      <div className="grid gap-3">
+        <SelectField
+          label="실행 플랫폼"
+          value={String(cfg.platform || 'chzzk')}
+          onChange={(value) => onChange('platform', value)}
+          options={COMMAND_PLATFORM_OPTIONS.map((item) => ({ ...item }))}
+        />
+        <Field label="채팅 명령어" value={String(cfg.command || '')} onChange={(value) => onChange('command', value)} />
+        <div className="rounded-[var(--radius-control)] border bg-background/70 p-3 text-xs leading-5 text-muted-foreground">
+          명령어 자체와 남은 일반 응답은 채팅에 보내지 않습니다. 룰렛·액션·방송 변경 같은 결과 동작은 바로 실행하며, 일반 응답은 이 노드의 response 출력값으로 이어서 사용할 수 있습니다.
+        </div>
+      </div>
+    );
+  }
   if (node.type === 'tts') {
     return (
       <div className="grid gap-3">
@@ -3574,15 +3615,20 @@ function ConfigFields({
     const hotkeys = discovery.hotkeys || [];
     const transitions = discovery.transitions || [];
     const action = String(cfg.action || 'scene.switch');
+    const filterTargetType = cfg.filterTargetType === 'scene' ? 'scene' : 'source';
+    const filterTargetName = String(cfg.filterTargetName || cfg.sourceName || '');
     const needsScene = obsSceneActions.has(action) || obsSceneSourceActions.has(action);
-    const needsSource = obsSceneSourceActions.has(action) || obsFilterActions.has(action) || obsInputActions.has(action) || obsMediaActions.has(action);
+    const needsSource = obsSceneSourceActions.has(action) || obsInputActions.has(action) || obsMediaActions.has(action);
     const needsFilter = obsFilterActions.has(action);
     const sceneOptions = scenes.map((scene) => ({ value: scene.name, label: `${scene.name}${scene.current ? ' · 현재' : ''}` }));
     const sourceOptions = sources
       .filter((source) => !obsSceneSourceActions.has(action) || !cfg.sceneName || source.sceneName === cfg.sceneName || !source.sceneName)
+      .filter((source, index, array) => array.findIndex((item) => item.name === source.name) === index)
       .map((source) => ({ value: source.name, label: `${source.name}${source.sceneName ? ` · ${source.sceneName}` : ''}` }));
+    const filterTargetOptions = filterTargetType === 'scene' ? sceneOptions : sourceOptions;
     const filterOptions = filters
-      .filter((filter) => !cfg.sourceName || filter.sourceName === cfg.sourceName || !filter.sourceName)
+      .filter((filter) => (filter.targetType || 'source') === filterTargetType)
+      .filter((filter) => !filterTargetName || filter.sourceName === filterTargetName)
       .map((filter) => ({ value: filter.name, label: `${filter.name}${filter.sourceName ? ` · ${filter.sourceName}` : ''}` }));
     const transitionOptions = transitions.map((transition) => ({ value: transition.name, label: `${transition.name}${transition.current ? ' · 현재' : ''}` }));
     const hotkeyOptions = hotkeys.map((hotkey) => ({ value: hotkey.name || hotkey.id, label: hotkey.name || hotkey.id }));
@@ -3628,6 +3674,33 @@ function ConfigFields({
             onChange={(value) => onChange('sourceName', value)}
             placeholder={sourceOptions.length ? '소스 또는 입력 선택' : 'OBS 목록을 먼저 불러오세요'}
             options={sourceOptions}
+          />
+        ) : null}
+        {needsFilter ? (
+          <SelectField
+            label="필터 대상 종류"
+            value={filterTargetType}
+            onChange={(value) => {
+              onChange('filterTargetType', value);
+              onChange('filterTargetName', '');
+              onChange('filterName', '');
+            }}
+            options={[
+              { value: 'source', label: '소스' },
+              { value: 'scene', label: '장면' },
+            ]}
+          />
+        ) : null}
+        {needsFilter ? (
+          <SelectField
+            label={filterTargetType === 'scene' ? '필터 대상 장면' : '필터 대상 소스'}
+            value={filterTargetName}
+            onChange={(value) => {
+              onChange('filterTargetName', value);
+              onChange('filterName', '');
+            }}
+            placeholder={filterTargetOptions.length ? `${filterTargetType === 'scene' ? '장면' : '소스'} 선택` : 'OBS 목록을 먼저 불러오세요'}
+            options={filterTargetOptions}
           />
         ) : null}
         {needsFilter ? (

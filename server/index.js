@@ -9,7 +9,7 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
-import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, getBotSettingsStrict, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, revokeSession, getSessionUserId, listChannelPoints, listChannelPointsPage, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, deductChannelPointsIfEnough, getChannelPoints, getChannelPointBalanceSummary, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, incrementBotCounter, issueApiKey, revokeApiKey, getOwnerPidForApiKey, issueApiWebSocketTicket, consumeApiWebSocketTicket, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, findSidByChannelViewerTokenSupabase, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, listPlatformAccountsForUserIds, findAppUserIdByChannelUid, findExactPublicChannelIdentity, getPublicChannelPointsSnapshot, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, markPlatformTokenValidated, deletePlatformTokens, deletePlatformAccount, getAppUserAdminStatus, getArubotAdminConsoleSnapshot, getArubotAdminStreamerFeatureDetails, getYoutubeBotProfile, upsertYoutubeBotProfile, updateYoutubeBotProfileTokens, markYoutubeBotProfileStatus, deleteYoutubeBotProfile, getYoutubeStreamerChannel, upsertYoutubeStreamerChannel, markYoutubeStreamerChannelModeratorRegistered, deleteYoutubeStreamerChannel, listYoutubeStreamerChannelsByYoutubeChannelId, updateYoutubeStreamerChannelLive, updateYoutubeStreamerChannelWebsub, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, claimBotRuleCooldown, enqueueDurableRuntimeJob, enqueuePaidDurableRuntimeJob, claimDurableRuntimeJobs, completeDurableRuntimeJob, failDurableRuntimeJob, claimRuntimeLease, releaseRuntimeLease, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps, recordBotEventLog, listBotEventLogs, getBotEventLog, insertDrawingDonationItem, listDrawingDonationItems, getDrawingDonationItem, getCurrentDrawingDonationItem, updateDrawingDonationItemStatus, deleteDrawingDonationItem, reorderDrawingDonationItems, uploadDrawingDonationObject, deleteDrawingDonationObjectKeys, deleteAccountData, cleanupPrivacyRetentionData, validateSecretEncryptionConfig, getPgPoolStatus, checkDatabaseReady, closeDatabaseConnections } from './supabase.js';
+import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, getBotSettingsStrict, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, revokeSession, getSessionUserId, listChannelPoints, listChannelPointsPage, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, deductChannelPointsIfEnough, getChannelPoints, getChannelPointBalanceSummary, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, getUserAttendanceSummary, incrementBotCounter, issueApiKey, revokeApiKey, getOwnerPidForApiKey, issueApiWebSocketTicket, consumeApiWebSocketTicket, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, findSidByChannelViewerTokenSupabase, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, listPlatformAccountsForUserIds, findAppUserIdByChannelUid, findExactPublicChannelIdentity, getPublicChannelPointsSnapshot, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, markPlatformTokenValidated, deletePlatformTokens, deletePlatformAccount, getAppUserAdminStatus, getArubotAdminConsoleSnapshot, getArubotAdminStreamerFeatureDetails, getYoutubeBotProfile, upsertYoutubeBotProfile, updateYoutubeBotProfileTokens, markYoutubeBotProfileStatus, deleteYoutubeBotProfile, getYoutubeStreamerChannel, upsertYoutubeStreamerChannel, markYoutubeStreamerChannelModeratorRegistered, deleteYoutubeStreamerChannel, listYoutubeStreamerChannelsByYoutubeChannelId, updateYoutubeStreamerChannelLive, updateYoutubeStreamerChannelWebsub, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, claimBotRuleCooldown, enqueueDurableRuntimeJob, enqueuePaidDurableRuntimeJob, claimDurableRuntimeJobs, completeDurableRuntimeJob, failDurableRuntimeJob, claimRuntimeLease, releaseRuntimeLease, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps, recordBotEventLog, listBotEventLogs, getBotEventLog, insertDrawingDonationItem, listDrawingDonationItems, getDrawingDonationItem, getCurrentDrawingDonationItem, updateDrawingDonationItemStatus, deleteDrawingDonationItem, reorderDrawingDonationItems, uploadDrawingDonationObject, deleteDrawingDonationObjectKeys, deleteAccountData, cleanupPrivacyRetentionData, validateSecretEncryptionConfig, getPgPoolStatus, checkDatabaseReady, closeDatabaseConnections } from './supabase.js';
 import { confirmPlatformTokenConsent, confirmYoutubeBotProfileConsent, countActiveDurableRuntimeJobs, touchPlatformTokenUsed, touchYoutubeBotProfileUsed } from './supabase.js';
 import { createPlatformProfileService } from './platform-profiles.js';
 import { executeAndStripLiveChangeTokens, filterLiveInfoByProvider, selectCategorySearchResult } from './live-command-actions.js';
@@ -33,6 +33,17 @@ import { getKstCalendarDate, resolveAttendanceDate } from './attendance-calendar
 import { DEFAULT_ATTENDANCE_MESSAGE, renderAttendanceTemplate } from './attendance-message.js';
 import { executeAttendanceSpecialOperations, extractAttendanceSpecialVariables } from './attendance-special-variables.js';
 import { prepareCounterVariablePlan, resolveCounterVariablePlan, stripUnplannedCounterVariables } from './counter-variables.js';
+import {
+  buildBlueprintScope,
+  compareBlueprintValues,
+  evaluateBlueprintValue,
+  getBlueprintResolverMemoKey,
+  hydrateBlueprintReadContext,
+  mergeBlueprintReadContexts,
+  normalizeBlueprintReadContext,
+  renderBlueprintTemplate,
+  renderBlueprintValueDeep,
+} from './action-blueprint-values.js';
 import {
   planLiveSessionTransition,
   primeProviderLiveObservations,
@@ -8493,84 +8504,6 @@ app.get('/api/roulette/logs', async (req, res) => {
   }
 });
 
-function getPathValue(source, pathExpression) {
-  const path = String(pathExpression || '').replace(/^\{|\}$/g, '').trim();
-  if (!path) return undefined;
-  return path.split('.').reduce((value, key) => {
-    if (value == null) return undefined;
-    return value[key];
-  }, source);
-}
-
-function buildBlueprintScope(context = {}, flow = {}, nodeOutputs = {}) {
-  return {
-    ...(context || {}),
-    flow,
-    node: nodeOutputs,
-    user: context.user || {},
-    channel: context.channel || {},
-    trigger: context.trigger || {},
-    roulette: context.roulette || {},
-    donation: context.donation || {},
-    attendance: context.attendance || {},
-    live: context.live || {}
-  };
-}
-
-function renderBlueprintTemplate(value, scope = {}) {
-  if (value == null) return '';
-  return String(value).replace(/\{([a-zA-Z0-9_.-]+)\}/g, (match, pathExpression) => {
-    const resolved = getPathValue(scope, pathExpression);
-    if (resolved == null) return '';
-    if (typeof resolved === 'object') return JSON.stringify(resolved);
-    return String(resolved);
-  });
-}
-
-function renderBlueprintValueDeep(value, scope = {}) {
-  if (typeof value === 'string') return renderBlueprintTemplate(value, scope);
-  if (Array.isArray(value)) return value.map((item) => renderBlueprintValueDeep(item, scope));
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, renderBlueprintValueDeep(item, scope)]));
-  }
-  return value;
-}
-
-function evaluateBlueprintValue(value, scope = {}) {
-  if (typeof value === 'number' || typeof value === 'boolean') return value;
-  if (value == null) return '';
-  const rendered = renderBlueprintTemplate(value, scope).trim();
-  if (/^(true|false)$/i.test(rendered)) return rendered.toLowerCase() === 'true';
-  if (/^-?\d+(\.\d+)?$/.test(rendered)) return Number(rendered);
-  if (/^[\d\s+\-*/().%]+$/.test(rendered) && /[+\-*/%]/.test(rendered)) {
-    try {
-      // Safe after strict whitelist: numbers, spaces, and arithmetic operators only.
-      const result = Function(`"use strict"; return (${rendered});`)();
-      return Number.isFinite(Number(result)) ? Number(result) : rendered;
-    } catch { }
-  }
-  return rendered;
-}
-
-function compareBlueprintValues(left, operator, right) {
-  const op = String(operator || 'eq');
-  if (op === 'exists') return left != null && left !== '';
-  if (op === 'empty') return left == null || left === '';
-  if (op === 'contains') return String(left ?? '').includes(String(right ?? ''));
-  if (op === 'regex') {
-    try { return new RegExp(String(right || '')).test(String(left ?? '')); } catch { return false; }
-  }
-  const ln = Number(left);
-  const rn = Number(right);
-  const bothNumbers = Number.isFinite(ln) && Number.isFinite(rn);
-  if (op === 'gt') return bothNumbers ? ln > rn : String(left) > String(right);
-  if (op === 'gte') return bothNumbers ? ln >= rn : String(left) >= String(right);
-  if (op === 'lt') return bothNumbers ? ln < rn : String(left) < String(right);
-  if (op === 'lte') return bothNumbers ? ln <= rn : String(left) <= String(right);
-  if (op === 'neq') return String(left) !== String(right);
-  return String(left) === String(right);
-}
-
 function blueprintInputPorts(node = {}) {
   return node.type === 'start' ? [] : ['in'];
 }
@@ -8614,6 +8547,8 @@ function isBlankConfigValue(value) {
   return value == null || String(value).trim() === '';
 }
 
+const BLUEPRINT_COMMAND_PLATFORMS = new Set(['chzzk', 'cime', 'youtube']);
+
 function validateBlueprintNodeConfig(node = {}) {
   const errors = [];
   const config = node.config || {};
@@ -8627,6 +8562,13 @@ function validateBlueprintNodeConfig(node = {}) {
     if (!Number.isFinite(value) || value < min || value > max) errors.push(`${label}: ${field} 값이 올바른 숫자여야 합니다.`);
   };
   if (node.type === 'chat') need('message', '메시지');
+  if (node.type === 'commandExecute') {
+    need('platform', '실행 플랫폼');
+    need('command', '채팅 명령어');
+    if (!BLUEPRINT_COMMAND_PLATFORMS.has(String(config.platform || '').trim().toLowerCase())) {
+      errors.push(`${label}: 지원하지 않는 실행 플랫폼입니다.`);
+    }
+  }
   if (node.type === 'readVariable') need('path', '읽을 변수');
   if (node.type === 'condition' || node.type === 'rouletteCompare') {
     need('left', '좌변');
@@ -8701,7 +8643,9 @@ function validateBlueprintNodeConfig(node = {}) {
       need('sourceName', '소스 이름');
     }
     if (OBS_FILTER_ACTIONS.has(action)) {
-      need('sourceName', '소스 이름');
+      const filterTargetType = String(config.filterTargetType || 'source');
+      if (!['source', 'scene'].includes(filterTargetType)) errors.push(`${label}: 필터 대상 종류가 올바르지 않습니다.`);
+      if (isBlankConfigValue(config.filterTargetName) && isBlankConfigValue(config.sourceName)) errors.push(`${label}: 필터 대상이 필요합니다.`);
       need('filterName', '필터 이름');
     }
     if (OBS_INPUT_ACTIONS.has(action) || OBS_MEDIA_ACTIONS.has(action)) need('sourceName', '소스/입력 이름');
@@ -8789,11 +8733,117 @@ function validateBlueprintGraph(nodes = [], edges = []) {
 
 async function resolveBlueprintChannelUid(ownerUserId, context = {}) {
   const direct = context.channelUid || context.channel?.channelUid || context.channel?.id || context.roulette?.channelUid;
-  if (direct) return String(direct);
   const sid = `user:${ownerUserId}`;
-  const settings = await getBotSettings(sid).catch(() => null) || {};
-  const uids = await resolveChzzkChannelUidsForSid(sid, settings);
-  return uids[0] || ownerUserId;
+  if (context.dryRun === true || context.source === 'manual_test') {
+    return String(direct || ownerUserId);
+  }
+  const provider = String(
+    context.trigger?.platform
+    || context.platform
+    || context.chatPost?.provider
+    || context.chatPost?.platform
+    || ''
+  ).trim().toLowerCase();
+  const supportedProvider = ['chzzk', 'cime', 'youtube'].includes(provider) ? provider : '';
+  if (!supportedProvider && direct) return String(direct);
+  const ownedChannelUid = await resolveStreamerUidForSid(sid, supportedProvider);
+  if (ownedChannelUid) return String(ownedChannelUid);
+  const error = new Error('The action channel could not be resolved for the current platform');
+  error.code = 'blueprint_channel_identity_unavailable';
+  throw error;
+}
+
+const BLUEPRINT_VARIABLE_LOOKUP_TIMEOUT_MS = Math.max(
+  1000,
+  Math.min(15000, Number(process.env.BLUEPRINT_VARIABLE_LOOKUP_TIMEOUT_MS || 5000))
+);
+
+async function withBlueprintVariableDeadline(family, loader) {
+  let timer = null;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(loader),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          const error = new Error(`The ${family} blueprint variable lookup timed out`);
+          error.code = `blueprint_${family}_timeout`;
+          reject(error);
+        }, BLUEPRINT_VARIABLE_LOOKUP_TIMEOUT_MS);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function createActionBlueprintVariableResolvers(ownerUserId, sid) {
+  const lookupOptions = () => ({
+    deadlineAt: Date.now() + BLUEPRINT_VARIABLE_LOOKUP_TIMEOUT_MS,
+    strict: true,
+  });
+  return {
+    loadUserPoints: ({ context, userId }) => withBlueprintVariableDeadline('user_points', async () => {
+      const channelUid = await resolveBlueprintChannelUid(ownerUserId, context);
+      if (!channelUid) {
+        const error = new Error('A channel identity is required to resolve user points');
+        error.code = 'blueprint_user_points_identity_required';
+        throw error;
+      }
+      return getChannelPoints(channelUid, userId);
+    }),
+    loadAttendanceSummary: ({ userId }) => withBlueprintVariableDeadline(
+      'attendance',
+      () => getUserAttendanceSummary(sid, userId, getKstDateString())
+    ),
+    loadFollowedAt: ({ provider, userId, context }) => withBlueprintVariableDeadline('follow', async () => {
+      const followedAt = await findUserFollowedAtForSid(
+        sid,
+        userId,
+        context.user?.username || '',
+        provider,
+        lookupOptions()
+      );
+      if (!followedAt) return { followedAt: null, followedDays: 0 };
+      const date = String(followedAt).slice(0, 10);
+      const start = new Date(`${date}T00:00:00Z`).getTime();
+      const end = new Date(`${getKstDateString()}T00:00:00Z`).getTime();
+      const followedDays = Number.isFinite(start) && Number.isFinite(end)
+        ? Math.max(0, Math.floor((end - start) / 86400000)) + 1
+        : 0;
+      return { followedAt: date, followedDays };
+    }),
+    loadSubscriptionMonths: ({ provider, userId }) => withBlueprintVariableDeadline(
+      'subscription',
+      () => getUserSubscriptionMonthsForSid(sid, userId, provider, lookupOptions())
+    ),
+    loadLiveInfo: ({ provider }) => withBlueprintVariableDeadline('live', async () => {
+      const supportedProvider = ['chzzk', 'cime', 'youtube'].includes(provider) ? provider : '';
+      const info = await getLiveInfoForSid(sid, { provider: supportedProvider });
+      const scoped = supportedProvider ? filterLiveInfoByProvider(info, supportedProvider) : info;
+      if (!scoped) {
+        const error = new Error('The current platform live information is unavailable');
+        error.code = 'blueprint_live_unavailable';
+        throw error;
+      }
+      const { elapsed, elapsedKo } = formatElapsedStrings(scoped.startedAtTs);
+      const notLive = '[방송 중이 아닙니다.]';
+      return {
+        live: scoped.live === true,
+        title: scoped.title || '',
+        category: scoped.category || '',
+        viewers: scoped.viewers ?? '',
+        startedAt: scoped.startedAt || '',
+        elapsed: elapsed || notLive,
+        elapsed_ko: elapsedKo || notLive,
+        channel: scoped.channel || '',
+      };
+    }),
+    loadFollowerCount: ({ provider }) => withBlueprintVariableDeadline(
+      'followers',
+      () => getChannelFollowersCountForSid(sid, provider, lookupOptions())
+    ),
+  };
 }
 
 async function getRuntimeActionBlueprint(ownerUserId, idOrSlug) {
@@ -8850,7 +8900,287 @@ async function executeBlueprintChatNode(ownerUserId, sid, node, text, context = 
   return { sent: false, reason: 'chat_session_unavailable' };
 }
 
-async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}) {
+function makeBlueprintCommandChatPost(ownerUserId, sid, platform, username, userId) {
+  if (platform === 'cime') {
+    return makeCimeChatPost(ownerUserId, username, {
+      liveManageActorId: userId || null,
+      counterUserId: userId || null,
+      suppressResultChat: true,
+    });
+  }
+  if (platform === 'youtube') {
+    const entry = youtubeSessionStore.get(ownerUserId) || null;
+    return makeYoutubeChatPost(ownerUserId, entry?.liveChatId || null, username, {
+      counterUserId: userId || null,
+      suppressResultChat: true,
+    });
+  }
+  const entry = sessionStore.get(sid) || null;
+  return makeChzzkChatPost(entry?.sessionKey || null, null, username, {
+    liveManageActorId: userId || null,
+    counterUserId: userId || null,
+    suppressResultChat: true,
+  });
+}
+
+async function resolveBlueprintCommandChannelUid(ownerUserId, sid, platform, context = {}) {
+  const contextPlatform = String(context.platform || context.trigger?.platform || context.chatPost?.provider || '').trim().toLowerCase();
+  const direct = context.channelUid || context.channel?.channelUid || context.channel?.id || context.roulette?.channelUid;
+  if (direct && contextPlatform === platform) return String(direct);
+  if (platform === 'cime') {
+    const entry = cimeSessionStore.get(ownerUserId) || null;
+    return String(entry?.channelId || await getCimeChannelId(ownerUserId).catch(() => '') || '');
+  }
+  if (platform === 'youtube') {
+    const entry = youtubeSessionStore.get(ownerUserId) || null;
+    return String(entry?.channelId || '');
+  }
+  const liveInfo = await getLiveInfoForSid(sid, { provider: 'chzzk' }).catch(() => null);
+  return String(liveInfo?.channelId || await resolveBlueprintChannelUid(ownerUserId, context).catch(() => '') || '');
+}
+
+async function emitBlueprintCommandEvent(sid, platform, payload) {
+  let targetPid = sid;
+  if (platform === 'chzzk') {
+    const owner = await getOwnerInfoForSid(sid).catch(() => null);
+    if (owner?.channelId) targetPid = `user:${String(owner.channelId)}`;
+  }
+  try { emitWarudoEvent(targetPid, payload); } catch { }
+  try { broadcastToDesktop(targetPid, { ...payload, metadata: payload.executionContext }); } catch { }
+}
+
+function summarizeBlueprintCommandActionJobs(jobs = []) {
+  return (Array.isArray(jobs) ? jobs : []).map((job) => ({
+    kind: job?.kind || null,
+    actionId: job?.actionId || null,
+    blueprintId: job?.blueprintId || job?.result?.run?.blueprintId || null,
+    runId: job?.runId || job?.result?.run?.id || null,
+    jobId: job?.jobId || job?.job?.id || null,
+    ok: job?.ok ?? null,
+    error: job?.error || null,
+  }));
+}
+
+async function executeBlueprintCommandNode({
+  ownerUserId,
+  sid,
+  platform,
+  commandText,
+  context = {},
+  dryRun = false,
+  blueprint = {},
+  node = {},
+  run = {},
+}) {
+  const selectedPlatform = String(platform || '').trim().toLowerCase();
+  const command = String(commandText || '').trim().slice(0, 500);
+  if (!BLUEPRINT_COMMAND_PLATFORMS.has(selectedPlatform)) throw new Error('blueprint_command_platform_invalid');
+  if (!command) throw new Error('blueprint_command_required');
+
+  const rules = await getRuntimeBotRulesWithDefaults(sid);
+  const candidate = getCommandRuleMatches(command, rules).find(({ rule }) => rule && rule.enabled !== false) || null;
+  if (!candidate) {
+    return { executed: false, platform: selectedPlatform, command, reason: 'command_not_found', response: '' };
+  }
+
+  const rule = candidate.rule;
+  const commandMatch = candidate.match;
+  if (!dryRun && rule.liveOnly === true) {
+    const liveInfo = await getLiveInfoForSid(sid, { provider: selectedPlatform }).catch(() => null);
+    if (!liveInfo?.live) {
+      return {
+        executed: false,
+        platform: selectedPlatform,
+        command,
+        matchedKeyword: commandMatch.matchedText,
+        ruleId: rule.id || null,
+        ruleName: rule.name || null,
+        reason: 'command_live_only',
+        response: '',
+      };
+    }
+  }
+
+  const responses = Array.isArray(rule.responses) ? rule.responses.filter((value) => typeof value === 'string' && value.length > 0) : [];
+  const selectedResponse = responses.length ? responses[Math.floor(Math.random() * responses.length)] : '';
+  const counterPlan = prepareCounterVariablePlan(selectedResponse);
+  let response = counterPlan.text;
+  const argsText = commandMatch.argsText;
+  const args = argsText ? argsText.split(/\s+/).map(String).filter(Boolean) : [];
+  const userId = String(context.user?.userId || context.user?.id || `blueprint:${ownerUserId}`);
+  const username = String(context.user?.username || context.user?.name || context.user?.nickname || '블루프린트');
+  const channelUid = await resolveBlueprintCommandChannelUid(ownerUserId, sid, selectedPlatform, context);
+  const chatPost = makeBlueprintCommandChatPost(ownerUserId, sid, selectedPlatform, username, userId);
+  const baseOutput = {
+    platform: selectedPlatform,
+    command,
+    matchedKeyword: commandMatch.matchedText,
+    ruleId: rule.id || null,
+    ruleName: rule.name || null,
+    args,
+    channelUid: channelUid || null,
+    commandCostDeducted: false,
+  };
+
+  if (dryRun) {
+    return {
+      ...baseOutput,
+      executed: false,
+      planned: true,
+      dryRun: true,
+      response: selectedResponse,
+      features: [],
+      actions: [],
+    };
+  }
+
+  const features = [];
+  const liveChangeResult = await executeCommandLiveChangeTokens(sid, response, {
+    provider: selectedPlatform,
+    argsText,
+    canManageLive: selectedPlatform === 'youtube' ? false : true,
+  });
+  response = liveChangeResult.text;
+  if (liveChangeResult.executed.includes('title_change')) features.push('live_title_change');
+  if (liveChangeResult.executed.includes('game_change')) features.push('live_game_change');
+
+  try {
+    response = await substituteAllPlaceholders(response, sid, userId, username, { provider: selectedPlatform });
+  } catch (error) {
+    console.warn('[Blueprint Command] Placeholder substitution failed:', error?.message || error);
+  }
+
+  const commandPayload = {
+    type: 'command',
+    cmd: commandMatch.matchedText,
+    args,
+    from: { userId, username },
+    at: Date.now(),
+    source: 'blueprint-command',
+    executionContext: {
+      source: 'blueprint-command',
+      platform: selectedPlatform,
+      pointsDeducted: false,
+      commandCost: Math.max(0, Number(rule.pointsCost || 0)),
+      blueprintId: blueprint.id || null,
+      nodeId: node.id || null,
+      runId: run.id || null,
+    },
+  };
+  await emitBlueprintCommandEvent(sid, selectedPlatform, commandPayload);
+
+  const videoDonationToken = /\$\{\s*video_donation\s*\}/i;
+  const videoDonationTokens = /\$\{\s*video_donation\s*\}/ig;
+  if (videoDonationToken.test(response)) {
+    response = await enqueueVideoDonationFromArgs({
+      sid,
+      channelUid: channelUid || null,
+      userId,
+      username,
+      args,
+      response,
+      vdReAll: videoDonationTokens,
+      context: {
+        source: 'blueprint-command',
+        provider: selectedPlatform,
+        command: { keyword: commandMatch.matchedText, ruleId: rule.id || null, ruleName: rule.name || null },
+        user: { userId, username },
+        eventId: run.id ? `${run.id}:${node.id || 'command'}` : null,
+      },
+    });
+    features.push('video_donation');
+  }
+
+  const rouletteToken = /\$\{\s*roulette::([^}]+)\s*\}/i;
+  const rouletteTokens = /\$\{\s*roulette::([^}]+)\s*\}/ig;
+  const rouletteMatch = String(response || '').match(rouletteToken);
+  if (rouletteMatch) {
+    const rouletteName = String(rouletteMatch[1] || '').trim();
+    response = String(response || '').replace(rouletteTokens, '').trim();
+    const requestedCount = parseInt(args[0] || '', 10);
+    const count = Number.isFinite(requestedCount) ? Math.max(1, Math.min(10, requestedCount)) : 1;
+    if (rouletteName) {
+      const batchId = count > 1 ? `${Date.now()}_${Math.random().toString(36).slice(2, 6)}` : null;
+      const rouletteChatPost = { ...chatPost, suppressResultChat: true, batchId, batchCount: count };
+      for (let index = 0; index < count; index += 1) {
+        await enqueueRouletteSpin(sid, {
+          name: rouletteName,
+          userId,
+          username,
+          chatPost: rouletteChatPost,
+          instant: index > 0,
+          eventContext: {
+            source: 'blueprint-command',
+            triggerName: commandMatch.matchedText,
+            pointDelta: 0,
+          },
+        });
+      }
+      features.push('roulette');
+    }
+  }
+
+  const actionResult = await executeAndStripActionVariableTokens(sid, response, {
+    ...context,
+    source: 'blueprint-command',
+    platform: selectedPlatform,
+    trigger: {
+      ...(context.trigger || {}),
+      message: command,
+      keyword: commandMatch.matchedText,
+      platform: selectedPlatform,
+    },
+    command: {
+      keyword: commandMatch.matchedText,
+      text: command,
+      ruleId: rule.id || null,
+      ruleName: rule.name || null,
+    },
+    user: { ...(context.user || {}), userId, username },
+    chatPost,
+    channelUid: channelUid || null,
+    channel: { ...(context.channel || {}), channelUid: channelUid || null },
+  });
+  if (actionResult.used) {
+    response = actionResult.text;
+    features.push('action');
+  }
+
+  response = String(await resolveCommandCounterVariables(counterPlan, response, {
+    sid,
+    provider: selectedPlatform,
+    userId,
+  }) || '').trim();
+
+  await recordCommandExecutionLog(sid, {
+    executed: true,
+    provider: selectedPlatform,
+    channelUid: channelUid || null,
+    userId,
+    username,
+    triggerName: commandMatch.matchedText,
+    targetName: rule.name || null,
+    ruleId: rule.id || null,
+    ruleName: rule.name || null,
+    args,
+    pointDelta: 0,
+    features,
+    actionJobs: actionResult.jobs || [],
+    source: 'blueprint-command',
+    resultValue: response || null,
+    summary: `블루프린트 명령어 직접 실행: ${commandMatch.matchedText}${rule.name ? ` · ${rule.name}` : ''}`,
+  });
+
+  return {
+    ...baseOutput,
+    executed: true,
+    response,
+    features,
+    actions: summarizeBlueprintCommandActionJobs(actionResult.jobs),
+  };
+}
+
+async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}, internal = {}) {
   const blueprint = await getRuntimeActionBlueprint(ownerUserId, idOrSlug);
   if (!blueprint || blueprint.enabled === false) return { ok: false, error: 'blueprint_not_found' };
   const dryRun = context.dryRun === true || context.source === 'manual_test';
@@ -8871,6 +9201,11 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}) {
     context,
     status: 'running'
   });
+  let runtimeContext = normalizeBlueprintReadContext(context);
+  const blueprintVariableMemo = internal.blueprintVariableMemo instanceof Map
+    ? internal.blueprintVariableMemo
+    : new Map();
+  const blueprintVariableResolvers = createActionBlueprintVariableResolvers(ownerUserId, sid);
   const nodeMap = new Map(nodes.map((node) => [String(node.id), node]));
   const edgeFrom = (nodeId, port = 'out') => edges.find((edge) => String(edge.source) === String(nodeId) && String(edge.sourcePort || 'out') === String(port));
   const flow = {};
@@ -8896,20 +9231,47 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}) {
     if (!node || node.enabled === false) return null;
     const startedAt = Date.now();
     const config = node.config || {};
-    const scope = buildBlueprintScope(context, flow, nodeOutputs);
     let output = {};
     let nextPort = 'out';
     executed.push(node.id);
     try {
+      const hydratedContext = await hydrateBlueprintReadContext({
+        context: runtimeContext,
+        value: config,
+        dryRun,
+        resolvers: blueprintVariableResolvers,
+        memo: blueprintVariableMemo,
+        currentDate: getKstDateString(),
+      });
+      runtimeContext = mergeBlueprintReadContexts(runtimeContext, hydratedContext);
+      const scope = buildBlueprintScope(runtimeContext, flow, nodeOutputs);
       if (node.type === 'start') {
-        output = { context };
+        output = { context: runtimeContext };
       } else if (node.type === 'end') {
         output = { status: config.status || 'success', message: renderBlueprintTemplate(config.message || '', scope) };
         await recordStep(node, 'done', incoming, output, startedAt);
         return output;
       } else if (node.type === 'chat') {
         const message = renderBlueprintTemplate(config.message || config.text || '', scope).slice(0, 100);
-        output = await executeBlueprintChatNode(ownerUserId, sid, node, message, context);
+        output = await executeBlueprintChatNode(ownerUserId, sid, node, message, runtimeContext);
+      } else if (node.type === 'commandExecute') {
+        const command = renderBlueprintTemplate(config.command || '', scope);
+        const currentActionKeys = [blueprint.id, blueprint.slug].map(String).filter(Boolean);
+        const actionStack = Array.from(new Set([
+          ...(Array.isArray(runtimeContext.actionStack) ? runtimeContext.actionStack.map(String) : []),
+          ...currentActionKeys,
+        ]));
+        output = await executeBlueprintCommandNode({
+          ownerUserId,
+          sid,
+          platform: config.platform,
+          commandText: command,
+          context: { ...runtimeContext, actionStack },
+          dryRun,
+          blueprint,
+          node,
+          run,
+        });
       } else if (node.type === 'wait') {
         const delayMs = Math.max(0, Number(evaluateBlueprintValue(config.ms || Number(config.seconds || 0) * 1000, scope) || 0));
         if (!dryRun && delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
@@ -8917,7 +9279,7 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}) {
       } else if (node.type === 'condition') {
         const left = evaluateBlueprintValue(config.left, scope);
         const right = evaluateBlueprintValue(config.right, scope);
-        const passed = compareBlueprintValues(left, config.operator, right);
+        const passed = await compareBlueprintValues(left, config.operator, right);
         output = { passed, left, right };
         nextPort = passed ? 'true' : 'false';
       } else if (node.type === 'setVariable') {
@@ -8939,11 +9301,16 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}) {
         output = { value };
       } else if (node.type === 'action') {
         const actionId = renderBlueprintTemplate(config.actionId || '', scope);
-        const actionStack = Array.isArray(context.actionStack) ? context.actionStack.map(String) : [];
+        const actionStack = Array.isArray(runtimeContext.actionStack) ? runtimeContext.actionStack.map(String) : [];
         const normalizedActionId = String(actionId || '');
         const currentActionKeys = [blueprint.id, blueprint.slug].map(String).filter(Boolean);
         output = normalizedActionId && !currentActionKeys.includes(normalizedActionId) && !actionStack.includes(normalizedActionId)
-          ? await executeActionBlueprint(ownerUserId, normalizedActionId, { ...context, source: dryRun ? 'manual_test' : 'blueprint_nested', dryRun, actionStack: [...actionStack, ...currentActionKeys] })
+          ? await executeActionBlueprint(
+              ownerUserId,
+              normalizedActionId,
+              { ...runtimeContext, source: dryRun ? 'manual_test' : 'blueprint_nested', dryRun, actionStack: [...actionStack, ...currentActionKeys] },
+              { blueprintVariableMemo }
+            )
           : { ok: false, error: 'recursive_action_blocked' };
       } else if (node.type === 'parallel') {
         const outgoing = edges.filter((edge) => String(edge.source) === String(node.id) && String(edge.sourcePort || 'out') === 'out');
@@ -8975,17 +9342,30 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}) {
         output = { picked };
         nextPort = `option:${picked.id || picked.index}`;
       } else if (node.type === 'pointsGet' || node.type === 'pointsEnough' || node.type === 'pointsAdjust') {
-        const channelUid = await resolveBlueprintChannelUid(ownerUserId, context);
-        const userId = renderBlueprintTemplate(config.userId || '{user.userId}', scope) || context.user?.userId;
-        const username = renderBlueprintTemplate(config.username || '{user.username}', scope) || context.user?.username;
-        const simulatedUser = userId && String(userId) === String(context.user?.userId || '');
-        const current = dryRun && simulatedUser
-          ? Number(context.user?.points || context.user?.channelPoints || 0)
-          : userId ? await getChannelPoints(channelUid, userId).catch(() => 0) : 0;
+        const channelUid = await resolveBlueprintChannelUid(ownerUserId, runtimeContext);
+        const userId = renderBlueprintTemplate(config.userId || '{user.userId}', scope) || runtimeContext.user?.userId;
+        const username = renderBlueprintTemplate(config.username || '{user.username}', scope) || runtimeContext.user?.username;
+        const simulatedUser = userId && String(userId) === String(runtimeContext.user?.userId || '');
+        const current = dryRun
+          ? (simulatedUser ? Number(runtimeContext.user?.points ?? runtimeContext.user?.channelPoints ?? 0) : 0)
+          : userId ? await getChannelPoints(channelUid, userId) : 0;
         if (node.type === 'pointsAdjust' && userId) {
           const delta = Math.floor(Number(evaluateBlueprintValue(config.delta || 0, scope) || 0));
           if (!dryRun && !suppressPointMutations) await incrChannelPoints(channelUid, userId, username || userId, delta);
-          output = { channelUid, userId, previous: current, delta, points: suppressPointMutations ? current : current + delta, dryRun, noPointCost: suppressPointMutations };
+          const nextPoints = !dryRun && !suppressPointMutations
+            ? await getChannelPoints(channelUid, userId)
+            : (suppressPointMutations ? current : current + delta);
+          output = { channelUid, userId, previous: current, delta, points: nextPoints, dryRun, noPointCost: suppressPointMutations };
+          if (simulatedUser) {
+            runtimeContext = {
+              ...runtimeContext,
+              user: { ...runtimeContext.user, points: nextPoints, channelPoints: nextPoints },
+            };
+            blueprintVariableMemo.set(
+              getBlueprintResolverMemoKey('user_points', runtimeContext, userId),
+              Promise.resolve(nextPoints)
+            );
+          }
         } else if (node.type === 'pointsEnough') {
           const required = Math.max(0, Number(evaluateBlueprintValue(config.required || 0, scope) || 0));
           const passed = Number(current || 0) >= required;
@@ -8993,17 +9373,31 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}) {
           nextPort = passed ? 'true' : 'false';
         } else {
           output = { channelUid, userId, points: current };
+          if (simulatedUser) {
+            runtimeContext = {
+              ...runtimeContext,
+              user: { ...runtimeContext.user, points: current, channelPoints: current },
+            };
+            blueprintVariableMemo.set(
+              getBlueprintResolverMemoKey('user_points', runtimeContext, userId),
+              Promise.resolve(current)
+            );
+          }
         }
       } else if (node.type === 'pointsRanking') {
-        const channelUid = await resolveBlueprintChannelUid(ownerUserId, context);
+        const channelUid = await resolveBlueprintChannelUid(ownerUserId, runtimeContext);
         const limit = Math.max(1, Math.min(50, Number(evaluateBlueprintValue(config.limit || 10, scope) || 10)));
-        const page = await listChannelPointsPage(channelUid, { offset: 0, limit }).catch(() => ({ rows: [] }));
+        const page = dryRun
+          ? { rows: [] }
+          : await listChannelPointsPage(channelUid, { offset: 0, limit }).catch(() => ({ rows: [] }));
         output = { channelUid, ranking: page.rows || [] };
       } else if (node.type === 'pointsExcluded') {
-        const channelUid = await resolveBlueprintChannelUid(ownerUserId, context);
-        const settings = await getBotSettings(sid).catch(() => null) || {};
-        const userId = renderBlueprintTemplate(config.userId || '{user.userId}', scope) || context.user?.userId;
-        const excluded = !!(userId && await isChannelPointExcluded(settings, userId));
+        const channelUid = await resolveBlueprintChannelUid(ownerUserId, runtimeContext);
+        const userId = renderBlueprintTemplate(config.userId || '{user.userId}', scope) || runtimeContext.user?.userId;
+        const simulatedUser = userId && String(userId) === String(runtimeContext.user?.userId || '');
+        const excluded = dryRun
+          ? !!(simulatedUser && (runtimeContext.user?.pointExcluded ?? runtimeContext.user?.pointsExcluded ?? false))
+          : !!(userId && await isChannelPointExcluded(await getBotSettingsStrict(sid), userId, { strict: true }));
         output = { channelUid, userId, excluded };
         nextPort = excluded ? 'true' : 'false';
       } else if (node.type === 'rouletteRun') {
@@ -9020,12 +9414,16 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}) {
       } else if (node.type === 'rouletteCompare') {
         const left = evaluateBlueprintValue(config.left || '{roulette.result.label}', scope);
         const right = evaluateBlueprintValue(config.right || '', scope);
-        const passed = compareBlueprintValues(left, config.operator || 'eq', right);
+        const passed = await compareBlueprintValues(left, config.operator || 'eq', right);
         output = { passed, left, right };
         nextPort = passed ? 'true' : 'false';
       } else if (node.type === 'attendanceGet') {
-        const userId = renderBlueprintTemplate(config.userId || '{user.userId}', scope) || context.user?.userId;
-        const totalDays = userId ? await getUserAttendanceTotalDays(sid, userId).catch(() => 0) : 0;
+        const userId = renderBlueprintTemplate(config.userId || '{user.userId}', scope) || runtimeContext.user?.userId;
+        const simulatedUser = userId && String(userId) === String(runtimeContext.user?.userId || '');
+        const simulatedDays = Number(runtimeContext.user?.attendanceDays ?? runtimeContext.attendance?.totalDays ?? 0);
+        const totalDays = dryRun
+          ? (simulatedUser && Number.isFinite(simulatedDays) ? Math.max(0, Math.floor(simulatedDays)) : 0)
+          : userId ? await getUserAttendanceTotalDays(sid, userId) : 0;
         output = { userId, totalDays };
       } else if (node.type === 'cooldown') {
         const key = `${blueprint.id}:${node.id}:${renderBlueprintTemplate(config.key || '{user.userId}', scope)}`;
@@ -9059,7 +9457,7 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}) {
             connectionId: null,
             jobType: 'blueprint.timer',
             runAfter: new Date(Date.now() + delayMs).toISOString(),
-            payload: { nodeId: node.id, blueprintId: blueprint.id, targetNodeId: edge.target, context }
+            payload: { nodeId: node.id, blueprintId: blueprint.id, targetNodeId: edge.target, context: runtimeContext }
           });
         }
         output = { queued: !dryRun && !!edge, delayMs, dryRun };
@@ -10346,16 +10744,36 @@ async function executeActionVariableTokens(sid, text, context = {}) {
   const ownerUserId = ownerUserIdFromSid(sid);
   if (!ownerUserId) return [];
   const jobs = [];
+  const actionStack = new Set((Array.isArray(context.actionStack) ? context.actionStack : []).map((value) => String(value).trim().toLocaleLowerCase('ko-KR')).filter(Boolean));
   for (const match of matches) {
     const actionId = String(match?.[1] || '').trim();
     if (!actionId) continue;
     try {
       const blueprint = await getRuntimeActionBlueprint(ownerUserId, actionId).catch(() => null);
       if (blueprint?.version?.published) {
+        const blueprintKeys = [actionId, blueprint.id, blueprint.slug, blueprint.name]
+          .map((value) => String(value || '').trim())
+          .filter(Boolean);
+        if (blueprintKeys.some((value) => actionStack.has(value.toLocaleLowerCase('ko-KR')))) {
+          jobs.push({
+            kind: 'blueprint',
+            actionId,
+            blueprintId: blueprint.id,
+            blueprintName: blueprint.name || actionId,
+            runId: null,
+            ok: false,
+            error: 'recursive_action_blocked',
+          });
+          continue;
+        }
         const runResult = await executeActionBlueprint(ownerUserId, actionId, {
           ...context,
           source: context.source || 'action_variable',
-          triggerRef: actionId
+          triggerRef: actionId,
+          actionStack: Array.from(new Set([
+            ...(Array.isArray(context.actionStack) ? context.actionStack.map(String) : []),
+            ...blueprintKeys,
+          ])),
         });
         jobs.push({
           kind: 'blueprint',
@@ -10657,11 +11075,15 @@ async function startRouletteSpin(sid, rouletteName, userId, username, opts = {})
   if (opts?.testMode !== true && opts?.executeResultActions !== false && picked.value && typeof picked.value === 'string' && picked.value.trim()) {
     await executeActionVariableTokens(sid, picked.value, {
       source: 'roulette',
-      roulette: { id: def.id || null, name: def.name },
+      roulette: {
+        id: def.id || null,
+        name: def.name,
+        result: { label: picked.label, value: picked.value },
+      },
       result: { label: picked.label, value: picked.value },
       user: { userId, username },
       chatPost: opts?.chatPost || null,
-      platform: opts?.chatPost?.platform || null,
+      platform: opts?.chatPost?.provider || opts?.chatPost?.platform || null,
       channelUid: channelContext.channelId,
       channel: { channelUid: channelContext.channelId },
     });
@@ -11765,13 +12187,14 @@ function isCimeLiveContentOpen(content) {
     || rawStatus.includes('stream');
 }
 
-async function getCimePlatformAccountForSid(sid) {
+async function getCimePlatformAccountForSid(sid, options = {}) {
   const ownerUserId = ownerUserIdFromSid(sid);
   if (!ownerUserId) return null;
   try {
     const accounts = await listPlatformAccounts(ownerUserId);
     return (accounts || []).find((account) => String(account.provider || '').toLowerCase() === 'cime') || null;
-  } catch {
+  } catch (error) {
+    if (options?.strict === true) throw error;
     return null;
   }
 }
@@ -11912,6 +12335,16 @@ function lookupDeadlineExpired(options = {}) {
   return Number.isFinite(deadlineAt) && deadlineAt > 0 && Date.now() >= deadlineAt;
 }
 
+function lookupDeadlineReached(options = {}) {
+  if (!lookupDeadlineExpired(options)) return false;
+  if (options?.strict === true) {
+    const error = new Error('Variable lookup deadline exceeded');
+    error.code = 'blueprint_variable_lookup_timeout';
+    throw error;
+  }
+  return true;
+}
+
 function lookupRequestTimeout(options = {}, fallbackMs = 8000) {
   const fallback = Math.max(250, Number(fallbackMs) || 8000);
   const deadlineAt = Number(options?.deadlineAt || 0);
@@ -11921,15 +12354,17 @@ function lookupRequestTimeout(options = {}, fallbackMs = 8000) {
 
 async function getChannelFollowersCountForSid(sid, provider = '', options = {}) {
   const normalizedProvider = String(provider || '').trim().toLowerCase();
+  const strict = options?.strict === true;
   const cacheKey = normalizedProvider ? `${normalizedProvider}:${sid}` : String(sid);
   const cached = followersCountCache.get(cacheKey);
   const now = Date.now();
   if (cached && (now - cached.ts) < 5 * 60 * 1000) return cached.count;
   let count = null;
   if (!normalizedProvider || normalizedProvider === 'chzzk') {
-    if (lookupDeadlineExpired(options)) return null;
+    if (lookupDeadlineReached(options)) return null;
     const uids = await getChannelUidsForSid(sid);
     const channelId = uids[0] || null;
+    let chzzkLookupError = null;
     if (channelId) {
       try {
         const accessToken = await getValidAccessToken(sid);
@@ -11938,36 +12373,47 @@ async function getChannelFollowersCountForSid(sid, provider = '', options = {}) 
           timeout: lookupRequestTimeout(options, DEFAULT_TIMEOUT),
         });
         count = Number(r1?.data?.content?.totalCount ?? r1?.data?.totalCount ?? r1?.data?.count ?? NaN);
-      } catch { }
+      } catch (error) {
+        chzzkLookupError = error;
+      }
     }
     if (channelId && (count == null || Number.isNaN(count))) {
       try {
-        if (lookupDeadlineExpired(options)) return null;
+        if (lookupDeadlineReached(options)) return null;
         const r2 = await axios.get(`https://api.chzzk.naver.com/service/v1/channels/${encodeURIComponent(channelId)}/followers/count`, {
           timeout: lookupRequestTimeout(options, DEFAULT_TIMEOUT),
         });
         count = Number(r2?.data?.content?.totalCount ?? r2?.data?.totalCount ?? r2?.data?.count ?? NaN);
-      } catch { }
+      } catch (error) {
+        if (strict) throw error;
+        chzzkLookupError = chzzkLookupError || error;
+      }
     }
     if (count != null && !Number.isNaN(count)) {
       followersCountCache.set(cacheKey, { ts: now, count });
       return count;
     }
-    if (normalizedProvider === 'chzzk') return null;
+    if (normalizedProvider === 'chzzk') {
+      if (strict && chzzkLookupError) throw chzzkLookupError;
+      return null;
+    }
   }
   if (normalizedProvider === 'youtube') return null;
   if (!normalizedProvider || normalizedProvider === 'cime') {
-    if (lookupDeadlineExpired(options)) return null;
+    if (lookupDeadlineReached(options)) return null;
     try {
-      const cimeAccount = await getCimePlatformAccountForSid(sid);
+      const cimeAccount = await getCimePlatformAccountForSid(sid, { strict });
       const publicProfile = cimeAccount?.metadata?.publicProfile || {};
       const cimeCount = readFiniteNumber(publicProfile.followerCount, publicProfile.raw?.followerCount, publicProfile.raw?.followers, publicProfile.raw?.followCount);
       if (cimeCount != null) {
         followersCountCache.set(cacheKey, { ts: now, count: cimeCount });
         return cimeCount;
       }
-    } catch { }
+    } catch (error) {
+      if (strict) throw error;
+    }
   }
+  if (lookupDeadlineReached(options)) return null;
   return null;
 }
 
@@ -11992,7 +12438,7 @@ async function findUserFollowedAtForSid(sid, userId, username = '', provider = '
       // Best-effort: paginate followers list to find the user
       const size = 50;
       for (let page = 1; page <= maxChzzkPages; page++) {
-        if (lookupDeadlineExpired(options)) return null;
+        if (lookupDeadlineReached(options)) return null;
         let data;
         try {
           const r = await axios.get(`${OPENAPI_BASE}/open/v1/channels/followers`, {
@@ -12003,7 +12449,7 @@ async function findUserFollowedAtForSid(sid, userId, username = '', provider = '
           data = r?.data?.content || r?.data || {};
         } catch {
           // Fallback to service API
-          if (lookupDeadlineExpired(options)) return null;
+          if (lookupDeadlineReached(options)) return null;
           const r2 = await axios.get(`https://api.chzzk.naver.com/service/v1/channels/${encodeURIComponent(channelId)}/followers`, {
             params: { page, size },
             timeout: lookupRequestTimeout(options, lookupTimeout),
@@ -12021,9 +12467,12 @@ async function findUserFollowedAtForSid(sid, userId, username = '', provider = '
         }
         if (list.length < size) break;
       }
-    } catch (e) { console.error(e) }
+    } catch (e) {
+      if (options?.strict === true) throw e;
+      console.error(e);
+    }
   }
-  if (lookupDeadlineExpired(options)) return null;
+  if (lookupDeadlineReached(options)) return null;
   if (normalizedProvider === 'chzzk' || normalizedProvider === 'youtube') {
     userFollowedAtCache.set(key, { ts: now, date: '' });
     return null;
@@ -12034,7 +12483,7 @@ async function findUserFollowedAtForSid(sid, userId, username = '', provider = '
       const accessToken = await getValidCimeAccessToken(ownerUserId);
       const size = 100;
       for (let page = 0; page < maxCimePages; page++) {
-        if (lookupDeadlineExpired(options)) return null;
+        if (lookupDeadlineReached(options)) return null;
         const r = await axios.get(`${CIME_OPENAPI_BASE}/open/v1/channels/followers`, {
           params: { page, size },
           headers: { Authorization: `Bearer ${accessToken}` },
@@ -12057,10 +12506,13 @@ async function findUserFollowedAtForSid(sid, userId, username = '', provider = '
     const status = Number(e?.response?.status || 0);
     if (status === 401 || status === 403) {
       console.warn('[CIME] Follower lookup requires READ:CHANNEL scope. Reconnect the CIME account to refresh OAuth permissions.');
+      if (options?.strict === true) throw e;
       return null;
     }
+    if (options?.strict === true) throw e;
   }
-  if (!lookupDeadlineExpired(options)) userFollowedAtCache.set(key, { ts: now, date: '' });
+  if (lookupDeadlineReached(options)) return null;
+  userFollowedAtCache.set(key, { ts: now, date: '' });
   return null;
 }
 
@@ -12090,7 +12542,7 @@ async function getUserSubscriptionMonthsForSid(sid, userId, provider = '', optio
     // Try open subscriptions API
     const size = 100;
     for (let page = 1; page <= 50; page++) {
-      if (lookupDeadlineExpired(options)) return null;
+      if (lookupDeadlineReached(options)) return null;
       let data;
       try {
         const r = await axios.get(`${OPENAPI_BASE}/open/v1/channels/${encodeURIComponent(channelId)}/subscriptions`, {
@@ -12101,7 +12553,7 @@ async function getUserSubscriptionMonthsForSid(sid, userId, provider = '', optio
         data = r?.data?.content || r?.data || {};
       } catch {
         // Fallback service API
-        if (lookupDeadlineExpired(options)) return null;
+        if (lookupDeadlineReached(options)) return null;
         const r2 = await axios.get(`https://api.chzzk.naver.com/service/v1/channels/${encodeURIComponent(channelId)}/subscriptions`, {
           params: { page, size },
           timeout: lookupRequestTimeout(options, DEFAULT_TIMEOUT),
@@ -12120,9 +12572,12 @@ async function getUserSubscriptionMonthsForSid(sid, userId, provider = '', optio
       }
       if (list.length < size) break;
     }
-  } catch { }
+  } catch (error) {
+    if (options?.strict === true) throw error;
+  }
+  if (lookupDeadlineReached(options)) return null;
   if (normalizedProvider === 'chzzk') {
-    if (!lookupDeadlineExpired(options)) userSubMonthsCache.set(key, { ts: now, months: null });
+    userSubMonthsCache.set(key, { ts: now, months: null });
     return null;
   }
   const cimeCached = userSubMonthsCache.get(`${sid}:cime:${userId}`) || userSubMonthsCache.get(`${sid}:${userId}`);
@@ -20323,10 +20778,10 @@ const BOT_VARIABLES = [
   { key: '{user.points}', label: '보유 포인트', description: '현재 채널에서 시청자가 보유한 통합 포인트입니다.', group: '시청자', providers: BOT_VARIABLE_PROVIDERS },
   { key: '{user.channelPoints}', label: '채널 포인트', description: '보유 포인트와 같은 값입니다.', group: '시청자', providers: BOT_VARIABLE_PROVIDERS },
   { key: '{user.attendanceDays}', label: '누적 출석일', description: '현재 채널에서 기록된 누적 출석일입니다.', group: '시청자', providers: BOT_VARIABLE_PROVIDERS },
-  { key: '{attendance.streak}', label: '연속 출석일', description: '출석 메시지에서 사용할 수 있는 현재 연속 출석일입니다.', group: '출석', providers: BOT_VARIABLE_PROVIDERS },
-  { key: '{attendance.totalDays}', label: '누적 출석일', description: '출석 메시지에서 사용할 수 있는 전체 출석일입니다.', group: '출석', providers: BOT_VARIABLE_PROVIDERS },
-  { key: '{attendance.points}', label: '출석 포인트', description: '출석 체크로 지급되는 포인트입니다.', group: '출석', providers: BOT_VARIABLE_PROVIDERS },
-  { key: '{attendance.date}', label: '출석 날짜', description: '한국 표준시(KST) 기준 출석 날짜입니다.', group: '출석', providers: BOT_VARIABLE_PROVIDERS },
+  { key: '{attendance.streak}', label: '연속 출석일', description: '출석 시점 또는 현재 출석 기록의 연속 출석일입니다.', group: '출석', providers: BOT_VARIABLE_PROVIDERS, contexts: ['attendance', 'blueprint'] },
+  { key: '{attendance.totalDays}', label: '누적 출석일', description: '출석 시점 또는 현재 출석 기록의 전체 출석일입니다.', group: '출석', providers: BOT_VARIABLE_PROVIDERS, contexts: ['attendance', 'blueprint'] },
+  { key: '{attendance.points}', label: '출석 포인트', description: '출석 실행으로 지급된 포인트이며, 출석 이벤트가 아닌 실행 액션에서는 0입니다.', group: '출석', providers: BOT_VARIABLE_PROVIDERS, contexts: ['attendance', 'blueprint'] },
+  { key: '{attendance.date}', label: '출석 날짜', description: '한국 표준시(KST) 기준 출석 날짜입니다.', group: '출석', providers: BOT_VARIABLE_PROVIDERS, contexts: ['attendance', 'blueprint'] },
   { key: '{user.followedAt}', label: '팔로우 시작일', description: '플랫폼에서 팔로우 날짜를 제공하는 경우 시청자가 팔로우를 시작한 날짜입니다.', group: '시청자', providers: ['chzzk', 'cime'], caveat: 'YouTube 채팅에서는 팔로우 날짜를 제공하지 않아 확인할 수 없음으로 표시됩니다.' },
   { key: '{user.followedDays}', label: '팔로우 일수', description: '팔로우한 날을 1일째로 계산한 팔로우 일수입니다.', group: '시청자', providers: ['chzzk', 'cime'], caveat: 'YouTube 채팅에서는 팔로우 날짜를 제공하지 않아 0일로 표시됩니다.' },
   { key: '{user.subscriptionMonths}', label: '구독 개월', description: '구독 이벤트나 구독 목록에서 확인 가능한 시청자의 구독 개월 수입니다.', group: '시청자', providers: ['chzzk', 'cime'], caveat: '씨미는 수신한 구독 이벤트에 저장된 값을 사용하며, YouTube 멤버십 개월은 현재 제공하지 않습니다.' },
@@ -20340,27 +20795,27 @@ const BOT_VARIABLES = [
   { key: '{channel.followers}', label: '팔로워 수', description: '확인 가능한 현재 채널 팔로워 수입니다.', group: '채널', providers: ['chzzk', 'cime'], caveat: '씨미는 프로필 동기화로 저장된 공개 수치를 사용합니다.' },
   { key: '${counter::user::변수명}', label: '시청자별 카운트', description: '명령어를 호출한 시청자마다 별도로 값을 1 올린 뒤, 증가한 숫자를 이 위치에 표시합니다.', group: '카운트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command'], effect: 'increment', caveat: '변수명을 원하는 이름으로 바꿔 사용하세요. 첫 호출은 1이며, 같은 응답에 동일 변수를 여러 번 넣어도 한 번만 증가합니다. 응답 하나에는 서로 다른 카운트를 최대 16개까지 사용할 수 있습니다. 예: ${counter::user::도전}' },
   { key: '${counter::global::변수명}', label: '전체 합산 카운트', description: '이 스트리머의 모든 시청자 호출을 변수명별로 합산해 값을 1 올린 뒤, 증가한 숫자를 이 위치에 표시합니다.', group: '카운트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command'], effect: 'increment', caveat: '변수명을 원하는 이름으로 바꿔 사용하세요. 첫 호출은 1이며, 시청자별 카운트와 전체 합산 카운트는 서로 독립적으로 저장됩니다. 응답 하나에는 서로 다른 카운트를 최대 16개까지 사용할 수 있습니다. 예: ${counter::global::도전}' },
-  { key: '${live.title_change}', label: '방송 제목 변경', description: '명령어 뒤에 입력한 전체 문장으로 현재 플랫폼의 방송 제목을 변경합니다.', group: '특수 실행', providers: ['chzzk', 'cime'], caveat: '스트리머 또는 매니저만 실행할 수 있으며 채팅에는 출력되지 않습니다. 명령어 인자가 없으면 실행하지 않고, 제거 후 응답이 비어 있으면 채팅도 보내지 않습니다.' },
-  { key: '${live.game_change}', label: '방송 카테고리 변경', description: '명령어 뒤에 입력한 전체 문장으로 현재 플랫폼의 카테고리를 검색해 변경합니다.', group: '특수 실행', providers: ['chzzk', 'cime'], caveat: '스트리머 또는 매니저만 실행할 수 있으며 채팅에는 출력되지 않습니다. 명령어 인자가 없으면 실행하지 않고, 제거 후 응답이 비어 있으면 채팅도 보내지 않습니다.' },
-  { key: '${video_donation}', label: '영상 후원 신청 실행', description: '명령어 인자로 받은 주소를 영상 후원 대기열에 넣고 실제 재생 구간만큼 포인트를 차감합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, caveat: '사용법: <주소> [<시작초>] [<종료초>] · 시작초와 종료초는 초 또는 분:초(예: 1:23 = 83초) 형식으로 입력합니다. 시작초 기본값은 0초이며, 종료초를 생략하면 영상 마지막까지 재생합니다. 설정된 최대 재생 시간은 항상 적용되며, 이 변수는 채팅에 출력되지 않습니다.' },
-  { key: '${roulette::룰렛이름}', label: '룰렛 실행', description: '지정한 룰렛을 즉시 실행하고 결과를 채팅/오버레이 흐름에 반영합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, caveat: '룰렛 이름 또는 ID를 :: 뒤에 입력하세요. 출석 메시지에서는 신규 출석에만 무료로 1회 실행됩니다. 예: ${roulette::오늘의 벌칙}' },
-  { key: '${action::액션이름}', label: '블루프린트 실행', description: '게시된 실행 액션 블루프린트를 명령어 응답 또는 출석 메시지에서 실행합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, caveat: '채팅으로 출력되지 않고 액션이 실행됩니다. 출석 메시지에서는 신규 출석에만 한 번 실행되며, 액션 이름, slug 또는 ID를 사용할 수 있습니다.' },
-  { key: '${automation::액션이름}', label: '블루프린트 실행 별칭', description: '${action::...}과 같은 방식으로 게시된 실행 액션을 실행합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS },
-  { key: '${blueprint::액션이름}', label: '블루프린트 실행 별칭', description: '${action::...}과 같은 방식으로 게시된 실행 액션을 실행합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS },
-  { key: '{trigger.message}', label: '트리거 메시지', description: '블루프린트를 실행시킨 채팅 메시지나 입력 문구입니다.', group: '블루프린트 컨텍스트', providers: BOT_VARIABLE_PROVIDERS },
-  { key: '{trigger.keyword}', label: '트리거 키워드', description: '명령어 실행에 매칭된 키워드입니다.', group: '블루프린트 컨텍스트', providers: BOT_VARIABLE_PROVIDERS },
-  { key: '{trigger.platform}', label: '트리거 플랫폼', description: '블루프린트를 실행시킨 플랫폼입니다.', group: '블루프린트 컨텍스트', providers: BOT_VARIABLE_PROVIDERS },
-  { key: '{user.userId}', label: '시청자 ID', description: '블루프린트와 자동화에서 사용하는 시청자 식별자입니다.', group: '블루프린트 컨텍스트', providers: BOT_VARIABLE_PROVIDERS },
-  { key: '{channel.channelUid}', label: '채널 ID', description: '현재 방송인 채널 식별자입니다.', group: '블루프린트 컨텍스트', providers: BOT_VARIABLE_PROVIDERS },
-  { key: '{donation.amount}', label: '후원 금액', description: '후원 이벤트로 실행된 블루프린트에서 사용할 수 있는 후원 금액입니다.', group: '블루프린트 컨텍스트', providers: BOT_VARIABLE_PROVIDERS },
-  { key: '{roulette.result.label}', label: '룰렛 결과 이름', description: '룰렛 실행 결과의 항목 이름입니다.', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS },
-  { key: '{roulette.result.value}', label: '룰렛 결과 값', description: '룰렛 항목에 설정한 실행 액션 또는 값입니다.', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS },
-  { key: '{node.rouletteRun.result.label}', label: '룰렛 노드 결과 이름', description: '블루프린트의 룰렛 실행 노드가 만든 결과 항목 이름입니다.', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS },
-  { key: '{node.rouletteRun.result.value}', label: '룰렛 노드 결과 값', description: '블루프린트의 룰렛 실행 노드가 만든 결과 값입니다.', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS },
-  { key: '{node.attendanceGet.totalDays}', label: '출석 조회 노드 누적일', description: '블루프린트 출석 조회 노드의 누적 출석일 결과입니다.', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS },
-  { key: '{node.pointsGet.points}', label: '포인트 조회 노드 결과', description: '블루프린트 포인트 조회 노드가 가져온 포인트입니다.', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS },
-  { key: '{node.overlay.overlayId}', label: '오버레이 ID', description: '블루프린트 오버레이 표시 노드가 만든 오버레이 식별자입니다.', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS },
-  { key: '{flow.변수이름}', label: '임시 변수', description: '블루프린트 임시 변수 노드에서 저장한 값을 읽습니다. 예: {flow.bonusPoint}', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS },
+  { key: '${live.title_change}', label: '방송 제목 변경', description: '명령어 뒤에 입력한 전체 문장으로 현재 플랫폼의 방송 제목을 변경합니다.', group: '특수 실행', providers: ['chzzk', 'cime'], contexts: ['command'], caveat: '스트리머 또는 매니저만 실행할 수 있으며 채팅에는 출력되지 않습니다. 명령어 인자가 없으면 실행하지 않고, 제거 후 응답이 비어 있으면 채팅도 보내지 않습니다.' },
+  { key: '${live.game_change}', label: '방송 카테고리 변경', description: '명령어 뒤에 입력한 전체 문장으로 현재 플랫폼의 카테고리를 검색해 변경합니다.', group: '특수 실행', providers: ['chzzk', 'cime'], contexts: ['command'], caveat: '스트리머 또는 매니저만 실행할 수 있으며 채팅에는 출력되지 않습니다. 명령어 인자가 없으면 실행하지 않고, 제거 후 응답이 비어 있으면 채팅도 보내지 않습니다.' },
+  { key: '${video_donation}', label: '영상 후원 신청 실행', description: '명령어 인자로 받은 주소를 영상 후원 대기열에 넣고 실제 재생 구간만큼 포인트를 차감합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command'], caveat: '사용법: <주소> [<시작초>] [<종료초>] · 시작초와 종료초는 초 또는 분:초(예: 1:23 = 83초) 형식으로 입력합니다. 시작초 기본값은 0초이며, 종료초를 생략하면 영상 마지막까지 재생합니다. 설정된 최대 재생 시간은 항상 적용되며, 이 변수는 채팅에 출력되지 않습니다.' },
+  { key: '${roulette::룰렛이름}', label: '룰렛 실행', description: '지정한 룰렛을 즉시 실행하고 결과를 채팅/오버레이 흐름에 반영합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command', 'attendance'], caveat: '룰렛 이름 또는 ID를 :: 뒤에 입력하세요. 출석 메시지에서는 신규 출석에만 무료로 1회 실행됩니다. 예: ${roulette::오늘의 벌칙}' },
+  { key: '${action::액션이름}', label: '블루프린트 실행', description: '게시된 실행 액션 블루프린트를 명령어 응답 또는 출석 메시지에서 실행합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command', 'attendance'], caveat: '채팅으로 출력되지 않고 액션이 실행됩니다. 출석 메시지에서는 신규 출석에만 한 번 실행되며, 액션 이름, slug 또는 ID를 사용할 수 있습니다.' },
+  { key: '${automation::액션이름}', label: '블루프린트 실행 별칭', description: '${action::...}과 같은 방식으로 게시된 실행 액션을 실행합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command', 'attendance'] },
+  { key: '${blueprint::액션이름}', label: '블루프린트 실행 별칭', description: '${action::...}과 같은 방식으로 게시된 실행 액션을 실행합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command', 'attendance'] },
+  { key: '{trigger.message}', label: '트리거 메시지', description: '블루프린트를 실행시킨 채팅 메시지나 입력 문구입니다.', group: '블루프린트 컨텍스트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint'] },
+  { key: '{trigger.keyword}', label: '트리거 키워드', description: '명령어 실행에 매칭된 키워드입니다.', group: '블루프린트 컨텍스트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint'] },
+  { key: '{trigger.platform}', label: '트리거 플랫폼', description: '블루프린트를 실행시킨 플랫폼입니다.', group: '블루프린트 컨텍스트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint'] },
+  { key: '{user.userId}', label: '시청자 ID', description: '블루프린트와 자동화에서 사용하는 시청자 식별자입니다.', group: '블루프린트 컨텍스트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint'] },
+  { key: '{channel.channelUid}', label: '채널 ID', description: '현재 방송인 채널 식별자입니다.', group: '블루프린트 컨텍스트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint'] },
+  { key: '{donation.amount}', label: '후원 금액', description: '후원 이벤트로 실행된 블루프린트에서 사용할 수 있는 후원 금액입니다.', group: '블루프린트 컨텍스트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint'], caveat: '후원 이벤트가 실행 컨텍스트에 금액을 제공한 경우에만 값이 있습니다.' },
+  { key: '{roulette.result.label}', label: '룰렛 결과 이름', description: '룰렛 결과로 실행된 블루프린트의 당첨 항목 이름입니다.', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint'], caveat: '룰렛 결과가 블루프린트를 실행한 경우에만 값이 있습니다.' },
+  { key: '{roulette.result.value}', label: '룰렛 결과 값', description: '룰렛 결과로 실행된 블루프린트의 당첨 항목 값입니다.', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint'], caveat: '룰렛 결과가 블루프린트를 실행한 경우에만 값이 있습니다.' },
+  { key: '{node.rouletteRun.result.label}', label: '룰렛 노드 결과 이름', description: '블루프린트의 룰렛 실행 노드가 만든 결과 항목 이름입니다.', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint'], caveat: '룰렛 실행 노드가 먼저 실행된 뒤 사용할 수 있습니다.' },
+  { key: '{node.rouletteRun.result.value}', label: '룰렛 노드 결과 값', description: '블루프린트의 룰렛 실행 노드가 만든 결과 값입니다.', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint'], caveat: '룰렛 실행 노드가 먼저 실행된 뒤 사용할 수 있습니다.' },
+  { key: '{node.attendanceGet.totalDays}', label: '출석 조회 노드 누적일', description: '블루프린트 출석 조회 노드의 누적 출석일 결과입니다.', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint'], caveat: '출석 조회 노드가 먼저 실행된 뒤 사용할 수 있습니다.' },
+  { key: '{node.pointsGet.points}', label: '포인트 조회 노드 결과', description: '블루프린트 포인트 조회 노드가 가져온 포인트입니다.', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint'], caveat: '포인트 조회 노드가 먼저 실행된 뒤 사용할 수 있습니다.' },
+  { key: '{node.overlay.overlayId}', label: '오버레이 ID', description: '블루프린트 오버레이 표시 노드가 만든 오버레이 식별자입니다.', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint'], caveat: '오버레이 표시 노드가 먼저 실행된 뒤 사용할 수 있습니다.' },
+  { key: '{flow.변수이름}', label: '임시 변수', description: '블루프린트 임시 변수 노드에서 저장한 값을 읽습니다. 예: {flow.bonusPoint}', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint'], caveat: '임시 변수 노드가 먼저 값을 저장한 뒤 사용할 수 있습니다.' },
 ];
 
 app.get('/api/bot/variables', async (req, res) => {
@@ -20620,10 +21075,16 @@ function parseChannelPointExcludeSet(settings = {}) {
   return new Set([...fromText, ...fromArray].map(String));
 }
 
-async function isChannelPointExcluded(settings, userId) {
+async function isChannelPointExcluded(settings, userId, options = {}) {
   const excludedSet = parseChannelPointExcludeSet(settings);
   if (!excludedSet.size) return false;
-  const keys = await listPointIdentityKeysForUserId(userId).catch(() => [String(userId || '')]);
+  let keys;
+  try {
+    keys = await listPointIdentityKeysForUserId(userId);
+  } catch (error) {
+    if (options?.strict === true) throw error;
+    keys = [String(userId || '')];
+  }
   return keys.some((key) => excludedSet.has(String(key)));
 }
 

@@ -9368,6 +9368,38 @@ export async function getUserAttendanceTotalDays(sid, userId) {
   return Number(count || 0);
 }
 
+export async function getUserAttendanceSummary(sid, userId, today) {
+  ensure();
+  const normalizedSid = normalizeAttendanceIdentity(sid, 'sid');
+  const normalizedUserId = normalizeAttendanceIdentity(userId, 'userId');
+  const normalizedToday = normalizeAttendanceDate(today);
+  if (getDbUrl()) {
+    return withPgClient((pg) => getAttendanceTotalsWithPg(
+      pg,
+      normalizedSid,
+      normalizedUserId,
+      normalizedToday
+    ));
+  }
+
+  const hasUserId = await tableHasColumn('attendance_state', 'user_id');
+  const hasUserIdCamel = await tableHasColumn('attendance_state', 'userid');
+  let query = supabase.from('attendance_state').select('*').eq('sid', normalizedSid);
+  if (hasUserId) query = query.eq('user_id', normalizedUserId);
+  else if (hasUserIdCamel) query = query.eq('userid', normalizedUserId);
+  else return { streak: 0, totalDays: await getUserAttendanceTotalDays(normalizedSid, normalizedUserId) };
+
+  const { data, error } = await query.maybeSingle();
+  if (error) throw error;
+  const totalDays = data?.total_days ?? data?.totalDays;
+  return {
+    streak: Number(data?.streak || 0),
+    totalDays: totalDays == null
+      ? await getUserAttendanceTotalDays(normalizedSid, normalizedUserId)
+      : Number(totalDays || 0),
+  };
+}
+
 // =============================
 // Live Sessions (방송 세션 상태 관리) - Supabase 버전
 // =============================
