@@ -128,14 +128,15 @@ describe('YouTube live chat integration regression', () => {
     expect(connectionPage).not.toContain("apiUrl('/api/youtube/bot/login')");
   });
 
-  test('streamer YouTube OAuth can create the app session and streamer channel', () => {
+  test('streamer YouTube OAuth can create the app session and register a resolved channel', () => {
     expect(serverIndex).toContain("const mode = requestedMode === 'central_bot'");
     expect(serverIndex).toContain("const preferredUserId = await getCurrentSessionUserId(req)");
     expect(serverIndex).toContain("const { userId } = await upsertPlatformIdentity('youtube', profile, preferredUserId)");
     expect(serverIndex).toContain("await upsertPlatformTokens('youtube', userId, profile.platformUserId, {");
     expect(serverIndex).toContain('await rotateAuthenticatedSession(req, res, userId)');
+    expect(serverIndex).toContain("if (oauthMode !== 'viewer' && oauthProfile.channelResolved)");
     expect(serverIndex).toContain('upsertYoutubeStreamerChannelFromOAuthProfile(req, userId, profile)');
-    expect(serverIndex).toContain("reason: oauthMode === 'viewer' ? null : 'youtube_streamer_registered'");
+    expect(serverIndex).toContain("'youtube_channel_registration_required'");
     expect(serverIndex).toContain("const allowedPaths = ['/viewer/', '/c/', '/connection']");
   });
 
@@ -215,7 +216,7 @@ describe('YouTube live chat integration regression', () => {
     expect(serverIndex).toContain("mode === 'viewer'");
     expect(serverIndex).toContain('authUrl.searchParams.set(\'scope\', scope)');
     expect(serverIndex).toContain("if (mode === 'central_bot') authUrl.searchParams.set('include_granted_scopes', 'true')");
-    expect(serverIndex).toContain("if (oauthMode !== 'viewer')");
+    expect(serverIndex).toContain("if (oauthMode !== 'viewer' && oauthProfile.channelResolved)");
     expect(serverIndex).toContain('normalizeGoogleTokenPayload(tokenPayload, {}, tokenFallbackScope)');
   });
 
@@ -263,7 +264,8 @@ describe('YouTube live chat integration regression', () => {
     expect(serverIndex).toContain('YOUTUBE_AUTH_INACTIVITY_MAX_AGE_MS');
     expect(serverIndex).toContain('async function validateYoutubeCentralBotAuthorization');
     expect(serverIndex).toContain("getValidYoutubeAccessToken(ownerUserId, { trackUse: false })");
-    expect(serverIndex).toContain("await updatePlatformAccountProfile('youtube', ownerUserId, user.platformUserId, profile)");
+    expect(serverIndex).toContain('const identity = await fetchGoogleYoutubeIdentityWithAccessToken(accessToken)');
+    expect(serverIndex).toContain('assertGoogleYoutubeIdentityMatches(identity, user.platformUserId)');
     expect(connectionPage).toContain('YouTube 권한 보관');
     expect(connectionPage).toContain('OAuth 연결 해제');
     expect(arubotAdminPage).toContain('중앙 봇 OAuth 권한 보관');

@@ -5588,6 +5588,13 @@ export async function getArubotAdminStreamerFeatureDetails(userId) {
   });
 }
 
+function platformProfileChannelId(profile, fallbackPlatformUserId) {
+  if (Object.prototype.hasOwnProperty.call(profile || {}, 'channelId')) {
+    return String(profile?.channelId || '').trim() || null;
+  }
+  return String(fallbackPlatformUserId || '').trim() || null;
+}
+
 export async function upsertPlatformIdentity(provider, profile, preferredUserId = null) {
   const p = normalizeProvider(provider);
   const platformUserId = String(profile?.platformUserId || profile?.channelId || '').trim();
@@ -5638,7 +5645,7 @@ export async function upsertPlatformIdentity(provider, profile, preferredUserId 
         userId,
         p,
         platformUserId,
-        profile?.channelId || platformUserId,
+        platformProfileChannelId(profile, platformUserId),
         profile?.channelName || profile?.displayName || null,
         profile?.channelHandle || null,
         profile?.avatarUrl || profile?.channelImageUrl || null,
@@ -6214,7 +6221,7 @@ export async function updatePlatformAccountProfile(provider, userId, platformUse
         p,
         normalizedUserId,
         String(platformUserId),
-        profile?.channelId || platformUserId,
+        platformProfileChannelId(profile, platformUserId),
         profile?.channelName || profile?.displayName || null,
         profile?.channelHandle || null,
         profile?.avatarUrl || profile?.channelImageUrl || null,

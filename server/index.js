@@ -18,6 +18,7 @@ import { buildYoutubeLiveInfoFallback, buildYoutubeLiveLookupContext, buildYoutu
 import { resolveVideoDonationTiming } from './video-donation-timing.js';
 import { appendVideoDonationQueueCount, countNonDurableVideoDonationItems, countVideoDonationQueueIncludingItem } from './video-donation-queue.js';
 import { fetchYouTubeVideoMetadata } from './youtube-video-metadata.js';
+import { extractYoutubeChannelPageMetadata, isYoutubeChannelId } from './youtube-channel-page.js';
 import { createPvdDurationProbeCoordinator } from './pvd-duration-probe.js';
 import { resolvePvdYouTubeMetadata } from './pvd-youtube-metadata-fallback.js';
 import { createRouletteBroadcastDelivery } from './roulette-broadcast-delivery.js';
@@ -93,7 +94,7 @@ const runtimeReadinessState = {
   shuttingDown: false,
 };
 const PROCESS_ROLE = process.env.ARUBOT_PROCESS_ROLE || 'api-runtime';
-const youtubeBotOAuthPendingStore = new Map(); // ownerUserId -> { tokens, channels, createdAt }
+const youtubeBotOAuthPendingStore = new Map(); // ownerUserId -> { tokens, channels, identity, manualChannelRequired, createdAt }
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'https://arubot.yuaru.com';
 const BACKEND_ORIGIN = process.env.BACKEND_ORIGIN || 'https://arubotapi.yuaru.com';
 const SERVER_STARTED_AT = new Date().toISOString();
@@ -13892,6 +13893,14 @@ function getMissingOAuthScopes(grantedScopes, requiredScopes) {
   const granted = normalizeOAuthScopeSet(grantedScopes);
   return (requiredScopes || []).filter((scope) => !granted.has(scope));
 }
+
+function mergeOAuthScopes(...values) {
+  const scopes = new Set();
+  for (const value of values) {
+    for (const scope of normalizeOAuthScopeSet(value)) scopes.add(scope);
+  }
+  return Array.from(scopes).join(' ');
+}
 const CIME_APP_API_BASE = process.env.CIME_APP_API_BASE || 'https://ci.me/api/app';
 const CIME_UNOFFICIAL_PROFILE_URL_TEMPLATE = process.env.CIME_UNOFFICIAL_PROFILE_URL_TEMPLATE || '';
 const YOUTUBE_CLIENT_ID = process.env.YOUTUBE_CLIENT_ID || process.env.GOOGLE_YOUTUBE_CLIENT_ID || '';
@@ -13922,10 +13931,13 @@ const YOUTUBE_STREAMER_AUTH_SCOPE = String(
   process.env.YOUTUBE_STREAMER_AUTH_SCOPE ||
   YOUTUBE_CHANNEL_READ_AUTH_SCOPE
 ).trim();
+const YOUTUBE_IDENTITY_AUTH_SCOPE = 'openid profile';
 const YOUTUBE_API_BASE = process.env.YOUTUBE_API_BASE || 'https://www.googleapis.com/youtube/v3';
 const YOUTUBE_AUTH_URL = process.env.YOUTUBE_AUTH_URL || 'https://accounts.google.com/o/oauth2/v2/auth';
 const YOUTUBE_TOKEN_URL = process.env.YOUTUBE_TOKEN_URL || 'https://oauth2.googleapis.com/token';
 const YOUTUBE_REVOKE_URL = process.env.YOUTUBE_REVOKE_URL || 'https://oauth2.googleapis.com/revoke';
+const YOUTUBE_USERINFO_URL = process.env.YOUTUBE_USERINFO_URL || 'https://openidconnect.googleapis.com/v1/userinfo';
+const YOUTUBE_PUBLIC_PAGE_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36';
 const YOUTUBE_CHAT_FETCH_INTERVAL_MS = Math.max(1000, Number(process.env.YOUTUBE_CHAT_FETCH_INTERVAL_MS || 5000));
 const YOUTUBE_QUOTA_RETRY_MS = Math.max(15 * 60 * 1000, Math.min(6 * 60 * 60 * 1000, Number(process.env.YOUTUBE_QUOTA_RETRY_MS || 60 * 60 * 1000)));
 const YOUTUBE_BOT_PROFILE_ID = process.env.YOUTUBE_BOT_PROFILE_ID || 'default';
@@ -16745,6 +16757,58 @@ function normalizeYoutubeProfile(channel) {
   };
 }
 
+function hashGoogleSubject(value) {
+  const subject = String(value || '').trim();
+  return subject ? crypto.createHash('sha256').update(subject).digest('hex') : null;
+}
+
+function normalizeGoogleYoutubeIdentity(userInfo) {
+  const googleSubjectHash = hashGoogleSubject(userInfo?.sub);
+  if (!googleSubjectHash) throw new Error('Google user profile did not include sub');
+  return {
+    platformUserId: `google:${googleSubjectHash}`,
+    channelId: null,
+    channelName: String(userInfo?.name || '').trim() || 'Google 계정',
+    channelHandle: null,
+    channelImageUrl: String(userInfo?.picture || '').trim() || null,
+    googleSubjectHash,
+    metadata: {
+      identitySource: 'google_oidc',
+      googleSubjectHash,
+      publicProfile: {
+        provider: 'youtube',
+        status: 'identity_only',
+        channelId: null,
+        fetchedAt: new Date().toISOString(),
+      },
+    },
+  };
+}
+
+async function fetchGoogleYoutubeIdentityWithAccessToken(accessToken) {
+  const response = await axios.get(YOUTUBE_USERINFO_URL, {
+    headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
+    timeout: DEFAULT_TIMEOUT,
+  });
+  return normalizeGoogleYoutubeIdentity(response?.data || {});
+}
+
+function assertGoogleYoutubeIdentityMatches(identity, expectedPlatformUserId = null, expectedSubjectHash = null) {
+  const storedPlatformUserId = String(expectedPlatformUserId || '').trim();
+  const storedSubjectHash = String(expectedSubjectHash || '').trim();
+  if (storedPlatformUserId.startsWith('google:') && storedPlatformUserId !== identity.platformUserId) {
+    const error = new Error('Authorized Google account no longer matches the stored YouTube connection');
+    error.status = 409;
+    throw error;
+  }
+  if (storedSubjectHash && storedSubjectHash !== identity.googleSubjectHash) {
+    const error = new Error('Authorized Google account no longer matches the stored YouTube connection');
+    error.status = 409;
+    throw error;
+  }
+  return identity;
+}
+
 function normalizeGoogleTokenPayload(payload, previousTokens = {}, fallbackScope = YOUTUBE_BOT_AUTH_SCOPE) {
   const expiresIn = Number(payload?.expires_in || payload?.expiresIn || 3600);
   return {
@@ -17448,6 +17512,43 @@ async function fetchYoutubeMyChannelsWithAccessToken(accessToken) {
     .filter((profile) => profile.channelId);
 }
 
+function mergeYoutubeChannelProfileWithGoogleIdentity(profile, identity) {
+  if (!profile?.platformUserId) return identity;
+  return {
+    ...profile,
+    platformUserId: identity.platformUserId,
+    googleSubjectHash: identity.googleSubjectHash,
+    metadata: {
+      ...(profile.metadata || {}),
+      identitySource: 'youtube_data_api',
+      googleSubjectHash: identity.googleSubjectHash,
+    },
+  };
+}
+
+async function resolveYoutubeOAuthProfile(accessToken, { lookupChannel = true } = {}) {
+  const identity = await fetchGoogleYoutubeIdentityWithAccessToken(accessToken);
+  if (!lookupChannel) return { profile: identity, identity, channelResolved: false, dataApiFallback: false };
+  try {
+    const channelProfile = await fetchYoutubeMyChannelWithAccessToken(accessToken);
+    if (channelProfile?.platformUserId) {
+      return {
+        profile: mergeYoutubeChannelProfileWithGoogleIdentity(channelProfile, identity),
+        identity,
+        channelResolved: true,
+        dataApiFallback: false,
+      };
+    }
+  } catch (error) {
+    console.warn('[YouTube] Data API channel lookup unavailable; continuing with Google OAuth identity:', {
+      status: Number(error?.response?.status) || null,
+      quotaExceeded: isYoutubeQuotaExceededError(error),
+      message: compactLogText(error?.response?.data?.error?.message || error?.message || error, 240),
+    });
+  }
+  return { profile: identity, identity, channelResolved: false, dataApiFallback: true };
+}
+
 async function fetchYoutubeMyChannel(ownerUserId) {
   const response = await youtubeApiGet('channels', ownerUserId, { part: 'snippet', mine: 'true' });
   const item = Array.isArray(response?.data?.items) ? response.data.items[0] : null;
@@ -17541,37 +17642,54 @@ function normalizeYoutubeChannelInput(input) {
   return { inputValue: raw, channelId: '', handle };
 }
 
+async function fetchYoutubePublicChannelPage(parsed) {
+  const channelUrl = parsed.channelId
+    ? `https://www.youtube.com/channel/${encodeURIComponent(parsed.channelId)}`
+    : `https://www.youtube.com/@${encodeURIComponent(parsed.handle)}`;
+  const response = await axios.get(channelUrl, {
+    timeout: 7000,
+    responseType: 'text',
+    maxRedirects: 5,
+    headers: {
+      Accept: 'text/html,application/xhtml+xml',
+      'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
+      'User-Agent': YOUTUBE_PUBLIC_PAGE_USER_AGENT,
+    },
+    validateStatus: (status) => status >= 200 && status < 400,
+  });
+  return extractYoutubeChannelPageMetadata(response?.data, { fallbackHandle: parsed.handle });
+}
+
 async function resolveYoutubeChannelFromInput(input) {
   const parsed = normalizeYoutubeChannelInput(input);
   if (!parsed.inputValue) throw new Error('YouTube channel URL or handle is required');
   if (parsed.channelId) {
-    try {
-      const response = await youtubeApiGetPublic('channels', { part: 'snippet', id: parsed.channelId }, { timeout: 5000 });
-      const item = Array.isArray(response?.data?.items) ? response.data.items[0] : null;
-      const profile = normalizeYoutubeProfile(item);
-      return {
-        youtubeChannelId: parsed.channelId,
-        youtubeHandle: profile.channelHandle || null,
-        title: profile.channelName || null,
-        thumbnailUrl: profile.channelImageUrl || null,
-        inputValue: parsed.inputValue,
-        resolved: !!profile.channelId,
-        metadata: { parsed, raw: item || null }
-      };
-    } catch {
-      return {
-        youtubeChannelId: parsed.channelId,
-        youtubeHandle: null,
-        title: null,
-        thumbnailUrl: null,
-        inputValue: parsed.inputValue,
-        resolved: true,
-        metadata: { parsed }
-      };
-    }
+    const page = await fetchYoutubePublicChannelPage(parsed).catch(() => null);
+    return {
+      youtubeChannelId: parsed.channelId,
+      youtubeHandle: page?.handle || null,
+      title: page?.title || null,
+      thumbnailUrl: page?.thumbnailUrl || null,
+      inputValue: parsed.inputValue,
+      resolved: true,
+      metadata: { parsed, source: page ? 'youtube_public_page' : 'channel_id_input' }
+    };
   }
   if (!parsed.handle) throw new Error('YouTube channel URL or handle is required');
   const handle = parsed.handle.startsWith('@') ? parsed.handle : `@${parsed.handle}`;
+  const page = await fetchYoutubePublicChannelPage(parsed).catch(() => null);
+  if (page?.channelId) {
+    return {
+      youtubeChannelId: page.channelId,
+      youtubeHandle: page.handle || parsed.handle,
+      title: page.title,
+      thumbnailUrl: page.thumbnailUrl,
+      inputValue: parsed.inputValue,
+      resolved: true,
+      metadata: { parsed, source: 'youtube_public_page', canonicalUrl: page.canonicalUrl || null }
+    };
+  }
+
   let response = await youtubeApiGetPublic('channels', { part: 'snippet', forHandle: handle }, { timeout: 5000 }).catch(() => null);
   let item = Array.isArray(response?.data?.items) ? response.data.items[0] : null;
   if (!item) {
@@ -17825,11 +17943,12 @@ app.get('/api/auth/youtube/login', (req, res) => {
       : requestedMode === 'viewer'
         ? 'viewer'
         : 'streamer_oauth';
-    const scope = mode === 'central_bot'
+    const youtubeScope = mode === 'central_bot'
       ? YOUTUBE_BOT_AUTH_SCOPE
       : mode === 'viewer'
         ? YOUTUBE_VIEWER_AUTH_SCOPE
         : YOUTUBE_STREAMER_AUTH_SCOPE;
+    const scope = mergeOAuthScopes(YOUTUBE_IDENTITY_AUTH_SCOPE, youtubeScope);
     const start = async () => {
       if (mode === 'central_bot') {
         const admin = await requireCurrentAdminUser(req, res);
@@ -17864,14 +17983,11 @@ app.get('/api/youtube/bot/login', (req, res) => {
 });
 
 app.get('/api/auth/youtube/callback', async (req, res) => {
-  let callbackStateValidation = null;
-  let callbackOauthMode = '';
   try {
     setOAuthNoStoreHeaders(res);
     const { code, state, error, error_description } = req.query;
     const savedState = req.cookies.oauth_state_youtube;
     const stateValidation = consumeOAuthState('youtube', state, savedState);
-    callbackStateValidation = stateValidation;
 
     if (error) {
       if (stateValidation.ok || savedState) clearManagedCookie(res, 'oauth_state_youtube');
@@ -17908,12 +18024,12 @@ app.get('/api/auth/youtube/callback', async (req, res) => {
       redirect_uri: YOUTUBE_REDIRECT_URI
     });
     const oauthMode = String(stateValidation.extra?.mode || '').trim();
-    callbackOauthMode = oauthMode;
-    const tokenFallbackScope = oauthMode === 'viewer'
+    const youtubeTokenFallbackScope = oauthMode === 'viewer'
       ? YOUTUBE_VIEWER_AUTH_SCOPE
       : oauthMode === 'streamer_oauth'
         ? YOUTUBE_STREAMER_AUTH_SCOPE
         : YOUTUBE_BOT_AUTH_SCOPE;
+    const tokenFallbackScope = mergeOAuthScopes(YOUTUBE_IDENTITY_AUTH_SCOPE, youtubeTokenFallbackScope);
     const tokens = normalizeGoogleTokenPayload(tokenPayload, {}, tokenFallbackScope);
     if (!tokens.accessToken) throw new Error('YouTube token response did not include access_token');
     const consentGrantedAt = new Date().toISOString();
@@ -17924,11 +18040,22 @@ app.get('/api/auth/youtube/callback', async (req, res) => {
       if (!ownerUserId) {
         return res.redirect(getArubotAdminRedirectUrl(req, { auth: 'error', platform: 'youtube', reason: 'admin_required' }));
       }
-      const channels = await fetchYoutubeMyChannelsWithAccessToken(tokens.accessToken);
-      if (!channels.length) throw new Error('YouTube channel profile did not include channel id');
+      const identity = await fetchGoogleYoutubeIdentityWithAccessToken(tokens.accessToken);
+      let channels = [];
+      try {
+        channels = await fetchYoutubeMyChannelsWithAccessToken(tokens.accessToken);
+      } catch (error) {
+        console.warn('[YouTube] Central bot channel lookup unavailable; waiting for manual channel registration:', {
+          status: Number(error?.response?.status) || null,
+          quotaExceeded: isYoutubeQuotaExceededError(error),
+          message: compactLogText(error?.response?.data?.error?.message || error?.message || error, 240),
+        });
+      }
       youtubeBotOAuthPendingStore.set(String(ownerUserId), {
         tokens,
         channels,
+        identity,
+        manualChannelRequired: channels.length === 0,
         consentGrantedAt,
         createdAt: Date.now()
       });
@@ -17940,6 +18067,7 @@ app.get('/api/auth/youtube/callback', async (req, res) => {
           selectedChannelTitle: channel.channelName,
           selectedChannelHandle: channel.channelHandle,
           selectedChannelThumbnailUrl: channel.channelImageUrl,
+          googleSubjectHash: identity.googleSubjectHash,
           accessToken: tokens.accessToken,
           refreshToken: tokens.refreshToken,
           tokenType: tokens.tokenType,
@@ -17954,13 +18082,21 @@ app.get('/api/auth/youtube/callback', async (req, res) => {
         youtubeBotOAuthPendingStore.delete(String(ownerUserId));
         return res.redirect(getArubotAdminRedirectUrl(req, { auth: 'success', platform: 'youtube', reason: 'central_bot_configured' }));
       }
-      return res.redirect(getArubotAdminRedirectUrl(req, { auth: 'success', platform: 'youtube', reason: 'central_bot_select_channel' }));
+      return res.redirect(getArubotAdminRedirectUrl(req, {
+        auth: 'success',
+        platform: 'youtube',
+        reason: channels.length ? 'central_bot_select_channel' : 'central_bot_register_channel'
+      }));
     }
 
-    const profile = await fetchYoutubeMyChannelWithAccessToken(tokens.accessToken);
-    if (!profile.platformUserId) throw new Error('YouTube channel profile did not include channel id');
+    const oauthProfile = await resolveYoutubeOAuthProfile(tokens.accessToken, { lookupChannel: oauthMode !== 'viewer' });
+    const profile = oauthProfile.profile;
 
-    const preferredUserId = await getCurrentSessionUserId(req);
+    const currentSessionUserId = await getCurrentSessionUserId(req);
+    const existingChannelUserId = !currentSessionUserId && profile.channelId
+      ? await findAppUserIdByChannelUid(profile.channelId).catch(() => null)
+      : null;
+    const preferredUserId = currentSessionUserId || existingChannelUserId;
     const { userId } = await upsertPlatformIdentity('youtube', profile, preferredUserId);
     invalidatePublicChannelIdentityCaches(userId, [
       profile.platformUserId,
@@ -17977,7 +18113,7 @@ app.get('/api/auth/youtube/callback', async (req, res) => {
     markProviderRuntimeConnected(userId, 'youtube');
 
     await rotateAuthenticatedSession(req, res, userId);
-    if (oauthMode !== 'viewer') {
+    if (oauthMode !== 'viewer' && oauthProfile.channelResolved) {
       await upsertYoutubeStreamerChannelFromOAuthProfile(req, userId, profile);
       ensureYoutubeSession(userId).catch((err) => {
         console.warn('[YouTube] Failed to start live chat session after OAuth callback:', err?.response?.data || err?.message || err);
@@ -17987,19 +18123,13 @@ app.get('/api/auth/youtube/callback', async (req, res) => {
     return res.redirect(getAuthRedirectUrlWithState(req, stateValidation, {
       auth: 'success',
       platform: 'youtube',
-      reason: oauthMode === 'viewer' ? null : 'youtube_streamer_registered'
+      reason: oauthMode === 'viewer'
+        ? null
+        : oauthProfile.channelResolved
+          ? 'youtube_streamer_registered'
+          : 'youtube_channel_registration_required'
     }));
   } catch (e) {
-    if (isYoutubeQuotaExceededError(e)) {
-      console.warn('[YouTube] OAuth callback deferred: Data API quota is exhausted', {
-        mode: callbackOauthMode || 'unknown',
-      });
-      const params = { auth: 'error', platform: 'youtube', reason: 'quota_exceeded' };
-      const redirectUrl = callbackOauthMode === 'central_bot'
-        ? getArubotAdminRedirectUrl(req, params)
-        : getAuthRedirectUrlWithState(req, callbackStateValidation, params);
-      return res.redirect(redirectUrl);
-    }
     console.error('[YouTube] Callback error', e?.response?.data || e?.message || e);
     return res.redirect(getAuthRedirectUrl(req, { auth: 'error', platform: 'youtube' }));
   }
@@ -18027,11 +18157,9 @@ app.post('/api/auth/youtube/consent/confirm', rateLimiters.userWrite, async (req
     const tokens = await getPlatformTokens('youtube', ownerUserId);
     if (!tokens) return res.status(404).json({ error: 'YouTube authorization not found' });
     const accessToken = await getValidYoutubeAccessToken(ownerUserId, { trackUse: false });
-    const profile = await fetchYoutubeMyChannelWithAccessToken(accessToken);
-    if (!profile.platformUserId || String(profile.platformUserId) !== String(tokens.platformUserId || '')) {
-      return res.status(409).json({ error: 'Authorized YouTube channel no longer matches the stored connection' });
-    }
-    await updatePlatformAccountProfile('youtube', ownerUserId, tokens.platformUserId, profile);
+    const identity = await fetchGoogleYoutubeIdentityWithAccessToken(accessToken);
+    assertGoogleYoutubeIdentityMatches(identity, tokens.platformUserId);
+    await markPlatformTokenValidated('youtube', ownerUserId);
     await confirmPlatformTokenConsent('youtube', ownerUserId);
     const [updatedTokens, accounts] = await Promise.all([
       getPlatformTokens('youtube', ownerUserId),
@@ -18064,7 +18192,7 @@ async function deleteYoutubeAuthorizedData(ownerUserId, platformUserId = null, r
   const owner = String(ownerUserId || '').replace(/^user:/, '').trim();
   if (!owner) return { tokensDeleted: 0, accountsDeleted: 0, streamerChannelDeleted: false };
   const streamerChannelDeleted = await deleteYoutubeStreamerChannel(owner).catch(() => false);
-  const deleted = await deletePlatformAccount('youtube', owner, platformUserId);
+  const deleted = await deletePlatformAccount('youtube', owner);
   invalidatePublicChannelIdentityCaches(owner, [
     platformUserId,
     platformUserId ? `youtube:${platformUserId}` : null,
@@ -18079,10 +18207,9 @@ app.post('/api/auth/youtube/revoke', async (req, res) => {
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
     const requestedPlatformUserId = String(req.body?.platformUserId || req.body?.platform_user_id || '').trim();
     const tokens = await getPlatformTokens('youtube', ownerUserId);
-    const platformUserId = requestedPlatformUserId || tokens?.platformUserId || null;
-    const tokenMatchesRequest = tokens && (!requestedPlatformUserId || String(tokens.platformUserId || '') === requestedPlatformUserId);
+    const platformUserId = tokens?.platformUserId || requestedPlatformUserId || null;
     let revokeResult = { attempted: false, alreadyRevoked: false };
-    if (tokenMatchesRequest) {
+    if (tokens) {
       revokeResult = await revokeYoutubeOAuthGrant(tokens);
     }
     const deleted = await deleteYoutubeAuthorizedData(ownerUserId, platformUserId, 'revoked');
@@ -18660,6 +18787,7 @@ app.get('/api/youtube/bot/status', async (req, res) => {
           channelHandle: channel.channelHandle,
           channelImageUrl: channel.channelImageUrl
         })),
+        manualChannelRequired: pending.manualChannelRequired === true,
         expiresAt: new Date(Number(pending.createdAt || Date.now()) + 10 * 60 * 1000).toISOString()
       } : null
     });
@@ -18677,7 +18805,23 @@ app.post('/api/youtube/bot/select-channel', rateLimiters.userWrite, async (req, 
     const pending = youtubeBotOAuthPendingStore.get(String(ownerUserId));
     if (!pending) return res.status(409).json({ error: 'No pending YouTube bot OAuth session' });
     const requestedChannelId = String(req.body?.channelId || '').trim();
-    const channel = (pending.channels || []).find((item) => String(item.channelId || '') === requestedChannelId);
+    const requestedChannelInput = String(req.body?.channel || req.body?.url || req.body?.handle || '').trim();
+    let channel = (pending.channels || []).find((item) => String(item.channelId || '') === requestedChannelId) || null;
+    if (!channel && requestedChannelInput) {
+      const resolved = await resolveYoutubeChannelFromInput(requestedChannelInput);
+      if (!resolved.youtubeChannelId) {
+        return res.status(422).json({
+          error: 'YouTube 채널 ID를 확인할 수 없습니다. /channel/UC... 형식의 채널 URL을 입력해 주세요.',
+          code: 'youtube_channel_id_unresolved'
+        });
+      }
+      channel = {
+        channelId: resolved.youtubeChannelId,
+        channelName: resolved.title,
+        channelHandle: resolved.youtubeHandle,
+        channelImageUrl: resolved.thumbnailUrl,
+      };
+    }
     if (!channel) return res.status(400).json({ error: 'Selected channel is not available in the pending OAuth session' });
     const profile = await upsertYoutubeBotProfile({
       id: YOUTUBE_BOT_PROFILE_ID,
@@ -18685,6 +18829,7 @@ app.post('/api/youtube/bot/select-channel', rateLimiters.userWrite, async (req, 
       selectedChannelTitle: channel.channelName,
       selectedChannelHandle: channel.channelHandle,
       selectedChannelThumbnailUrl: channel.channelImageUrl,
+      googleSubjectHash: pending.identity?.googleSubjectHash || null,
       accessToken: pending.tokens.accessToken,
       refreshToken: pending.tokens.refreshToken,
       tokenType: pending.tokens.tokenType,
@@ -18709,18 +18854,15 @@ app.post('/api/youtube/bot/verify', rateLimiters.userWrite, async (req, res) => 
     if (!admin) return;
     const ownerUserId = admin.userId;
     const profile = await getValidYoutubeBotProfile();
-    const channels = await fetchYoutubeMyChannelsWithAccessToken(profile.accessToken);
-    const matched = channels.find((channel) => String(channel.channelId || '') === String(profile.selectedChannelId || ''));
-    if (!matched) {
-      const updated = await markYoutubeBotProfileStatus(profile.id, { status: 'reauth_required', lastError: 'Selected bot channel is not available for this OAuth token' });
-      return res.status(409).json({ ok: false, profile: publicYoutubeBotProfile(updated), error: 'Selected bot channel is not available for this OAuth token' });
-    }
+    const identity = await fetchGoogleYoutubeIdentityWithAccessToken(profile.accessToken);
+    assertGoogleYoutubeIdentityMatches(identity, null, profile.googleSubjectHash);
     const updated = await upsertYoutubeBotProfile({
       id: profile.id,
-      selectedChannelId: matched.channelId,
-      selectedChannelTitle: matched.channelName,
-      selectedChannelHandle: matched.channelHandle,
-      selectedChannelThumbnailUrl: matched.channelImageUrl,
+      selectedChannelId: profile.selectedChannelId,
+      selectedChannelTitle: profile.selectedChannelTitle,
+      selectedChannelHandle: profile.selectedChannelHandle,
+      selectedChannelThumbnailUrl: profile.selectedChannelThumbnailUrl,
+      googleSubjectHash: profile.googleSubjectHash || identity.googleSubjectHash,
       accessToken: profile.accessToken,
       refreshToken: profile.refreshToken,
       tokenType: profile.tokenType,
@@ -18744,16 +18886,16 @@ app.post('/api/youtube/bot/consent/confirm', rateLimiters.userWrite, async (req,
     const admin = await requireCurrentAdminUser(req, res);
     if (!admin) return;
     const profile = await getValidYoutubeBotProfile({ trackUse: false });
-    const channels = await fetchYoutubeMyChannelsWithAccessToken(profile.accessToken);
-    const matched = channels.find((channel) => String(channel.channelId || '') === String(profile.selectedChannelId || ''));
-    if (!matched) return res.status(409).json({ error: 'Selected bot channel is not available for this OAuth token' });
+    const identity = await fetchGoogleYoutubeIdentityWithAccessToken(profile.accessToken);
+    assertGoogleYoutubeIdentityMatches(identity, null, profile.googleSubjectHash);
     const confirmedAt = new Date().toISOString();
     const updated = await upsertYoutubeBotProfile({
       id: profile.id,
-      selectedChannelId: matched.channelId,
-      selectedChannelTitle: matched.channelName,
-      selectedChannelHandle: matched.channelHandle,
-      selectedChannelThumbnailUrl: matched.channelImageUrl,
+      selectedChannelId: profile.selectedChannelId,
+      selectedChannelTitle: profile.selectedChannelTitle,
+      selectedChannelHandle: profile.selectedChannelHandle,
+      selectedChannelThumbnailUrl: profile.selectedChannelThumbnailUrl,
+      googleSubjectHash: profile.googleSubjectHash || identity.googleSubjectHash,
       accessToken: profile.accessToken,
       refreshToken: profile.refreshToken,
       tokenType: profile.tokenType,
@@ -18941,6 +19083,37 @@ app.post('/api/youtube/streamer-channel', rateLimiters.userWrite, async (req, re
     }
     const input = String(req.body?.channel || req.body?.url || req.body?.handle || '').trim();
     const resolved = await resolveYoutubeChannelFromInput(input);
+    if (!resolved.youtubeChannelId) {
+      return res.status(422).json({
+        error: 'YouTube 채널 ID를 확인할 수 없습니다. /channel/UC... 형식의 채널 URL을 입력해 주세요.',
+        code: 'youtube_channel_id_unresolved'
+      });
+    }
+    const youtubeTokens = await getPlatformTokens('youtube', ownerUserId).catch(() => null);
+    if (youtubeTokens?.platformUserId) {
+      const googleSubjectHash = String(youtubeTokens.platformUserId).startsWith('google:')
+        ? String(youtubeTokens.platformUserId).slice('google:'.length)
+        : null;
+      await updatePlatformAccountProfile('youtube', ownerUserId, youtubeTokens.platformUserId, {
+        platformUserId: youtubeTokens.platformUserId,
+        channelId: resolved.youtubeChannelId,
+        channelName: resolved.title,
+        channelHandle: resolved.youtubeHandle,
+        channelImageUrl: resolved.thumbnailUrl,
+        metadata: {
+          identitySource: 'manual_channel_registration',
+          googleSubjectHash,
+          publicProfile: {
+            provider: 'youtube',
+            status: 'ok',
+            channelId: resolved.youtubeChannelId,
+            fetchedAt: new Date().toISOString(),
+          },
+        },
+      }).catch((error) => {
+        console.warn('[YouTube] Failed to synchronize the registered channel with the OAuth account:', error?.message || error);
+      });
+    }
     const websubSecret = `ytws_${crypto.randomBytes(24).toString('base64url')}`;
     const streamerChannel = await upsertYoutubeStreamerChannel(ownerUserId, {
       ...resolved,
@@ -19543,7 +19716,7 @@ function stationChannelUrl(provider, channelId, handle) {
       const handlePath = normalizedHandle.startsWith('@') ? normalizedHandle : `@${normalizedHandle}`;
       return `https://www.youtube.com/${encodeURIComponent(handlePath).replace('%40', '@')}`;
     }
-    if (normalizedChannelId) return `https://www.youtube.com/channel/${encodeURIComponent(normalizedChannelId)}`;
+    if (isYoutubeChannelId(normalizedChannelId)) return `https://www.youtube.com/channel/${encodeURIComponent(normalizedChannelId)}`;
   }
   if (normalizedChannelId) return `https://chzzk.naver.com/${encodeURIComponent(normalizedChannelId)}`;
   return null;
@@ -24556,11 +24729,11 @@ async function subscribeEvent(kind, sessionKey, channelId, accessToken) {
 
 async function getYoutubeChannelId(ownerUserId) {
   const streamerChannel = await getYoutubeStreamerChannel(ownerUserId).catch(() => null);
-  if (streamerChannel?.youtubeChannelId) return String(streamerChannel.youtubeChannelId);
+  if (isYoutubeChannelId(streamerChannel?.youtubeChannelId)) return String(streamerChannel.youtubeChannelId);
   const accountChannelId = await resolveChannelIdForOwnerUserId(ownerUserId, { provider: 'youtube', allowFallback: false });
-  if (accountChannelId) return accountChannelId;
+  if (isYoutubeChannelId(accountChannelId)) return accountChannelId;
   const tokens = await getPlatformTokens('youtube', ownerUserId);
-  if (tokens?.platformUserId) return String(tokens.platformUserId);
+  if (isYoutubeChannelId(tokens?.platformUserId)) return String(tokens.platformUserId);
   return null;
 }
 
@@ -27786,19 +27959,15 @@ async function validateYoutubeCentralBotAuthorization(summary) {
   summary.centralChecked += 1;
   try {
     const validProfile = await getValidYoutubeBotProfile({ trackUse: false });
-    const channels = await fetchYoutubeMyChannelsWithAccessToken(validProfile.accessToken);
-    const matched = channels.find((channel) => String(channel.channelId || '') === String(validProfile.selectedChannelId || ''));
-    if (!matched) {
-      await deleteYoutubeCentralBotAuthorization(validProfile, 'youtube_bot_authorization_channel_missing');
-      summary.centralDeleted += 1;
-      return;
-    }
+    const identity = await fetchGoogleYoutubeIdentityWithAccessToken(validProfile.accessToken);
+    assertGoogleYoutubeIdentityMatches(identity, null, validProfile.googleSubjectHash);
     await upsertYoutubeBotProfile({
       id: validProfile.id,
-      selectedChannelId: matched.channelId,
-      selectedChannelTitle: matched.channelName,
-      selectedChannelHandle: matched.channelHandle,
-      selectedChannelThumbnailUrl: matched.channelImageUrl,
+      selectedChannelId: validProfile.selectedChannelId,
+      selectedChannelTitle: validProfile.selectedChannelTitle,
+      selectedChannelHandle: validProfile.selectedChannelHandle,
+      selectedChannelThumbnailUrl: validProfile.selectedChannelThumbnailUrl,
+      googleSubjectHash: validProfile.googleSubjectHash || identity.googleSubjectHash,
       accessToken: validProfile.accessToken,
       refreshToken: validProfile.refreshToken,
       tokenType: validProfile.tokenType,
@@ -27863,20 +28032,8 @@ async function validateYoutubeAuthorizations(reason = 'scheduled') {
       summary.checked += 1;
       try {
         const accessToken = await getValidYoutubeAccessToken(ownerUserId, { trackUse: false });
-        const profile = await fetchYoutubeMyChannelWithAccessToken(accessToken);
-        await updatePlatformAccountProfile('youtube', ownerUserId, user.platformUserId, profile);
-        const currentChannel = await getYoutubeStreamerChannel(ownerUserId).catch(() => null);
-        if (currentChannel?.youtubeChannelId === profile.channelId) {
-          const refreshedChannel = buildYoutubeStreamerChannelFromProfile(profile, { id: currentChannel.botProfileId });
-          await upsertYoutubeStreamerChannel(ownerUserId, {
-            ...refreshedChannel,
-            botProfileId: currentChannel.botProfileId,
-            websubSecret: currentChannel.websubSecret,
-            websubStatus: currentChannel.websubStatus,
-            lastError: currentChannel.lastError,
-            metadata: { ...(currentChannel.metadata || {}), ...(refreshedChannel?.metadata || {}), source: 'youtube_oauth_revalidation' }
-          });
-        }
+        const identity = await fetchGoogleYoutubeIdentityWithAccessToken(accessToken);
+        assertGoogleYoutubeIdentityMatches(identity, user.platformUserId);
         await markPlatformTokenValidated('youtube', ownerUserId);
         summary.valid += 1;
       } catch (error) {

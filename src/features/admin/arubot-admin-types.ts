@@ -36,6 +36,7 @@ export type YoutubeBotStatus = {
   } | null;
   pending?: {
     channels?: YoutubePendingChannel[];
+    manualChannelRequired?: boolean;
     expiresAt?: string;
   } | null;
 };

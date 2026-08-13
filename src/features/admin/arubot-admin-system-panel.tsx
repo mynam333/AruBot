@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import {
   Bot,
+  Cable,
   CheckCircle2,
   Copy,
   Database,
@@ -19,6 +20,7 @@ import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
 import { SectionHeader, StatusDot } from '@/components/ui/page';
 import { cn } from '@/shared/lib/utils';
 import type { AdminConsoleSnapshot, AdminStatus, YoutubeBotStatus } from '@/features/admin/arubot-admin-types';
@@ -96,6 +98,7 @@ export function ArubotAdminSystemPanel({
   onCopy: (value: string) => void;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
+  const [manualChannel, setManualChannel] = useState('');
   const profile = youtubeBotStatus?.profile || null;
   const configured = youtubeBotStatus?.configured === true;
   const reauthRequired = profile?.reauthRequired === true || profile?.status === 'reauth_required';
@@ -124,6 +127,20 @@ export function ArubotAdminSystemPanel({
       () => fetch(endpoints.selectChannel, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ channelId }) }),
       'YouTube 중앙 봇 채널을 선택했습니다.',
       'YouTube 봇 채널을 선택하지 못했습니다.',
+    );
+  };
+
+  const registerYoutubeBotChannel = () => {
+    const channel = manualChannel.trim();
+    if (!channel) {
+      toast.error('YouTube 채널 URL이나 핸들을 입력해 주세요.');
+      return;
+    }
+    return runAction(
+      'select:manual',
+      () => fetch(endpoints.selectChannel, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ channel }) }),
+      'YouTube 중앙 봇 채널을 등록했습니다.',
+      '채널 ID를 확인하지 못했습니다. /channel/UC... 형식의 URL로 다시 시도해 주세요.',
     );
   };
 
@@ -231,6 +248,26 @@ export function ArubotAdminSystemPanel({
                     <span className="min-w-0"><span className="block truncate text-sm font-semibold">{channel.channelName || channel.channelId}</span><span className="block truncate text-xs text-muted-foreground">{channel.channelHandle || channel.channelId}</span></span>
                   </button>
                 ))}
+              </div>
+            ) : null}
+
+            {youtubeBotStatus?.pending?.manualChannelRequired ? (
+              <div className="mt-4 grid gap-2">
+                <label htmlFor="youtube-central-bot-channel" className="text-sm font-semibold">봇 채널 직접 등록</label>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Input
+                    id="youtube-central-bot-channel"
+                    value={manualChannel}
+                    onChange={(event) => setManualChannel(event.target.value)}
+                    placeholder="https://www.youtube.com/channel/UC... 또는 @handle"
+                    disabled={!!busy}
+                  />
+                  <Button type="button" onClick={registerYoutubeBotChannel} disabled={!!busy || !manualChannel.trim()}>
+                    <Cable className="h-4 w-4" />
+                    채널 등록
+                  </Button>
+                </div>
+                <p className="text-xs leading-5 text-muted-foreground">Google 인증은 완료되었습니다. 입력한 공개 채널 주소로 중앙 봇 채널을 확정합니다.</p>
               </div>
             ) : null}
 

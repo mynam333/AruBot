@@ -53,7 +53,7 @@ describe('disconnected channel runtime regression', () => {
 
     expect(youtubeBody).toContain("await deleteYoutubeAuthorizedData(ownerUserId, platformUserId, 'revoked')");
     expect(youtubeDeleteBody).toContain('await deleteYoutubeStreamerChannel(owner)');
-    expect(youtubeDeleteBody).toContain("await deletePlatformAccount('youtube', owner, platformUserId)");
+    expect(youtubeDeleteBody).toContain("await deletePlatformAccount('youtube', owner)");
     expect(cimeBody).toContain('await deletePlatformTokens(\'cime\', ownerUserId)');
     expect(chzzkBody).toContain('await updateTokens(sid, null)');
   });
