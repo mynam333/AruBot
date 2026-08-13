@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import pkg from 'pg';
 import fs from 'fs';
 import path from 'path';
+import { isPublicShortLinkCode, normalizePublicShortLinkTarget } from './public-short-links.js';
 const { Client, Pool } = pkg;
 
 let supabase;
@@ -983,6 +984,75 @@ export async function incrementBotCounter({ sid, counterName, scope, subjectKey 
     const value = result.rows?.[0]?.value;
     if (value == null) throw new Error('Counter increment did not return a value');
     return String(value);
+  }, 0);
+}
+
+function normalizeStoredPublicShortLinkTarget(value) {
+  const targetPath = normalizePublicShortLinkTarget(value);
+  if (!targetPath) {
+    const error = new Error('A valid public short-link target path is required');
+    error.code = 'invalid_short_link_target';
+    throw error;
+  }
+  return targetPath;
+}
+
+function normalizePublicShortLinkRow(row) {
+  if (!row) return null;
+  return {
+    code: String(row.code || ''),
+    targetPath: String(row.target_path || row.targetPath || ''),
+    createdAt: row.created_at || row.createdAt || null,
+  };
+}
+
+/**
+ * Returns one permanent code per canonical public target path. Concurrent callers
+ * converge through the unique target_path index; code collisions are retried.
+ */
+export async function getOrCreatePublicShortLink(targetPath, { createdBy = null } = {}) {
+  const normalizedTarget = normalizeStoredPublicShortLinkTarget(targetPath);
+  const actor = String(createdBy || '').replace(/^user:/, '').trim().slice(0, 256) || null;
+  return withPgClient(async (pg) => {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const code = crypto.randomBytes(8).toString('base64url').slice(0, 10);
+      const inserted = await pg.query(
+        `insert into public.public_short_links (code, target_path, created_by)
+         values ($1, $2, $3)
+         on conflict do nothing
+         returning code, target_path, created_at`,
+        [code, normalizedTarget, actor]
+      );
+      if (inserted.rows?.[0]) return normalizePublicShortLinkRow(inserted.rows[0]);
+
+      const existing = await pg.query(
+        `select code, target_path, created_at
+           from public.public_short_links
+          where target_path = $1
+          limit 1`,
+        [normalizedTarget]
+      );
+      if (existing.rows?.[0]) return normalizePublicShortLinkRow(existing.rows[0]);
+      // The generated code collided with another target. Retry with fresh entropy.
+    }
+    const error = new Error('Failed to allocate a unique public short-link code');
+    error.code = 'short_link_code_allocation_failed';
+    throw error;
+  }, 0);
+}
+
+export async function resolvePublicShortLink(code) {
+  const normalizedCode = String(code || '').trim();
+  if (!isPublicShortLinkCode(normalizedCode)) return null;
+  return withPgClient(async (pg) => {
+    const result = await pg.query(
+      `select code, target_path, created_at
+         from public.public_short_links
+        where code = $1
+        limit 1`,
+      [normalizedCode]
+    );
+    return normalizePublicShortLinkRow(result.rows?.[0]);
   }, 0);
 }
 
@@ -3210,6 +3280,15 @@ export async function deleteAccountData(ownerUserId, options = {}) {
          or (counter_scope = 'user' and subject_key = any($2::text[]))`,
         [scope.channelAliases, scope.identityKeys]
       );
+      if (await tableExistsPg(pg, 'public.public_short_links')) {
+        const anonymizedLinks = await pg.query(
+          `update public.public_short_links
+              set created_by = null
+            where created_by = $1`,
+          [scope.owner]
+        );
+        addPrivacyDeleteCount(summary, 'public.public_short_links.created_by', anonymizedLinks.rowCount);
+      }
       await deleteDynamicChannelPointRows(pg, summary, scope);
       await deleteRowsByColumnValues(pg, summary, 'public.automation_jobs', [
         { column: 'owner_user_id', values: [scope.owner] },
@@ -4242,6 +4321,24 @@ export async function ensureSchema() {
       create index if not exists idx_bot_counter_values_user_subject
         on bot_counter_values (subject_key, sid)
         where counter_scope = 'user';
+      create table if not exists public_short_links (
+        code text primary key,
+        target_path text not null,
+        created_by text,
+        created_at timestamptz not null default now(),
+        constraint public_short_links_code_ck check (code ~ '^[A-Za-z0-9_-]{10,16}$'),
+        constraint public_short_links_target_ck check (
+          char_length(target_path) between 3 and 512
+          and left(target_path, 1) = '/'
+          and left(target_path, 2) <> '//'
+          and position(E'\\\\' in target_path) = 0
+        )
+      );
+      create unique index if not exists public_short_links_target_path_uniq
+        on public_short_links (target_path);
+      create index if not exists idx_public_short_links_created_by
+        on public_short_links (created_by)
+        where created_by is not null;
       -- Backfill from legacy camelCase columns
       do $$ begin
         if exists (select 1 from information_schema.columns where table_name='bot_rules' and column_name='adminonly') then

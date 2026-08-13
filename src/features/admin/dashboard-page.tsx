@@ -6,6 +6,7 @@ import {
   ChevronRight,
   Clapperboard,
   Coins,
+  ExternalLink,
   HeartHandshake,
   MessageSquare,
   Radio,
@@ -22,6 +23,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button, LinkButton } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { EmptyState, ErrorState, PageHeader, SectionHeader, StatusDot } from '@/components/ui/page';
+import { ShareLinkActions } from '@/components/ui/share-link-actions';
 import { CommandCreateDialog, RouletteCreateDialog } from '@/features/admin/admin-action-dialogs';
 import { apiUrl, readJsonResult } from '@/shared/api/http';
 
@@ -399,8 +401,12 @@ export function DashboardPage() {
                 {visibleAccounts.map((account) => {
                   const runtime = runtimeByProvider.get(String(account.provider || '').toLowerCase()) || null;
                   const runtimeError = platformRuntimeError(runtime);
+                  const publicUid = account.provider && account.channel_id
+                    ? `${String(account.provider).toLowerCase()}:${account.channel_id}`
+                    : '';
+                  const publicPath = publicUid ? `/c/${encodeURIComponent(publicUid)}` : '';
                   return (
-                  <div key={`${account.provider}-${account.channel_id || account.channel_name}`} className="flex min-w-0 items-center gap-3 p-3.5">
+                  <div key={`${account.provider}-${account.channel_id || account.channel_name}`} className="flex min-w-0 flex-wrap items-center gap-3 p-3.5">
                     <ChannelAvatar account={account} />
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-sm font-semibold">{account.channel_name || account.channel_id || '연결된 채널'}</div>
@@ -411,9 +417,21 @@ export function DashboardPage() {
                       </div>
                       {runtimeError ? <div className="mt-1 truncate text-xs text-destructive" title={runtimeError}>{runtimeError}</div> : null}
                     </div>
-                    <div className="flex shrink-0 items-center gap-2">
+                    <div className="flex shrink-0 flex-wrap items-center gap-2">
                       {runtime?.live === true || account.metadata?.publicProfile?.isLive ? <Badge tone="rose">LIVE</Badge> : null}
                       <StatusDot status={platformRuntimeStatus(runtime)} label={platformRuntimeLabel(runtime)} />
+                      {publicPath ? (
+                        <>
+                          <LinkButton href={publicPath} variant="ghost" size="sm">
+                            공개 페이지
+                            <ExternalLink aria-hidden="true" className="h-4 w-4" />
+                          </LinkButton>
+                          <ShareLinkActions
+                            path={publicPath}
+                            title={`${account.channel_name || account.channel_id} | AruBot`}
+                          />
+                        </>
+                      ) : null}
                     </div>
                   </div>
                   );

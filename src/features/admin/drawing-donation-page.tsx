@@ -2,13 +2,15 @@
 
 import * as Switch from '@radix-ui/react-switch';
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
-import { Ban, Check, Copy, Eraser, Eye, GripVertical, ImagePlus, Loader2, Play, RefreshCw, RotateCw, Settings, ShieldAlert, Trash2, Undo2, Wifi, X } from 'lucide-react';
+import { Ban, Check, Copy, Eraser, Eye, GripVertical, ImagePlus, Play, RefreshCw, RotateCw, Settings, ShieldAlert, Trash2, Undo2, Wifi, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { ShareLinkActions } from '@/components/ui/share-link-actions';
 import { apiUrl, apiWsUrl } from '@/shared/api/http';
+import { writeClipboardText } from '@/shared/lib/share-links';
 import { formatNumber } from '@/shared/lib/utils';
 
 type DrawingSettings = {
@@ -86,35 +88,6 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   });
   if (!response.ok) throw new Error(path);
   return response.json();
-}
-
-async function writeClipboardText(value: string) {
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(value);
-      return;
-    }
-  } catch {
-    // Fall through for browsers that expose Clipboard API without granting access.
-  }
-
-  const textarea = document.createElement('textarea');
-  textarea.value = value;
-  textarea.setAttribute('readonly', '');
-  textarea.style.position = 'fixed';
-  textarea.style.opacity = '0';
-  document.body.appendChild(textarea);
-  textarea.select();
-  const copied = document.execCommand('copy');
-  textarea.remove();
-  if (!copied) throw new Error('clipboard unavailable');
-}
-
-function buildViewerDonationPath(ownerUserId: string | null | undefined) {
-  const normalizedOwnerUserId = String(ownerUserId || '').replace(/^user:/i, '').trim();
-  if (!normalizedOwnerUserId) return '';
-  const drawingEditorPath = `/viewer/drawing/${encodeURIComponent(normalizedOwnerUserId)}`;
-  return `/viewer/login?returnTo=${encodeURIComponent(drawingEditorPath)}`;
 }
 
 function adminCrayonNoise(seed: number) {
@@ -380,7 +353,6 @@ export function DrawingDonationPage() {
   const [blockedUsers, setBlockedUsers] = useState<BlockedUser[]>([]);
   const [overlayPath, setOverlayPath] = useState('');
   const [viewerDonationPath, setViewerDonationPath] = useState('');
-  const [viewerLinkPending, setViewerLinkPending] = useState(false);
   const [blockForm, setBlockForm] = useState({ userId: '', username: '', reason: '' });
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -396,31 +368,22 @@ export function DrawingDonationPage() {
     return `${window.location.origin}${overlayPath}`;
   }, [overlayPath]);
 
-  const viewerDonationUrl = useMemo(() => {
-    if (!viewerDonationPath || typeof window === 'undefined') return viewerDonationPath;
-    return `${window.location.origin}${viewerDonationPath}`;
-  }, [viewerDonationPath]);
-
   const applyQueuePayload = useCallback((payload: QueuePayload | null) => {
     if (payload?.items) setItems(payload.items);
   }, []);
 
   const refresh = useCallback(async () => {
-    const [settingsPayload, queuePayload, blockPayload, viewerPayload, accountPayload] = await Promise.all([
+    const [settingsPayload, queuePayload, blockPayload, viewerPayload] = await Promise.all([
       readJson<{ settings: DrawingSettings }>('/api/drawing-donation/settings'),
       readJson<{ items: DrawingItem[] }>('/api/drawing-donation/queue'),
       readJson<{ items: BlockedUser[] }>('/api/bot/blocked-users'),
-      readJson<{ path: string; donationPath?: string | null; ownerUserId?: string | null }>('/api/drawing-donation/viewer-url'),
-      readJson<{ userId?: string | null }>('/api/account/platforms').catch(() => ({ userId: null })),
+      readJson<{ path: string; donationPath?: string | null; publicUid?: string | null }>('/api/drawing-donation/viewer-url'),
     ]);
     setSettings({ ...defaultSettings, ...settingsPayload.settings, canvas: { ...defaultSettings.canvas, ...settingsPayload.settings?.canvas } });
     setItems(queuePayload.items || []);
     setBlockedUsers(blockPayload.items || []);
     setOverlayPath(viewerPayload.path || '');
-    setViewerDonationPath(
-      viewerPayload.donationPath
-      || buildViewerDonationPath(viewerPayload.ownerUserId || accountPayload.userId),
-    );
+    setViewerDonationPath(viewerPayload.donationPath || '');
   }, []);
 
   useEffect(() => {
@@ -489,34 +452,6 @@ export function DrawingDonationPage() {
       toast.error('주소를 복사하지 못했어요.');
     }
   }, []);
-
-  const copyViewerDonationLink = useCallback(async () => {
-    if (viewerLinkPending) return;
-    setViewerLinkPending(true);
-    try {
-      let address = viewerDonationUrl;
-      if (!address) {
-        const [viewerResult, accountResult] = await Promise.allSettled([
-          readJson<{ path?: string; donationPath?: string | null; ownerUserId?: string | null }>('/api/drawing-donation/viewer-url'),
-          readJson<{ userId?: string | null }>('/api/account/platforms'),
-        ]);
-        const viewerPayload = viewerResult.status === 'fulfilled' ? viewerResult.value : null;
-        const accountPayload = accountResult.status === 'fulfilled' ? accountResult.value : null;
-        const donationPath = viewerPayload?.donationPath
-          || buildViewerDonationPath(viewerPayload?.ownerUserId || accountPayload?.userId);
-        if (!donationPath) throw new Error('viewer donation URL unavailable');
-        if (viewerPayload?.path) setOverlayPath(viewerPayload.path);
-        setViewerDonationPath(donationPath);
-        address = `${window.location.origin}${donationPath}`;
-      }
-      await writeClipboardText(address);
-      toast.success('시청자 그림 후원 링크를 복사했어요.');
-    } catch {
-      toast.error('시청자 링크를 준비하지 못했어요. 로그인 상태를 확인해 주세요.');
-    } finally {
-      setViewerLinkPending(false);
-    }
-  }, [viewerDonationUrl, viewerLinkPending]);
 
   const runItemAction = (path: string, id: string, message: string) => {
     startTransition(async () => {
@@ -702,15 +637,15 @@ export function DrawingDonationPage() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={copyViewerDonationLink}
-              disabled={viewerLinkPending}
-            >
-              {viewerLinkPending ? <Loader2 className="h-[1em] w-[1em] animate-spin" /> : <Copy className="h-[1em] w-[1em]" />}
-              시청자 링크 복사
-            </Button>
+            <ShareLinkActions
+              path={viewerDonationPath}
+              title="AruBot 그림 후원"
+              text="방송 화면에 그림을 보내 보세요."
+              showCopy
+              copyLabel="짧은 시청자 링크 복사"
+              disabled={!viewerDonationPath}
+              size="default"
+            />
             <Button type="button" variant="secondary" onClick={() => refresh().catch(() => undefined)}>
               <RefreshCw className="h-[1em] w-[1em]" /> 새로고침
             </Button>

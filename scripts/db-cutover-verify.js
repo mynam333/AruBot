@@ -15,6 +15,7 @@ const REQUIRED_TABLES = [
   'bot_settings',
   'bot_rules',
   'bot_counter_values',
+  'public_short_links',
   'roulette_sessions',
   'migration_log',
   'channel_tokens',

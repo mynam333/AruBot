@@ -141,6 +141,7 @@ export const DEFAULT_COUNT_TABLES = [
   'bot_stats',
   'bot_rules',
   'bot_counter_values',
+  'public_short_links',
   'live_days',
   'attendance',
   'attendance_state',

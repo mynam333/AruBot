@@ -9,7 +9,7 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
-import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, getBotSettingsStrict, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, revokeSession, getSessionUserId, listChannelPoints, listChannelPointsPage, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, deductChannelPointsIfEnough, getChannelPoints, getChannelPointBalanceSummary, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, getUserAttendanceSummary, incrementBotCounter, issueApiKey, revokeApiKey, getOwnerPidForApiKey, issueApiWebSocketTicket, consumeApiWebSocketTicket, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, findSidByChannelViewerTokenSupabase, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, listPlatformAccountsForUserIds, findAppUserIdByChannelUid, findExactPublicChannelIdentity, getPublicChannelPointsSnapshot, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, markPlatformTokenValidated, deletePlatformTokens, deletePlatformAccount, getAppUserAdminStatus, getArubotAdminConsoleSnapshot, getArubotAdminStreamerFeatureDetails, getYoutubeBotProfile, upsertYoutubeBotProfile, updateYoutubeBotProfileTokens, markYoutubeBotProfileStatus, deleteYoutubeBotProfile, getYoutubeStreamerChannel, upsertYoutubeStreamerChannel, markYoutubeStreamerChannelModeratorRegistered, deleteYoutubeStreamerChannel, listYoutubeStreamerChannelsByYoutubeChannelId, updateYoutubeStreamerChannelLive, updateYoutubeStreamerChannelWebsub, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, claimBotRuleCooldown, enqueueDurableRuntimeJob, enqueuePaidDurableRuntimeJob, claimDurableRuntimeJobs, completeDurableRuntimeJob, failDurableRuntimeJob, claimRuntimeLease, releaseRuntimeLease, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps, recordBotEventLog, listBotEventLogs, getBotEventLog, insertDrawingDonationItem, listDrawingDonationItems, getDrawingDonationItem, getCurrentDrawingDonationItem, updateDrawingDonationItemStatus, deleteDrawingDonationItem, reorderDrawingDonationItems, uploadDrawingDonationObject, deleteDrawingDonationObjectKeys, deleteAccountData, cleanupPrivacyRetentionData, validateSecretEncryptionConfig, getPgPoolStatus, checkDatabaseReady, closeDatabaseConnections } from './supabase.js';
+import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, getBotSettingsStrict, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, revokeSession, getSessionUserId, listChannelPoints, listChannelPointsPage, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, deductChannelPointsIfEnough, getChannelPoints, getChannelPointBalanceSummary, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, getUserAttendanceSummary, incrementBotCounter, getOrCreatePublicShortLink, resolvePublicShortLink, issueApiKey, revokeApiKey, getOwnerPidForApiKey, issueApiWebSocketTicket, consumeApiWebSocketTicket, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, findSidByChannelViewerTokenSupabase, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, listPlatformAccountsForUserIds, findAppUserIdByChannelUid, findExactPublicChannelIdentity, getPublicChannelPointsSnapshot, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, markPlatformTokenValidated, deletePlatformTokens, deletePlatformAccount, getAppUserAdminStatus, getArubotAdminConsoleSnapshot, getArubotAdminStreamerFeatureDetails, getYoutubeBotProfile, upsertYoutubeBotProfile, updateYoutubeBotProfileTokens, markYoutubeBotProfileStatus, deleteYoutubeBotProfile, getYoutubeStreamerChannel, upsertYoutubeStreamerChannel, markYoutubeStreamerChannelModeratorRegistered, deleteYoutubeStreamerChannel, listYoutubeStreamerChannelsByYoutubeChannelId, updateYoutubeStreamerChannelLive, updateYoutubeStreamerChannelWebsub, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, claimBotRuleCooldown, enqueueDurableRuntimeJob, enqueuePaidDurableRuntimeJob, claimDurableRuntimeJobs, completeDurableRuntimeJob, failDurableRuntimeJob, claimRuntimeLease, releaseRuntimeLease, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps, recordBotEventLog, listBotEventLogs, getBotEventLog, insertDrawingDonationItem, listDrawingDonationItems, getDrawingDonationItem, getCurrentDrawingDonationItem, updateDrawingDonationItemStatus, deleteDrawingDonationItem, reorderDrawingDonationItems, uploadDrawingDonationObject, deleteDrawingDonationObjectKeys, deleteAccountData, cleanupPrivacyRetentionData, validateSecretEncryptionConfig, getPgPoolStatus, checkDatabaseReady, closeDatabaseConnections } from './supabase.js';
 import { confirmPlatformTokenConsent, confirmYoutubeBotProfileConsent, countActiveDurableRuntimeJobs, touchPlatformTokenUsed, touchYoutubeBotProfileUsed } from './supabase.js';
 import { createPlatformProfileService } from './platform-profiles.js';
 import { executeAndStripLiveChangeTokens, filterLiveInfoByProvider, selectCategorySearchResult } from './live-command-actions.js';
@@ -55,6 +55,13 @@ import { buildCanonicalOAuthStartUrl, createOAuthStateToken, resolveOAuthRequest
 import { getChannelIdFromUserId, selectPlatformChannelId, validateChannelId } from './channel-identity.js';
 import { findCommandKeywordMatch, getCommandRuleMatches } from './command-keyword.js';
 import { createRuntimeRecoverySupervisor } from './runtime-recovery.js';
+import {
+  buildPublicShortLinkRedirectUrl,
+  buildPublicShortLinkUrl,
+  isPublicShortLinkCode,
+  normalizePublicShortLinkTarget,
+  publicShortLinkTargetChannelUid,
+} from './public-short-links.js';
 import youtubeLiveChatReceiver from './youtube-live-chat-receiver.cjs';
 import { WebSocketServer, WebSocket } from 'ws';
 
@@ -220,6 +227,8 @@ const rateLimiters = {
   externalLookup: createIpRateLimiter({ prefix: 'externalLookup', windowMs: 60 * 1000, max: 30 }),
   userWrite: createIpRateLimiter({ prefix: 'userWrite', windowMs: 60 * 1000, max: 120 }),
   apiKeyCommand: createIpRateLimiter({ prefix: 'apiKeyCommand', windowMs: 60 * 1000, max: 240 }),
+  shortLinkCreate: createIpRateLimiter({ prefix: 'shortLinkCreate', windowMs: 60 * 1000, max: 20 }),
+  shortLinkResolve: createIpRateLimiter({ prefix: 'shortLinkResolve', windowMs: 60 * 1000, max: 120 }),
 };
 
 const singleFlightRequests = new Map();
@@ -353,6 +362,73 @@ const runPublicRouletteLogsOperation = createBoundedOperationRunner({
   maxInFlight: PUBLIC_ROULETTE_LOGS_MAX_INFLIGHT,
   timeoutMs: PUBLIC_ROULETTE_LOGS_TIMEOUT_MS,
 });
+const PUBLIC_SHORT_LINK_CACHE_TTL_MS = readBoundedIntegerEnv(
+  'PUBLIC_SHORT_LINK_CACHE_TTL_MS',
+  10 * 60_000,
+  30_000,
+  60 * 60_000,
+);
+const PUBLIC_SHORT_LINK_CACHE_MAX_ENTRIES = readBoundedIntegerEnv(
+  'PUBLIC_SHORT_LINK_CACHE_MAX_ENTRIES',
+  5_000,
+  100,
+  50_000,
+);
+const PUBLIC_SHORT_LINK_MAX_INFLIGHT = readBoundedIntegerEnv(
+  'PUBLIC_SHORT_LINK_MAX_INFLIGHT',
+  64,
+  4,
+  256,
+);
+const PUBLIC_SHORT_LINK_TIMEOUT_MS = readBoundedIntegerEnv(
+  'PUBLIC_SHORT_LINK_TIMEOUT_MS',
+  2_500,
+  250,
+  10_000,
+);
+const publicShortLinkPositiveCache = new Map();
+const runPublicShortLinkLookup = createBoundedOperationRunner({
+  maxInFlight: PUBLIC_SHORT_LINK_MAX_INFLIGHT,
+  timeoutMs: PUBLIC_SHORT_LINK_TIMEOUT_MS,
+  errorCode: 'public_short_link_temporarily_unavailable',
+});
+
+function rememberResolvedPublicShortLink(link) {
+  const code = String(link?.code || '').trim();
+  const targetPath = normalizePublicShortLinkTarget(link?.targetPath);
+  if (!isPublicShortLinkCode(code) || !targetPath) return null;
+  publicShortLinkPositiveCache.delete(code);
+  publicShortLinkPositiveCache.set(code, {
+    code,
+    targetPath,
+    expiresAt: Date.now() + PUBLIC_SHORT_LINK_CACHE_TTL_MS,
+  });
+  while (publicShortLinkPositiveCache.size > PUBLIC_SHORT_LINK_CACHE_MAX_ENTRIES) {
+    const oldestCode = publicShortLinkPositiveCache.keys().next().value;
+    if (typeof oldestCode !== 'string') break;
+    publicShortLinkPositiveCache.delete(oldestCode);
+  }
+  return { code, targetPath };
+}
+
+async function resolveCachedPublicShortLink(code) {
+  const normalizedCode = String(code || '').trim();
+  if (!isPublicShortLinkCode(normalizedCode)) return null;
+  const cached = publicShortLinkPositiveCache.get(normalizedCode);
+  if (cached && cached.expiresAt > Date.now()) {
+    publicShortLinkPositiveCache.delete(normalizedCode);
+    publicShortLinkPositiveCache.set(normalizedCode, cached);
+    return { code: cached.code, targetPath: cached.targetPath };
+  }
+  if (cached) publicShortLinkPositiveCache.delete(normalizedCode);
+  return singleFlight(`public-short-link:${normalizedCode}`, () => (
+    runPublicShortLinkLookup(async () => {
+      const link = await resolvePublicShortLink(normalizedCode);
+      // Misses are deliberately not cached, so random invalid codes cannot fill memory.
+      return rememberResolvedPublicShortLink(link);
+    })
+  ));
+}
 
 function parsePublicPointPolicyUid(value) {
   const raw = String(value || '').trim();
@@ -7279,6 +7355,72 @@ app.get('/api/version', (req, res) => {
   });
 });
 
+app.post('/api/short-links', rateLimiters.shortLinkCreate, async (req, res) => {
+  const targetPath = normalizePublicShortLinkTarget(req.body?.path || req.body?.targetPath);
+  if (!targetPath) return res.status(400).json({ error: 'invalid_public_short_link_target' });
+  try {
+    const channelUid = publicShortLinkTargetChannelUid(targetPath);
+    const identity = channelUid ? await resolveVerifiedPublicChannelIdentity(channelUid) : null;
+    const identityOwnerUserId = String(identity?.ownerUserId || '').replace(/^user:/, '').trim();
+    if (!identityOwnerUserId) return res.status(404).json({ error: 'public_channel_not_found' });
+    const createdBy = await getCurrentSessionUserId(req).catch(() => null);
+    const normalizedCreatedBy = String(createdBy || '').replace(/^user:/, '').trim() || null;
+    if (targetPath.startsWith('/viewer/drawing/') && normalizedCreatedBy !== identityOwnerUserId) {
+      return res.status(401).json({ error: 'login_required_for_viewer_short_link' });
+    }
+    if (targetPath.startsWith('/viewer/login?') && normalizedCreatedBy !== identityOwnerUserId) {
+      return res.status(401).json({ error: 'login_required_for_viewer_short_link' });
+    }
+    const link = await getOrCreatePublicShortLink(targetPath, { createdBy });
+    if (!link?.code) throw new Error('short_link_create_failed');
+    rememberResolvedPublicShortLink(link);
+    const shortUrl = buildPublicShortLinkUrl(link.code, FRONTEND_ORIGIN);
+    if (!shortUrl) throw new Error('short_link_frontend_origin_invalid');
+    return res.status(201).json({
+      code: link.code,
+      path: link.targetPath,
+      shortPath: `/s/${link.code}`,
+      shortUrl,
+    });
+  } catch (error) {
+    console.warn('[Short Link] Failed to create link:', error?.message || error);
+    return res.status(503).json({ error: 'short_link_temporarily_unavailable' });
+  }
+});
+
+app.get('/api/public/short-links/:code', async (req, res) => {
+  const code = String(req.params.code || '').trim();
+  if (!isPublicShortLinkCode(code)) return res.status(404).json({ error: 'short_link_not_found' });
+  try {
+    const link = await resolveCachedPublicShortLink(code);
+    const targetPath = normalizePublicShortLinkTarget(link?.targetPath);
+    if (!targetPath) return res.status(404).json({ error: 'short_link_not_found' });
+    res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=3600');
+    return res.json({ code, path: targetPath });
+  } catch (error) {
+    console.warn('[Short Link] Failed to resolve link:', error?.message || error);
+    return res.status(503).json({ error: 'short_link_temporarily_unavailable' });
+  }
+});
+
+// Compatibility fallback when /s is routed to the API origin instead of Next.js.
+app.get('/s/:code', rateLimiters.shortLinkResolve, async (req, res) => {
+  const code = String(req.params.code || '').trim();
+  if (!isPublicShortLinkCode(code)) return res.status(404).send('Not found');
+  try {
+    const link = await resolveCachedPublicShortLink(code);
+    const targetPath = normalizePublicShortLinkTarget(link?.targetPath);
+    if (!targetPath) return res.status(404).send('Not found');
+    const redirectUrl = buildPublicShortLinkRedirectUrl(targetPath, FRONTEND_ORIGIN);
+    if (!redirectUrl) return res.status(503).send('Temporarily unavailable');
+    res.setHeader('Cache-Control', 'no-store');
+    return res.redirect(302, redirectUrl);
+  } catch (error) {
+    console.warn('[Short Link] Failed to redirect link:', error?.message || error);
+    return res.status(503).send('Temporarily unavailable');
+  }
+});
+
 app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
@@ -8182,8 +8324,26 @@ app.get('/api/drawing-donation/viewer-url', async (req, res) => {
     }
     drawingTokenToSid.set(token, sid);
     const ownerUserId = ownerUserIdFromSid(sid);
-    const drawingEditorPath = ownerUserId
-      ? `/viewer/drawing/${encodeURIComponent(ownerUserId)}`
+    const publicAccount = ownerUserId
+      ? (await listPlatformAccounts(ownerUserId).catch(() => []))
+        .find((account) => {
+          const provider = String(account?.provider || '').trim().toLowerCase();
+          const channelUid = String(account?.channel_id || account?.platform_user_id || '').trim();
+          return ['chzzk', 'cime', 'youtube'].includes(provider) && channelUid;
+        })
+      : null;
+    const publicUid = publicAccount
+      ? `${String(publicAccount.provider).trim().toLowerCase()}:${String(publicAccount.channel_id || publicAccount.platform_user_id).trim()}`
+      : ownerUserId
+        ? await getYoutubeStreamerChannel(ownerUserId)
+          .then((channel) => {
+            const channelId = String(channel?.youtube_channel_id || channel?.youtubeChannelId || '').trim();
+            return channelId ? `youtube:${channelId}` : null;
+          })
+          .catch(() => null)
+        : null;
+    const drawingEditorPath = publicUid
+      ? `/viewer/drawing/${encodeURIComponent(publicUid)}`
       : null;
     const donationPath = drawingEditorPath
       ? `/viewer/login?returnTo=${encodeURIComponent(drawingEditorPath)}`
@@ -8192,6 +8352,7 @@ app.get('/api/drawing-donation/viewer-url', async (req, res) => {
       token,
       path: `/drawing-overlay/${encodeURIComponent(token)}`,
       ownerUserId,
+      publicUid,
       donationPath
     });
   } catch (e) {

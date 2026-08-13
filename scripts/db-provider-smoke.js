@@ -6,6 +6,7 @@ const REQUIRED_TABLES = [
   'bot_settings',
   'bot_rules',
   'bot_counter_values',
+  'public_short_links',
   'roulette_sessions',
   'migration_log',
 ];
@@ -56,13 +57,40 @@ async function main() {
         await client.query('rollback').catch(() => undefined);
       }
     }
+    let shortLinkCrudAccess = false;
+    if (tables.public_short_links) {
+      const suffix = `${Date.now().toString(36)}${process.pid.toString(36)}`;
+      const smokeCode = `sl${suffix}`.slice(0, 16).padEnd(10, '0');
+      const smokeTarget = `/c/provider-smoke-${suffix}`;
+      await client.query('begin');
+      try {
+        await client.query(
+          `insert into public.public_short_links (code, target_path, created_by)
+           values ($1, $2, 'provider-smoke')`,
+          [smokeCode, smokeTarget]
+        );
+        const selected = await client.query('select code from public.public_short_links where code = $1', [smokeCode]);
+        if (selected.rowCount !== 1) throw new Error('Runtime role cannot read its public short-link probe row');
+        const updated = await client.query(
+          `update public.public_short_links set created_by = null where code = $1`,
+          [smokeCode]
+        );
+        if (updated.rowCount !== 1) throw new Error('Runtime role cannot update its public short-link probe row');
+        const deleted = await client.query('delete from public.public_short_links where code = $1', [smokeCode]);
+        if (deleted.rowCount !== 1) throw new Error('Runtime role cannot delete its public short-link probe row');
+        shortLinkCrudAccess = true;
+      } finally {
+        await client.query('rollback').catch(() => undefined);
+      }
+    }
     return {
       provider,
       database: now.rows[0]?.database,
       now: now.rows[0]?.now,
       tables,
       counterWriteAccess,
-      ok: Object.values(tables).every(Boolean) && counterWriteAccess,
+      shortLinkCrudAccess,
+      ok: Object.values(tables).every(Boolean) && counterWriteAccess && shortLinkCrudAccess,
     };
   });
 

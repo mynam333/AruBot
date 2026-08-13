@@ -729,7 +729,7 @@ export function DrawingDonationEditorPage({ channelUid }: { channelUid: string }
     <ViewerShell>
       <section className="mx-auto mt-[clamp(1rem,3vw,2rem)] max-w-7xl space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <Button asChild variant="ghost"><Link href={`/c/${encodeURIComponent(channelUid)}`}><ArrowLeft className="h-[1em] w-[1em]" /> 공개 페이지로</Link></Button>
+          <Button asChild variant="ghost"><Link href={`/c/${encodeURIComponent(channelUid)}`}><ArrowLeft aria-hidden="true" className="h-[1em] w-[1em]" /> 공개 페이지로</Link></Button>
           {streamer ? <Badge tone={streamer.points >= estimatedCost ? 'mint' : 'rose'}>{formatNumber(streamer.points)}P 보유 · 예상 {formatNumber(estimatedCost)}P</Badge> : null}
         </div>
 

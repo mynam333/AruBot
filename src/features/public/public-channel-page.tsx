@@ -4,6 +4,7 @@ import { Badge } from '@/components/ui/badge';
 import { LegalFooter } from '@/components/app-shell/legal-footer';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ErrorState } from '@/components/ui/page';
+import { ShareLinkActions } from '@/components/ui/share-link-actions';
 import { cn } from '@/shared/lib/utils';
 import { readPublicChannelData, readPublicChannelHub, type PublicChannelKind } from '@/shared/api/public';
 import { PublicPointEarningSummary, type PublicPointEarningPolicy } from './public-point-earning-summary';
@@ -120,13 +121,16 @@ function PublicShell({
   channelUid,
   channelName,
   active,
+  sharePath,
   children,
 }: {
   channelUid: string;
   channelName: string;
   active?: PublicChannelKind | 'hub';
+  sharePath: string;
   children: React.ReactNode;
 }) {
+  const encodedChannelUid = encodeURIComponent(channelUid);
   return (
     <main className="min-h-screen px-4 py-6">
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-5">
@@ -150,27 +154,35 @@ function PublicShell({
                 명령어, 포인트, 룰렛, 라이브 정보를 모바일에서도 빠르게 열어볼 수 있어요.
               </p>
             </div>
-            <nav aria-label={`${channelName} 공개 채널 메뉴`} className="flex flex-wrap gap-2 text-sm font-semibold">
-              {tabs.map((tab) => {
-                const Icon = tab.icon;
-                const href = `/c/${channelUid}/${tab.href}`;
-                const selected = active === tab.href;
-                return (
-                  <Link
-                    key={tab.href}
-                    href={href}
-                    aria-current={selected ? 'page' : undefined}
-                    className={cn(
-                      'inline-flex items-center gap-2 rounded-[var(--radius-control)] border bg-background/75 px-[clamp(0.75rem,1.4vw,1rem)] py-[clamp(0.5rem,1vw,0.75rem)] transition hover:bg-muted',
-                      selected && 'border-primary/35 bg-primary/10 text-primary',
-                    )}
-                  >
-                    <Icon aria-hidden="true" className="h-4 w-4 text-primary" />
-                    {tab.label}
-                  </Link>
-                );
-              })}
-            </nav>
+            <div className="grid gap-3 sm:justify-items-end">
+              <nav aria-label={`${channelName} 공개 채널 메뉴`} className="flex flex-wrap gap-2 text-sm font-semibold">
+                {tabs.map((tab) => {
+                  const Icon = tab.icon;
+                  const href = `/c/${encodedChannelUid}/${tab.href}`;
+                  const selected = active === tab.href;
+                  return (
+                    <Link
+                      key={tab.href}
+                      href={href}
+                      aria-current={selected ? 'page' : undefined}
+                      className={cn(
+                        'inline-flex items-center gap-2 rounded-[var(--radius-control)] border bg-background/75 px-[clamp(0.75rem,1.4vw,1rem)] py-[clamp(0.5rem,1vw,0.75rem)] transition hover:bg-muted',
+                        selected && 'border-primary/35 bg-primary/10 text-primary',
+                      )}
+                    >
+                      <Icon aria-hidden="true" className="h-4 w-4 text-primary" />
+                      {tab.label}
+                    </Link>
+                  );
+                })}
+              </nav>
+              <ShareLinkActions
+                path={sharePath}
+                title={`${channelName} | AruBot`}
+                text={`${channelName}의 공개 참여 페이지를 확인해 보세요.`}
+                shareLabel="짧은 링크 공유"
+              />
+            </div>
           </div>
         </section>
         {children}
@@ -184,9 +196,13 @@ export async function PublicChannelPage({ channelUid, kind }: { channelUid: stri
   const config = meta[kind];
   const Icon = config.icon;
   const data = await readPublicChannelData(channelUid, kind);
+  const encodedChannelUid = encodeURIComponent(channelUid);
+  const pagePath = kind === 'rouletteLogs'
+    ? `/c/${encodedChannelUid}/roulette/logs`
+    : `/c/${encodedChannelUid}/${kind}`;
 
   return (
-    <PublicShell channelUid={channelUid} channelName={channelLabel(data, channelUid)} active={kind}>
+    <PublicShell channelUid={channelUid} channelName={channelLabel(data, channelUid)} active={kind} sharePath={pagePath}>
       <Card>
         <CardHeader>
           <div className="flex flex-wrap items-start justify-between gap-3">
@@ -198,7 +214,7 @@ export async function PublicChannelPage({ channelUid, kind }: { channelUid: stri
               </CardTitle>
               <CardDescription>{config.description}</CardDescription>
             </div>
-            <Link href={`/c/${channelUid}`} className="inline-flex items-center gap-2 rounded-[var(--radius-control)] border px-[clamp(0.75rem,1.4vw,1rem)] py-[clamp(0.5rem,1vw,0.75rem)] text-sm font-semibold text-muted-foreground transition hover:bg-muted hover:text-foreground">
+            <Link href={`/c/${encodedChannelUid}`} className="inline-flex items-center gap-2 rounded-[var(--radius-control)] border px-[clamp(0.75rem,1.4vw,1rem)] py-[clamp(0.5rem,1vw,0.75rem)] text-sm font-semibold text-muted-foreground transition hover:bg-muted hover:text-foreground">
               채널 홈
               <ChevronRight className="h-4 w-4" />
             </Link>
@@ -219,6 +235,7 @@ export async function PublicChannelPage({ channelUid, kind }: { channelUid: stri
 export async function PublicChannelHub({ channelUid }: { channelUid: string }) {
   const data = await readPublicChannelHub(channelUid);
   const pointEarning = readPublicPointEarningPolicy(data.points);
+  const encodedChannelUid = encodeURIComponent(channelUid);
   const drawingPath = `/viewer/drawing/${encodeURIComponent(channelUid)}`;
   const cards = [
     { href: `/viewer/login?returnTo=${encodeURIComponent(drawingPath)}`, title: '그림 후원', body: '로그인하고 방송 화면 위에 내 그림을 그려요.', count: 1, icon: ImagePlus, tone: 'mint', direct: true },
@@ -229,14 +246,14 @@ export async function PublicChannelHub({ channelUid }: { channelUid: string }) {
   ] as const;
 
   return (
-    <PublicShell channelUid={channelUid} channelName={channelLabel(data.live, channelUid)} active="hub">
+    <PublicShell channelUid={channelUid} channelName={channelLabel(data.live, channelUid)} active="hub" sharePath={`/c/${encodedChannelUid}`}>
       {Object.values(data).every((value) => value == null) ? <ErrorState description="채널 참여 정보를 불러오지 못했습니다. 잠시 후 다시 열어 주세요." /> : null}
       <PublicPointEarningSummary policy={pointEarning} />
       <section className="grid gap-4 sm:grid-cols-2">
         {cards.map((card) => {
           const Icon = card.icon;
           return (
-            <Link key={card.href} href={card.direct ? card.href : `/c/${channelUid}/${card.href}`} className="group rounded-[var(--radius-card)] border bg-card p-[clamp(1.25rem,2.2vw,1.5rem)] shadow-subtle transition-colors hover:border-primary/35 hover:bg-muted/30">
+            <Link key={card.href} href={card.direct ? card.href : `/c/${encodedChannelUid}/${card.href}`} className="group rounded-[var(--radius-card)] border bg-card p-[clamp(1.25rem,2.2vw,1.5rem)] shadow-subtle transition-colors hover:border-primary/35 hover:bg-muted/30">
               <div className="flex items-start justify-between gap-3">
                 <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-muted text-primary">
                   <Icon className="h-5 w-5" />

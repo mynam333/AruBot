@@ -23,6 +23,7 @@ import { LegalFooter } from '@/components/app-shell/legal-footer';
 import { Button, LinkButton } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Pagination } from '@/components/ui/pagination';
+import { ShareLinkActions } from '@/components/ui/share-link-actions';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
 import { apiUrl } from '@/shared/api/http';
 import { cn, formatNumber } from '@/shared/lib/utils';
@@ -707,10 +708,17 @@ export function ViewerPointsPage() {
               </p>
             </div>
             {topBalance ? (
-              <LinkButton href={topBalance.publicLinks?.home || `/c/${topBalance.channelUid}`} variant="soft" className="mt-auto justify-center">
-                공개 페이지 열기
-                <ExternalLink className="h-4 w-4" />
-              </LinkButton>
+              <div className="mt-auto flex flex-wrap gap-2">
+                <LinkButton href={topBalance.publicLinks?.home || `/c/${topBalance.channelUid}`} variant="soft" className="flex-1 justify-center">
+                  공개 페이지 열기
+                  <ExternalLink aria-hidden="true" className="h-4 w-4" />
+                </LinkButton>
+                <ShareLinkActions
+                  path={topBalance.publicLinks?.home || `/c/${topBalance.channelUid}`}
+                  title={`${topBalance.channelName || topBalance.channelUid} | AruBot`}
+                  size="default"
+                />
+              </div>
             ) : (
               <LinkButton href="/viewer/connect" variant="soft" className="mt-auto justify-center">
                 <UserRoundPlus className="h-4 w-4" />
@@ -798,11 +806,15 @@ export function ViewerPointsPage() {
                   <div className="mt-4 flex flex-wrap gap-2">
                     <LinkButton href={balance.publicLinks?.home || `/c/${balance.channelUid}`} variant="ghost">
                       공개 페이지
-                      <ExternalLink className="h-4 w-4" />
+                      <ExternalLink aria-hidden="true" className="h-4 w-4" />
                     </LinkButton>
+                    <ShareLinkActions
+                      path={balance.publicLinks?.home || `/c/${balance.channelUid}`}
+                      title={`${balance.channelName || balance.channelUid} | AruBot`}
+                    />
                     <Button type="button" variant="ghost" onClick={() => setStationBalance(balance)}>
                       방송국 바로가기
-                      <Tv className="h-4 w-4" />
+                      <Tv aria-hidden="true" className="h-4 w-4" />
                     </Button>
                   </div>
                 </CardContent>

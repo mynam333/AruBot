@@ -11,27 +11,27 @@ describe('drawing donation viewer link regression', () => {
     const routeBody = serverIndex.slice(routeStart, routeEnd);
 
     expect(routeBody).toContain('const ownerUserId = ownerUserIdFromSid(sid)');
-    expect(routeBody).toContain('`/viewer/drawing/${encodeURIComponent(ownerUserId)}`');
+    expect(routeBody).toContain('const publicUid = publicAccount');
+    expect(routeBody).toContain('`youtube:${channelId}`');
+    expect(routeBody).toContain('`/viewer/drawing/${encodeURIComponent(publicUid)}`');
     expect(routeBody).toContain('`/viewer/login?returnTo=${encodeURIComponent(drawingEditorPath)}`');
     expect(routeBody).toContain('ownerUserId');
+    expect(routeBody).toContain('publicUid');
     expect(routeBody).toContain('donationPath');
   });
 
-  test('builds a backward-compatible viewer URL and renders a top-level copy button', () => {
+  test('uses the verified viewer URL and renders top-level short copy and share actions', () => {
     expect(adminPage).toContain('viewerDonationPath');
-    expect(adminPage).toContain('viewerDonationUrl');
-    expect(adminPage).toContain("readJson<{ userId?: string | null }>('/api/account/platforms')");
-    expect(adminPage).toContain('buildViewerDonationPath(viewerPayload.ownerUserId || accountPayload.userId)');
-    expect(adminPage).toContain('`/viewer/login?returnTo=${encodeURIComponent(drawingEditorPath)}`');
+    expect(adminPage).toContain('setViewerDonationPath(viewerPayload.donationPath || \'\')');
+    expect(adminPage).not.toContain("readJson<{ userId?: string | null }>('/api/account/platforms')");
+    expect(adminPage).not.toContain('buildViewerDonationPath');
     expect(adminPage).not.toContain('setViewerPath');
-    expect(adminPage).toContain('시청자 링크 복사');
-    expect(adminPage.indexOf('시청자 링크 복사')).toBeLessThan(adminPage.indexOf('<CardTitle>접수 설정</CardTitle>'));
+    expect(adminPage).toContain('짧은 시청자 링크 복사');
+    expect(adminPage.indexOf('짧은 시청자 링크 복사')).toBeLessThan(adminPage.indexOf('<CardTitle>접수 설정</CardTitle>'));
     expect(adminPage).not.toContain('<CardTitle>시청자 그림 후원 링크</CardTitle>');
-    expect(adminPage).toContain('const copyViewerDonationLink = useCallback(async () =>');
-    expect(adminPage).toContain("readJson<{ path?: string; donationPath?: string | null; ownerUserId?: string | null }>('/api/drawing-donation/viewer-url')");
-    expect(adminPage).toContain('onClick={copyViewerDonationLink}');
-    expect(adminPage).not.toContain('disabled={!viewerDonationUrl}');
-    expect(adminPage).toContain('disabled={viewerLinkPending}');
-    expect(adminPage).toContain("document.execCommand('copy')");
+    expect(adminPage).toContain('<ShareLinkActions');
+    expect(adminPage).toContain('path={viewerDonationPath}');
+    expect(adminPage).toContain('showCopy');
+    expect(adminPage).toContain('disabled={!viewerDonationPath}');
   });
 });
