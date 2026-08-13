@@ -6,9 +6,11 @@ const BLUEPRINT_NUMERIC_TEXT_RE = /^[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?$/;
 const BLUEPRINT_REGEX_MAX_PATTERN_LENGTH = 256;
 const BLUEPRINT_REGEX_MAX_INPUT_LENGTH = 4096;
 const BLUEPRINT_REGEX_TIMEOUT_MS = 100;
+const BLUEPRINT_REGEX_STARTUP_TIMEOUT_MS = 2000;
 const BLUEPRINT_REGEX_MAX_PENDING = 32;
 
 let blueprintRegexWorker = null;
+let blueprintRegexWorkerReady = false;
 let blueprintRegexActiveTask = null;
 const blueprintRegexQueue = [];
 let blueprintRegexTaskId = 0;
@@ -16,10 +18,12 @@ let blueprintRegexTaskId = 0;
 function rejectActiveRegexTask(worker, error) {
   if (blueprintRegexWorker !== worker) return;
   blueprintRegexWorker = null;
+  blueprintRegexWorkerReady = false;
   const task = blueprintRegexActiveTask;
   blueprintRegexActiveTask = null;
   if (task) {
     clearTimeout(task.timer);
+    clearTimeout(task.startupTimer);
     task.reject(error);
   }
   queueMicrotask(runNextBlueprintRegexTask);
@@ -35,9 +39,19 @@ function ensureBlueprintRegexWorker() {
   worker.unref();
   worker.on('message', (message) => {
     if (blueprintRegexWorker !== worker) return;
+    if (message?.type === 'ready') {
+      blueprintRegexWorkerReady = true;
+      const task = blueprintRegexActiveTask;
+      if (task) {
+        clearTimeout(task.startupTimer);
+        dispatchBlueprintRegexTask(worker, task);
+      }
+      return;
+    }
     const task = blueprintRegexActiveTask;
     if (!task || message?.id !== task.id) return;
     clearTimeout(task.timer);
+    clearTimeout(task.startupTimer);
     blueprintRegexActiveTask = null;
     if (message?.ok === true) task.resolve(message.matched === true);
     else task.reject(createBlueprintValueError('blueprint_regex_invalid', '실행 액션의 정규식이 올바르지 않습니다.'));
@@ -58,25 +72,22 @@ function ensureBlueprintRegexWorker() {
     );
   });
   blueprintRegexWorker = worker;
+  blueprintRegexWorkerReady = false;
   return worker;
 }
 
-function runNextBlueprintRegexTask() {
-  if (blueprintRegexActiveTask || blueprintRegexQueue.length === 0) return;
-  const task = blueprintRegexQueue.shift();
-  let worker;
-  try {
-    worker = ensureBlueprintRegexWorker();
-  } catch (error) {
-    task.reject(createBlueprintValueError('blueprint_regex_worker_failed', '실행 액션의 정규식 검사기를 시작하지 못했습니다.', error));
-    queueMicrotask(runNextBlueprintRegexTask);
-    return;
-  }
-  blueprintRegexActiveTask = task;
-  worker.ref();
+function dispatchBlueprintRegexTask(worker, task) {
+  if (
+    task.dispatched
+    || blueprintRegexWorker !== worker
+    || blueprintRegexActiveTask !== task
+    || !blueprintRegexWorkerReady
+  ) return;
+  task.dispatched = true;
   task.timer = setTimeout(() => {
     if (blueprintRegexWorker !== worker || blueprintRegexActiveTask !== task) return;
     blueprintRegexWorker = null;
+    blueprintRegexWorkerReady = false;
     blueprintRegexActiveTask = null;
     task.reject(createBlueprintValueError('blueprint_regex_timeout', '실행 액션의 정규식 검사가 제한 시간을 초과했습니다.'));
     void worker.terminate();
@@ -92,13 +103,49 @@ function runNextBlueprintRegexTask() {
   }
 }
 
+function runNextBlueprintRegexTask() {
+  if (blueprintRegexActiveTask || blueprintRegexQueue.length === 0) return;
+  const task = blueprintRegexQueue.shift();
+  let worker;
+  try {
+    worker = ensureBlueprintRegexWorker();
+  } catch (error) {
+    task.reject(createBlueprintValueError('blueprint_regex_worker_failed', '실행 액션의 정규식 검사기를 시작하지 못했습니다.', error));
+    queueMicrotask(runNextBlueprintRegexTask);
+    return;
+  }
+  blueprintRegexActiveTask = task;
+  worker.ref();
+  if (blueprintRegexWorkerReady) {
+    dispatchBlueprintRegexTask(worker, task);
+    return;
+  }
+  task.startupTimer = setTimeout(() => {
+    if (blueprintRegexWorker !== worker || blueprintRegexActiveTask !== task) return;
+    rejectActiveRegexTask(
+      worker,
+      createBlueprintValueError('blueprint_regex_worker_failed', '실행 액션의 정규식 검사기를 시작하지 못했습니다.')
+    );
+    void worker.terminate();
+  }, BLUEPRINT_REGEX_STARTUP_TIMEOUT_MS);
+}
+
 function matchBlueprintRegex(pattern, input) {
   const pendingCount = blueprintRegexQueue.length + (blueprintRegexActiveTask ? 1 : 0);
   if (pendingCount >= BLUEPRINT_REGEX_MAX_PENDING) {
     return Promise.reject(createBlueprintValueError('blueprint_regex_overloaded', '실행 액션의 정규식 검사 요청이 너무 많습니다.'));
   }
   return new Promise((resolve, reject) => {
-    blueprintRegexQueue.push({ id: ++blueprintRegexTaskId, pattern, input, resolve, reject, timer: null });
+    blueprintRegexQueue.push({
+      id: ++blueprintRegexTaskId,
+      pattern,
+      input,
+      resolve,
+      reject,
+      timer: null,
+      startupTimer: null,
+      dispatched: false,
+    });
     runNextBlueprintRegexTask();
   });
 }

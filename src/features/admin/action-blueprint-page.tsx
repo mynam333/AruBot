@@ -780,6 +780,15 @@ function validateBlueprint(nodes: BlueprintNode[], edges: BlueprintEdge[]) {
       outputKeys.add(key);
     }
   });
+  const outgoingByNodeAndPort = new Set(edges.map((edge) => `${edge.source}:${edge.sourcePort || 'out'}`));
+  nodes.forEach((node) => {
+    if (!['condition', 'pointsEnough', 'pointsExcluded', 'rouletteCompare', 'cooldown'].includes(node.type)) return;
+    const hasTrueBranch = outgoingByNodeAndPort.has(`${node.id}:true`);
+    const hasFalseBranch = outgoingByNodeAndPort.has(`${node.id}:false`);
+    if (!hasTrueBranch && !hasFalseBranch) {
+      errors.push(`${node.name}: 참 또는 거짓 분기 중 하나 이상을 다음 노드에 연결해 주세요.`);
+    }
+  });
   if (nodes.length && hasCycle(nodes, edges)) errors.push('순환 연결은 실행할 수 없습니다. 반복은 N회 반복 노드를 사용하세요.');
   return Array.from(new Set(errors));
 }
@@ -1061,12 +1070,13 @@ function normalizeBlueprint(payload?: Blueprint | null) {
       version: { nodes, edges: defaultEdges(nodes), viewport: DEFAULT_VIEWPORT, published: false },
     } satisfies Blueprint;
   }
+  const nodes = payload.version?.nodes?.length ? payload.version.nodes.map(normalizeNodeName) : defaultNodes();
   return {
     ...payload,
     version: {
       ...(payload.version || {}),
-      nodes: payload.version?.nodes?.length ? payload.version.nodes.map(normalizeNodeName) : defaultNodes(),
-      edges: payload.version?.edges || [],
+      nodes,
+      edges: normalizeImportedEdges(payload.version?.edges, nodes),
       viewport: payload.version?.viewport || DEFAULT_VIEWPORT,
     },
   };
@@ -1125,11 +1135,27 @@ function normalizeImportedEdges(rawEdges: unknown, nodes: BlueprintNode[]) {
   const nodeMap = new Map(nodes.map((node) => [node.id, node]));
   return rawEdges.flatMap((raw) => {
     if (!raw || typeof raw !== 'object') return [];
-    const source = raw as Partial<BlueprintEdge>;
-    const sourceNode = nodeMap.get(String(source.source || ''));
-    const targetNode = nodeMap.get(String(source.target || ''));
-    const sourcePort = String(source.sourcePort || 'out');
-    const targetPort = String(source.targetPort || 'in');
+    const source = raw as Partial<BlueprintEdge> & {
+      sourceHandle?: unknown;
+      targetHandle?: unknown;
+      source_port?: unknown;
+      target_port?: unknown;
+      source_handle?: unknown;
+      target_handle?: unknown;
+      sourceId?: unknown;
+      targetId?: unknown;
+      source_id?: unknown;
+      target_id?: unknown;
+    };
+    const sourceNode = nodeMap.get(String(source.source ?? source.sourceId ?? source.source_id ?? ''));
+    const targetNode = nodeMap.get(String(source.target ?? source.targetId ?? source.target_id ?? ''));
+    const normalizePort = (value: unknown, fallback: string) => {
+      const port = String(value ?? fallback).trim() || fallback;
+      const reservedPort = port.toLowerCase();
+      return ['in', 'out', 'true', 'false'].includes(reservedPort) ? reservedPort : port;
+    };
+    const sourcePort = normalizePort(source.sourcePort ?? source.sourceHandle ?? source.source_port ?? source.source_handle, 'out');
+    const targetPort = normalizePort(source.targetPort ?? source.targetHandle ?? source.target_port ?? source.target_handle, 'in');
     if (!sourceNode || !targetNode) return [];
     if (!outputPorts(sourceNode).includes(sourcePort) || !inputPorts(targetNode).includes(targetPort)) return [];
     return [{
@@ -2030,10 +2056,13 @@ export function ActionBlueprintPage() {
       const currentSnapshot = serializeBlueprintSnapshot(blueprint);
       const targetBlueprint = blueprint.id && persistedSnapshotRef.current === currentSnapshot ? blueprint : await save();
       if (!targetBlueprint?.id) return;
-      const data = await jsonRequest<{ ok?: boolean; error?: string; run?: BlueprintRun; executed?: string[] }>(`/api/action-blueprints/${encodeURIComponent(targetBlueprint.id)}/test`, 'POST', {
+      const data = await jsonRequest<{ ok?: boolean; error?: string; validationErrors?: string[]; run?: BlueprintRun; executed?: string[] }>(`/api/action-blueprints/${encodeURIComponent(targetBlueprint.id)}/test`, 'POST', {
         context: simulatorContext(),
       });
-      toast[data.ok ? 'success' : 'error'](data.ok ? `테스트 실행 완료: ${data.executed?.length || 0}개 노드` : data.error || '테스트 실패');
+      const failureMessage = data.validationErrors?.length
+        ? data.validationErrors[0]
+        : data.error || '테스트 실패';
+      toast[data.ok ? 'success' : 'error'](data.ok ? `테스트 실행 완료: ${data.executed?.length || 0}개 노드` : failureMessage);
       const runData = await readJson<{ runs?: BlueprintRun[] }>(`/api/action-blueprints/${encodeURIComponent(targetBlueprint.id)}/runs`);
       setRuns(runData?.runs || []);
       if (data.run?.id) {

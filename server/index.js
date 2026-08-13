@@ -3185,7 +3185,8 @@ function makeChzzkChatPost(sessionKey, accessToken, resolvedUsername, extra = {}
 }
 
 function makeCimeChatPost(ownerUserId, resolvedUsername, extra = {}) {
-  return { provider: 'cime', ownerUserId, resolvedUsername, ...extra };
+  const channelUid = extra.channelUid || cimeSessionStore.get(ownerUserId)?.channelId || null;
+  return { provider: 'cime', ownerUserId, resolvedUsername, ...extra, channelUid };
 }
 
 function rememberOutboundMessage(entry, text) {
@@ -8523,6 +8524,32 @@ function blueprintAllowsMultipleOutgoing(node = {}) {
   return String(node?.type || '') === 'parallel';
 }
 
+function blueprintEdgePort(edge = {}, kind = 'source') {
+  const prefix = kind === 'target' ? 'target' : 'source';
+  const fallback = kind === 'target' ? 'in' : 'out';
+  const value = edge?.[`${prefix}Port`]
+    ?? edge?.[`${prefix}Handle`]
+    ?? edge?.[`${prefix}_port`]
+    ?? edge?.[`${prefix}_handle`];
+  const port = String(value ?? fallback).trim() || fallback;
+  const reservedPort = port.toLowerCase();
+  return ['in', 'out', 'true', 'false'].includes(reservedPort) ? reservedPort : port;
+}
+
+function normalizeBlueprintEdges(edges = []) {
+  if (!Array.isArray(edges)) return [];
+  return edges.flatMap((edge) => {
+    if (!edge || typeof edge !== 'object') return [];
+    return [{
+      ...edge,
+      source: String(edge.source ?? edge.sourceId ?? edge.source_id ?? ''),
+      target: String(edge.target ?? edge.targetId ?? edge.target_id ?? ''),
+      sourcePort: blueprintEdgePort(edge, 'source'),
+      targetPort: blueprintEdgePort(edge, 'target'),
+    }];
+  });
+}
+
 const OBS_SCENE_ACTIONS = new Set(['scene.switch', 'scene.preview']);
 const OBS_SCENE_SOURCE_ACTIONS = new Set(['source.show', 'source.hide', 'source.toggle', 'source.visibility']);
 const OBS_FILTER_ACTIONS = new Set(['filter.on', 'filter.off', 'filter.toggle', 'filter.enabled']);
@@ -8692,6 +8719,7 @@ function hasBlueprintCycle(nodes = [], edges = []) {
 }
 
 function validateBlueprintGraph(nodes = [], edges = []) {
+  edges = normalizeBlueprintEdges(edges);
   const errors = [];
   const startNodes = nodes.filter((node) => node.type === 'start');
   if (startNodes.length !== 1) errors.push('시작 노드는 반드시 1개여야 합니다.');
@@ -8727,6 +8755,15 @@ function validateBlueprintGraph(nodes = [], edges = []) {
       outputUse.add(outputKey);
     }
   }
+  const outgoingByNodeAndPort = new Set(edges.map((edge) => `${edge.source}:${edge.sourcePort}`));
+  for (const node of nodes) {
+    if (!['condition', 'pointsEnough', 'pointsExcluded', 'rouletteCompare', 'cooldown'].includes(String(node.type || ''))) continue;
+    const hasTrueBranch = outgoingByNodeAndPort.has(`${node.id}:true`);
+    const hasFalseBranch = outgoingByNodeAndPort.has(`${node.id}:false`);
+    if (!hasTrueBranch && !hasFalseBranch) {
+      errors.push(`${node.name || node.type}: 참 또는 거짓 분기 중 하나 이상을 다음 노드에 연결해 주세요.`);
+    }
+  }
   if (nodeIds.size && hasBlueprintCycle(nodes, edges)) errors.push('순환 연결은 실행할 수 없습니다. 반복은 N회 반복 노드를 사용하세요.');
   return Array.from(new Set(errors));
 }
@@ -8745,7 +8782,11 @@ async function resolveBlueprintChannelUid(ownerUserId, context = {}) {
     || ''
   ).trim().toLowerCase();
   const supportedProvider = ['chzzk', 'cime', 'youtube'].includes(provider) ? provider : '';
-  if (!supportedProvider && direct) return String(direct);
+  // All non-dry-run callers construct this context on the server from the
+  // actual chat/attendance/roulette event. Prefer that exact channel so a
+  // delayed or temporarily incomplete platform-account lookup cannot abort a
+  // point condition before it reaches either branch.
+  if (direct) return String(direct);
   const ownedChannelUid = await resolveStreamerUidForSid(sid, supportedProvider);
   if (ownedChannelUid) return String(ownedChannelUid);
   const error = new Error('The action channel could not be resolved for the current platform');
@@ -8753,10 +8794,12 @@ async function resolveBlueprintChannelUid(ownerUserId, context = {}) {
   throw error;
 }
 
-const BLUEPRINT_VARIABLE_LOOKUP_TIMEOUT_MS = Math.max(
-  1000,
-  Math.min(15000, Number(process.env.BLUEPRINT_VARIABLE_LOOKUP_TIMEOUT_MS || 5000))
-);
+const BLUEPRINT_VARIABLE_LOOKUP_TIMEOUT_MS = (() => {
+  const configured = Number(process.env.BLUEPRINT_VARIABLE_LOOKUP_TIMEOUT_MS);
+  return Number.isFinite(configured)
+    ? Math.max(1000, Math.min(15000, configured))
+    : 5000;
+})();
 
 async function withBlueprintVariableDeadline(family, loader) {
   let timer = null;
@@ -9188,7 +9231,7 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}, inter
   const version = blueprint.version || {};
   if (!version.published && context.source !== 'manual_test') return { ok: false, error: 'blueprint_not_published' };
   const nodes = Array.isArray(version.nodes) ? version.nodes : [];
-  const edges = Array.isArray(version.edges) ? version.edges : [];
+  const edges = normalizeBlueprintEdges(version.edges);
   const validationErrors = validateBlueprintGraph(nodes, edges);
   if (validationErrors.length) return { ok: false, error: 'blueprint_invalid', validationErrors };
 
@@ -9549,6 +9592,18 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}, inter
           nodeOutputs.action[actionKey] = output;
         }
       }
+      const conditionalPorts = blueprintOutputPorts(node);
+      if (
+        conditionalPorts.includes('true')
+        && conditionalPorts.includes('false')
+        && node.type !== 'loop'
+        && !edgeFrom(node.id, 'true')
+        && !edgeFrom(node.id, 'false')
+      ) {
+        const error = new Error(`${node.name || node.type} 노드의 참/거짓 분기가 모두 연결되지 않았습니다.`);
+        error.code = 'blueprint_branch_not_connected';
+        throw error;
+      }
       await recordStep(node, 'done', incoming, output, startedAt);
       if (node.type === 'loop') {
         const falseEdge = edgeFrom(node.id, 'false');
@@ -9569,7 +9624,16 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}, inter
     return { ok: true, run: finalRun, result, executed, flow, nodeOutputs };
   } catch (error) {
     const finalRun = await finishActionBlueprintRun(ownerUserId, run.id, { status: 'failed', error: error?.message || String(error) });
-    return { ok: false, run: finalRun, error: error?.message || String(error), executed, flow, nodeOutputs };
+    return {
+      ok: false,
+      run: finalRun,
+      error: error?.message || String(error),
+      errorCode: error?.code || null,
+      failedNodeId: executed.at(-1) || null,
+      executed,
+      flow,
+      nodeOutputs,
+    };
   }
 }
 
@@ -10782,8 +10846,22 @@ async function executeActionVariableTokens(sid, text, context = {}) {
           blueprintName: blueprint.name || actionId,
           runId: runResult?.run?.id || null,
           ok: runResult?.ok !== false,
+          error: runResult?.ok === false ? (runResult?.error || 'action_execution_failed') : null,
+          errorCode: runResult?.ok === false ? (runResult?.errorCode || null) : null,
+          failedNodeId: runResult?.ok === false ? (runResult?.failedNodeId || null) : null,
           result: runResult,
         });
+        if (runResult?.ok === false) {
+          console.warn('[Action Blueprint] execution failed', {
+            ownerUserId,
+            actionId,
+            blueprintId: blueprint.id,
+            runId: runResult?.run?.id || null,
+            failedNodeId: runResult?.failedNodeId || null,
+            errorCode: runResult?.errorCode || null,
+            error: runResult?.error || 'action_execution_failed',
+          });
+        }
       } else if (context.requirePublishedBlueprint === true) {
         jobs.push({
           kind: 'blueprint',
@@ -11473,6 +11551,18 @@ async function executeRouletteResultCommand(sid, commandText, userId, username, 
       }
 
       if (allowExecute && typeof responseToSend === 'string') {
+        const ownerUserId = ownerUserIdFromSid(sid);
+        const providerEntry = chatPostProvider === 'cime'
+          ? cimeSessionStore.get(ownerUserId)
+          : chatPostProvider === 'youtube'
+            ? youtubeSessionStore.get(ownerUserId)
+            : entry;
+        const rouletteCommandChannelUid = String(
+          chatPost?.channelUid
+          || chatPost?.channelId
+          || providerEntry?.channelId
+          || ''
+        ).trim() || null;
         const actionResult = await executeAndStripActionVariableTokens(sid, responseToSend, {
           source: 'roulette-command',
           platform: chatPostProvider || 'chzzk',
@@ -11481,6 +11571,8 @@ async function executeRouletteResultCommand(sid, commandText, userId, username, 
           chatPost: (isCimeChatPost || isYoutubeChatPost)
             ? chatPost
             : makeChzzkChatPost(entry?.sessionKey || null, null, username, { liveManageActorId: chatPost?.liveManageActorId || null }),
+          channelUid: rouletteCommandChannelUid,
+          channel: { channelUid: rouletteCommandChannelUid },
         });
         if (actionResult.used) {
           responseToSend = actionResult.text;
@@ -12118,6 +12210,9 @@ async function recordCommandExecutionLog(sid, context = {}) {
         jobId: job.job?.id || job.jobId || null,
         kind: job.kind || null,
         ok: job.ok ?? null,
+        error: job.error || job.result?.error || null,
+        errorCode: job.errorCode || job.result?.errorCode || null,
+        failedNodeId: job.failedNodeId || job.result?.failedNodeId || null,
       })) : [],
       actionIds: Array.isArray(context.actionJobs)
         ? Array.from(new Set(context.actionJobs.map((job) => job.actionId || job.blueprintId || job.result?.run?.blueprintId || job.run?.blueprintId).filter(Boolean).map(String)))
@@ -19570,7 +19665,7 @@ app.post('/api/action-blueprints', rateLimiters.userWrite, async (req, res) => {
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
     const body = req.body || {};
     const nodes = Array.isArray(body.nodes) ? body.nodes : [];
-    const edges = Array.isArray(body.edges) ? body.edges : [];
+    const edges = normalizeBlueprintEdges(body.edges);
     const validationErrors = validateBlueprintGraph(nodes, edges);
     const blueprint = await upsertActionBlueprint(ownerUserId, {
       id: body.id,
@@ -24565,7 +24660,8 @@ function normalizeYoutubeLiveChatItem(item) {
 }
 
 function makeYoutubeChatPost(ownerUserId, liveChatId, resolvedUsername, extra = {}) {
-  return { provider: 'youtube', ownerUserId, liveChatId, resolvedUsername, ...extra };
+  const channelUid = extra.channelUid || youtubeSessionStore.get(ownerUserId)?.channelId || null;
+  return { provider: 'youtube', ownerUserId, liveChatId, resolvedUsername, ...extra, channelUid };
 }
 
 function isYoutubeReauthRequired(entryOrError) {

@@ -11,3 +11,5 @@ parentPort.on('message', (message) => {
     parentPort.postMessage({ id, ok: false, matched: false });
   }
 });
+
+parentPort.postMessage({ type: 'ready' });

@@ -1526,13 +1526,35 @@ async function listPointTablesForChannelAliases(channelAliases, pg = null) {
   return uniqueNonEmpty(tables);
 }
 
+async function listExistingPointTablesForChannelAliases(channelAliases, pg) {
+  const candidates = pointTableCandidatesForAliases(channelAliases);
+  if (!candidates.length) return [];
+  const { rows } = await pg.query(
+    `select table_name
+       from information_schema.tables
+      where table_schema = 'public'
+        and table_type = 'BASE TABLE'
+        and table_name = any($1::text[])`,
+    [candidates]
+  );
+  const existing = new Set((rows || []).map((row) => String(row.table_name || '')).filter(Boolean));
+  return candidates.filter((table) => existing.has(table));
+}
+
+const POINT_IDENTITY_READ_BATCH_SIZE = 32;
+
 async function sumPointsForIdentity(pg, channelAliases, identityKeys) {
   const keys = uniqueNonEmpty(identityKeys);
   if (!keys.length) return 0;
+  const tables = await listExistingPointTablesForChannelAliases(channelAliases, pg);
+  if (!tables.length) return 0;
   let total = 0;
-  const tables = await listPointTablesForChannelAliases(channelAliases, pg);
-  for (const table of tables) {
-    const { rows } = await pg.query(`select coalesce(sum(points), 0) as points from ${quoteChannelPointsTable(table)} where user_id = any($1::text[])`, [keys]);
+  for (let index = 0; index < tables.length; index += POINT_IDENTITY_READ_BATCH_SIZE) {
+    const batch = tables.slice(index, index + POINT_IDENTITY_READ_BATCH_SIZE);
+    const union = batch
+      .map((table) => `select points from ${quoteChannelPointsTable(table)} where user_id = any($1::text[])`)
+      .join(' union all ');
+    const { rows } = await pg.query(`select coalesce(sum(points), 0) as points from (${union}) as point_rows`, [keys]);
     total += Number(rows?.[0]?.points || 0);
   }
   return total;
@@ -1541,12 +1563,19 @@ async function sumPointsForIdentity(pg, channelAliases, identityKeys) {
 async function getPointBalanceSummaryForIdentity(pg, channelAliases, identityKeys) {
   const keys = uniqueNonEmpty(identityKeys);
   if (!keys.length) return { username: null, points: 0, found: false };
+  const tables = await listExistingPointTablesForChannelAliases(channelAliases, pg);
+  if (!tables.length) return { username: null, points: 0, found: false };
   let total = 0;
   let username = null;
   let found = false;
-  const tables = await listPointTablesForChannelAliases(channelAliases, pg);
-  for (const table of tables) {
-    const { rows } = await pg.query(`select username, points from ${quoteChannelPointsTable(table)} where user_id = any($1::text[])`, [keys]);
+  for (let index = 0; index < tables.length; index += POINT_IDENTITY_READ_BATCH_SIZE) {
+    const batch = tables.slice(index, index + POINT_IDENTITY_READ_BATCH_SIZE);
+    const union = batch
+      .map((table, batchIndex) => (
+        `select ${index + batchIndex}::integer as source_order, username, points from ${quoteChannelPointsTable(table)} where user_id = any($1::text[])`
+      ))
+      .join(' union all ');
+    const { rows } = await pg.query(`select username, points from (${union}) as point_rows order by source_order asc`, [keys]);
     for (const row of rows || []) {
       found = true;
       if (!username && row.username) username = row.username;
