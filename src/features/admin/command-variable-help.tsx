@@ -28,7 +28,7 @@ type CommandVariableHelpButtonProps = {
 
 type VariableContext = 'command' | 'attendance' | 'donation' | 'blueprint';
 
-const ATTENDANCE_VARIABLE_GROUPS = new Set(['시청자', '출석', '방송', '채널']);
+const ATTENDANCE_VARIABLE_GROUPS = new Set(['시청자', '출석', '방송', '채널', '날짜']);
 const ATTENDANCE_SPECIAL_VARIABLES = new Set([
   '${roulette::룰렛이름}',
   '${action::액션이름}',

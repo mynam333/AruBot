@@ -1,5 +1,6 @@
 import safeRegex from 'safe-regex2';
 import { Worker } from 'node:worker_threads';
+import { substituteDdayVariables } from './dday-variables.js';
 
 const BLUEPRINT_READ_TOKEN_RE = /(?<!\$)\{([\p{L}\p{N}_.-]+)\}/gu;
 const BLUEPRINT_NUMERIC_TEXT_RE = /^[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?$/;
@@ -494,7 +495,7 @@ export function buildBlueprintScope(context = {}, flow = {}, nodeOutputs = {}) {
 
 export function renderBlueprintTemplate(value, scope = {}) {
   if (value == null) return '';
-  return String(value).replace(BLUEPRINT_READ_TOKEN_RE, (match, pathExpression) => {
+  return substituteDdayVariables(value).replace(BLUEPRINT_READ_TOKEN_RE, (match, pathExpression) => {
     const resolved = getBlueprintPathValue(scope, pathExpression);
     if (resolved == null) return '';
     if (typeof resolved === 'object') {

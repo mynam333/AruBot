@@ -5,6 +5,11 @@ const { execFileSync } = require('child_process');
 const root = path.join(__dirname, '..');
 const serverIndex = fs.readFileSync(path.join(root, 'server', 'index.js'), 'utf8');
 
+function expectedKstDday(targetDate, timestamp = Date.now()) {
+  const today = new Date(timestamp + (9 * 60 * 60 * 1000)).toISOString().slice(0, 10);
+  return String((Date.parse(`${targetDate}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / (24 * 60 * 60 * 1000));
+}
+
 const BLUEPRINT_READ_CONTRACT = Object.freeze({
   context: Object.freeze({
     '{user.name}': '테스트 시청자',
@@ -48,6 +53,9 @@ const BLUEPRINT_READ_CONTRACT = Object.freeze({
     '{node.overlay.overlayId}': 'overlay-1',
     '{flow.변수이름}': '임시 값',
   }),
+  dynamic: Object.freeze({
+    '${dday::2026-08-14}': expectedKstDday('2026-08-14'),
+  }),
 });
 
 function parseBotVariableCatalog(source) {
@@ -86,11 +94,11 @@ describe('action blueprint variable catalog contract', () => {
   });
 
   test('keeps every special execution token out of the blueprint variable scope', () => {
-    const specialTokens = catalog.filter(({ key }) => key.startsWith('${'));
+    const specialTokens = catalog.filter(({ key }) => key.startsWith('${') && !/^\$\{dday::/i.test(key));
 
     expect(specialTokens.length).toBeGreaterThan(0);
     expect(specialTokens.every(({ contexts }) => Array.isArray(contexts) && !contexts.includes('blueprint'))).toBe(true);
-    expect(visibleInBlueprint.some(({ key }) => key.startsWith('${'))).toBe(false);
+    expect(visibleInBlueprint.filter(({ key }) => key.startsWith('${')).map(({ key }) => key)).toEqual(['${dday::2026-08-14}']);
   });
 
   test('hydrates and renders the contracted context, resolver, and runtime values', () => {

@@ -44,6 +44,9 @@ function groupDescription(group: string, count: number) {
   if (group === '카운트') {
     return '사용할 때마다 1씩 증가하고, 증가한 현재 값이 변수 자리에 표시됩니다. 유저별 카운트와 모든 유저 합산 카운트를 따로 쓸 수 있어요.';
   }
+  if (group === '날짜') {
+    return '입력한 날짜까지 남은 날은 양수, 지나간 날은 음수로 표시합니다. 날짜 당일은 0이에요.';
+  }
   return `채팅 문구에 넣으면 ${count}가지 상황을 자동으로 채워줘요.`;
 }
 

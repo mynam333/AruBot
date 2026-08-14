@@ -34,6 +34,7 @@ import { getKstCalendarDate, resolveAttendanceDate } from './attendance-calendar
 import { DEFAULT_ATTENDANCE_MESSAGE, renderAttendanceTemplate } from './attendance-message.js';
 import { executeAttendanceSpecialOperations, extractAttendanceSpecialVariables } from './attendance-special-variables.js';
 import { prepareCounterVariablePlan, resolveCounterVariablePlan, stripUnplannedCounterVariables } from './counter-variables.js';
+import { substituteDdayVariables } from './dday-variables.js';
 import {
   buildBlueprintScope,
   compareBlueprintValues,
@@ -11984,7 +11985,7 @@ function formatElapsedStrings(startedAtTs) {
 
 async function substituteAllPlaceholders(text, sid, userId, username, context = {}) {
   if (!text) return text;
-  let out = String(text);
+  let out = substituteDdayVariables(text);
   const provider = String(context?.provider || context?.platform || '').trim().toLowerCase();
   const lookupOptions = { deadlineAt: Number(context?.lookupDeadlineAt || 0) };
   if (/\{live\.(?:title|category|viewers|startedAt|elapsed|elapsed_ko|channel)\}/.test(out)) {
@@ -21222,6 +21223,7 @@ const BOT_VARIABLES = [
   { key: '{live.elapsed_ko}', label: '방송 진행 시간', description: '한국어 형식으로 표시되는 방송 진행 시간입니다.', group: '방송', providers: BOT_VARIABLE_PROVIDERS },
   { key: '{live.channel}', label: '방송 채널', description: '현재 방송 채널 이름 또는 식별자입니다.', group: '방송', providers: BOT_VARIABLE_PROVIDERS },
   { key: '{channel.followers}', label: '팔로워 수', description: '확인 가능한 현재 채널 팔로워 수입니다.', group: '채널', providers: ['chzzk', 'cime'], caveat: '씨미는 프로필 동기화로 저장된 공개 수치를 사용합니다.' },
+  { key: '${dday::2026-08-14}', label: 'D-Day 일수', description: '입력한 날짜와 KST 기준 오늘의 차이를 일수로 표시합니다.', group: '날짜', providers: BOT_VARIABLE_PROVIDERS, caveat: '날짜를 YYYY-MM-DD 형식으로 바꿔 사용하세요. 미래 날짜는 양수, 오늘은 0, 지난 날짜는 음수입니다.' },
   { key: '${counter::user::변수명}', label: '시청자별 카운트', description: '명령어를 호출한 시청자마다 별도로 값을 1 올린 뒤, 증가한 숫자를 이 위치에 표시합니다.', group: '카운트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command'], effect: 'increment', caveat: '변수명을 원하는 이름으로 바꿔 사용하세요. 첫 호출은 1이며, 같은 응답에 동일 변수를 여러 번 넣어도 한 번만 증가합니다. 응답 하나에는 서로 다른 카운트를 최대 16개까지 사용할 수 있습니다. 예: ${counter::user::도전}' },
   { key: '${counter::global::변수명}', label: '전체 합산 카운트', description: '이 스트리머의 모든 시청자 호출을 변수명별로 합산해 값을 1 올린 뒤, 증가한 숫자를 이 위치에 표시합니다.', group: '카운트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command'], effect: 'increment', caveat: '변수명을 원하는 이름으로 바꿔 사용하세요. 첫 호출은 1이며, 시청자별 카운트와 전체 합산 카운트는 서로 독립적으로 저장됩니다. 응답 하나에는 서로 다른 카운트를 최대 16개까지 사용할 수 있습니다. 예: ${counter::global::도전}' },
   { key: '${live.title_change}', label: '방송 제목 변경', description: '명령어 뒤에 입력한 전체 문장으로 현재 플랫폼의 방송 제목을 변경합니다.', group: '특수 실행', providers: ['chzzk', 'cime'], contexts: ['command'], caveat: '스트리머 또는 매니저만 실행할 수 있으며 채팅에는 출력되지 않습니다. 명령어 인자가 없으면 실행하지 않고, 제거 후 응답이 비어 있으면 채팅도 보내지 않습니다.' },
