@@ -709,6 +709,35 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       if (window.parent !== window) window.parent.postMessage(message, window.location.origin);
     } catch { }
   }, [testConnectionId, token]);
+  const announceRouletteSettled = React.useCallback((payload: {
+    spinId?: string | null;
+    label: string;
+    value?: string | number | null;
+    selectedIndex: number;
+    itemCount: number;
+  }) => {
+    postEmbeddedMessage({ type: 'arubot:roulette-settled', ...payload });
+    const spinId = String(payload.spinId || '').trim();
+    if (!spinId || previewMode || testConnectionId) return;
+
+    const notifyServer = () => {
+      const socket = wsRef.current;
+      if (!socket || socket.readyState !== WebSocket.OPEN) return;
+      try {
+        socket.send(JSON.stringify({
+          type: 'roulette:settled',
+          spinId,
+          label: payload.label,
+        }));
+      } catch { }
+    };
+
+    // Two animation frames put the acknowledgement after React has committed
+    // the final result and the browser has painted it at least once.
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(notifyServer);
+    });
+  }, [postEmbeddedMessage, previewMode, testConnectionId]);
 
   // 메시지 채널 ID 검증 함수
   const validateMessageChannelId = React.useCallback((message: WsPayload, expectedChannelId: string | null): boolean => {
@@ -1396,8 +1425,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       setWheelSettled(true);
       playEndSfx();
       setActive(true);
-      postEmbeddedMessage({
-        type: 'arubot:roulette-settled',
+      announceRouletteSettled({
         spinId: meta?.spinId || null,
         label: finalLabel,
         value: meta?.value ?? null,
@@ -1422,7 +1450,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       timersRef.current.push(doneId);
     }, OUT_MS);
     timersRef.current.push(prepId);
-  }, [playEndSfx, applyServerLook, postEmbeddedMessage]);
+  }, [playEndSfx, applyServerLook, announceRouletteSettled]);
 
   const startSpinAnimation = React.useCallback((finalLabel: string, itemsFromServer: string[] | null, meta?: WsPayload) => {
     // clear previous timers
@@ -1470,8 +1498,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       setWheelRotationDeg(wheelFinalRotation);
       setWheelSettled(true);
       setWheelSpinPlan(null);
-      postEmbeddedMessage({
-        type: 'arubot:roulette-settled',
+      announceRouletteSettled({
         spinId: meta?.spinId || null,
         label: wheelResolvedLabel,
         value: meta?.value ?? null,
@@ -1592,7 +1619,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       }
     };
     rafIdRef.current = requestAnimationFrame(run);
-  }, [playStartSfx, playEndSfx, rowH, computeRowsHalf, postEmbeddedMessage, embeddedTestMode, updateDebugInfo, layout, urlLook.layout]);
+  }, [playStartSfx, playEndSfx, rowH, computeRowsHalf, announceRouletteSettled, embeddedTestMode, updateDebugInfo, layout, urlLook.layout]);
 
   // Process any queued roulette events after current spin completes
   processQueuedRef.current = () => {

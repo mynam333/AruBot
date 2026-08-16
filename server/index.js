@@ -22,6 +22,7 @@ import { extractYoutubeChannelPageMetadata, isYoutubeChannelId } from './youtube
 import { createPvdDurationProbeCoordinator } from './pvd-duration-probe.js';
 import { resolvePvdYouTubeMetadata } from './pvd-youtube-metadata-fallback.js';
 import { createRouletteBroadcastDelivery } from './roulette-broadcast-delivery.js';
+import { createRouletteResultActionCoordinator } from './roulette-result-action-coordinator.js';
 import { buildPointEarningPolicy, calculateDonationPointAward, normalizePointAward } from './point-earning-policy.js';
 import { installChzzkSocketIo2ParserGuard } from './chzzk-socket-io2-guard.js';
 import {
@@ -3179,6 +3180,12 @@ const rouletteQueues = new Map(); // sid -> Array<QueuedSpin>
 const rouletteProcessing = new Set(); // sid currently processing
 const ROULETTE_SPIN_MS = 5200; // must match viewer spin duration
 const ROULETTE_EMPHASIS_MS = 1000; // final emphasis time in viewer
+const ROULETTE_ACTION_SETTLE_FALLBACK_GRACE_MS = 750;
+const rouletteResultActionCoordinator = createRouletteResultActionCoordinator({
+  onError: (error, entry, reason) => {
+    console.error(`[Roulette] Deferred result action failed (${reason}) for spin ${entry?.spinId || 'unknown'}:`, error?.message || error);
+  },
+});
 // Dedup map to avoid duplicate result chats if overlapping triggers happen
 const rouletteLastResultSent = new Map(); // sid -> { key, at }
 // Dedup map to avoid double-enqueue for the same command fired twice rapidly
@@ -11202,6 +11209,33 @@ async function executeCommandLiveChangeTokens(sid, text, context = {}) {
   return result;
 }
 
+async function executeRouletteResultActions(sid, def, picked, userId, username, channelId, chatPost = null) {
+  await executeActionVariableTokens(sid, picked.value, {
+    source: 'roulette',
+    roulette: {
+      id: def.id || null,
+      name: def.name,
+      result: { label: picked.label, value: picked.value },
+    },
+    result: { label: picked.label, value: picked.value },
+    user: { userId, username },
+    chatPost,
+    platform: chatPost?.provider || chatPost?.platform || null,
+    channelUid: channelId,
+    channel: { channelUid: channelId },
+  });
+
+  const commandValue = picked.value.replace(/\$\{\s*(?:action|automation|blueprint)::([^}]+)\s*\}/ig, '').trim();
+  if (!commandValue) return;
+
+  try {
+    console.log(`[Roulette] Executing command from settled result: ${commandValue} for user: ${username}`);
+    await executeRouletteResultCommand(sid, commandValue, userId, username, chatPost);
+  } catch (error) {
+    console.error('[Roulette] Failed to execute settled result command:', error);
+  }
+}
+
 async function startRouletteSpin(sid, rouletteName, userId, username, opts = {}) {
   const channelContext = await getChannelContext(sid);
   if (!channelContext) {
@@ -11313,38 +11347,39 @@ async function startRouletteSpin(sid, rouletteName, userId, username, opts = {})
     });
   }
 
-  if (opts?.testMode !== true && opts?.executeResultActions !== false && picked.value && typeof picked.value === 'string' && picked.value.trim()) {
-    await executeActionVariableTokens(sid, picked.value, {
-      source: 'roulette',
-      roulette: {
-        id: def.id || null,
-        name: def.name,
-        result: { label: picked.label, value: picked.value },
-      },
-      result: { label: picked.label, value: picked.value },
-      user: { userId, username },
-      chatPost: opts?.chatPost || null,
-      platform: opts?.chatPost?.provider || opts?.chatPost?.platform || null,
-      channelUid: channelContext.channelId,
-      channel: { channelUid: channelContext.channelId },
-    });
-    const commandValue = picked.value.replace(/\$\{\s*(?:action|automation|blueprint)::([^}]+)\s*\}/ig, '').trim();
-    try {
-      if (commandValue) {
-        console.log(`[Roulette] Executing command from result: ${commandValue} for user: ${username}`);
-        await executeRouletteResultCommand(sid, commandValue, userId, username, opts?.chatPost || null);
-      }
-    } catch (e) {
-      console.error('[Roulette] Failed to execute result command:', e);
-    }
-  }
   // Broadcast to any connected viewers for this token, include 'instant' flag when requested
   let broadcastSuccess = false;
+  let overlayDeliverySuccess = false;
   let retryCount = 0;
   const targetConnectionId = normalizeRouletteTestConnectionId(opts?.targetConnectionId);
   const maxRetries = targetConnectionId ? 8 : 3;
   const spinDurationMs = opts?.instant === true ? 0 : ROULETTE_SPIN_MS;
   const spinStartedAt = Date.now();
+  const shouldExecuteResultActions = Boolean(
+    opts?.testMode !== true && opts?.executeResultActions !== false
+    && typeof picked.value === 'string'
+    && picked.value.trim(),
+  );
+  let resultActionsRegistered = false;
+  if (shouldExecuteResultActions) {
+    resultActionsRegistered = rouletteResultActionCoordinator.register({
+      token,
+      spinId,
+      channelId: channelContext.channelId,
+      label: picked.label,
+      notBefore: spinStartedAt + spinDurationMs,
+      fallbackDelayMs: spinDurationMs + ROULETTE_ACTION_SETTLE_FALLBACK_GRACE_MS,
+      execute: () => executeRouletteResultActions(
+        sid,
+        def,
+        picked,
+        userId,
+        username,
+        channelContext.channelId,
+        opts?.chatPost || null,
+      ),
+    });
+  }
   const deliverRouletteBroadcast = createRouletteBroadcastDelivery({
     mirrorTestToChannel: opts?.mirrorTestToChannel === true,
     deliverToTest: ({ targetConnectionId, channelId, token: deliveryToken, message }) => (
@@ -11413,6 +11448,7 @@ async function startRouletteSpin(sid, rouletteName, userId, username, opts = {})
 
       if (channelResult.success > 0) {
         broadcastSuccess = true;
+        overlayDeliverySuccess = true;
         if (targetConnectionId) {
           rouletteTestAuthorizations.delete(targetConnectionId);
           const deliveredConnection = rouletteTestConnections.get(targetConnectionId);
@@ -11438,13 +11474,14 @@ async function startRouletteSpin(sid, rouletteName, userId, username, opts = {})
           broadcastSuccess = true;
         } else {
           try {
-            await broadcastRouletteResult(token, {
+            const fallbackResult = await broadcastRouletteResult(token, {
               spinId,
               spinDurationMs,
               spinStartedAt,
               instant: opts?.instant === true,
               testMode: opts?.testMode === true,
             });
+            overlayDeliverySuccess = Number(fallbackResult?.success || 0) > 0;
             broadcastSuccess = true;
             console.log(`[Roulette] Fallback broadcast completed for token: ${token.substring(0, 16)}...`);
           } catch (fallbackError) {
@@ -11459,13 +11496,14 @@ async function startRouletteSpin(sid, rouletteName, userId, username, opts = {})
           broadcastSuccess = true;
         } else {
           try {
-            await broadcastRouletteResult(token, {
+            const fallbackResult = await broadcastRouletteResult(token, {
               spinId,
               spinDurationMs,
               spinStartedAt,
               instant: opts?.instant === true,
               testMode: opts?.testMode === true,
             });
+            overlayDeliverySuccess = Number(fallbackResult?.success || 0) > 0;
             broadcastSuccess = true;
             console.log(`[Roulette] Fallback broadcast successful for token: ${token.substring(0, 16)}...`);
           } catch (fallbackError) {
@@ -11504,6 +11542,27 @@ async function startRouletteSpin(sid, rouletteName, userId, username, opts = {})
     }
   } else {
     console.log(`[Roulette] Broadcast completed successfully for channel: ${channelContext.channelId}, user: ${username}, result: ${picked.label}`);
+  }
+  if (shouldExecuteResultActions && (!resultActionsRegistered || !overlayDeliverySuccess)) {
+    if (resultActionsRegistered) {
+      await rouletteResultActionCoordinator.release({ token, spinId }, 'overlay-unavailable');
+    } else {
+      const executeUncoordinatedFallback = () => executeRouletteResultActions(
+        sid, def, picked, userId, username, channelContext.channelId, opts?.chatPost || null,
+      ).catch((error) => {
+        console.error(`[Roulette] Result action fallback failed for spin ${spinId}:`, error?.message || error);
+      });
+      if (overlayDeliverySuccess) {
+        const remainingMs = Math.max(
+          0,
+          spinStartedAt + spinDurationMs + ROULETTE_ACTION_SETTLE_FALLBACK_GRACE_MS - Date.now(),
+        );
+        const fallbackTimer = setTimeout(() => { void executeUncoordinatedFallback(); }, remainingMs);
+        fallbackTimer.unref?.();
+      } else {
+        await executeUncoordinatedFallback();
+      }
+    }
   }
   const origin = (process.env.PUBLIC_ORIGIN || '');
   const path = `/roulette/${encodeURIComponent(token)}`;
@@ -29462,6 +29521,23 @@ function registerRouletteRoutes() {
       // Keepalive
       const ka = setInterval(() => { try { ws.ping(); } catch { } }, 30000);
 
+      ws.on('message', (raw) => {
+        if (testConnectionId) return;
+        let message = null;
+        try {
+          message = JSON.parse(String(raw));
+        } catch {
+          return;
+        }
+        if (message?.type !== 'roulette:settled') return;
+        void rouletteResultActionCoordinator.settle({
+          token,
+          channelId,
+          spinId: message.spinId,
+          label: message.label,
+        });
+      });
+
       ws.on('close', (code, reason) => {
         try { clearInterval(ka); } catch { }
 
@@ -30088,7 +30164,7 @@ async function broadcastRouletteResult(token, eventMeta = {}) {
       }
     }
 
-    return;
+    return result;
 
   } catch (error) {
     console.error('[Roulette Broadcast] Unexpected error:', error?.message || error);
