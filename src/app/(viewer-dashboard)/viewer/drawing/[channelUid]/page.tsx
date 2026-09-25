@@ -1,5 +1,7 @@
 import type { Metadata } from 'next';
+import { notFound } from 'next/navigation';
 import { DrawingDonationEditorPage } from '@/features/viewer/drawing-donation-page';
+import { decodeChannelRouteParam } from '@/shared/lib/channel-route-param';
 
 export const metadata: Metadata = {
   title: '그림 그리기 | AruBot',
@@ -8,5 +10,7 @@ export const metadata: Metadata = {
 
 export default async function ViewerDrawingEditorRoute({ params }: { params: Promise<{ channelUid: string }> }) {
   const { channelUid } = await params;
-  return <DrawingDonationEditorPage channelUid={decodeURIComponent(channelUid)} />;
+  const decodedChannelUid = decodeChannelRouteParam(channelUid);
+  if (!decodedChannelUid) notFound();
+  return <DrawingDonationEditorPage channelUid={decodedChannelUid} />;
 }

@@ -69,7 +69,7 @@ describe('qualified public channel route regression', () => {
     expect(drawingResolver).not.toContain('balance?.channelUid');
     expect(drawingRoutes.match(/findViewerDrawingStreamer\(data\.streamers, channelUid, identity\)/g)).toHaveLength(2);
     expect(serverIndex).toContain('entries.push(attachInternalPointSettingsSid(entry, resolved.sid))');
-    expect(drawingPage).toContain('loadStreamer(channelUid)');
+    expect(drawingPage).toContain('loadStreamer(channelUid, controller.signal)');
     expect(drawingPage).toContain('channelUid: streamer.publicUid || streamer.channelUid');
     expect(publicPage).toContain('const drawingPath = `/viewer/drawing/${encodeURIComponent(channelUid)}`');
   });

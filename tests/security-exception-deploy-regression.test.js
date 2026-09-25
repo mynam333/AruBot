@@ -198,7 +198,7 @@ describe('production security exception and deployment gates', () => {
 
     expect(packageJson.dependencies['js-yaml']).toBeUndefined();
     expect(packageJson.dependencies.nanoid).toBeUndefined();
-    expect(semver.satisfies(jsYamlVersion, '>=4.3.1 <4.4.0')).toBe(true);
+    expect(semver.satisfies(jsYamlVersion, '>=4.3.2 <4.4.0')).toBe(true);
     expect(semver.satisfies(nanoidVersion, '>=3.3.17 <3.4.0')).toBe(true);
   });
 
@@ -260,6 +260,32 @@ describe('production security exception and deployment gates', () => {
       severity: 'missing-high',
       nodes: [],
     });
+  });
+
+  test('a patch-only npm fix recommendation does not expand the reviewed exception', () => {
+    const report = knownAuditReport();
+    for (const entry of Object.values(report.vulnerabilities)) entry.fixAvailable.version = '4.8.4';
+    expect(audit.inspectAuditReport(report).allowed).toHaveLength(6);
+    expect(audit.inspectAuditReport(report).blocking).toHaveLength(0);
+
+    report.vulnerabilities['socket.io-parser'].via[4].range = '<3.3.7';
+    expect(audit.inspectAuditReport(report).blocking.map(({ name }) => name)).toContain('socket.io-parser');
+  });
+
+  test.each([
+    false,
+    true,
+    { ...expectedFix, name: 'another-package' },
+    { ...expectedFix, isSemVerMajor: false },
+    { ...expectedFix, version: '4.8.2' },
+    { ...expectedFix, version: '4.8.4-beta.1' },
+    { ...expectedFix, version: '4.9.0' },
+    { ...expectedFix, version: '5.0.0' },
+    { ...expectedFix, extra: 'unreviewed' },
+  ])('rejects an unreviewed npm fix recommendation: %j', (fixAvailable) => {
+    const report = knownAuditReport();
+    report.vulnerabilities['socket.io-parser'].fixAvailable = fixAvailable;
+    expect(audit.inspectAuditReport(report).blocking.map(({ name }) => name)).toContain('socket.io-parser');
   });
 
   test('exception entries require exact causes, effects, nodes, and advisory identity', () => {

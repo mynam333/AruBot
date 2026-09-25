@@ -236,12 +236,20 @@ function exactArrayMatch(actual, expected, normalize = (value) => String(value))
   return sortedActual.every((value, index) => value === sortedExpected[index]);
 }
 
-function exactRecordMatch(actual, expected) {
+function matchesReviewedFixRecommendation(actual, expected) {
   if (!isRecord(actual) || !isRecord(expected)) return false;
   const actualKeys = Object.keys(actual).sort();
   const expectedKeys = Object.keys(expected).sort();
+  const semver = loadSemver();
+  // npm recommends the latest patch even when the installed chain and every
+  // advisory are unchanged. This metadata must not be treated as a new risk.
+  // Keep the recommendation bounded to the reviewed release line; it is never installed.
   return exactArrayMatch(actualKeys, expectedKeys)
-    && expectedKeys.every((key) => actual[key] === expected[key]);
+    && actual.name === expected.name
+    && actual.isSemVerMajor === expected.isSemVerMajor
+    && typeof actual.version === 'string'
+    && semver.valid(actual.version) === actual.version
+    && semver.satisfies(actual.version, `~${expected.version}`);
 }
 
 function verifyPinnedSocketIoException(packageJson, packageLock) {
@@ -324,7 +332,7 @@ function isKnownExceptionEntry(name, vulnerability) {
   if (!exception || !isRecord(vulnerability)) return false;
   if (vulnerability.name !== name || vulnerability.severity !== exception.severity) return false;
   if (vulnerability.range !== exception.range) return false;
-  if (!exactRecordMatch(vulnerability.fixAvailable, exception.fixAvailable)) return false;
+  if (!matchesReviewedFixRecommendation(vulnerability.fixAvailable, exception.fixAvailable)) return false;
   if (!Array.isArray(vulnerability.via)) return false;
 
   const advisories = [];

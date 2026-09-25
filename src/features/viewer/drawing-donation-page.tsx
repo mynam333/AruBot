@@ -119,16 +119,16 @@ function ViewerShell({ children }: { children: React.ReactNode }) {
   );
 }
 
-async function loadStreamer(channelUid: string) {
-  const response = await fetch(apiUrl(`/api/viewer/drawing-donation/streamers/${encodeURIComponent(channelUid)}`), { credentials: 'include', cache: 'no-store' });
-  if (!response.ok) throw new Error('load failed');
+async function loadStreamer(channelUid: string, signal?: AbortSignal) {
+  const response = await fetch(apiUrl(`/api/viewer/drawing-donation/streamers/${encodeURIComponent(channelUid)}`), { credentials: 'include', cache: 'no-store', signal });
+  if (!response.ok) throw Object.assign(new Error('streamer unavailable'), { status: response.status });
   return response.json() as Promise<{ streamer: Streamer }>;
 }
 
-async function loadLivePlayback(surface: LiveSurface) {
+async function loadLivePlayback(surface: LiveSurface, signal?: AbortSignal) {
   const provider = encodeURIComponent(surface.provider);
   const channelId = encodeURIComponent(surface.hlsChannelId || surface.channelId);
-  const response = await fetch(apiUrl(`/api/drawing-donation/live-playback?provider=${provider}&channelId=${channelId}`), { credentials: 'include', cache: 'no-store' });
+  const response = await fetch(apiUrl(`/api/drawing-donation/live-playback?provider=${provider}&channelId=${channelId}`), { credentials: 'include', cache: 'no-store', signal });
   if (!response.ok) {
     const error = new Error('live playback unavailable') as Error & { status: number };
     error.status = response.status;
@@ -400,6 +400,8 @@ export function DrawingDonationEditorPage({ channelUid }: { channelUid: string }
   const strokesRef = useRef<Stroke[]>([]);
   const redoStackRef = useRef<Stroke[]>([]);
   const [streamer, setStreamer] = useState<Streamer | null>(null);
+  const [streamerStatus, setStreamerStatus] = useState<'loading' | 'ready' | 'login-required' | 'not-found' | 'error'>('loading');
+  const [streamerRetryToken, setStreamerRetryToken] = useState(0);
   const [selectedSurfaceKey, setSelectedSurfaceKey] = useState('');
   const [livePlaybackUrl, setLivePlaybackUrl] = useState('');
   const [liveEmbedUrl, setLiveEmbedUrl] = useState('');
@@ -492,18 +494,35 @@ export function DrawingDonationEditorPage({ channelUid }: { channelUid: string }
   }, []);
 
   useEffect(() => {
-    loadStreamer(channelUid)
+    let cancelled = false;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15_000);
+    setStreamer(null);
+    setStreamerStatus('loading');
+    loadStreamer(channelUid, controller.signal)
       .then((data) => {
-        const found = data.streamer || null;
-        setStreamer(found || null);
+        if (cancelled) return;
+        const found = data.streamer;
+        if (!found) throw Object.assign(new Error('streamer unavailable'), { status: 404 });
+        setStreamer(found);
+        setStreamerStatus('ready');
         manualSurfaceSelectionRef.current = false;
         attemptedSurfaceKeysRef.current.clear();
         const surfaces = found?.liveSurfaces || [];
         const preferred = surfaces.find((surface) => surface.live === true) || surfaces[0];
         if (preferred) setSelectedSurfaceKey(`${preferred.provider}:${preferred.channelId}`);
       })
-      .catch(() => toast.error('그림 후원 정보를 불러오지 못했어요.'));
-  }, [channelUid]);
+      .catch((error: Error & { status?: number }) => {
+        if (cancelled) return;
+        setStreamerStatus(error.status === 401 ? 'login-required' : error.status === 404 ? 'not-found' : 'error');
+      })
+      .finally(() => clearTimeout(timeout));
+    return () => {
+      cancelled = true;
+      clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [channelUid, streamerRetryToken]);
 
   useEffect(() => {
     redraw(strokesRef.current);
@@ -528,7 +547,9 @@ export function DrawingDonationEditorPage({ channelUid }: { channelUid: string }
       };
     }
     setLivePlaybackStatus('loading');
-    loadLivePlayback(selectedSurface)
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 18_000);
+    loadLivePlayback(selectedSurface, controller.signal)
       .then((payload) => {
         if (cancelled) return;
         const playbackUrl = payload.playbackUrl || '';
@@ -553,9 +574,12 @@ export function DrawingDonationEditorPage({ channelUid }: { channelUid: string }
           attemptedSurfaceKeysRef.current.clear();
         }
         if (offline) retryTimer = setTimeout(() => setPlaybackRetryToken((current) => current + 1), 20_000);
-      });
+      })
+      .finally(() => clearTimeout(timeout));
     return () => {
       cancelled = true;
+      clearTimeout(timeout);
+      controller.abort();
       if (retryTimer) clearTimeout(retryTimer);
     };
   }, [liveSurfaces, playbackRetryToken, selectedSurface]);
@@ -783,6 +807,31 @@ export function DrawingDonationEditorPage({ channelUid }: { channelUid: string }
           <Button asChild variant="ghost"><Link href={`/c/${encodeURIComponent(channelUid)}`}><ArrowLeft aria-hidden="true" className="h-[1em] w-[1em]" /> 공개 페이지로</Link></Button>
           {streamer ? <Badge tone={streamer.points >= estimatedCost ? 'mint' : 'rose'}>{formatNumber(streamer.points)}P 보유 · 예상 {formatNumber(estimatedCost)}P</Badge> : null}
         </div>
+
+        {streamerStatus !== 'ready' ? (
+          <div role={streamerStatus === 'loading' ? 'status' : 'alert'} className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-panel)] border bg-card p-4 shadow-subtle">
+            <div className="space-y-1 text-sm">
+              <p className="font-semibold">
+                {streamerStatus === 'loading' ? '그림 후원 정보를 불러오는 중입니다.'
+                  : streamerStatus === 'login-required' ? '로그인이 필요해요.'
+                    : streamerStatus === 'not-found' ? '이 채널의 그림 후원 정보를 찾지 못했어요.'
+                      : '그림 후원 정보를 불러오지 못했어요.'}
+              </p>
+              {streamerStatus !== 'loading' ? (
+                <p className="text-muted-foreground">
+                  {streamerStatus === 'login-required' ? '시청자 계정으로 로그인하면 방송 화면과 보유 포인트를 불러올 수 있어요.'
+                    : streamerStatus === 'not-found' ? '공개 페이지에서 그림 후원 활성화 여부와 연결한 시청자 계정을 확인해 주세요.'
+                      : '서버 연결을 확인한 뒤 다시 시도해 주세요. 다시 시도해도 그린 그림은 유지됩니다.'}
+                </p>
+              ) : null}
+            </div>
+            {streamerStatus === 'login-required' ? (
+              <LinkButton href={`/viewer/login?returnTo=${encodeURIComponent(`/viewer/drawing/${encodeURIComponent(channelUid)}`)}`}>로그인하고 계속하기</LinkButton>
+            ) : streamerStatus !== 'loading' ? (
+              <Button type="button" variant="outline" onClick={() => setStreamerRetryToken((current) => current + 1)}>정보 다시 불러오기</Button>
+            ) : <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin text-muted-foreground" />}
+          </div>
+        ) : null}
 
         {liveSurfaces.length ? (
           <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius-panel)] border bg-card/80 p-3 shadow-subtle">

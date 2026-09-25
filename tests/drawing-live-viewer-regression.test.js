@@ -6,7 +6,7 @@ const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'),
 
 describe('drawing live viewer regression', () => {
   test('resolves both HLS and YouTube playback through the live endpoint', () => {
-    expect(page).toContain('loadLivePlayback(selectedSurface)');
+    expect(page).toContain('loadLivePlayback(selectedSurface, controller.signal)');
     expect(page).toContain('setLiveEmbedUrl(embedUrl)');
     expect(page).toContain('src={liveEmbedUrl}');
     expect(page).not.toContain('src={selectedSurface.embedUrl}');
