@@ -13,6 +13,7 @@ on:
       - 'package.json'
       - 'package-lock.json'
       - 'server/**'
+      - 'shared/**'
       - 'scripts/**'
       - 'tests/**'
 
@@ -85,8 +86,9 @@ jobs:
           mkdir -p "$STAGING_DIR"
 
           cp -a package.json package-lock.json ecosystem.config.cjs "$STAGING_DIR/"
-          cp -a server scripts "$STAGING_DIR/"
+          cp -a server scripts shared "$STAGING_DIR/"
           cp -a .nvmrc .node-version "$STAGING_DIR/"
+          node scripts/verify-backend-artifact.cjs "$STAGING_DIR"
 
           tar -C "$STAGING_DIR" -czf "$ARCHIVE_PATH" .
           mv "$ARCHIVE_PATH" "$ARCHIVE_NAME"
