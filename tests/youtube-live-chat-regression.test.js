@@ -265,7 +265,7 @@ describe('YouTube live chat integration regression', () => {
     expect(serverIndex).toContain('async function validateYoutubeCentralBotAuthorization');
     expect(serverIndex).toContain("getValidYoutubeAccessToken(ownerUserId, { trackUse: false })");
     expect(serverIndex).toContain('const identity = await fetchGoogleYoutubeIdentityWithAccessToken(accessToken)');
-    expect(serverIndex).toContain('assertGoogleYoutubeIdentityMatches(identity, user.platformUserId)');
+    expect(serverIndex.includes('validateStoredYoutubeAuthorization({ ...user, accessToken })')).toBe(true);
     expect(connectionPage).toContain('YouTube 권한 보관');
     expect(connectionPage).toContain('OAuth 연결 해제');
     expect(arubotAdminPage).toContain('중앙 봇 OAuth 권한 보관');

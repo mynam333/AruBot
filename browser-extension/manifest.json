@@ -37,6 +37,7 @@
     "*://*.youtube-nocookie.com/*",
     "https://chzzk.naver.com/*",
     "https://api.chzzk.naver.com/*",
+    "https://creatorhub-api.naver.com/*",
     "https://*.nchat.naver.com/*",
     "wss://*.nchat.naver.com/*",
     "https://ci.me/*",

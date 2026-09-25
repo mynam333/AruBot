@@ -4,6 +4,7 @@ const path = require('path');
 describe('browser extension CHZZK video donation regression', () => {
   const background = fs.readFileSync(path.join(__dirname, '..', 'browser-extension', 'background.js'), 'utf8');
   const manifest = fs.readFileSync(path.join(__dirname, '..', 'browser-extension', 'manifest.json'), 'utf8');
+  const buildScript = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'build-browser-extension.js'), 'utf8');
 
   test('CHZZK video donation alert id keeps the video@ prefix for session-url API', () => {
     expect(background).toContain('function extractChzzkVideoDonationAlertId');
@@ -29,13 +30,26 @@ describe('browser extension CHZZK video donation regression', () => {
     expect(background).toContain("if (text.startsWith('[')) return text");
     expect(background).toContain("const [eventName, raw] = payload");
     expect(background).toContain("if (eventName !== 'donation' || !body || !isLikelyVideoDonation(body)) return");
-    expect(background).toContain('const duration = normalizeDurationFromPayload(body)');
-    expect(background).toContain('if (duration) enqueuePause(service, duration, body)');
+    expect(background).toContain('return enqueueChzzkDonation(service, body)');
   });
 
-  test('manifest allows CHZZK session metadata and nchat websocket hosts', () => {
+  test('missing packet duration is resolved from current CHZZK and media metadata endpoints', () => {
+    expect(background).toContain('function resolveChzzkDonationDuration');
+    expect(background).toContain("new URL('https://www.youtube.com/watch')");
+    expect(background).toContain('https://api.chzzk.naver.com/service/v1/clips/${encodeURIComponent(id)}/detail');
+    expect(background).toContain("new URL('https://api.chzzk.naver.com/service/v2/donation/videos')");
+    expect(background).toContain("new URL('https://creatorhub-api.naver.com/api/v5.0/clipviewer/card')");
+    expect(background).toContain("card?.body?.card?.content?.contentId");
+    expect(background).toContain('durationForPlaybackRange(payload, mediaDurationSec)');
+    expect(background).toContain('chzzkDonationSequence');
+  });
+
+  test('manifest and packages include all CHZZK metadata hosts and parser script', () => {
     expect(manifest).toContain('https://api.chzzk.naver.com/*');
+    expect(manifest).toContain('https://creatorhub-api.naver.com/*');
     expect(manifest).toContain('https://*.nchat.naver.com/*');
     expect(manifest).toContain('wss://*.nchat.naver.com/*');
+    expect(buildScript).toContain("'chzzk-video-metadata.js'");
+    expect(buildScript).toContain("scripts: ['chzzk-video-metadata.js', 'background.js']");
   });
 });

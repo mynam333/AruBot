@@ -10,6 +10,7 @@ const buildVersion = nextBuildVersion();
 
 const files = [
   'background.js',
+  'chzzk-video-metadata.js',
   'content-youtube.js',
   'popup.html',
   'popup.css',
@@ -50,7 +51,7 @@ function buildManifest(browser) {
     delete manifest.browser_specific_settings;
   } else if (browser === 'firefox') {
     manifest.background = {
-      scripts: ['background.js']
+      scripts: ['chzzk-video-metadata.js', 'background.js']
     };
     manifest.browser_specific_settings = {
       gecko: {

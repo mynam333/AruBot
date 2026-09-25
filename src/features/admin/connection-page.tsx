@@ -442,6 +442,22 @@ export function ConnectionPage() {
     }
   };
 
+  const retryYoutubeConnection = async () => {
+    setYoutubeBusy(true);
+    try {
+      const response = await fetch(apiUrl('/api/youtube/reset'), { method: 'POST', credentials: 'include' });
+      const data = await response.json().catch(() => null);
+      if (!response.ok || data?.lastError) throw new Error(data?.error || data?.lastError || 'YouTube 채팅 연결에 실패했습니다.');
+      if (data?.connected) toast.success('YouTube 채팅에 연결되었습니다.');
+      else toast.info('연결을 다시 시작했습니다. 라이브 방송이 감지되면 채팅을 연결합니다.');
+      refresh();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'YouTube 채팅 연결에 실패했습니다.');
+    } finally {
+      setYoutubeBusy(false);
+    }
+  };
+
   const copyText = async (value?: string | null) => {
     if (!value) return;
     try {
@@ -664,6 +680,12 @@ export function ConnectionPage() {
                         <Button type="button" variant="outline" onClick={confirmYoutubeModerator} disabled={youtubeBusy}>
                           <CheckCircle2 className="h-4 w-4" />
                           운영자 실제 확인
+                        </Button>
+                      ) : null}
+                      {youtubeRegistered ? (
+                        <Button type="button" variant="outline" onClick={retryYoutubeConnection} disabled={youtubeBusy}>
+                          <RefreshCw className={youtubeBusy ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
+                          채팅 연결 재시도
                         </Button>
                       ) : null}
                       {youtubeRegistered ? (

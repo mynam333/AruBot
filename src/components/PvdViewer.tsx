@@ -6,6 +6,7 @@ import {
   normalizePvdIdlePlaylist,
   type PvdIdlePlaylist,
 } from '@/components/pvdIdlePlaylist';
+import { createPvdYouTubeMixPlayer } from '@/components/pvdYouTubeMixPlayer';
 import { createYouTubeDurationProbeRunner, type YouTubeDurationProbeRequest, type YouTubeDurationProbeResult } from '@/components/youtubeDurationProbe';
 import { getBrowserApiBase } from '@/shared/api/http';
 
@@ -116,8 +117,12 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
   const [externalItem, setExternalItem] = useState<ExternalVideoDonationItem | null>(null);
   const [captionsEnabled, setCaptionsEnabled] = useState(false);
   const [youtubeActive, setYoutubeActive] = useState(false);
+  const [mixActive, setMixActive] = useState(false);
   const [volumeControlsVisible, setVolumeControlsVisible] = useState(false);
   const playerDivRef = useRef<HTMLDivElement | null>(null);
+  const mixDivRef = useRef<HTMLDivElement | null>(null);
+  const mixPlayerRef = useRef<ReturnType<typeof createPvdYouTubeMixPlayer> | null>(null);
+  const mixActiveRef = useRef(false);
   const externalFrameRef = useRef<HTMLIFrameElement | null>(null);
   const externalVideoRef = useRef<HTMLVideoElement | null>(null);
   const playerRef = useRef<YouTubePlayer | null>(null);
@@ -201,6 +206,37 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
 
     return ytReadyPromiseRef.current;
   }, []);
+
+  useEffect(() => {
+    const mix = createPvdYouTubeMixPlayer({
+      getApi: getYouTubeApi,
+      getHost: () => mixDivRef.current,
+      isVisible: () => !document.hidden,
+      fetchSeed: async (signal) => {
+        const response = await fetch(`${getViewerApiBase()}/api/video-donation/idle-playlist/next-by-token`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, signal,
+          body: JSON.stringify({ token, seedOnly: true }),
+        });
+        const payload = await response.json();
+        const seed = payload?.tracks?.[0]?.mediaId;
+        if (!response.ok || !seed) {
+          throw Object.assign(new Error(payload?.error || 'mix_seed_not_found'), { retryAfterMs: payload?.retryAfterMs });
+        }
+        return String(seed);
+      },
+      onPlaying: (playing) => { if (mixActiveRef.current) idlePlayingRef.current = playing; },
+      onBoundary: () => {
+        if (!deferredDonationRef.current) return false;
+        idleAdvanceRef.current('end');
+        return true;
+      },
+    });
+    mixPlayerRef.current = mix;
+    return () => {
+      mix.dispose();
+      if (mixPlayerRef.current === mix) mixPlayerRef.current = null;
+    };
+  }, [getViewerApiBase, getYouTubeApi, token]);
 
   const probeYouTubeDuration = useCallback((
     request: YouTubeDurationProbeRequest,
@@ -292,6 +328,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
     const normalized = Math.max(0, Math.min(100, Math.round(Number(nextVolume || 0))));
     volumeRef.current = normalized;
     setVolume(normalized);
+    mixPlayerRef.current?.setVolume(normalized);
     const player = playerRef.current;
     const video = externalVideoRef.current;
     if (video) {
@@ -320,6 +357,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
   }, [postToExternalPlayer]);
 
   const applyYouTubeCaptions = useCallback((enabled = captionsEnabled) => {
+    mixPlayerRef.current?.setCaptions(enabled);
     const player = playerRef.current;
     if (!player) return;
     try {
@@ -436,6 +474,9 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
   }, [clearYouTubePlayerHost]);
 
   const stopPlayer = useCallback(() => {
+    mixPlayerRef.current?.pause();
+    mixActiveRef.current = false;
+    setMixActive(false);
     ensureSeqRef.current += 1;
     expectedYouTubeMediaIdRef.current = null;
     try { playerRef.current && playerRef.current.stopVideo && playerRef.current.stopVideo(); } catch {}
@@ -477,6 +518,11 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
 
   const captureIdlePosition = useCallback(() => {
     if (playbackModeRef.current !== 'idle') return;
+    if (mixActiveRef.current) {
+      mixPlayerRef.current?.pause();
+      mixActiveRef.current = false;
+      setMixActive(false);
+    }
     idlePlayingRef.current = false;
     try {
       const current = Number(playerRef.current?.getCurrentTime?.() || 0);
@@ -790,7 +836,9 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
   const applyIdlePlaylistConfig = useCallback((value: unknown) => {
     const next = normalizePvdIdlePlaylist(value);
     const signature = getPvdIdlePlaylistSignature(next);
+    if (signature === idleSignatureRef.current) return idlePlaylistRef.current;
     if (signature !== idleSignatureRef.current) {
+      mixPlayerRef.current?.configure(next);
       idleSignatureRef.current = signature;
       idleOrderRef.current = createPvdIdlePlaybackOrder(next);
       idleCursorRef.current = 0;
@@ -805,6 +853,18 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
 
   const startIdlePlayback = useCallback(() => {
     const playlist = idlePlaylistRef.current;
+    if (playlist.enabled && playlist.mode === 'recommended') {
+      if (!mixActiveRef.current) stopPlayer();
+      playbackModeRef.current = 'idle';
+      mixActiveRef.current = true;
+      setMixActive(true);
+      setYoutubeActive(true);
+      mixPlayerRef.current?.setVolume(volumeRef.current);
+      mixPlayerRef.current?.setCaptions(captionsEnabled);
+      mixPlayerRef.current?.start(playlist);
+      return;
+    }
+    if (mixActiveRef.current) stopPlayer();
     if (!playlist.enabled || !playlist.tracks.length) {
       if (playbackModeRef.current === 'idle') stopPlayer();
       return;
@@ -876,6 +936,10 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
     const playlist = idlePlaylistRef.current;
     const currentMediaId = idleCurrentMediaIdRef.current;
     const deferredItem = deferredDonationRef.current;
+    if (playlist.mode === 'recommended') {
+      if (deferredItem) { stopPlayer(); activateDeferredDonation(deferredItem); }
+      return;
+    }
     if (!playlist.enabled || !idleOrderRef.current.length) {
       stopPlayer();
       if (deferredItem) activateDeferredDonation(deferredItem);
@@ -907,6 +971,7 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
     }
 
     if (!nextMediaId) {
+      idleCursorRef.current = order.length;
       idleExhaustedRef.current = true;
       idleCurrentMediaIdRef.current = null;
       idleResumeAtRef.current = 0;
@@ -1193,7 +1258,8 @@ export default function PvdViewer({ viewerToken }: { viewerToken?: string } = {}
 
   return (
     <div style={{ width: '100vw', height: '100vh', background: 'transparent' }}>
-      <div ref={playerDivRef} style={{ width: '100%', height: '100%', display: externalItem ? 'none' : 'block' }} />
+      <div ref={playerDivRef} style={{ width: '100%', height: '100%', display: externalItem || mixActive ? 'none' : 'block' }} />
+      <div ref={mixDivRef} data-youtube-mix-player style={{ position: 'fixed', inset: 0, display: mixActive ? 'block' : 'none' }} />
       {externalItem ? (
         <div style={{ position: 'fixed', inset: 0, display: 'grid', placeItems: 'center', overflow: 'hidden' }}>
           {externalItem.viewerSrc && externalItem.isDirectVideo ? (

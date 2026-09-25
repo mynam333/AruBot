@@ -11,6 +11,7 @@ export type PvdIdlePlaylist = {
   enabled: boolean;
   mode: 'recommended' | 'custom';
   topic: string;
+  mixUrl?: string;
   loop: boolean;
   shuffle: boolean;
   tracks: PvdIdleTrack[];
@@ -47,13 +48,35 @@ export function normalizePvdIdlePlaylist(value: unknown): PvdIdlePlaylist {
     if (tracks.length >= 200) break;
   }
   return {
-    enabled: source.enabled === true && tracks.length > 0,
+    enabled: source.enabled === true && (source.mode !== 'custom' || tracks.length > 0),
     mode: source.mode === 'custom' ? 'custom' : 'recommended',
     topic: String(source.topic || ''),
+    mixUrl: String(source.mixUrl || '').trim(),
     loop: source.loop !== false,
     shuffle: source.shuffle === true,
     tracks,
   };
+}
+
+export function mergePvdIdleRecommendations(
+  playlist: PvdIdlePlaylist,
+  order: string[],
+  cursor: number,
+  incoming: PvdIdleTrack[],
+  excluded: Set<string>,
+) {
+  const pendingIds = order.slice(Math.max(0, cursor));
+  const byId = new Map(playlist.tracks.map((track) => [track.mediaId, track]));
+  const tracks = pendingIds.flatMap((id) => byId.has(id) ? [byId.get(id)!] : []);
+  const seen = new Set(pendingIds);
+  for (const track of incoming) {
+    if (!seen.has(track.mediaId) && !excluded.has(track.mediaId)) {
+      seen.add(track.mediaId);
+      tracks.push(track);
+    }
+    if (tracks.length >= 200) break;
+  }
+  return { playlist: { ...playlist, tracks }, order: tracks.map((track) => track.mediaId) };
 }
 
 export function getPvdIdlePlaylistSignature(playlist: PvdIdlePlaylist) {
@@ -61,6 +84,7 @@ export function getPvdIdlePlaylistSignature(playlist: PvdIdlePlaylist) {
     enabled: playlist.enabled,
     mode: playlist.mode,
     topic: playlist.topic,
+    mixUrl: playlist.mixUrl || '',
     loop: playlist.loop,
     shuffle: playlist.shuffle,
     tracks: playlist.tracks.map((track) => track.mediaId),

@@ -1,4 +1,7 @@
+if (typeof importScripts === 'function') importScripts('chzzk-video-metadata.js');
+
 const api = typeof browser !== 'undefined' ? browser : chrome;
+const chzzkVideoMetadata = self.AruChzzkVideoMetadata;
 
 const SERVICES = ['chzzk', 'cime', 'toonation', 'arubot'];
 const SERVICE_LABELS = {
@@ -40,6 +43,9 @@ const runtime = {
   pauseUntil: 0,
   lastBroadcast: 0
 };
+
+const chzzkDurationCache = new Map();
+let chzzkDonationSequence = Promise.resolve();
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -383,8 +389,27 @@ function pickNumber(object, names) {
 function normalizeDurationFromPayload(payload) {
   const candidates = getNestedCandidates(payload);
   for (const object of candidates) {
-    const start = pickNumber(object, ['vStart', 'startSecond', 'startSec', 'video_begin', 'begin', 'start']);
-    const end = pickNumber(object, ['vEnd', 'endSecond', 'endSec', 'video_end', 'end']);
+    const start = pickNumber(object, [
+      'vStart',
+      'startSecond',
+      'startSec',
+      'videoStartSecond',
+      'playStartSecond',
+      'beginSecond',
+      'video_begin',
+      'begin',
+      'start'
+    ]);
+    const end = pickNumber(object, [
+      'vEnd',
+      'endSecond',
+      'endSec',
+      'videoEndSecond',
+      'playEndSecond',
+      'finishSecond',
+      'video_end',
+      'end'
+    ]);
     if (start != null && end != null && end > start) return Math.ceil(end - start);
   }
 
@@ -412,6 +437,168 @@ function normalizeDurationFromPayload(payload) {
     }
   }
   return null;
+}
+
+async function fetchTextWithTimeout(url, { credentials = 'include', accept = 'application/json, text/plain, */*', timeoutMs = 8000 } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      credentials,
+      cache: 'no-store',
+      signal: controller.signal,
+      headers: { accept }
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return response.text();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchJsonWithTimeout(url, options) {
+  const text = await fetchTextWithTimeout(url, options);
+  const payload = parseJsonMessage(text);
+  if (!payload) throw new Error('Invalid JSON response');
+  return payload;
+}
+
+async function fetchYouTubeMediaDuration(videoId) {
+  const url = new URL('https://www.youtube.com/watch');
+  url.searchParams.set('v', videoId);
+  url.searchParams.set('hl', 'en');
+  url.searchParams.set('bpctr', '9999999999');
+  url.searchParams.set('has_verified', '1');
+  const html = await fetchTextWithTimeout(url.toString(), {
+    credentials: 'omit',
+    accept: 'text/html,application/xhtml+xml',
+    timeoutMs: 10000
+  });
+  return chzzkVideoMetadata.parseYouTubeDurationHtml(html);
+}
+
+async function fetchChzzkClipMediaDuration(clipId) {
+  const fetchDetailDuration = async (id) => {
+    const detailUrl = new URL(`https://api.chzzk.naver.com/service/v1/clips/${encodeURIComponent(id)}/detail`);
+    detailUrl.searchParams.set('optionalProperties', 'COMMENT');
+    const detail = await fetchJsonWithTimeout(detailUrl.toString());
+    return chzzkVideoMetadata.extractDurationSeconds(detail?.content || detail);
+  };
+  try {
+    const duration = await fetchDetailDuration(clipId);
+    if (duration) return duration;
+  } catch {}
+
+  const cardUrl = new URL('https://creatorhub-api.naver.com/api/v5.0/clipviewer/card');
+  cardUrl.searchParams.set('userInteraction', 'true');
+  cardUrl.searchParams.set('seedType', 'SPECIFIC');
+  cardUrl.searchParams.set('serviceType', 'CHZZK');
+  cardUrl.searchParams.set('seedMediaId', clipId);
+  try {
+    const card = await fetchJsonWithTimeout(cardUrl.toString());
+    const cardDuration = chzzkVideoMetadata.extractDurationSeconds(card);
+    if (cardDuration) return cardDuration;
+    const contentId = String(card?.body?.card?.content?.contentId || '').trim();
+    if (contentId && contentId !== clipId) {
+      try { return await fetchDetailDuration(contentId); } catch {}
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchOfficialChzzkVideoDuration(media, payload) {
+  const channelId = chzzkVideoMetadata.extractChannelId(payload);
+  if (!channelId) return null;
+  const url = new URL('https://api.chzzk.naver.com/service/v2/donation/videos');
+  url.searchParams.set('videoURL', media.url);
+  url.searchParams.set('channelId', channelId);
+  try {
+    const response = await fetchJsonWithTimeout(url.toString());
+    return chzzkVideoMetadata.extractDurationSeconds(response?.content || response);
+  } catch {
+    return null;
+  }
+}
+
+async function fetchChzzkDonationMediaDuration(media, payload) {
+  let duration = null;
+  if (media.kind === 'youtube') {
+    try { duration = await fetchYouTubeMediaDuration(media.id); } catch {}
+  } else if (media.kind === 'chzzk_clip') {
+    duration = await fetchChzzkClipMediaDuration(media.id);
+  }
+  return duration || fetchOfficialChzzkVideoDuration(media, payload);
+}
+
+async function getCachedChzzkDonationMediaDuration(media, payload) {
+  const key = `${media.kind}:${media.id}`;
+  const now = Date.now();
+  const cached = chzzkDurationCache.get(key);
+  if (cached?.expiresAt > now) {
+    return cached.promise || cached.durationSec || null;
+  }
+
+  const promise = fetchChzzkDonationMediaDuration(media, payload);
+  chzzkDurationCache.set(key, { promise, expiresAt: now + 15000 });
+  try {
+    const durationSec = await promise;
+    if (!durationSec) {
+      chzzkDurationCache.delete(key);
+      return null;
+    }
+    chzzkDurationCache.set(key, { durationSec, expiresAt: Date.now() + 30 * 60 * 1000 });
+    return durationSec;
+  } catch {
+    chzzkDurationCache.delete(key);
+    return null;
+  }
+}
+
+async function resolveChzzkDonationDuration(payload) {
+  const packetDuration = normalizeDurationFromPayload(payload);
+  if (packetDuration) return { durationSec: packetDuration, source: 'packet' };
+
+  const media = chzzkVideoMetadata.extractDonationMedia(payload);
+  if (!media) return { durationSec: null, source: 'media_not_found' };
+  const mediaDurationSec = await getCachedChzzkDonationMediaDuration(media, payload);
+  const durationSec = chzzkVideoMetadata.durationForPlaybackRange(payload, mediaDurationSec);
+  return {
+    durationSec,
+    source: durationSec ? `${media.kind}_metadata` : 'metadata_unavailable',
+    media
+  };
+}
+
+function enqueueChzzkDonation(service, payload) {
+  const resolutionPromise = resolveChzzkDonationDuration(payload)
+    .catch(() => ({ durationSec: null, source: 'resolution_failed' }));
+  const next = chzzkDonationSequence
+    .catch(() => {})
+    .then(async () => {
+      const resolution = await resolutionPromise;
+      if (resolution.durationSec) {
+        return enqueuePause(service, resolution.durationSec, {
+          ...payload,
+          durationResolutionSource: resolution.source
+        });
+      }
+      setServiceState(service, {
+        status: 'connected',
+        message: 'Video received, duration unavailable',
+        lastEventAt: Date.now(),
+        lastDurationSec: null
+      });
+      console.warn('[aru-pause:chzzk] donation duration unavailable', {
+        reason: resolution.source,
+        videoType: payload?.videoType || null,
+        videoId: payload?.videoId || null
+      });
+      return false;
+    });
+  chzzkDonationSequence = next;
+  return next;
 }
 
 function extractCimeClipIdFromValue(value) {
@@ -703,8 +890,7 @@ function handleSocketIoMessage(service, packet, ws) {
       return;
     }
     if (eventName !== 'donation' || !body || !isLikelyVideoDonation(body)) return;
-    const duration = normalizeDurationFromPayload(body);
-    if (duration) enqueuePause(service, duration, body);
+    return enqueueChzzkDonation(service, body);
   }
 }
 

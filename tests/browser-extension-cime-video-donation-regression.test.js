@@ -20,10 +20,18 @@ describe('browser extension CIME video donation regression', () => {
   });
 
   test('CIME DONATION_VIDEO payload shape is recognized and duration is calculated from vStart/vEnd', () => {
+    const normalizerStart = background.indexOf('function normalizeDurationFromPayload');
+    const normalizerEnd = background.indexOf('async function fetchTextWithTimeout', normalizerStart);
+    const normalizer = background.slice(normalizerStart, normalizerEnd);
+
     expect(background).toContain("if (payload.action === 'PONG') return");
     expect(background).toContain("if (payload.action !== 'DONATION_VIDEO' && !isLikelyVideoDonation(payload)) return");
-    expect(background).toContain("pickNumber(object, ['vStart', 'startSecond', 'startSec', 'video_begin', 'begin', 'start'])");
-    expect(background).toContain("pickNumber(object, ['vEnd', 'endSecond', 'endSec', 'video_end', 'end'])");
+    for (const field of ['vStart', 'startSecond', 'startSec', 'video_begin', 'begin', 'start']) {
+      expect(normalizer).toContain(`'${field}'`);
+    }
+    for (const field of ['vEnd', 'endSecond', 'endSec', 'video_end', 'end']) {
+      expect(normalizer).toContain(`'${field}'`);
+    }
     expect(background).toContain('event?.id || event?.donationId || event?.nfId');
     expect(background).toContain('title: event?.title || event?.vTitle || event?.videoTitle || event?.video_info?.title || event?.content?.video_info?.title || event?.videoDescription || null');
   });

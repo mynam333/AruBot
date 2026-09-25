@@ -13,6 +13,7 @@ export type VideoDonationIdlePlaylist = {
   enabled: boolean;
   mode: 'recommended' | 'custom';
   topic: string;
+  mixUrl: string;
   recommendationCount: number;
   loop: boolean;
   shuffle: boolean;
@@ -22,13 +23,14 @@ export type VideoDonationIdlePlaylist = {
 
 export const MAX_VIDEO_DONATION_IDLE_TRACKS = 200;
 export const MAX_VIDEO_DONATION_IDLE_TRACK_DURATION_SEC = 10 * 60;
-export const DEFAULT_VIDEO_DONATION_IDLE_RECOMMENDATION_COUNT = 12;
+export const DEFAULT_VIDEO_DONATION_IDLE_RECOMMENDATION_COUNT = 1;
 
 export function createDefaultVideoDonationIdlePlaylist(): VideoDonationIdlePlaylist {
   return {
     enabled: false,
     mode: 'recommended',
     topic: '로파이 집중',
+    mixUrl: '',
     recommendationCount: DEFAULT_VIDEO_DONATION_IDLE_RECOMMENDATION_COUNT,
     loop: true,
     shuffle: false,
@@ -83,6 +85,7 @@ export function normalizeVideoDonationIdlePlaylist(value: unknown): VideoDonatio
     enabled: source.enabled === true,
     mode,
     topic: String(source.topic || defaults.topic).trim().slice(0, 80) || defaults.topic,
+    mixUrl: String(source.mixUrl || '').trim().slice(0, 2048),
     recommendationCount,
     loop: source.loop !== false,
     shuffle: source.shuffle === true,

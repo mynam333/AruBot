@@ -129,8 +129,12 @@ async function loadLivePlayback(surface: LiveSurface) {
   const provider = encodeURIComponent(surface.provider);
   const channelId = encodeURIComponent(surface.hlsChannelId || surface.channelId);
   const response = await fetch(apiUrl(`/api/drawing-donation/live-playback?provider=${provider}&channelId=${channelId}`), { credentials: 'include', cache: 'no-store' });
-  if (!response.ok) throw new Error('live playback unavailable');
-  return response.json() as Promise<{ playbackUrl: string }>;
+  if (!response.ok) {
+    const error = new Error('live playback unavailable') as Error & { status: number };
+    error.status = response.status;
+    throw error;
+  }
+  return response.json() as Promise<{ playbackUrl?: string | null; embedUrl?: string | null }>;
 }
 
 function traceDrawingPath(ctx: CanvasRenderingContext2D, points: StrokePoint[], width: number, height: number) {
@@ -398,7 +402,11 @@ export function DrawingDonationEditorPage({ channelUid }: { channelUid: string }
   const [streamer, setStreamer] = useState<Streamer | null>(null);
   const [selectedSurfaceKey, setSelectedSurfaceKey] = useState('');
   const [livePlaybackUrl, setLivePlaybackUrl] = useState('');
-  const [livePlaybackStatus, setLivePlaybackStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [liveEmbedUrl, setLiveEmbedUrl] = useState('');
+  const [livePlaybackStatus, setLivePlaybackStatus] = useState<'idle' | 'loading' | 'ready' | 'offline' | 'error'>('idle');
+  const [playbackRetryToken, setPlaybackRetryToken] = useState(0);
+  const manualSurfaceSelectionRef = useRef(false);
+  const attemptedSurfaceKeysRef = useRef(new Set<string>());
   const [liveMuted, setLiveMuted] = useState(true);
   const [liveVolume, setLiveVolume] = useState(0.35);
   const [strokes, setStrokes] = useState<Stroke[]>([]);
@@ -488,6 +496,8 @@ export function DrawingDonationEditorPage({ channelUid }: { channelUid: string }
       .then((data) => {
         const found = data.streamer || null;
         setStreamer(found || null);
+        manualSurfaceSelectionRef.current = false;
+        attemptedSurfaceKeysRef.current.clear();
         const surfaces = found?.liveSurfaces || [];
         const preferred = surfaces.find((surface) => surface.live === true) || surfaces[0];
         if (preferred) setSelectedSurfaceKey(`${preferred.provider}:${preferred.channelId}`);
@@ -508,8 +518,10 @@ export function DrawingDonationEditorPage({ channelUid }: { channelUid: string }
 
   useEffect(() => {
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
     setLivePlaybackUrl('');
-    if (!selectedSurface?.hlsSupported) {
+    setLiveEmbedUrl('');
+    if (!selectedSurface) {
       setLivePlaybackStatus('idle');
       return () => {
         cancelled = true;
@@ -519,39 +531,61 @@ export function DrawingDonationEditorPage({ channelUid }: { channelUid: string }
     loadLivePlayback(selectedSurface)
       .then((payload) => {
         if (cancelled) return;
-        setLivePlaybackUrl(payload.playbackUrl || '');
-        setLivePlaybackStatus(payload.playbackUrl ? 'ready' : 'error');
+        const playbackUrl = payload.playbackUrl || '';
+        const embedUrl = payload.embedUrl || '';
+        setLivePlaybackUrl(playbackUrl);
+        setLiveEmbedUrl(embedUrl);
+        if (!playbackUrl && !embedUrl) throw Object.assign(new Error('live playback unavailable'), { status: 404 });
+        attemptedSurfaceKeysRef.current.clear();
+        if (embedUrl) setLivePlaybackStatus('ready');
       })
-      .catch(() => {
-        if (!cancelled) setLivePlaybackStatus('error');
+      .catch((error: Error & { status?: number }) => {
+        if (cancelled) return;
+        const offline = error.status === 404;
+        setLivePlaybackStatus(offline ? 'offline' : 'error');
+        if (offline && !manualSurfaceSelectionRef.current) {
+          attemptedSurfaceKeysRef.current.add(`${selectedSurface.provider}:${selectedSurface.channelId}`);
+          const next = liveSurfaces.find((surface) => !attemptedSurfaceKeysRef.current.has(`${surface.provider}:${surface.channelId}`));
+          if (next) {
+            setSelectedSurfaceKey(`${next.provider}:${next.channelId}`);
+            return;
+          }
+          attemptedSurfaceKeysRef.current.clear();
+        }
+        if (offline) retryTimer = setTimeout(() => setPlaybackRetryToken((current) => current + 1), 20_000);
       });
     return () => {
       cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
     };
-  }, [selectedSurface]);
+  }, [liveSurfaces, playbackRetryToken, selectedSurface]);
 
   useEffect(() => {
     const video = liveVideoRef.current;
     if (!video || !livePlaybackUrl) return undefined;
     let hls: Hls | null = null;
     let disposed = false;
-    video.muted = liveMuted;
-    video.volume = Math.max(0, Math.min(1, liveVolume));
     video.playsInline = true;
     const play = () => video.play().catch(() => undefined);
-    if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    const onPlaying = () => setLivePlaybackStatus('ready');
+    const onError = () => {
+      if (!disposed) {
+        console.warn('[Drawing Donation] Video playback failed:', video.error?.code, video.error?.message);
+        setLivePlaybackStatus('error');
+      }
+    };
+    video.addEventListener('playing', onPlaying);
+    video.addEventListener('error', onError);
+    const playNatively = () => {
       video.src = livePlaybackUrl;
       video.addEventListener('loadedmetadata', play, { once: true });
-      return () => {
-        video.removeEventListener('loadedmetadata', play);
-        video.removeAttribute('src');
-        video.load();
-      };
-    }
+    };
     import('hls.js')
       .then(({ default: Hls }) => {
-        if (disposed || !Hls.isSupported()) {
-          if (!disposed) setLivePlaybackStatus('error');
+        if (disposed) return;
+        if (!Hls.isSupported()) {
+          if (video.canPlayType('application/vnd.apple.mpegurl')) playNatively();
+          else setLivePlaybackStatus('error');
           return;
         }
         hls = new Hls({
@@ -563,17 +597,34 @@ export function DrawingDonationEditorPage({ channelUid }: { channelUid: string }
         hls.loadSource(livePlaybackUrl);
         hls.attachMedia(video);
         hls.on(Hls.Events.MANIFEST_PARSED, play);
+        hls.on(Hls.Events.ERROR, (_event, data) => {
+          if (data.fatal && !disposed) {
+            console.warn('[Drawing Donation] HLS playback failed:', data.type, data.details);
+            setLivePlaybackStatus('error');
+          }
+        });
       })
       .catch(() => {
-        if (!disposed) setLivePlaybackStatus('error');
+        if (disposed) return;
+        if (video.canPlayType('application/vnd.apple.mpegurl')) playNatively();
+        else setLivePlaybackStatus('error');
       });
     return () => {
       disposed = true;
       hls?.destroy();
+      video.removeEventListener('loadedmetadata', play);
+      video.removeEventListener('playing', onPlaying);
+      video.removeEventListener('error', onError);
       video.removeAttribute('src');
       video.load();
     };
-  }, [liveMuted, livePlaybackUrl, liveVolume]);
+  }, [livePlaybackUrl]);
+
+  useEffect(() => {
+    if (livePlaybackStatus !== 'error' || !selectedSurface) return undefined;
+    const timer = setTimeout(() => setPlaybackRetryToken((current) => current + 1), 10_000);
+    return () => clearTimeout(timer);
+  }, [livePlaybackStatus, selectedSurface]);
 
   useEffect(() => {
     const video = liveVideoRef.current;
@@ -581,7 +632,7 @@ export function DrawingDonationEditorPage({ channelUid }: { channelUid: string }
     video.muted = liveMuted;
     video.volume = Math.max(0, Math.min(1, liveVolume));
     if (!liveMuted) video.play().catch(() => undefined);
-  }, [liveMuted, liveVolume]);
+  }, [liveMuted, livePlaybackUrl, liveVolume]);
 
   const getPoint = (event: React.PointerEvent<HTMLCanvasElement>): StrokePoint => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -742,7 +793,12 @@ export function DrawingDonationEditorPage({ channelUid }: { channelUid: string }
                 <button
                   key={key}
                   type="button"
-                  onClick={() => setSelectedSurfaceKey(key)}
+                  onClick={() => {
+                    manualSurfaceSelectionRef.current = true;
+                    attemptedSurfaceKeysRef.current.clear();
+                    setSelectedSurfaceKey(key);
+                    setPlaybackRetryToken((current) => current + 1);
+                  }}
                   className={`inline-flex min-h-[var(--control-height-sm)] items-center gap-2 rounded-full border px-3 text-xs font-semibold transition ${selectedSurfaceKey === key ? 'border-primary/40 bg-primary/12 text-primary' : 'bg-background/70 text-muted-foreground hover:border-primary/30 hover:text-foreground'}`}
                 >
                   {providerLabels[surface.provider] || surface.provider}
@@ -772,23 +828,32 @@ export function DrawingDonationEditorPage({ channelUid }: { channelUid: string }
                   />
                 ) : (
                   <div className="absolute inset-0 grid place-items-center bg-black text-center text-sm text-white/72">
-                    <span>{livePlaybackStatus === 'loading' ? '방송 화면을 불러오는 중입니다.' : '현재 재생 가능한 방송 화면을 찾지 못했어요.'}</span>
+                    <span>{livePlaybackStatus === 'loading' ? '방송 화면을 불러오는 중입니다.' : '화면 연결과 관계없이 그림을 계속 그릴 수 있어요.'}</span>
                   </div>
                 )
-              ) : selectedSurface?.embedUrl ? (
+              ) : liveEmbedUrl ? (
                 <iframe
-                  key={`${selectedSurface.provider}:${selectedSurface.channelId}`}
-                  src={selectedSurface.embedUrl}
-                  title={`${providerLabels[selectedSurface.provider] || selectedSurface.provider} 방송 화면`}
+                  key={liveEmbedUrl}
+                  src={liveEmbedUrl}
+                  title={`${providerLabels[selectedSurface?.provider || ''] || selectedSurface?.provider} 방송 화면`}
                   className="absolute inset-0 h-full w-full border-0 bg-black"
                   allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
                   referrerPolicy="no-referrer-when-downgrade"
+                  onError={() => setLivePlaybackStatus('error')}
                 />
               ) : (
                 <div className="absolute inset-0 grid place-items-center bg-muted/30 text-center text-sm text-muted-foreground">
-                  <span>방송 화면 위에 올라갈 위치를 생각하며 그려주세요.</span>
+                  <span>{selectedSurface && livePlaybackStatus === 'loading' ? '방송 화면을 불러오는 중입니다.' : '방송 화면 위에 올라갈 위치를 생각하며 그려주세요.'}</span>
                 </div>
               )}
+              {selectedSurface && (livePlaybackStatus === 'offline' || livePlaybackStatus === 'error') ? (
+                <div className="pointer-events-none absolute inset-x-0 bottom-3 z-20 flex justify-center px-3">
+                  <div className="pointer-events-auto flex items-center gap-2 rounded-full border bg-card/90 px-3 py-1.5 text-xs shadow-subtle backdrop-blur-xl">
+                    <span>{livePlaybackStatus === 'offline' ? '현재 생방송을 찾지 못했어요.' : '방송 화면 연결이 끊겼어요.'}</span>
+                    <Button type="button" size="sm" variant="ghost" onClick={() => setPlaybackRetryToken((current) => current + 1)}>다시 연결</Button>
+                  </div>
+                </div>
+              ) : null}
               {selectedSurface?.hlsSupported ? (
                 <div className="absolute right-3 top-3 z-20 flex max-w-[min(18rem,calc(100%-1.5rem))] items-center gap-2 rounded-full border bg-card/88 px-2 py-1.5 shadow-subtle backdrop-blur-xl">
                   <Button type="button" size="icon" variant="ghost" onClick={() => setLiveMuted((current) => !current)} aria-label={liveMuted ? '방송 소리 켜기' : '방송 소리 끄기'}>

@@ -19,9 +19,18 @@ import { resolveVideoDonationTiming } from './video-donation-timing.js';
 import { appendVideoDonationQueueCount, countNonDurableVideoDonationItems, countVideoDonationQueueIncludingItem } from './video-donation-queue.js';
 import { fetchYouTubeVideoMetadata } from './youtube-video-metadata.js';
 import { extractYoutubeChannelPageMetadata, isYoutubeChannelId } from './youtube-channel-page.js';
+import { isYoutubeGrantRevoked, validateYoutubeGrant } from './youtube-authorization.js';
+import { createYoutubeIdleRecommendations } from './youtube-idle-recommendations.js';
+import { parseYouTubeMix } from '../shared/youtube-mix.js';
 import { createPvdDurationProbeCoordinator } from './pvd-duration-probe.js';
 import { resolvePvdYouTubeMetadata } from './pvd-youtube-metadata-fallback.js';
 import { createRouletteBroadcastDelivery } from './roulette-broadcast-delivery.js';
+import {
+  parseChzzkLivePlaybackUrl,
+  parseCimeLivePlaybackUrl,
+  parseCimeChannelSlug,
+  youtubeLiveEmbedUrl,
+} from './drawing-live-playback.js';
 import { createRouletteResultActionCoordinator } from './roulette-result-action-coordinator.js';
 import { buildPointEarningPolicy, calculateDonationPointAward, normalizePointAward } from './point-earning-policy.js';
 import { installChzzkSocketIo2ParserGuard } from './chzzk-socket-io2-guard.js';
@@ -228,6 +237,7 @@ function createIpRateLimiter({ windowMs, max, prefix }) {
 
 const rateLimiters = {
   externalLookup: createIpRateLimiter({ prefix: 'externalLookup', windowMs: 60 * 1000, max: 30 }),
+  drawingPlayback: createIpRateLimiter({ prefix: 'drawingPlayback', windowMs: 60 * 1000, max: 300 }),
   userWrite: createIpRateLimiter({ prefix: 'userWrite', windowMs: 60 * 1000, max: 120 }),
   apiKeyCommand: createIpRateLimiter({ prefix: 'apiKeyCommand', windowMs: 60 * 1000, max: 240 }),
   shortLinkCreate: createIpRateLimiter({ prefix: 'shortLinkCreate', windowMs: 60 * 1000, max: 20 }),
@@ -2688,6 +2698,11 @@ const drawingTokenToSid = new Map(); // token -> sid (in-memory reverse index)
 const drawingOverlaySockets = new Map(); // sid -> Set<WebSocket>
 const drawingAdminSockets = new Map(); // sid -> Set<WebSocket>
 const drawingLivePlaybackCache = new Map(); // key -> { expiresAt, value }
+const runDrawingLivePlaybackLookup = createBoundedOperationRunner({
+  maxInFlight: 16,
+  timeoutMs: 14_000,
+  errorCode: 'drawing_live_playback_temporarily_unavailable',
+});
 
 // =============================
 // =============================
@@ -3612,11 +3627,10 @@ async function searchYouTubeVideoIdByQuery(query) {
 const PVD_IDLE_PLAYLIST_MAX_TRACKS = 200;
 const PVD_IDLE_RECOMMENDATION_TRACKS = 12;
 const PVD_IDLE_TRACK_MAX_DURATION_SEC = 10 * 60;
-const PVD_IDLE_RECOMMENDATION_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-const PVD_IDLE_RECOMMENDATION_CACHE_MAX_TOPICS = 100;
-const PVD_IDLE_RECOMMENDATION_MAX_SEARCH_PAGES = 10;
-const pvdIdleRecommendationCache = new Map();
-const pvdIdleRecommendationInFlight = new Map();
+const recommendYouTubeIdleTracks = createYoutubeIdleRecommendations({
+  search: (params) => youtubeApiGetPublic('search', params, { timeout: 7000 }),
+  hydrate: (tracks) => hydrateYouTubeIdleTracks(tracks, { strict: true }),
+});
 
 function normalizePvdIdleRecommendationCount(value) {
   const parsed = Math.floor(Number(value));
@@ -3686,6 +3700,7 @@ function normalizePvdIdlePlaylist(value) {
     enabled: source.enabled === true,
     mode,
     topic: compactLogText(source.topic || '로파이 집중', 80),
+    mixUrl: String(source.mixUrl || '').trim().slice(0, 2048),
     recommendationCount,
     loop: source.loop !== false,
     shuffle: source.shuffle === true,
@@ -3706,9 +3721,10 @@ function getPvdIdlePlaylistForViewer(value) {
   const playlist = normalizePvdIdlePlaylist(value);
   const tracks = playlist.mode === 'custom' ? playlist.customTracks : playlist.recommendedTracks;
   return {
-    enabled: playlist.enabled && tracks.length > 0,
+    enabled: playlist.enabled && (playlist.mode === 'recommended' || tracks.length > 0),
     mode: playlist.mode,
     topic: playlist.topic,
+    mixUrl: parseYouTubeMix(playlist.mixUrl)?.url || '',
     loop: playlist.loop,
     shuffle: playlist.shuffle,
     tracks,
@@ -3727,6 +3743,7 @@ function youtubeThumbnailFromSnippet(snippet, videoId) {
 function mapYouTubeApiVideoToIdleTrack(item, fallback = null) {
   const videoId = String(item?.id || fallback?.mediaId || fallback?.videoId || '').trim();
   if (!videoId || item?.status?.embeddable === false || item?.status?.privacyStatus === 'private') return null;
+  if (item?.snippet?.liveBroadcastContent && item.snippet.liveBroadcastContent !== 'none') return null;
   const durationSec = parseIso8601Duration(item?.contentDetails?.duration || '') || fallback?.durationSec || null;
   return normalizePvdIdleTrack({
     mediaId: videoId,
@@ -3736,7 +3753,7 @@ function mapYouTubeApiVideoToIdleTrack(item, fallback = null) {
   }, { requireKnownDuration: true });
 }
 
-async function hydrateYouTubeIdleTracks(seedTracks) {
+async function hydrateYouTubeIdleTracks(seedTracks, { strict = false } = {}) {
   const seeds = normalizePvdIdleTracks(seedTracks, PVD_IDLE_PLAYLIST_MAX_TRACKS, { requireKnownDuration: false });
   if (!seeds.length) {
     return { tracks: [], requestedCount: 0, excludedCount: 0, excludedTooLongCount: 0, detailRequests: 0 };
@@ -3766,7 +3783,9 @@ async function hydrateYouTubeIdleTracks(seedTracks) {
       }
     }
     apiCompleted = true;
-  } catch { }
+  } catch (error) {
+    if (strict) throw error;
+  }
 
   if (!apiCompleted && hydrated.length === 0 && seeds.length === 1) {
     const info = await fetchYouTubeInfo(seeds[0].mediaId).catch(() => null);
@@ -3862,147 +3881,6 @@ async function fetchYouTubePlaylistIdleTracks(playlistId) {
     excludedTooLongCount,
     apiRequests: { playlistItems: playlistItemRequests, videos: detailRequests },
   };
-}
-
-function shufflePvdIdleTracks(values) {
-  const next = values.slice();
-  for (let index = next.length - 1; index > 0; index -= 1) {
-    const swapIndex = Math.floor(Math.random() * (index + 1));
-    [next[index], next[swapIndex]] = [next[swapIndex], next[index]];
-  }
-  return next;
-}
-
-function getPvdIdleRecommendationCacheKey(topic) {
-  return String(topic || '').normalize('NFKC').toLocaleLowerCase('ko-KR');
-}
-
-function prunePvdIdleRecommendationCache() {
-  const now = Date.now();
-  for (const [key, entry] of pvdIdleRecommendationCache) {
-    if (Number(entry?.expiresAt || 0) <= now) pvdIdleRecommendationCache.delete(key);
-  }
-  while (pvdIdleRecommendationCache.size > PVD_IDLE_RECOMMENDATION_CACHE_MAX_TOPICS) {
-    const oldestKey = pvdIdleRecommendationCache.keys().next().value;
-    if (!oldestKey) break;
-    pvdIdleRecommendationCache.delete(oldestKey);
-  }
-}
-
-function getPvdIdleRecommendationCacheEntry(key) {
-  prunePvdIdleRecommendationCache();
-  const entry = pvdIdleRecommendationCache.get(key) || null;
-  if (!entry) return null;
-  pvdIdleRecommendationCache.delete(key);
-  pvdIdleRecommendationCache.set(key, entry);
-  return entry;
-}
-
-function setPvdIdleRecommendationCacheEntry(key, entry) {
-  pvdIdleRecommendationCache.delete(key);
-  pvdIdleRecommendationCache.set(key, entry);
-  prunePvdIdleRecommendationCache();
-}
-
-function withPvdIdleRecommendationLock(key, task) {
-  const previous = pvdIdleRecommendationInFlight.get(key) || Promise.resolve();
-  const current = previous.catch(() => null).then(task);
-  pvdIdleRecommendationInFlight.set(key, current);
-  return current.finally(() => {
-    if (pvdIdleRecommendationInFlight.get(key) === current) pvdIdleRecommendationInFlight.delete(key);
-  });
-}
-
-async function recommendYouTubeIdleTracks(topic, limit = PVD_IDLE_RECOMMENDATION_TRACKS) {
-  const normalizedTopic = compactLogText(topic || '로파이 집중', 80);
-  const safeLimit = normalizePvdIdleRecommendationCount(limit);
-  const cacheKey = getPvdIdleRecommendationCacheKey(normalizedTopic);
-
-  return withPvdIdleRecommendationLock(cacheKey, async () => {
-    let entry = getPvdIdleRecommendationCacheEntry(cacheKey);
-    const hadFreshCache = Boolean(entry);
-    if (!entry) {
-      entry = {
-        topic: normalizedTopic,
-        tracks: [],
-        nextPageToken: '',
-        started: false,
-        exhausted: false,
-        expiresAt: Date.now() + PVD_IDLE_RECOMMENDATION_CACHE_TTL_MS,
-      };
-    }
-
-    let searchRequests = 0;
-    let detailRequests = 0;
-    let excludedCount = 0;
-    let excludedTooLongCount = 0;
-
-    while (entry.tracks.length < safeLimit && !entry.exhausted && searchRequests < PVD_IDLE_RECOMMENDATION_MAX_SEARCH_PAGES) {
-      let response = null;
-      searchRequests += 1;
-      try {
-        response = await youtubeApiGetPublic('search', {
-          part: 'snippet',
-          type: 'video',
-          q: `${normalizedTopic} 음악 -플레이리스트 -모음 -mix`,
-          maxResults: 50,
-          order: 'relevance',
-          regionCode: 'KR',
-          relevanceLanguage: 'ko',
-          safeSearch: 'moderate',
-          videoCategoryId: '10',
-          videoEmbeddable: 'true',
-          videoSyndicated: 'true',
-          pageToken: entry.started ? entry.nextPageToken : '',
-        });
-      } catch {
-        if (!entry.started && entry.tracks.length === 0) {
-          const first = await searchYouTubeVideoIdByQuery(`${normalizedTopic} 음악`).catch(() => null);
-          if (first) {
-            const hydrated = await hydrateYouTubeIdleTracks([{ mediaId: first }]);
-            detailRequests += hydrated.detailRequests;
-            excludedCount += hydrated.excludedCount;
-            excludedTooLongCount += hydrated.excludedTooLongCount;
-            entry.tracks = hydrated.tracks;
-          }
-        }
-        entry.exhausted = true;
-        break;
-      }
-
-      entry.started = true;
-      const items = Array.isArray(response?.data?.items) ? response.data.items : [];
-      const seeds = items.map((item) => ({
-        mediaId: item?.id?.videoId,
-        title: item?.snippet?.title,
-        thumbnailUrl: youtubeThumbnailFromSnippet(item?.snippet, item?.id?.videoId),
-      }));
-      const hydrated = await hydrateYouTubeIdleTracks(seeds);
-      detailRequests += hydrated.detailRequests;
-      excludedCount += hydrated.excludedCount;
-      excludedTooLongCount += hydrated.excludedTooLongCount;
-      entry.tracks = normalizePvdIdleTracks(
-        [...entry.tracks, ...hydrated.tracks],
-        PVD_IDLE_PLAYLIST_MAX_TRACKS,
-        { requireKnownDuration: true },
-      );
-      entry.nextPageToken = String(response?.data?.nextPageToken || '');
-      entry.exhausted = !entry.nextPageToken || items.length === 0;
-    }
-
-    entry.expiresAt = Date.now() + PVD_IDLE_RECOMMENDATION_CACHE_TTL_MS;
-    setPvdIdleRecommendationCacheEntry(cacheKey, entry);
-    return {
-      topic: normalizedTopic,
-      requestedCount: safeLimit,
-      availableCount: entry.tracks.length,
-      tracks: shufflePvdIdleTracks(entry.tracks).slice(0, safeLimit),
-      cacheHit: hadFreshCache && searchRequests === 0 && detailRequests === 0,
-      excludedCount,
-      excludedTooLongCount,
-      apiRequests: { search: searchRequests, videos: detailRequests },
-    };
-  });
 }
 
 async function resolvePvdIdlePlaylistInput(input) {
@@ -7567,6 +7445,35 @@ app.post('/api/video-donation/idle-playlist/recommend', rateLimiters.externalLoo
   }
 });
 
+app.post('/api/video-donation/idle-playlist/next-by-token', rateLimiters.externalLookup, async (req, res) => {
+  try {
+    const token = String(req.body?.token || '').trim();
+    if (!token) return res.status(400).json({ error: 'token required' });
+    const sid = await findSidByViewerToken(token);
+    if (!sid) return res.status(404).json({ error: 'token not found' });
+    const settings = await getBotSettingsStrict(sid);
+    if (!settings || settings.videoDonationViewerToken !== token) {
+      return res.status(404).json({ error: 'token not found' });
+    }
+    const playlist = normalizePvdIdlePlaylist(settings.videoDonationIdlePlaylist);
+    if (!playlist.enabled || playlist.mode !== 'recommended') {
+      return res.json({ tracks: [], topic: playlist.topic, retryAfterMs: 60000 });
+    }
+    const excludeIds = (Array.isArray(req.body?.excludeIds) ? req.body.excludeIds : [])
+      .slice(-1000).filter((id) => typeof id === 'string' && /^[A-Za-z0-9_-]{11}$/.test(id));
+    const seedOnly = req.body?.seedOnly === true;
+    const result = await recommendYouTubeIdleTracks(playlist.topic, seedOnly ? 1 : 12, { excludeIds, maxPages: seedOnly ? 1 : 2 });
+    res.set('Cache-Control', 'no-store');
+    return res.json(result);
+  } catch (error) {
+    const quotaExceeded = isYoutubeQuotaExceededError(error);
+    return res.status(quotaExceeded ? 503 : 502).json({
+      error: quotaExceeded ? 'YouTube 검색 할당량을 사용할 수 없습니다.' : '다음 추천곡을 불러오지 못했습니다.',
+      retryAfterMs: quotaExceeded ? 5 * 60 * 1000 : 60000,
+    });
+  }
+});
+
 // Public: activate a queued donation after the current idle track finishes.
 app.post('/api/video-donation/activate-by-token', async (req, res) => {
   try {
@@ -7674,12 +7581,10 @@ app.post('/api/video-donation/settings', async (req, res) => {
     const hasIdlePlaylistInput = Object.prototype.hasOwnProperty.call(body, 'idlePlaylist');
     const idleSource = hasIdlePlaylistInput ? body.idlePlaylist : settings.videoDonationIdlePlaylist;
     const idlePlaylist = normalizePvdIdlePlaylist(idleSource);
-    if (idlePlaylist.enabled && idlePlaylist.mode === 'recommended' && idlePlaylist.recommendedTracks.length === 0) {
-      const recommendation = await recommendYouTubeIdleTracks(idlePlaylist.topic, idlePlaylist.recommendationCount);
-      idlePlaylist.recommendedTracks = recommendation.tracks;
-      if (!idlePlaylist.recommendedTracks.length) {
-        return res.status(400).json({ error: '추천곡을 찾지 못했습니다. 다른 주제를 입력해 주세요.' });
-      }
+    if (idlePlaylist.mixUrl) {
+      const mix = parseYouTubeMix(idlePlaylist.mixUrl);
+      if (!mix) return res.status(400).json({ error: '올바른 YouTube Mix 주소를 입력해 주세요.' });
+      idlePlaylist.mixUrl = mix.url;
     }
     if (idlePlaylist.enabled && idlePlaylist.mode === 'custom' && idlePlaylist.customTracks.length === 0) {
       return res.status(400).json({ error: '직접 구성 플레이리스트에 곡을 하나 이상 추가해 주세요.' });
@@ -8369,17 +8274,28 @@ app.get('/api/drawing-donation/viewer-url', async (req, res) => {
   }
 });
 
-app.get('/api/drawing-donation/live-playback', rateLimiters.externalLookup, async (req, res) => {
+app.get('/api/drawing-donation/live-playback', rateLimiters.drawingPlayback, async (req, res) => {
   try {
     const provider = String(req.query?.provider || '').trim().toLowerCase();
     const channelId = String(req.query?.channelId || '').trim();
-    if (!['chzzk', 'cime'].includes(provider) || !channelId) return res.status(400).json({ error: 'invalid_live_surface' });
-    const playback = await resolveDrawingLivePlaybackUrl(provider, channelId);
-    if (!playback?.playbackUrl) return res.status(404).json({ error: 'live_playback_not_found' });
+    if (!['chzzk', 'cime', 'youtube'].includes(provider) || !/^[a-z0-9_-]{1,128}$/i.test(channelId)) {
+      return res.status(400).json({ error: 'invalid_live_surface' });
+    }
+    const identity = provider === 'youtube'
+      ? await resolveVerifiedPublicChannelIdentity(`youtube:${channelId}`)
+      : null;
+    if (provider === 'youtube' && !identity?.ownerUserId) {
+      return res.status(404).json({ error: 'live_playback_not_found' });
+    }
+    const playback = await resolveDrawingLivePlaybackUrl(provider, channelId, identity?.ownerUserId);
+    if (!playback?.playbackUrl && !playback?.embedUrl) {
+      return res.status(404).json({ error: 'live_playback_not_found' });
+    }
+    res.setHeader('Cache-Control', 'no-store');
     return res.json(playback);
   } catch (e) {
     console.warn('[Drawing Donation] live playback resolve failed:', e?.message || e);
-    return res.status(502).json({ error: 'Failed to resolve live playback' });
+    return res.status(Number(e?.status) === 503 ? 503 : 502).json({ error: 'live_playback_temporarily_unavailable' });
   }
 });
 
@@ -8481,7 +8397,7 @@ app.post('/api/drawing-donation/submit', rateLimiters.userWrite, async (req, res
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
     const channelUid = String(req.body?.channelUid || '').trim();
     if (!channelUid) return res.status(400).json({ error: 'channelUid required' });
-    const data = await collectViewerDrawingDonationStreamers(ownerUserId);
+    const data = await collectViewerDrawingDonationStreamers(ownerUserId, { includeLiveSurfaces: false });
     const identity = await resolveVerifiedPublicChannelIdentity(channelUid);
     const streamer = findViewerDrawingStreamer(data.streamers, channelUid, identity);
     if (!streamer) return res.status(404).json({ error: 'not_available' });
@@ -10237,7 +10153,9 @@ async function maybeStoreDrawingStrokes(ownerSid, drawingId, strokes) {
 }
 
 function getDrawingLivePlaybackCacheKey(provider, channelId) {
-  return `${String(provider || '').toLowerCase()}:${String(channelId || '').toLowerCase()}`;
+  const normalizedProvider = String(provider || '').toLowerCase();
+  const exactChannelId = String(channelId || '');
+  return `${normalizedProvider}:${normalizedProvider === 'chzzk' ? exactChannelId.toLowerCase() : exactChannelId}`;
 }
 
 async function fetchJsonWithTimeout(url, { timeoutMs = 6000, headers = {} } = {}) {
@@ -10252,62 +10170,89 @@ async function fetchJsonWithTimeout(url, { timeoutMs = 6000, headers = {} } = {}
       },
       signal: controller.signal,
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) {
+      const error = new Error(`HTTP ${response.status}`);
+      error.status = response.status;
+      throw error;
+    }
     return await response.json();
   } finally {
     clearTimeout(timer);
   }
 }
 
-function parseChzzkLlhlsPlaybackUrl(payload = {}) {
-  const candidates = ['livePlaybackJson', 'previewPlaybackJson', 'radioModePlaybackJson'];
-  for (const key of candidates) {
-    const raw = payload?.content?.[key];
-    if (!raw || typeof raw !== 'string') continue;
-    let playback = null;
-    try {
-      playback = JSON.parse(raw);
-    } catch {
-      continue;
-    }
-    const media = Array.isArray(playback?.media) ? playback.media : [];
-    const llhls = media.find((item) => String(item?.mediaId || '').toLowerCase() === 'llhls');
-    const path = String(llhls?.path || '').trim();
-    if (/^https?:\/\/.+\.m3u8(\?.*)?$/i.test(path)) return path;
-  }
-  return null;
-}
-
-function parseCimePlaybackUrl(payload = {}) {
-  const url = String(payload?.data?.playbackUrl || '').trim();
-  return /^https?:\/\/.+\.m3u8(\?.*)?$/i.test(url) ? url : null;
-}
-
-async function resolveDrawingLivePlaybackUrl(provider, channelId) {
+async function resolveDrawingLivePlaybackUrl(provider, channelId, ownerUserId = null) {
   const normalizedProvider = String(provider || '').trim().toLowerCase();
-  const normalizedChannelId = String(channelId || '').trim().replace(/^@/, '');
-  if (!normalizedChannelId || !['chzzk', 'cime'].includes(normalizedProvider)) return null;
-  const cacheKey = getDrawingLivePlaybackCacheKey(normalizedProvider, normalizedChannelId);
+  const normalizedChannelId = String(channelId || '').trim();
+  if (!/^[a-z0-9_-]{1,128}$/i.test(normalizedChannelId) || !['chzzk', 'cime', 'youtube'].includes(normalizedProvider)) return null;
+  const verifiedOwner = String(ownerUserId || '').replace(/^user:/, '').trim();
+  if (normalizedProvider === 'youtube' && !verifiedOwner) return null;
+  const cacheKey = `${getDrawingLivePlaybackCacheKey(normalizedProvider, normalizedChannelId)}:${verifiedOwner}`;
   const cached = drawingLivePlaybackCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.value;
-
-  let playbackUrl = null;
-  if (normalizedProvider === 'chzzk') {
-    const url = `https://api.chzzk.naver.com/service/v3.3/channels/${encodeURIComponent(normalizedChannelId)}/live-detail`;
-    playbackUrl = parseChzzkLlhlsPlaybackUrl(await fetchJsonWithTimeout(url, { headers: { referer: `https://chzzk.naver.com/live/${encodeURIComponent(normalizedChannelId)}` } }));
-  } else if (normalizedProvider === 'cime') {
-    const url = `https://ci.me/api/app/channels/${encodeURIComponent(normalizedChannelId)}/live`;
-    playbackUrl = parseCimePlaybackUrl(await fetchJsonWithTimeout(url, { headers: { referer: `https://ci.me/@${encodeURIComponent(normalizedChannelId)}` } }));
-  }
-
-  const value = playbackUrl ? { provider: normalizedProvider, channelId: normalizedChannelId, playbackUrl, fetchedAt: new Date().toISOString() } : null;
-  drawingLivePlaybackCache.set(cacheKey, { expiresAt: Date.now() + (value ? 15_000 : 5_000), value });
-  if (drawingLivePlaybackCache.size > 200) {
-    for (const [key, entry] of drawingLivePlaybackCache) {
-      if (entry.expiresAt <= Date.now() || drawingLivePlaybackCache.size > 160) drawingLivePlaybackCache.delete(key);
+  return singleFlight(`drawing-live:${cacheKey}`, () => runDrawingLivePlaybackLookup(async () => {
+    let playbackUrl = null;
+    let embedUrl = null;
+    try {
+      if (normalizedProvider === 'chzzk') {
+        const url = `https://api.chzzk.naver.com/service/v3.3/channels/${encodeURIComponent(normalizedChannelId)}/live-detail`;
+        playbackUrl = parseChzzkLivePlaybackUrl(await fetchJsonWithTimeout(url, { headers: { referer: `https://chzzk.naver.com/live/${encodeURIComponent(normalizedChannelId)}` } }));
+      } else if (normalizedProvider === 'cime') {
+        let slug = normalizedChannelId;
+        if (/^\d+$/.test(slug)) {
+          const profile = await fetchJsonWithTimeout(`https://ci.me/api/app/channels/id/${encodeURIComponent(slug)}`);
+          slug = parseCimeChannelSlug(profile, slug);
+        }
+        if (slug) {
+          const url = `https://ci.me/api/app/channels/${encodeURIComponent(slug)}/live`;
+          playbackUrl = parseCimeLivePlaybackUrl(await fetchJsonWithTimeout(url, { headers: { referer: `https://ci.me/@${encodeURIComponent(slug)}` } }));
+        }
+      } else {
+        const sid = `user:${verifiedOwner}`;
+        const cachedState = liveStatusCache.get(sid);
+        const entry = youtubeSessionStore.get(verifiedOwner);
+        const registered = await getYoutubeStreamerChannel(verifiedOwner).catch(() => null);
+        const candidateIds = Array.from(new Set([
+          cachedState?.provider === 'youtube' && String(cachedState.channelId || '') === normalizedChannelId ? cachedState.broadcastId : null,
+          String(entry?.channelId || '') === normalizedChannelId ? entry?.broadcastId : null,
+          String(registered?.youtubeChannelId || '') === normalizedChannelId ? registered?.lastDetectedVideoId : null,
+        ].map((id) => String(id || '').trim()).filter((id) => /^[a-z0-9_-]{11}$/i.test(id))));
+        let lookupError = null;
+        const checkCandidate = async (videoId) => {
+          try {
+            return youtubeLiveEmbedUrl(await fetchYoutubeVideoLiveDetails(videoId), normalizedChannelId);
+          } catch (error) {
+            lookupError ||= error;
+            return null;
+          }
+        };
+        for (const videoId of candidateIds) {
+          embedUrl = await checkCandidate(videoId);
+          if (embedUrl) break;
+        }
+        if (!embedUrl) {
+          const info = await getLiveInfoForSid(sid, { provider: 'youtube' });
+          const videoId = String(info?.raw?.id || '').trim();
+          if (info?.live === true && /^[a-z0-9_-]{11}$/i.test(videoId) && !candidateIds.includes(videoId)) {
+            embedUrl = await checkCandidate(videoId);
+          }
+        }
+        if (!embedUrl && lookupError) throw lookupError;
+      }
+    } catch (error) {
+      if (Number(error?.status) !== 404) throw error;
     }
-  }
-  return value;
+    const value = playbackUrl || embedUrl
+      ? { provider: normalizedProvider, channelId: normalizedChannelId, playbackUrl, embedUrl, fetchedAt: new Date().toISOString() }
+      : null;
+    drawingLivePlaybackCache.set(cacheKey, { expiresAt: Date.now() + (value ? 15_000 : 5_000), value });
+    if (drawingLivePlaybackCache.size > 200) {
+      for (const [key, entry] of drawingLivePlaybackCache) {
+        if (entry.expiresAt <= Date.now() || drawingLivePlaybackCache.size > 160) drawingLivePlaybackCache.delete(key);
+      }
+    }
+    return value;
+  }));
 }
 
 function buildDrawingLiveSurfaceFromAccount(account = {}, liveState = null) {
@@ -10320,18 +10265,14 @@ function buildDrawingLiveSurfaceFromAccount(account = {}, liveState = null) {
   const profileUrl = String(account.profile_url || account.profileUrl || publicProfile.profileUrl || publicProfile.url || metadata.profileUrl || '').trim();
   const liveUrl = String(publicProfile.liveUrl || metadata.liveUrl || '').trim();
   let watchUrl = '';
-  let embedUrl = '';
   if (provider === 'youtube') {
     const youtubeChannelId = channelId || publicProfile.channelId || '';
     watchUrl = liveUrl || profileUrl || (youtubeChannelId ? `https://www.youtube.com/channel/${encodeURIComponent(youtubeChannelId)}/live` : '');
-    embedUrl = youtubeChannelId ? `https://www.youtube.com/embed/live_stream?channel=${encodeURIComponent(youtubeChannelId)}&autoplay=1&mute=1&controls=0&modestbranding=1&playsinline=1` : '';
   } else if (provider === 'chzzk') {
     watchUrl = liveUrl || profileUrl || (channelId ? `https://chzzk.naver.com/live/${encodeURIComponent(channelId)}` : '');
-    embedUrl = watchUrl;
   } else if (provider === 'cime') {
     const cimeId = String(handle || channelId || '').trim().replace(/^@/, '');
     watchUrl = (cimeId ? `https://ci.me/@${encodeURIComponent(cimeId)}/live` : '') || liveUrl || profileUrl;
-    embedUrl = watchUrl;
   }
   return {
     provider,
@@ -10341,7 +10282,7 @@ function buildDrawingLiveSurfaceFromAccount(account = {}, liveState = null) {
     avatarUrl: account.avatar_url || account.avatarUrl || publicProfile.avatarUrl || null,
     live: liveState?.provider === provider ? !!liveState.live : null,
     watchUrl,
-    embedUrl,
+    embedUrl: '',
     hlsChannelId: provider === 'cime' ? (handle || channelId).replace(/^@/, '') : channelId,
     hlsSupported: provider === 'chzzk' || provider === 'cime',
     embeddable: provider === 'youtube',
@@ -10351,7 +10292,10 @@ function buildDrawingLiveSurfaceFromAccount(account = {}, liveState = null) {
 async function collectDrawingLiveSurfacesForSid(sid) {
   const ownerUserId = String(sid || '').replace(/^user:/, '');
   if (!ownerUserId) return [];
-  const accounts = await listPlatformAccounts(ownerUserId).catch(() => []);
+  const [accounts, youtubeChannel] = await Promise.all([
+    listPlatformAccounts(ownerUserId).catch(() => []),
+    getYoutubeStreamerChannel(ownerUserId).catch(() => null),
+  ]);
   const surfaces = [];
   for (const account of accounts || []) {
     const provider = String(account.provider || '').toLowerCase();
@@ -10364,7 +10308,17 @@ async function collectDrawingLiveSurfacesForSid(sid) {
       liveState = liveState?.provider === 'cime' ? liveState : null;
     }
     const surface = buildDrawingLiveSurfaceFromAccount(account, liveState);
+    if (surface.provider === 'youtube' && !isYoutubeChannelId(surface.channelId)) continue;
     if (surface.provider && surface.channelId) surfaces.push(surface);
+  }
+  if (isYoutubeChannelId(youtubeChannel?.youtubeChannelId)
+    && !surfaces.some((surface) => surface.provider === 'youtube' && surface.channelId === youtubeChannel.youtubeChannelId)) {
+    surfaces.push(buildDrawingLiveSurfaceFromAccount({
+      provider: 'youtube',
+      channel_id: youtubeChannel.youtubeChannelId,
+      channel_name: youtubeChannel.title || youtubeChannel.youtubeHandle || youtubeChannel.youtubeChannelId,
+      channel_handle: youtubeChannel.youtubeHandle || '',
+    }, liveStatusCache.get(sid)));
   }
   return surfaces;
 }
@@ -10667,7 +10621,7 @@ async function resolveDrawingDonationSettingsForBalance(balance) {
   return drawing.enabled ? { sid, settings, drawing } : null;
 }
 
-async function collectViewerDrawingDonationStreamers(ownerUserId) {
+async function collectViewerDrawingDonationStreamers(ownerUserId, { includeLiveSurfaces = true } = {}) {
   const platforms = await listPlatformAccounts(ownerUserId).catch(() => []);
   const identityKeys = collectViewerPointIdentityKeys(ownerUserId, platforms);
   const balances = await listViewerPointBalancesForUserIds(identityKeys);
@@ -10676,7 +10630,9 @@ async function collectViewerDrawingDonationStreamers(ownerUserId) {
     const resolved = await resolveDrawingDonationSettingsForBalance(balance);
     if (!resolved) continue;
     const blocked = findBlockedBotUser(resolved.settings, ownerUserId, null, identityKeys);
-    const liveSurfaces = await collectDrawingLiveSurfacesForSid(resolved.sid).catch(() => []);
+    const liveSurfaces = includeLiveSurfaces
+      ? await collectDrawingLiveSurfacesForSid(resolved.sid).catch(() => [])
+      : [];
     const entry = {
       channelUid: balance.channelUid,
       publicUid: publicChannelUidForBalance(balance),
@@ -16869,6 +16825,14 @@ function assertGoogleYoutubeIdentityMatches(identity, expectedPlatformUserId = n
   return identity;
 }
 
+async function validateStoredYoutubeAuthorization(record) {
+  return validateYoutubeGrant(record, {
+    fetchIdentity: fetchGoogleYoutubeIdentityWithAccessToken,
+    fetchChannels: fetchYoutubeMyChannelsWithAccessToken,
+    assertIdentity: assertGoogleYoutubeIdentityMatches,
+  });
+}
+
 function normalizeGoogleTokenPayload(payload, previousTokens = {}, fallbackScope = YOUTUBE_BOT_AUTH_SCOPE) {
   const expiresIn = Number(payload?.expires_in || payload?.expiresIn || 3600);
   return {
@@ -17436,9 +17400,9 @@ async function getValidYoutubeBotProfile({ trackUse = true } = {}) {
     } catch (e) {
       const message = e?.response?.data?.error_description || e?.response?.data?.error || e?.message || 'youtube_bot_token_refresh_failed';
       const error = new Error(String(message));
-      error.code = 'youtube_bot_reauth_required';
       error.status = e?.response?.status || 500;
       error.reauthRequired = isYoutubeReauthRequired({ status: error.status, message });
+      error.code = error.reauthRequired ? 'youtube_bot_reauth_required' : 'youtube_bot_token_refresh_failed';
       if (error.reauthRequired) {
         await deleteYoutubeBotProfile(profile.id).catch(() => null);
         for (const key of Array.from(youtubeSessionStore.keys())) closeYoutubeSession(key, 'youtube_bot_authorization_invalid');
@@ -17896,7 +17860,7 @@ async function fetchYoutubeVideoLiveDetails(videoId) {
   const id = String(videoId || '').trim();
   if (!id) return null;
   const response = await youtubeApiGetPublic('videos', {
-    part: 'snippet,liveStreamingDetails',
+    part: 'snippet,liveStreamingDetails,status',
     id
   }, { timeout: 7000 });
   const item = Array.isArray(response?.data?.items) ? response.data.items[0] : null;
@@ -17945,12 +17909,23 @@ async function refreshYoutubeLiveFromRegisteredChannel(ownerUserId, options = {}
   const streamerChannel = await getYoutubeStreamerChannel(ownerUserId);
   if (!streamerChannel?.youtubeChannelId) return null;
   let liveInfo = null;
+  let lookupError = null;
   if (streamerChannel.lastDetectedVideoId) {
-    liveInfo = await fetchYoutubeVideoLiveDetails(streamerChannel.lastDetectedVideoId).catch(() => null);
+    try {
+      liveInfo = await fetchYoutubeVideoLiveDetails(streamerChannel.lastDetectedVideoId);
+    } catch (error) {
+      lookupError = error;
+    }
   }
   if (!liveInfo?.live && options.allowSearch === true) {
-    liveInfo = await fetchYoutubeActiveLiveForChannel(streamerChannel.youtubeChannelId).catch(() => null);
+    try {
+      liveInfo = await fetchYoutubeActiveLiveForChannel(streamerChannel.youtubeChannelId);
+      lookupError = null;
+    } catch (error) {
+      lookupError = error;
+    }
   }
+  if (lookupError && !liveInfo?.liveChatId) throw lookupError;
   if (liveInfo?.liveChatId) {
     await updateYoutubeStreamerChannelLive(ownerUserId, {
       lastDetectedVideoId: liveInfo.videoId || liveInfo.broadcastId,
@@ -18217,8 +18192,7 @@ app.post('/api/auth/youtube/consent/confirm', rateLimiters.userWrite, async (req
     const tokens = await getPlatformTokens('youtube', ownerUserId);
     if (!tokens) return res.status(404).json({ error: 'YouTube authorization not found' });
     const accessToken = await getValidYoutubeAccessToken(ownerUserId, { trackUse: false });
-    const identity = await fetchGoogleYoutubeIdentityWithAccessToken(accessToken);
-    assertGoogleYoutubeIdentityMatches(identity, tokens.platformUserId);
+    await validateStoredYoutubeAuthorization({ ...tokens, accessToken });
     await markPlatformTokenValidated('youtube', ownerUserId);
     await confirmPlatformTokenConsent('youtube', ownerUserId);
     const [updatedTokens, accounts] = await Promise.all([
@@ -18914,8 +18888,7 @@ app.post('/api/youtube/bot/verify', rateLimiters.userWrite, async (req, res) => 
     if (!admin) return;
     const ownerUserId = admin.userId;
     const profile = await getValidYoutubeBotProfile();
-    const identity = await fetchGoogleYoutubeIdentityWithAccessToken(profile.accessToken);
-    assertGoogleYoutubeIdentityMatches(identity, null, profile.googleSubjectHash);
+    const identity = await validateStoredYoutubeAuthorization(profile);
     const updated = await upsertYoutubeBotProfile({
       id: profile.id,
       selectedChannelId: profile.selectedChannelId,
@@ -18946,8 +18919,7 @@ app.post('/api/youtube/bot/consent/confirm', rateLimiters.userWrite, async (req,
     const admin = await requireCurrentAdminUser(req, res);
     if (!admin) return;
     const profile = await getValidYoutubeBotProfile({ trackUse: false });
-    const identity = await fetchGoogleYoutubeIdentityWithAccessToken(profile.accessToken);
-    assertGoogleYoutubeIdentityMatches(identity, null, profile.googleSubjectHash);
+    const identity = await validateStoredYoutubeAuthorization(profile);
     const confirmedAt = new Date().toISOString();
     const updated = await upsertYoutubeBotProfile({
       id: profile.id,
@@ -19236,10 +19208,14 @@ app.post('/api/youtube/streamer-channel/moderator-confirmed', rateLimiters.userW
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
     const verification = await verifyYoutubeBotModeratorRegistration(ownerUserId);
     if (!verification.verified) {
-      await markYoutubeStreamerChannelModeratorRegistered(ownerUserId, false, verification.message || verification.reason).catch(() => null);
+      const conclusive = ['verification_channel_mismatch', 'bot_is_not_moderator'].includes(verification.reason);
+      if (conclusive) {
+        await markYoutubeStreamerChannelModeratorRegistered(ownerUserId, false, verification.message || verification.reason).catch(() => null);
+      }
+      const existing = await getYoutubeStreamerChannel(ownerUserId);
       return res.status(409).json({
         ok: false,
-        moderatorRegistered: false,
+        moderatorRegistered: existing?.moderatorRegistered === true,
         verification
       });
     }
@@ -25060,11 +25036,7 @@ function makeYoutubeChatPost(ownerUserId, liveChatId, resolvedUsername, extra = 
 }
 
 function isYoutubeReauthRequired(entryOrError) {
-  if (!entryOrError) return false;
-  if (entryOrError.reauthRequired === true) return true;
-  const status = Number(entryOrError.status || entryOrError.lastStatus || entryOrError?.response?.status || 0);
-  const text = String(entryOrError.lastError || entryOrError.message || entryOrError?.response?.data?.error || '').toLowerCase();
-  return status === 401 || text.includes('invalid_grant') || text.includes('unauthorized') || text.includes('no youtube refresh token');
+  return isYoutubeGrantRevoked(entryOrError);
 }
 
 function getYoutubeIgnoredDonationSummary(entry) {
@@ -25259,8 +25231,8 @@ async function verifyYoutubeBotModeratorRegistration(ownerUserId) {
     throw error;
   }
 
-  const liveInfo = await refreshYoutubeLiveFromRegisteredChannel(ownerUserId, { allowSearch: true }).catch(() => null);
-  const liveChatId = liveInfo?.liveChatId || streamerChannel.lastLiveChatId || null;
+  const liveInfo = await refreshYoutubeLiveFromRegisteredChannel(ownerUserId, { allowSearch: true });
+  const liveChatId = liveInfo?.live ? liveInfo.liveChatId : null;
   if (!liveChatId) {
     return {
       verified: false,
@@ -25360,8 +25332,12 @@ async function verifyYoutubeBotModeratorRegistration(ownerUserId) {
     reason = 'moderator_capability_verified';
     message = 'AruBot 중앙 봇의 표준 또는 관리 운영자 권한을 실제 채팅 관리 기능으로 확인했습니다.';
   } else if (!verified) {
-    reason = 'bot_is_not_moderator';
-    message = 'AruBot 중앙 봇 메시지는 확인했지만 YouTube API에서 표준 또는 관리 운영자 권한이 확인되지 않았습니다.';
+    const inconclusive = capability.status === 429 || capability.status >= 500
+      || ['quotaExceeded', 'dailyLimitExceeded'].includes(capability.reason);
+    reason = inconclusive ? 'verification_lookup_failed' : 'bot_is_not_moderator';
+    message = inconclusive
+      ? 'YouTube 권한 확인 요청이 실패했습니다. 잠시 후 다시 확인해 주세요.'
+      : 'AruBot 중앙 봇 메시지는 확인했지만 YouTube API에서 표준 또는 관리 운영자 권한이 확인되지 않았습니다.';
   }
 
   const result = {
@@ -27554,16 +27530,24 @@ app.get('/api/youtube/events', async (req, res) => {
   }
 });
 
-app.post('/api/youtube/reset', async (req, res) => {
+app.post('/api/youtube/reset', rateLimiters.userWrite, async (req, res) => {
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
     cancelProviderSessionRecovery('youtube', ownerUserId);
     closeYoutubeSession(ownerUserId, 'reset');
     const entry = await ensureYoutubeSession(ownerUserId);
-    return res.json({ ok: true, connected: !!entry.connected, liveChatId: entry.liveChatId || null, lastError: entry.lastError || null });
+    return res.json({
+      ok: true, connected: !!entry.connected, liveChatId: entry.liveChatId || null,
+      lastError: visibleYoutubeRuntimeError(entry),
+      reauthRequired: isYoutubeReauthRequired(entry),
+    });
   } catch (e) {
-    return res.status(500).json({ error: 'Failed to reset YouTube session' });
+    return res.status(e?.status || e?.response?.status || 500).json({
+      error: e?.response?.data?.error?.message || e?.message || 'YouTube 채팅 연결을 다시 시작하지 못했습니다.',
+      code: e?.code || getYoutubeApiErrorReason(e),
+      reauthRequired: isYoutubeReauthRequired(e),
+    });
   }
 });
 
@@ -28020,8 +28004,7 @@ async function validateYoutubeCentralBotAuthorization(summary) {
   summary.centralChecked += 1;
   try {
     const validProfile = await getValidYoutubeBotProfile({ trackUse: false });
-    const identity = await fetchGoogleYoutubeIdentityWithAccessToken(validProfile.accessToken);
-    assertGoogleYoutubeIdentityMatches(identity, null, validProfile.googleSubjectHash);
+    const identity = await validateStoredYoutubeAuthorization(validProfile);
     await upsertYoutubeBotProfile({
       id: validProfile.id,
       selectedChannelId: validProfile.selectedChannelId,
@@ -28093,8 +28076,7 @@ async function validateYoutubeAuthorizations(reason = 'scheduled') {
       summary.checked += 1;
       try {
         const accessToken = await getValidYoutubeAccessToken(ownerUserId, { trackUse: false });
-        const identity = await fetchGoogleYoutubeIdentityWithAccessToken(accessToken);
-        assertGoogleYoutubeIdentityMatches(identity, user.platformUserId);
+        await validateStoredYoutubeAuthorization({ ...user, accessToken });
         await markPlatformTokenValidated('youtube', ownerUserId);
         summary.valid += 1;
       } catch (error) {

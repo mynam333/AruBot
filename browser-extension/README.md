@@ -25,7 +25,7 @@ Chrome/Firefox용 영상 후원 감지 확장 프로그램입니다. CHZZK, CIME
 ## 현재 커넥터
 
 - CIME: 오버레이 HTML의 `socketUrl`/`alertKey`를 읽고 `DONATION_VIDEO` WebSocket을 구독합니다. 패킷에 `ci.me/clips/{id}`가 있으면 `https://ci.me/json/clips/{id}`에서 `bodyData.clips[0].duration`과 `playback.url`을 보강합니다.
-- CHZZK: `video@...` 세션 ID로 `/manage/v1/alerts/{id}/session-url`을 조회한 뒤 Socket.IO WebSocket을 연결합니다.
+- CHZZK: `video@...` 세션 ID로 `/manage/v1/alerts/{id}/session-url`을 조회한 뒤 Socket.IO `EIO=3` WebSocket을 연결합니다. 이벤트에 종료 시간이 없으면 YouTube watch 메타데이터의 `lengthSeconds`, CHZZK 클립 상세 API의 `content.duration`, 또는 공식 `/service/v2/donation/videos` 응답으로 전체 길이를 보강한 다음 시작 시간을 뺍니다. 같은 영상의 길이는 30분 동안 캐시하며 이벤트는 수신 순서대로 처리합니다.
 - Toonation: alertbox HTML의 `payload`를 읽고 `wss://ws.toon.at/{payload}`에 연결합니다.
 - AruBot: PVD viewer URL 또는 토큰에서 viewer token을 추출하고 `/api/pvd/ws?token=...`에 연결합니다. 운영 주소 `https://arubot.yuaru.com/pvd/{token}`은 자동으로 `https://arubotapi.yuaru.com` API를 사용합니다. 로컬 프론트가 `localhost:3000`이면 현재 프로젝트의 `getBrowserApiBase()`와 동일하게 `http://127.0.0.1:3001`을 사용합니다. 옵션의 `AruBot API base`로 명시적 API 주소를 덮어쓸 수 있습니다.
 
@@ -35,4 +35,4 @@ Chrome/Firefox용 영상 후원 감지 확장 프로그램입니다. CHZZK, CIME
 - `elapsedSec`, `atSec`, `startedAt`, `serverNow`를 이용해 이미 재생된 시간을 빼고 남은 영상 시간만 YouTube 일시정지 큐에 추가합니다.
 - `/api/video-donation/now-playing?token=...`을 WebSocket 연결 직후 한 번 더 조회해 초기 패킷 누락에도 대비합니다.
 
-비공식/내부 API는 서비스 배포에 따라 바뀔 수 있습니다. 그래서 패킷에서 `start/end`, `duration`, `video_length`, `video_info.duration`, `vStart/vEnd` 등 여러 후보 필드를 탐지하도록 구현했습니다.
+비공식/내부 API는 서비스 배포에 따라 바뀔 수 있습니다. 그래서 패킷에서 `start/end`, `duration`, `video_length`, `video_info.duration`, `vStart/vEnd`, `videoStartSecond/videoEndSecond` 등 여러 후보 필드를 탐지하고, 길이를 찾지 못한 이벤트를 팝업 상태에 명시하도록 구현했습니다.

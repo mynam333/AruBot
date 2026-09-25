@@ -5,6 +5,7 @@ describe('영상 후원 대기 플레이리스트 회귀 방지', () => {
   const serverIndex = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
   const pvdViewer = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'PvdViewer.tsx'), 'utf8');
   const idleModel = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'pvdIdlePlaylist.ts'), 'utf8');
+  const recommendations = fs.readFileSync(path.join(__dirname, '..', 'server', 'youtube-idle-recommendations.js'), 'utf8');
   const editor = fs.readFileSync(path.join(__dirname, '..', 'src', 'features', 'admin', 'video-donation-idle-playlist-editor.tsx'), 'utf8');
   const settingsDialog = fs.readFileSync(path.join(__dirname, '..', 'src', 'features', 'admin', 'admin-action-dialogs.tsx'), 'utf8');
 
@@ -27,20 +28,18 @@ describe('영상 후원 대기 플레이리스트 회귀 방지', () => {
   test('주제 추천 곡 수는 1~200곡으로 저장하고 50곡 단위 페이지를 이어서 구성해야 함', () => {
     expect(serverIndex).toContain('normalizePvdIdleRecommendationCount');
     expect(serverIndex).toContain('recommendationCount,');
-    expect(serverIndex).toContain('maxResults: 50');
-    expect(serverIndex).toContain('pageToken: entry.started ? entry.nextPageToken');
-    expect(serverIndex).toContain('entry.tracks.length < safeLimit');
+    expect(recommendations).toContain('maxResults: 50');
+    expect(recommendations).toContain('pageToken: entry.nextPageToken');
+    expect(recommendations).toContain('available().length < safeLimit');
     expect(editor).toContain('value.recommendationCount');
     expect(editor).toContain('max={MAX_VIDEO_DONATION_IDLE_TRACKS}');
-    expect(editor).toContain('추천 곡 수');
+    expect(editor).toContain('시작곡 후보 수');
   });
 
   test('추천 결과는 주제별로 재사용하고 동시에 같은 주제를 구성해도 API 요청을 합쳐야 함', () => {
-    expect(serverIndex).toContain('PVD_IDLE_RECOMMENDATION_CACHE_TTL_MS = 24 * 60 * 60 * 1000');
-    expect(serverIndex).toContain('pvdIdleRecommendationCache');
-    expect(serverIndex).toContain('pvdIdleRecommendationInFlight');
-    expect(serverIndex).toContain('withPvdIdleRecommendationLock');
-    expect(serverIndex).toContain('cacheHit: hadFreshCache && searchRequests === 0 && detailRequests === 0');
+    expect(recommendations).toContain('CACHE_TTL_MS = 24 * 60 * 60 * 1000');
+    expect(recommendations).toContain('inFlight.get(key)');
+    expect(recommendations).toContain('cacheHit: hadFreshCache && searchRequests === 0 && detailRequests === 0');
   });
 
   test('재생 시간이 확인된 10분 이하 영상만 대기 음악으로 저장해야 함', () => {

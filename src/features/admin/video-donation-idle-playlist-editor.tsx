@@ -20,6 +20,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { apiUrl } from '@/shared/api/http';
 import { cn } from '@/shared/lib/utils';
+import { parseYouTubeMix } from '../../../shared/youtube-mix.js';
 import {
   MAX_VIDEO_DONATION_IDLE_TRACKS,
   normalizeVideoDonationIdleTracks,
@@ -198,6 +199,8 @@ export function VideoDonationIdlePlaylistEditor({
   const [recommendPending, setRecommendPending] = useState(false);
   const [addPending, setAddPending] = useState(false);
   const activeTracks = value.mode === 'recommended' ? value.recommendedTracks : value.customTracks;
+  const hasMixUrl = !!value.mixUrl.trim();
+  const invalidMixUrl = hasMixUrl && !parseYouTubeMix(value.mixUrl);
 
   const update = (patch: Partial<VideoDonationIdlePlaylist>) => onChange({ ...value, ...patch });
 
@@ -213,7 +216,7 @@ export function VideoDonationIdlePlaylistEditor({
       const tracks = normalizeVideoDonationIdleTracks(result.tracks);
       if (!tracks.length) throw new Error('추천곡을 찾지 못했습니다.');
       update({ recommendedTracks: tracks });
-      toast.success(`${tracks.length}곡으로 추천 플레이리스트를 만들었어요${formatExcludedSummary(result)}.`);
+      toast.success(`Mix 시작곡 후보 ${tracks.length}곡을 불러왔어요${formatExcludedSummary(result)}.`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '추천 플레이리스트를 만들지 못했습니다.');
     } finally {
@@ -294,12 +297,29 @@ export function VideoDonationIdlePlaylistEditor({
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2">
-            <PlaylistToggle checked={value.loop} onCheckedChange={(loop) => update({ loop })} icon={<Repeat2 className="h-4 w-4" />} label="반복 재생" />
-            <PlaylistToggle checked={value.shuffle} onCheckedChange={(shuffle) => update({ shuffle })} icon={<Shuffle className="h-4 w-4" />} label="셔플" />
+            {value.mode === 'custom' ? (
+              <PlaylistToggle checked={value.loop} onCheckedChange={(loop) => update({ loop })} icon={<Repeat2 className="h-4 w-4" />} label="반복 재생" />
+            ) : <Badge tone="mint" className="w-fit self-center">YouTube Mix</Badge>}
+            {value.mode === 'custom' ? <PlaylistToggle checked={value.shuffle} onCheckedChange={(shuffle) => update({ shuffle })} icon={<Shuffle className="h-4 w-4" />} label="셔플" /> : null}
           </div>
 
           {value.mode === 'recommended' ? (
             <div className="grid gap-3">
+              <label className="grid min-w-0 gap-2 text-sm font-semibold" htmlFor="video-donation-idle-mix-url">
+                Mix 주소 (선택)
+                <Input
+                  id="video-donation-idle-mix-url"
+                  value={value.mixUrl}
+                  onChange={(event) => update({ mixUrl: event.target.value })}
+                  placeholder="https://www.youtube.com/watch?v=...&list=RD..."
+                  maxLength={2048}
+                  aria-invalid={invalidMixUrl ? true : undefined}
+                  aria-describedby={invalidMixUrl ? 'video-donation-idle-mix-error' : undefined}
+                  className="min-w-0"
+                />
+              </label>
+              {invalidMixUrl ? <span id="video-donation-idle-mix-error" className="text-xs text-destructive">올바른 YouTube Mix 주소를 입력해 주세요.</span> : null}
+              {!hasMixUrl ? (
               <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_8rem_auto] sm:items-end">
                 <label className="grid min-w-0 gap-2 text-sm font-semibold" htmlFor="video-donation-idle-topic">
                   추천 주제
@@ -316,7 +336,7 @@ export function VideoDonationIdlePlaylistEditor({
                   {TOPIC_PRESETS.map((topic) => <option key={topic} value={topic} />)}
                 </datalist>
                 <label className="grid min-w-0 gap-2 text-sm font-semibold" htmlFor="video-donation-idle-recommendation-count">
-                  추천 곡 수
+                  시작곡 후보 수
                   <div className="relative min-w-0">
                     <Input
                       id="video-donation-idle-recommendation-count"
@@ -324,7 +344,7 @@ export function VideoDonationIdlePlaylistEditor({
                       min={1}
                       max={MAX_VIDEO_DONATION_IDLE_TRACKS}
                       inputMode="numeric"
-                      aria-label="추천 곡 수"
+                      aria-label="시작곡 후보 수"
                       value={value.recommendationCount}
                       onChange={(event) => {
                         const count = Math.max(1, Math.min(MAX_VIDEO_DONATION_IDLE_TRACKS, Math.floor(Number(event.target.value) || 1)));
@@ -337,9 +357,10 @@ export function VideoDonationIdlePlaylistEditor({
                 </label>
                 <Button type="button" variant="soft" className="sm:self-end" onClick={() => void createRecommendations()} disabled={recommendPending}>
                   {recommendPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                  추천곡 구성
+                  시작곡 찾기
                 </Button>
               </div>
+              ) : null}
             </div>
           ) : (
             <div className="grid gap-3">
@@ -366,9 +387,9 @@ export function VideoDonationIdlePlaylistEditor({
             </div>
           )}
 
-          <div className="grid gap-3">
+          {value.mode === 'custom' || !hasMixUrl ? <div className="grid gap-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="text-sm font-semibold">재생 목록</div>
+              <div className="text-sm font-semibold">{value.mode === 'recommended' ? 'Mix 시작곡 후보' : '재생 목록'}</div>
               <div className="flex flex-wrap items-center justify-end gap-2">
                 <Badge tone="neutral">최대 10분</Badge>
                 <Badge tone={activeTracks.length ? 'mint' : 'neutral'}>{activeTracks.length}곡</Badge>
@@ -378,7 +399,7 @@ export function VideoDonationIdlePlaylistEditor({
               tracks={activeTracks}
               onChange={(tracks) => update(value.mode === 'recommended' ? { recommendedTracks: tracks } : { customTracks: tracks })}
             />
-          </div>
+          </div> : null}
         </>
       ) : null}
     </div>

@@ -35,12 +35,12 @@ describe('YouTube OAuth without Data API quota', () => {
     expect(adminSystemPanel).toContain('봇 채널 직접 등록');
   });
 
-  test('validates retained OAuth grants through UserInfo instead of channels.list', () => {
+  test('uses a scope-aware validator for retained OAuth grants', () => {
     const validationStart = serverIndex.indexOf('async function validateYoutubeCentralBotAuthorization');
     const validationEnd = serverIndex.indexOf("setTimeout(() => { validateYoutubeAuthorizations", validationStart);
     const validation = serverIndex.slice(validationStart, validationEnd);
-    expect(validation).toContain('fetchGoogleYoutubeIdentityWithAccessToken');
-    expect(validation).toContain('assertGoogleYoutubeIdentityMatches');
+    expect(validation).toContain('validateStoredYoutubeAuthorization(validProfile)');
+    expect(validation).toContain('validateStoredYoutubeAuthorization({ ...user, accessToken })');
     expect(validation).not.toContain('fetchYoutubeMyChannelWithAccessToken');
     expect(validation).not.toContain('fetchYoutubeMyChannelsWithAccessToken');
   });
