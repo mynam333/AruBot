@@ -38,8 +38,9 @@
 
 ## 저장과 전송
 
-- `POST /api/drawing-donation/originals`: 로그인한 사용자의 임시 PNG 업로드, 최대 8MiB.
-- `POST /api/drawing-donation/submit`: 문서 최대 1MiB, 소유권/차단/한도/가격/해시/렌더링 검증. 모든 원본 저장 후 기존 atomic paid durable job으로 차감·등록한다.
+- `POST /api/drawing-donation/originals`: 로그인한 사용자의 임시 PNG 업로드, 최대 16MiB. 최대 1920×1920 RGBA 캔버스의 원본 보존을 위한 여유를 포함한다. API·편집기·로컬 저장소는 같은 상수를 사용한다.
+- `POST /api/drawing-donation/submit`: 문서 최대 4MiB, 소유권/차단/한도/가격/해시/렌더링 검증. 전체 JSON 요청 제한 5MiB 안에서 메타데이터 여유를 둔다. 모든 원본 저장 후 기존 atomic paid durable job으로 차감·등록한다.
+- 편집기는 점 수·획 수뿐 아니라 UTF-8 기록 용량을 실시간 표시한다. 새 입력의 바이트 증가량을 계산해 제한을 넘기기 전에 멈추고, 이미 수락한 획·변형 프레임은 확정한다. 마지막 획 전체를 취소하거나 좌표·압력·시간을 줄이지 않는다. revision 등 메타데이터 증가를 위해 1KiB를 예약한다.
 - 문서 해시 기반 요청 키로 응답 유실 후 재시도해도 동일 요청의 차감을 반복하지 않는다. 성공 응답의 두 해시가 일치한 뒤 초안을 정리한다.
 - `GET /api/drawing-donation/originals/:id`: 스트리머 세션 또는 OBS 토큰으로 해당 스트리머의 원본만 읽는다. 파일은 공개 정적 경로에 노출하지 않는다.
 - 기존 `canvas`, `metrics`, `replay` JSON과 `stroke_object_key`, `preview_object_key`를 사용한다. 추가 DB migration은 없다. `previewImage`는 목록용 WebP이며, V2 `previewObjectKey`는 전체 PNG 원본 키다.
@@ -66,6 +67,6 @@
 ## 배포 확인
 
 1. API와 프런트엔드를 같은 변경으로 배포하고 `npm ci`로 새 의존성 `perfect-freehand`, `@napi-rs/canvas`, `perspective-transform`을 설치한다. 네이티브 Canvas의 운영 플랫폼용 optional dependency를 제외하지 않는다.
-2. 원본 영구 저장 경로의 쓰기 권한·디스크 용량·백업을 확인한다. 이번 작업에서는 운영 DB/봇을 실행하지 않았다.
+2. 원본 영구 저장 경로의 쓰기 권한·디스크 용량·백업을 확인한다. 앞단 프록시와 외부 Storage 버킷을 사용하는 경우 PNG 업로드 제한도 16MiB 이상인지 확인한다. 이번 작업에서는 운영 DB/봇을 실행하지 않았다.
 3. 기존 OBS 브라우저 소스를 새로고침한다. 구버전 OBS에는 V2 문서를 전송하지 않는다.
 4. 실제 로그인한 시청자의 제출 → 승인 → OBS 재생 → 원본 유지 → 이벤트 로그 무료 재생을 소액/테스트 채널에서 최종 확인한다. 실제 운영 OBS, 실기 펜의 필압·손바닥 입력, 다중 서버 장애 상황은 아직 실환경 검증하지 않았다.

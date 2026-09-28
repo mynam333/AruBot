@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { MAX_ORIGINAL_BYTES } from '../shared/drawing/limits.js';
 
 export function drawingStorageDirectory() {
   if (process.env.DRAWING_DONATION_STORAGE_DIR) return path.resolve(process.env.DRAWING_DONATION_STORAGE_DIR);
@@ -36,7 +37,7 @@ export function createLocalDrawingStorage(directory = drawingStorageDirectory())
   return {
     async write(key, payload) {
       const { raw, target } = location(key);
-      if (Buffer.byteLength(payload) > 8 * 1024 * 1024) throw new Error('drawing_too_large');
+      if (Buffer.byteLength(payload) > MAX_ORIGINAL_BYTES) throw new Error('drawing_too_large');
       await ensureParents(target, true);
       const temporary = `${target}.${crypto.randomUUID()}.tmp`;
       let handle;
@@ -54,7 +55,7 @@ export function createLocalDrawingStorage(directory = drawingStorageDirectory())
       const { target } = location(key);
       await ensureParents(target, false);
       const stat = await fs.lstat(target);
-      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 8 * 1024 * 1024) throw new Error('drawing_original_unavailable');
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_ORIGINAL_BYTES) throw new Error('drawing_original_unavailable');
       return fs.readFile(target);
     },
     async remove(keys) {

@@ -10,6 +10,7 @@ import { readDraft, writeDraft } from '@/shared/drawing/draft-store';
 import { BRUSH_SHORTCUTS, TOOL_SHORTCUTS, drawingShortcut, type DrawingTool as Tool } from '@/shared/drawing/shortcuts';
 import { BRUSHES, buildTimeline, createBrush, createDrawing, drawingCost, hashDrawing, rememberDrawingColor, validateDrawing, visibleStrokes, type BrushType, type DrawingDocument, type DrawingBrush, type DrawingPoint, type DrawingStroke, type DrawingShapeStyle, type SelectionFrame, type SelectionRect } from '../../../shared/drawing/document.js';
 import { createDrawingRenderer, floodFillRuns, type DrawingRenderer } from '../../../shared/drawing/renderer.js';
+import { MAX_DOCUMENT_BYTES, MAX_ORIGINAL_BYTES, RECORDING_HEADROOM_BYTES, drawingJsonBytes, drawingUsage, updateDrawingUsage, drawingLimitError } from '../../../shared/drawing/limits.js';
 import { constrainLinePoint, constrainShapePoint, distortSelection, rotateSelection, selectionCorners, selectionRect, transformSelection } from '../../../shared/drawing/selection.js';
 
 export type DrawingStudioSettings = { pricingMode: string; costPoints: number; inkCostPerUnit: number; replayMaxSec: number; canvas: { widthRatio: number; heightRatio: number }; maxStrokes?: number; maxPoints?: number; blocked?: boolean };
@@ -21,7 +22,7 @@ const pointCount = (doc: DrawingDocument) => doc.strokes.reduce((n, s) => n + s.
 const SWATCHES = ['#f05b84', '#eb5757', '#f3a43b', '#f3d457', '#68b984', '#39afc2', '#517ee1', '#9775ce', '#ffffff', '#191b20'];
 const makeCanvas = (w: number, h: number) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
 const uid = () => crypto.randomUUID();
-const errorMessages: Record<string, string> = { too_many_points: '그리기 점 수 한도에 도달했습니다.', too_many_strokes: '획 수 한도에 도달했습니다.', drawing_too_large: '그림 원본이 저장 용량 한도를 초과했습니다.', drawing_fill_too_complex: '이 영역은 너무 복잡해 채울 수 없습니다.', insufficient_points: '포인트가 부족합니다.', drawing_price_changed: '후원 비용이 변경되었습니다. 정보를 새로 불러온 뒤 다시 확인해 주세요.', drawing_original_mismatch: '원본 일치 검증에 실패했습니다. 그림은 보존되어 있습니다.', drawing_storage_unavailable: '원본 저장소에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.', blocked_user: '이 방송에서는 봇 기능을 사용할 수 없습니다.', drawing_queue_limit: '대기 중인 그림 후원이 너무 많습니다.', drawing_submit_cooldown: '잠시 후 다시 보내 주세요.' };
+const errorMessages: Record<string, string> = { too_many_points: '그리기 점 수 한도에 도달했습니다. 한도까지 그린 부분은 보존됩니다.', too_many_strokes: '획 수 한도에 도달했습니다.', drawing_too_large: '그리기 기록 용량 한도에 도달했습니다. 한도까지 그린 부분은 보존되며, 실행 취소나 레이어 삭제로 공간을 확보할 수 있습니다.', drawing_original_too_large: 'PNG 원본 이미지가 전송 용량 한도를 초과했습니다. 그림은 그대로 보존되어 있습니다.', drawing_too_complex: '선택 변형 기록 한도에 도달했습니다. 기존 그림은 보존됩니다.', drawing_fill_too_complex: '이 영역은 너무 복잡해 채울 수 없습니다.', insufficient_points: '포인트가 부족합니다.', drawing_price_changed: '후원 비용이 변경되었습니다. 정보를 새로 불러온 뒤 다시 확인해 주세요.', drawing_original_mismatch: '원본 일치 검증에 실패했습니다. 그림은 보존되어 있습니다.', drawing_storage_unavailable: '원본 저장소에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.', blocked_user: '이 방송에서는 봇 기능을 사용할 수 없습니다.', drawing_queue_limit: '대기 중인 그림 후원이 너무 많습니다.', drawing_submit_cooldown: '잠시 후 다시 보내 주세요.' };
 
 function BrushSample({ brush }: { brush: DrawingBrush }) {
   const ref = useRef<HTMLCanvasElement>(null);
@@ -47,6 +48,7 @@ function IconButton({ label, shortcut, active, children, ...props }: React.Butto
 export function DrawingStudio({ channelUid, viewerUserId, points, settings, background, onSubmitted, localOnly = false }: Props) {
   const [doc, setDoc] = useState(() => createDrawing(settings.canvas.widthRatio, settings.canvas.heightRatio, 'new'));
   const docRef = useRef(doc), rendererRef = useRef<DrawingRenderer | null>(null);
+  const [usage, setUsage] = useState(() => drawingUsage(doc)), usageRef = useRef(usage);
   const canvasRef = useRef<HTMLCanvasElement>(null), cursorRef = useRef<HTMLDivElement>(null), viewportRef = useRef<HTMLDivElement>(null);
   const [brush, setBrush] = useState(() => createBrush()), [tool, setTool] = useState<Tool>('freehand');
   const lastBrushRef = useRef(brush);
@@ -70,7 +72,7 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
   const dialogRef = useRef<HTMLDialogElement>(null), previewRef = useRef<HTMLCanvasElement>(null);
   const draftKey = `${viewerUserId}:${channelUid}`;
   const cost = useMemo(() => drawingCost(doc, settings), [doc, settings]);
-  const count = pointCount(doc);
+  const count = usage.pointCount;
   const timeline = useMemo(() => buildTimeline(doc, settings.replayMaxSec), [doc, settings.replayMaxSec]);
   const isShape = CLOSED_SHAPES.includes(tool);
   const activeLayer = doc.layers.find((layer) => layer.id === layerId);
@@ -88,10 +90,10 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
 
   const schedule = useCallback(() => {
     if (frameRef.current) return;
-    frameRef.current = requestAnimationFrame(() => { frameRef.current = 0; draw(); });
+    frameRef.current = requestAnimationFrame(() => { frameRef.current = 0; draw(); setUsage(usageRef.current); });
   }, [draw]);
   const stopPlayback = useCallback(() => { cancelAnimationFrame(animationRef.current); animationRef.current = 0; setPlaying(false); setPlayProgress(0); draw(); }, [draw]);
-  const assign = useCallback((next: DrawingDocument) => { docRef.current = next; setDoc(next); draw(Infinity, next); }, [draw]);
+  const assign = useCallback((next: DrawingDocument) => { docRef.current = next; usageRef.current = drawingUsage(next); setUsage(usageRef.current); setDoc(next); draw(Infinity, next); }, [draw]);
   const remember = useCallback((previous: DrawingDocument) => {
     historyRef.current = [...historyRef.current.slice(-29), previous]; redoRef.current = []; setHistoryVersion((n) => n + 1);
   }, []);
@@ -215,6 +217,16 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
     element.style.transform = `translate(${event.clientX - rect.left - diameter / 2}px, ${event.clientY - rect.top - diameter / 2}px)`;
     element.style.opacity = ['pan', 'select'].includes(tool) || busy ? '0' : '1';
   }
+  function recordStroke(stroke: DrawingStroke, byteDelta?: number) {
+    const current = docRef.current, index = current.strokes.findIndex((s) => s.id === stroke.id);
+    const nextUsage = updateDrawingUsage(usageRef.current, current.strokes[index], stroke, byteDelta);
+    const error = drawingLimitError(nextUsage, settings, RECORDING_HEADROOM_BYTES);
+    if (error) { toast.error(errorMessages[error]); return false; }
+    const strokes = current.strokes.slice();
+    if (index < 0) strokes.push(stroke); else strokes[index] = stroke;
+    docRef.current = { ...current, strokes }; usageRef.current = nextUsage; schedule();
+    return true;
+  }
   function updateStroke(p: DrawingPoint, shift = false) {
     const active = activeRef.current; if (!active?.strokeId) return;
     const current = docRef.current, index = current.strokes.findIndex((s) => s.id === active.strokeId), stroke = current.strokes[index];
@@ -231,8 +243,8 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
     if (shift && CLOSED_SHAPES.includes(stroke.kind)) p = constrainShapePoint(stroke.points[0], p, current);
     if (shift && stroke.kind === 'line') p = constrainLinePoint(stroke.points[0], p, current).point;
     const points = [...stroke.points, p];
-    const strokes = current.strokes.slice(); strokes[index] = { ...stroke, points }; docRef.current = { ...current, strokes };
-    lastPointer.current = p; schedule();
+    if (!recordStroke({ ...stroke, points }, drawingJsonBytes(p) + 1)) { finishStroke(); return; }
+    lastPointer.current = p;
   }
 
   function beginSelection(event: ReactPointerEvent<HTMLDivElement>) {
@@ -240,7 +252,7 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
     if (event.pointerType === 'touch' && penPointerRef.current !== null) return;
     if (event.pointerType === 'pen') penPointerRef.current = event.pointerId;
     const current = docRef.current;
-    if (current.strokes.length >= (settings.maxStrokes || 120) || pointCount(current) + 3 >= (settings.maxPoints || 6000)) { toast.error('그림 기록 한도에 도달했습니다.'); return; }
+    if (current.strokes.length >= (settings.maxStrokes || 120) || pointCount(current) + 3 > (settings.maxPoints || 6000)) { toast.error('그림 기록 한도에 도달했습니다.'); return; }
     if (selection.operationId && current.strokes.filter((s) => s.layerId === layerId).at(-1)?.id !== selection.operationId) { setSelection(null); return; }
     event.preventDefault(); event.stopPropagation(); canvasRef.current?.focus({ preventScroll: true }); event.currentTarget.setPointerCapture(event.pointerId); stopPlayback(); lastPointer.current = null;
     const p = point(event.nativeEvent, false), handle = (event.target as HTMLElement).closest('[data-selection-handle]')?.getAttribute('data-selection-handle') || 'move';
@@ -258,9 +270,9 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
     // Only stored anchor points are bounded; transform gestures may start outside the canvas.
     const anchor = { ...p, x: Math.max(0, Math.min(1, p.x)), y: Math.max(0, Math.min(1, p.y)) };
     const stroke: DrawingStroke = { id, layerId, seed: 0, kind: 'selection', brush: createBrush('pen'), mirror: false, transform: { x: 0, y: 0, scale: 1 }, points: [anchor, anchor], selection: { rect: selection.rect, sourceId: selection.operationId, copy: event.altKey && handle === 'move' }, frames: [frame] };
+    if (!recordStroke(stroke)) { event.currentTarget.releasePointerCapture(event.pointerId); penPointerRef.current = null; return; }
     activeRef.current = { pointer: event.pointerId, before: current, mode: 'transform', strokeId: id, start: p, view: viewRef.current, selection, handle, corners, toggleCorner,
       rotation: { last: Math.atan2((p.y - frame.y) * current.height, (p.x - frame.x) * current.width), total: frame.angle } };
-    docRef.current = { ...current, strokes: [...current.strokes, stroke] }; schedule();
   }
 
   function updateSelection(p: DrawingPoint, shift: boolean) {
@@ -276,9 +288,11 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
       frame = result.frame; active.rotation = result.rotation;
     } else frame = transformSelection(base, active.selection.rect, active.handle!, active.start, p, current, shift, shift);
     frame = { ...frame, t: Math.max(stroke.frames!.at(-1)!.t, p.t) };
+    const last = { ...stroke.points[0], t: frame.t };
+    const byteDelta = drawingJsonBytes(frame) + 1 + drawingJsonBytes(last) - drawingJsonBytes(stroke.points[1]);
+    if (!recordStroke({ ...stroke, points: [stroke.points[0], last], frames: [...stroke.frames!, frame] }, byteDelta)) { finishStroke(); return; }
     active.moved ||= Math.hypot((p.x - active.start.x) * current.width, (p.y - active.start.y) * current.height) > 0.5;
-    const strokes = current.strokes.slice(); strokes[index] = { ...stroke, points: [stroke.points[0], { ...stroke.points[0], t: frame.t }], frames: [...stroke.frames!, frame] };
-    docRef.current = { ...current, strokes }; setSelection({ ...active.selection, frame, operationId: stroke.id }); schedule();
+    setSelection({ ...active.selection, frame, operationId: stroke.id });
   }
   function beginStroke(event: ReactPointerEvent<HTMLCanvasElement>) {
     if (busy || review || !draftReady || recoverable) return;
@@ -316,12 +330,15 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
         const layerCanvas = renderer().render(current, Infinity, settings.replayMaxSec, layerId);
         stroke.runs = floodFillRuns(layerCanvas.getContext('2d')!.getImageData(0, 0, current.width, current.height), Math.min(current.width - 1, Math.floor(p.x * current.width)), Math.min(current.height - 1, Math.floor(p.y * current.height)));
         stroke.brush = createBrush('pen', brush.color, brush.alpha);
+        const error = drawingLimitError(updateDrawingUsage(usageRef.current, undefined, stroke), settings, RECORDING_HEADROOM_BYTES);
+        if (error) throw new Error(error);
         const next = { ...current, strokes: [...current.strokes, stroke] }; validateDrawing(next, settings); commit(next); recordUsedColor(stroke);
       } catch (error) { report(error); }
       return;
     }
+    if (!recordStroke(stroke)) { event.currentTarget.releasePointerCapture(event.pointerId); penPointerRef.current = null; return; }
     activeRef.current = { pointer: event.pointerId, before: current, mode: 'draw', strokeId: stroke.id, start: p, view: viewRef.current, ...(event.shiftKey ? { lineAnchor: p } : {}) };
-    docRef.current = { ...current, strokes: [...current.strokes, stroke] }; lastPointer.current = p; schedule();
+    lastPointer.current = p;
     if (brush.type === 'airbrush' && tool === 'freehand') airTimerRef.current = setInterval(() => { if (activeRef.current && lastPointer.current) updateStroke({ ...lastPointer.current, t: Math.max(lastPointer.current.t, performance.now() - originRef.current) }); }, 45);
   }
   function moveStroke(event: ReactPointerEvent<HTMLElement>) {
@@ -359,6 +376,8 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
         p.p = event.pointerType === 'pen' && brush.type === 'brush' ? p.p : stroke.points.at(-1)!.p;
         updateStroke(p, event.shiftKey);
       }
+      // A limit reached on pointer-up may already have committed the accepted part.
+      if (activeRef.current !== active) return;
     }
     activeRef.current = null; lastPointer.current = null;
     if (cancel || (active.mode === 'transform' && !active.moved)) {
@@ -395,7 +414,7 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
     stopPlayback(); setBusy(true);
     try {
       const frozen = structuredClone(docRef.current); validateDrawing(frozen, settings);
-      const blob = await png(frozen); if (blob.size > 8 * 1024 * 1024) throw new Error('drawing_too_large');
+      const blob = await png(frozen); if (blob.size > MAX_ORIGINAL_BYTES) throw new Error('drawing_original_too_large');
       const hash = await hashDrawing(frozen);
       const originalHash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', await blob.arrayBuffer())), (n) => n.toString(16).padStart(2, '0')).join('');
       setReview({ doc: frozen, blob, url: URL.createObjectURL(blob), hash, originalHash, cost: drawingCost(frozen, settings), requestId: hash });
@@ -443,7 +462,7 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
           </div>
           <div ref={cursorRef} aria-hidden="true" className="pointer-events-none absolute left-0 top-0 z-30 rounded-full border border-black bg-transparent opacity-0 shadow-[0_0_0_1px_#fff,inset_0_0_0_1px_#fff]"><span className="absolute left-1/2 top-1/2 h-[3px] w-[3px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-[0_0_0_1px_#000]" /></div>
         </div>
-        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground"><span role="status">{draftStatus}</span><span className="tabular-nums">{doc.strokes.length}/{settings.maxStrokes || 120}획 · {count.toLocaleString()}/{(settings.maxPoints || 6000).toLocaleString()}점</span></div>
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground"><span role="status">{draftStatus}</span><span className="tabular-nums">{usage.strokeCount}/{settings.maxStrokes || 120}획 · {count.toLocaleString()}/{(settings.maxPoints || 6000).toLocaleString()}점</span><span className={`tabular-nums ${usage.jsonSize >= (MAX_DOCUMENT_BYTES - RECORDING_HEADROOM_BYTES) * 0.9 ? 'font-semibold text-rose-500' : ''}`}>기록 용량 {(usage.jsonSize / 1024 / 1024).toFixed(2)} / {(MAX_DOCUMENT_BYTES / 1024 / 1024).toFixed(0)} MB</span></div>
         <div className="flex flex-wrap items-center gap-2 border-y py-2"><div className="inline-flex rounded-md border p-0.5">{([['live', '방송'], ['light', '밝게'], ['dark', '어둡게']] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={backgroundMode === value} onClick={() => setBackgroundMode(value)} className={`rounded px-3 py-1.5 text-xs ${backgroundMode === value ? 'bg-muted font-semibold' : ''}`}>{label}</button>)}</div><IconButton label={playing ? '미리보기 중지' : '방송 재생 미리보기'} onClick={() => playing ? stopPlayback() : play()} disabled={!visibleStrokes(doc).length}>{playing ? <Pause size={17} /> : <Play size={17} />}</IconButton><span className="text-xs tabular-nums">{(timeline.targetReplayMs / 1000).toFixed(1)}초 · {timeline.speed.toFixed(1)}배속 · 대기 제외</span><Button size="sm" variant="ghost" onClick={() => play(doc, false, true)} disabled={!doc.strokes.length}>원속도</Button></div>
         {playing ? <progress className="h-1 w-full accent-primary" value={playProgress} max={1} aria-label="재생 진행" /> : null}
         <section className="space-y-2" aria-label="레이어"><div className="flex items-center justify-between"><span className="inline-flex items-center gap-1 text-xs font-semibold"><Layers size={14} /> 레이어</span><IconButton label="레이어 추가" disabled={doc.layers.length >= 3} onClick={() => { const id = uid(); commit({ ...doc, layers: [...doc.layers, { id, name: `레이어 ${doc.layers.length + 1}`, visible: true, locked: false }] }); setLayerId(id); }}><Plus size={15} /></IconButton></div>{[...doc.layers].reverse().map((layer) => <div key={layer.id} className={`flex min-w-0 items-center gap-1 rounded-md border px-1 ${layer.id === layerId ? 'border-primary/50 bg-primary/5' : ''}`}><button type="button" className="h-9 min-w-0 flex-1 truncate px-2 text-left text-xs" onClick={() => setLayerId(layer.id)} onDoubleClick={() => { const name = window.prompt('레이어 이름', layer.name)?.trim().slice(0, 40); if (name) commit({ ...doc, layers: doc.layers.map((l) => l.id === layer.id ? { ...l, name } : l) }); }}>{layer.name}</button><IconButton label={layer.visible ? '레이어 숨기기' : '레이어 표시'} onClick={() => commit({ ...doc, layers: doc.layers.map((l) => l.id === layer.id ? { ...l, visible: !l.visible } : l) })}>{layer.visible ? <Eye size={14} /> : <EyeOff size={14} />}</IconButton><IconButton label={layer.locked ? '잠금 해제' : '레이어 잠금'} onClick={() => commit({ ...doc, layers: doc.layers.map((l) => l.id === layer.id ? { ...l, locked: !l.locked } : l) })}>{layer.locked ? <Lock size={14} /> : <Unlock size={14} />}</IconButton>{([-1, 1] as const).map((direction) => <IconButton key={direction} label={direction === 1 ? '레이어 위로' : '레이어 아래로'} disabled={doc.layers.indexOf(layer) + direction < 0 || doc.layers.indexOf(layer) + direction >= doc.layers.length} onClick={() => { const layers = [...doc.layers], index = layers.indexOf(layer); [layers[index], layers[index + direction]] = [layers[index + direction], layers[index]]; commit({ ...doc, layers }); }}>{direction === 1 ? <ArrowUp size={14} /> : <ArrowDown size={14} />}</IconButton>)}<IconButton label="레이어 삭제" disabled={doc.layers.length <= 1 || layer.locked} onClick={() => { if (window.confirm('이 레이어의 그림을 삭제할까요?')) { const layers = doc.layers.filter((l) => l.id !== layer.id); commit({ ...doc, layers, strokes: doc.strokes.filter((s) => s.layerId !== layer.id) }); setLayerId(layers[0].id); } }}><Trash2 size={14} /></IconButton></div>)}</section>

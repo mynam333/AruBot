@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { MAX_ORIGINAL_BYTES } from '../shared/drawing/limits.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -32,7 +33,10 @@ test('local storage rejects directory traversal and oversized uploads', async ()
       await assert.rejects(storage.write(key, Buffer.from('test')), /drawing_invalid_storage_key/);
       await assert.rejects(storage.read(key), /drawing_invalid_storage_key/);
     }
-    await assert.rejects(storage.write('drawing-donations/owner/id/huge.png', Buffer.alloc(8 * 1024 * 1024 + 1)), /drawing_too_large/);
+    const large = Buffer.alloc(8 * 1024 * 1024 + 1, 37);
+    const key = await storage.write('drawing-donations/owner/id/large.png', large);
+    assert.deepEqual(await storage.read(key), large);
+    await assert.rejects(storage.write('drawing-donations/owner/id/huge.png', Buffer.alloc(MAX_ORIGINAL_BYTES + 1)), /drawing_too_large/);
   });
 });
 

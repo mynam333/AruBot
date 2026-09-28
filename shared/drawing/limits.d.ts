@@ -1,0 +1,11 @@
+import type { DrawingDocument, DrawingStroke } from './document.js';
+export const MAX_DOCUMENT_BYTES: number;
+export const MAX_ORIGINAL_BYTES: number;
+export const RECORDING_HEADROOM_BYTES: number;
+export const MAX_FILL_RUNS: number;
+export const MAX_SELECTION_PIXELS: number;
+export type DrawingUsage = { jsonSize: number; strokeCount: number; pointCount: number; fillRuns: number; selectionPixels: number };
+export function drawingJsonBytes(value: unknown): number;
+export function drawingUsage(document: DrawingDocument): DrawingUsage;
+export function updateDrawingUsage(usage: DrawingUsage, previous: DrawingStroke | undefined, stroke: DrawingStroke, byteDelta?: number): DrawingUsage;
+export function drawingLimitError(usage: DrawingUsage, limits?: { maxStrokes?: number; maxPoints?: number }, reservedBytes?: number): string | null;

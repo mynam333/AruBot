@@ -1,8 +1,9 @@
 import { DEFAULT_QUAD, validSelectionQuad } from './selection.js';
+import { MAX_DOCUMENT_BYTES, MAX_FILL_RUNS, MAX_SELECTION_PIXELS, drawingJsonBytes } from './limits.js';
+export { MAX_DOCUMENT_BYTES } from './limits.js';
 
 export const DRAWING_VERSION = 2;
 export const RENDERER_VERSION = '2.0.0';
-export const MAX_DOCUMENT_BYTES = 1024 * 1024;
 export const BRUSHES = {
   pen: { label: '정밀 펜', size: 0.007, texture: 0, hardness: 1, flow: 1, angle: 35 },
   pencil: { label: '연필', size: 0.005, texture: 0.7, hardness: 0.8, flow: 1, angle: 35 },
@@ -114,7 +115,7 @@ export function validateDrawing(document, limits = {}) {
       if (stroke.selection.sourceId !== null && (source?.kind !== 'selection' || source.id !== stroke.selection.sourceId || canonicalDrawing(source.selection.rect) !== canonicalDrawing(rect))) invalid('drawing_invalid_selection');
       if (stroke.transform.x || stroke.transform.y || stroke.transform.scale !== 1 || b.type !== 'pen' || b.alpha !== 1) invalid('drawing_invalid_selection');
       selectionPixels += rect.width * rect.height;
-      if (selectionPixels > 67108864) invalid('drawing_too_complex');
+      if (selectionPixels > MAX_SELECTION_PIXELS) invalid('drawing_too_complex');
       if (!Array.isArray(stroke.frames) || !stroke.frames.length || stroke.points.length !== 2) invalid('drawing_invalid_selection');
       let previousTime = stroke.points[0].t;
       for (const frame of stroke.frames) {
@@ -133,7 +134,7 @@ export function validateDrawing(document, limits = {}) {
     if (stroke.kind === 'fill') {
       if (!Array.isArray(stroke.runs) || !stroke.runs.length || stroke.runs.length % 3) invalid('drawing_invalid_fill');
       fillRuns += stroke.runs.length / 3;
-      if (fillRuns > 40000) invalid('drawing_fill_too_complex');
+      if (fillRuns > MAX_FILL_RUNS) invalid('drawing_fill_too_complex');
       let lastY = -1, lastEnd = 0;
       for (let i = 0; i < stroke.runs.length; i += 3) {
         const [y, x, length] = stroke.runs.slice(i, i + 3);
@@ -143,7 +144,7 @@ export function validateDrawing(document, limits = {}) {
     } else if (stroke.runs !== undefined) invalid('drawing_invalid_fill');
     lastInLayer.set(stroke.layerId, stroke);
   }
-  const jsonSize = new TextEncoder().encode(canonicalDrawing(document)).length;
+  const jsonSize = drawingJsonBytes(document);
   if (jsonSize > MAX_DOCUMENT_BYTES) invalid('drawing_too_large');
   return { pointCount, rawPointCount: pointCount, jsonSize, strokeCount: document.strokes.length };
 }

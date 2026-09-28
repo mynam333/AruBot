@@ -1,7 +1,7 @@
 const crypto = require('node:crypto');
 const loadServerFunctions = require('./helpers/load-server-functions.cjs');
 const loadSource = require('./helpers/load-source.cjs');
-const model = loadSource('shared/drawing/document.js', { './selection.js': loadSource('shared/drawing/selection.js') });
+const model = loadSource('shared/drawing/document.js', { './selection.js': loadSource('shared/drawing/selection.js'), './limits.js': loadSource('shared/drawing/limits.js') });
 
 function harness() {
   const document = model.createDrawing(16, 9, 'submission');

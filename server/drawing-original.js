@@ -2,8 +2,9 @@ import { Worker } from 'node:worker_threads';
 import crypto from 'node:crypto';
 import sharp from 'sharp';
 import { canonicalDrawing, validateDrawing, drawingInk, buildTimeline } from '../shared/drawing/document.js';
+import { MAX_ORIGINAL_BYTES } from '../shared/drawing/limits.js';
 
-export const DRAWING_ORIGINAL_LIMIT = 8 * 1024 * 1024;
+export const DRAWING_ORIGINAL_LIMIT = MAX_ORIGINAL_BYTES;
 let running = 0;
 
 export function originalOwnerKey(owner) {
@@ -11,7 +12,8 @@ export function originalOwnerKey(owner) {
 }
 
 export async function inspectOriginal(buffer) {
-  if (!Buffer.isBuffer(buffer) || !buffer.length || buffer.length > DRAWING_ORIGINAL_LIMIT) throw Object.assign(new Error('drawing_too_large'), { status: 400 });
+  if (!Buffer.isBuffer(buffer) || !buffer.length) throw Object.assign(new Error('drawing_invalid_original'), { status: 400 });
+  if (buffer.length > DRAWING_ORIGINAL_LIMIT) throw Object.assign(new Error('drawing_original_too_large'), { status: 400 });
   const metadata = await sharp(buffer, { limitInputPixels: 3686400 }).metadata();
   if (metadata.format !== 'png' || (metadata.pages || 1) !== 1 || metadata.width < 32 || metadata.height < 32 || metadata.width > 1920 || metadata.height > 1920) throw Object.assign(new Error('drawing_invalid_original'), { status: 400 });
   return { width: metadata.width, height: metadata.height, hash: crypto.createHash('sha256').update(buffer).digest('hex') };

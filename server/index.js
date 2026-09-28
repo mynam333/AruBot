@@ -1,6 +1,6 @@
 import express from 'express';
 import { downloadDrawingDonationObject, getDurableRuntimeJob } from './supabase.js';
-import { inspectOriginal, originalOwnerKey, validateDrawingSubmission, verifyDrawingOriginal } from './drawing-original.js';
+import { DRAWING_ORIGINAL_LIMIT, inspectOriginal, originalOwnerKey, validateDrawingSubmission, verifyDrawingOriginal } from './drawing-original.js';
 import { RENDERER_VERSION, canonicalDrawing, drawingCost } from '../shared/drawing/document.js';
 import path from 'path';
 import fs from 'fs';
@@ -8466,7 +8466,7 @@ app.get('/api/viewer/drawing-donation/streamers/:channelUid', async (req, res) =
   }
 });
 
-app.post('/api/drawing-donation/originals', rateLimiters.userWrite, express.raw({ type: 'image/png', limit: '8mb' }), async (req, res) => {
+app.post('/api/drawing-donation/originals', rateLimiters.userWrite, express.raw({ type: 'image/png', limit: DRAWING_ORIGINAL_LIMIT }), async (req, res) => {
   try {
     const userId = await getCurrentSessionUserId(req);
     if (!userId) return res.status(401).json({ error: 'Login required' });
