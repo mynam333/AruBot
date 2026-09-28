@@ -65,9 +65,9 @@ describe('CHZZK live chat auto-connect regression', () => {
     const donationEnd = serverIndex.indexOf("socket.on('SUBSCRIPTION'", donationStart);
     const donationBody = serverIndex.slice(donationStart, donationEnd);
 
-    expect(chatBody).toContain('const liveState = await refreshChzzkLiveStatusForSid(sid, { ttlMs: 5000 })');
+    expect(chatBody).toContain('const liveState = await refreshChzzkLiveStatusForEvent(sid)');
     expect(chatBody).toContain('if (!liveState.live) return');
-    expect(donationBody).toContain('const liveState = await refreshChzzkLiveStatusForSid(sid, { ttlMs: 5000 })');
+    expect(donationBody).toContain('const liveState = await refreshChzzkLiveStatusForEvent(sid)');
     expect(donationBody).toContain('if (!liveState.live) return');
   });
 });

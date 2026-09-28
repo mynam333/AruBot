@@ -46,6 +46,8 @@ const runtime = {
 
 const chzzkDurationCache = new Map();
 let chzzkDonationSequence = Promise.resolve();
+let youTubeMessageSequence = Promise.resolve();
+let youTubeMessageRevision = 0;
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -194,11 +196,17 @@ async function enqueuePause(service, durationSec, event = {}) {
   state.status = 'connected';
   state.message = `${totalDuration}s queued`;
 
-  runtime.pauseUntil = effectivePauseUntil();
-  await pauseYouTube(runtime.pauseUntil);
-  scheduleResume();
+  await syncYouTubePause();
   broadcastState();
   return true;
+}
+
+function syncYouTubePause() {
+  compactQueues();
+  runtime.pauseUntil = effectivePauseUntil();
+  if (runtime.pauseUntil <= Date.now()) return resumeYouTube();
+  scheduleResume();
+  return pauseYouTube(runtime.pauseUntil);
 }
 
 function scheduleResume() {
@@ -212,14 +220,7 @@ function scheduleResume() {
     return;
   }
   runtime.resumeTimer = setTimeout(() => {
-    compactQueues();
-    runtime.pauseUntil = effectivePauseUntil();
-    if (runtime.pauseUntil <= Date.now()) {
-      resumeYouTube();
-    } else {
-      scheduleResume();
-      pauseYouTube(runtime.pauseUntil);
-    }
+    syncYouTubePause().catch(() => {});
     broadcastState();
   }, Math.min(delay + 80, 2147483647));
 }
@@ -236,25 +237,34 @@ async function queryYouTubeTabs() {
   });
 }
 
-async function sendToYouTubeTabs(message) {
-  const tabs = await queryYouTubeTabs();
-  const focusedWindow = runtime.settings.resumeFocusedOnly
-    ? await api.windows.getLastFocused().catch(() => null)
-    : null;
+function sendToYouTubeTabs(message) {
+  const revision = ++youTubeMessageRevision;
+  // A slow tab lookup must not deliver an old pause after a skip/resume.
+  const next = youTubeMessageSequence.catch(() => {}).then(async () => {
+    if (revision !== youTubeMessageRevision) return;
+    const tabs = await queryYouTubeTabs();
+    const focusedWindow = message.type === 'aru-pause:pause' && runtime.settings.resumeFocusedOnly
+      ? await api.windows.getLastFocused().catch(() => null)
+      : null;
 
-  for (const tab of tabs) {
-    if (focusedWindow && tab.windowId !== focusedWindow.id) continue;
-    try {
-      await api.tabs.sendMessage(tab.id, message);
-    } catch {
+    for (const tab of tabs) {
+      if (revision !== youTubeMessageRevision) return;
+      if (focusedWindow && tab.windowId !== focusedWindow.id) continue;
       try {
-        await api.scripting.executeScript({ target: { tabId: tab.id }, files: ['content-youtube.js'] });
         await api.tabs.sendMessage(tab.id, message);
       } catch {
-        // The tab may be a restricted browser page or still loading.
+        try {
+          await api.scripting.executeScript({ target: { tabId: tab.id }, files: ['content-youtube.js'] });
+          if (revision !== youTubeMessageRevision) return;
+          await api.tabs.sendMessage(tab.id, message);
+        } catch {
+          // The tab may be a restricted browser page or still loading.
+        }
       }
     }
-  }
+  });
+  youTubeMessageSequence = next;
+  return next;
 }
 
 function pauseYouTube(until) {
@@ -262,6 +272,8 @@ function pauseYouTube(until) {
 }
 
 function resumeYouTube() {
+  if (runtime.resumeTimer) clearTimeout(runtime.resumeTimer);
+  runtime.resumeTimer = null;
   runtime.pauseUntil = 0;
   for (const service of SERVICES) {
     runtime.serviceState[service].endAt = 0;
@@ -276,6 +288,7 @@ function restartConnectors() {
     for (const service of SERVICES) {
       setServiceState(service, { status: 'idle', message: 'Monitoring off', connectedAt: null, reconnectAt: null });
     }
+    resumeYouTube().catch(() => {});
     return;
   }
 
@@ -910,43 +923,121 @@ async function createAruBotConnector(overlayUrl, attempt) {
   if (!token) throw new Error('AruBot PVD token not found');
   const apiBase = inferAruBotApiBase(parsed);
   const wsUrl = buildAruBotWsUrl(apiBase, token);
+  let closed = false;
+  let snapshot = null;
+  let revision = 0;
+  let lastServerNow = 0;
+  let syncTimer = null;
+  let fetching = false;
+  let dismissedItemId = '';
 
   async function handleAruBotStart(payload) {
-    if (!payload || payload.type === 'pong') return;
+    if (closed || !payload || !Object.prototype.hasOwnProperty.call(payload, 'item')) return;
+    const serverNow = Number(payload.serverNow) || 0;
+    if (serverNow && serverNow < lastServerNow) return;
+    lastServerNow = Math.max(lastServerNow, serverNow);
+    snapshot = payload;
     const item = payload.item || null;
-    if (!item) {
-      setServiceState('arubot', { status: 'connected', message: 'Connected, waiting' });
-      return;
-    }
-    const duration = normalizeAruBotRemainingDuration(payload);
-    if (duration) {
-      await enqueuePause('arubot', duration, {
-        ...item,
-        id: getAruBotItemId(payload),
+    const itemId = item ? getAruBotItemId(payload) : '';
+    if (itemId !== dismissedItemId) dismissedItemId = '';
+    const state = runtime.serviceState.arubot;
+    const now = Date.now();
+    if (!item || payload.idleDeferred === true || item.isIdle === true || dismissedItemId) {
+      state.endAt = 0;
+      state.queue = [];
+      state.message = payload.idleDeferred ? 'Waiting for idle music to finish' : 'Connected, waiting';
+    } else {
+      const remaining = normalizeAruBotRemainingDuration(payload);
+      // Paused/unknown-length playback uses a bounded lease refreshed by snapshots.
+      const duration = payload.paused === true || !remaining
+        ? 45
+        : remaining + normalizeSeconds(runtime.settings.extraDelaySec, 1);
+      state.endAt = now + duration * 1000;
+      state.queue = [{
+        id: `arubot:${itemId}`,
+        service: 'arubot',
+        label: SERVICE_LABELS.arubot,
+        durationSec: duration,
+        rawDurationSec: remaining,
+        startAt: now,
+        endAt: state.endAt,
         title: item.title || item.videoTitle || item.mediaTitle || 'AruBot video donation'
-      });
+      }];
+      state.lastDurationSec = remaining;
+      state.message = payload.paused === true ? 'Donation paused' : 'Donation playing';
+    }
+    state.status = 'connected';
+    state.lastEventAt = now;
+    await syncYouTubePause();
+    broadcastState();
+  }
+
+  async function refreshSnapshot() {
+    if (closed || fetching) return;
+    fetching = true;
+    const requestedRevision = revision;
+    try {
+      const payload = await fetchAruBotNowPlaying(apiBase, token);
+      if (!closed && requestedRevision === revision) await handleAruBotStart(payload);
+    } catch {
+      // Keep the latest socket state and let its finite pause timer expire on disconnect.
+    } finally {
+      fetching = false;
     }
   }
 
-  return createWebSocketConnector({
+  function stopSync() {
+    closed = true;
+    if (syncTimer) clearInterval(syncTimer);
+    syncTimer = null;
+  }
+
+  const connector = createWebSocketConnector({
     service: 'arubot',
     url: wsUrl,
     onOpen: () => {
+      if (closed) return;
       setServiceState('arubot', { status: 'connected', message: `Connected: ${new URL(apiBase).host}` });
-      fetchAruBotNowPlaying(apiBase, token)
-        .then((payload) => handleAruBotStart({ type: 'start', ...payload }))
-        .catch(() => {});
+      refreshSnapshot();
+      syncTimer = setInterval(() => {
+        if (!snapshot || (snapshot.item && !snapshot.idleDeferred && !dismissedItemId)) refreshSnapshot();
+      }, 15000);
     },
     onMessage: (event) => {
+      if (closed) return;
       const payload = parseJsonMessage(String(event.data));
       if (!payload) return;
-      if (payload.type === 'start') return handleAruBotStart(payload);
-      if (payload.type === 'control') {
-        setServiceState('arubot', { status: 'connected', message: `Control: ${payload.op || 'sync'}` });
+      if (payload.type === 'start') {
+        revision += 1;
+        return handleAruBotStart(payload);
+      }
+      if (payload.type === 'control' && ['pause', 'play', 'seek'].includes(payload.op)) {
+        revision += 1;
+        if (!snapshot?.item) return refreshSnapshot();
+        const next = { ...snapshot, ...payload, item: snapshot.item };
+        if (typeof payload.paused !== 'boolean') {
+          next.paused = payload.op === 'seek' ? snapshot.paused : payload.op === 'pause';
+        }
+        // Control positions supersede the elapsed time in the previous start packet.
+        if (payload.atSec != null) delete next.elapsedSec;
+        return handleAruBotStart(next);
       }
     },
-    onClose: () => scheduleReconnect('arubot', overlayUrl, 'Socket closed', attempt)
+    onClose: () => {
+      stopSync();
+      scheduleReconnect('arubot', overlayUrl, 'Socket closed', attempt);
+    }
   });
+  return {
+    close() {
+      stopSync();
+      connector.close();
+    },
+    clearPause() {
+      dismissedItemId = snapshot?.item ? getAruBotItemId(snapshot) : '';
+      revision += 1;
+    }
+  };
 }
 
 function parseAruBotViewerUrl(value) {
@@ -998,13 +1089,7 @@ function buildAruBotWsUrl(apiBase, token) {
 }
 
 async function fetchAruBotNowPlaying(apiBase, token) {
-  const response = await fetch(`${apiBase}/api/video-donation/now-playing?token=${encodeURIComponent(token)}`, {
-    credentials: 'include',
-    cache: 'no-store',
-    headers: { accept: 'application/json' }
-  });
-  if (!response.ok) throw new Error(`AruBot now-playing HTTP ${response.status}`);
-  return response.json();
+  return fetchJsonWithTimeout(`${apiBase}/api/video-donation/now-playing?token=${encodeURIComponent(token)}`);
 }
 
 function getAruBotItemId(payload) {
@@ -1065,6 +1150,7 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
     if (message?.type === 'clear-pause') {
+      for (const connector of runtime.connectors.values()) connector.clearPause?.();
       await resumeYouTube();
       broadcastState();
       sendResponse({ ok: true, state: getPublicState() });
@@ -1091,10 +1177,7 @@ api.runtime.onStartup.addListener(async () => {
 
 api.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'aru-pause-tick') {
-    compactQueues();
-    runtime.pauseUntil = effectivePauseUntil();
-    if (runtime.pauseUntil > Date.now()) pauseYouTube(runtime.pauseUntil);
-    else if (runtime.pauseUntil > 0) resumeYouTube();
+    if (runtime.pauseUntil > 0 || effectivePauseUntil() > 0) syncYouTubePause().catch(() => {});
     broadcastState();
   }
 });

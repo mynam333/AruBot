@@ -11,6 +11,7 @@ import { ErrorState } from '@/components/ui/page';
 import { apiUrl } from '@/shared/api/http';
 import type { PublicChannelKind } from '@/shared/api/public';
 import { cn, compactDateTime, formatNumber } from '@/shared/lib/utils';
+import { decodeChannelRouteParam } from '@/shared/lib/channel-route-param';
 
 type PointRow = {
   username?: string | null;
@@ -134,7 +135,9 @@ function pointName(row: PointRow) {
 }
 
 function buildEndpoint(channelUid: string, kind: PublicChannelKind) {
-  const encodedUid = encodeURIComponent(channelUid);
+  const uid = decodeChannelRouteParam(channelUid);
+  if (!uid) throw new Error('Invalid channel UID');
+  const encodedUid = encodeURIComponent(uid);
   const endpoint = kind === 'commands'
     ? `/api/public/${encodedUid}/rules`
     : kind === 'points'

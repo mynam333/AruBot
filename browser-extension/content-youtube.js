@@ -63,7 +63,8 @@
   }
 
   function pauseVideos(until) {
-    state.until = Math.max(state.until, Number(until) || 0);
+    // Background sends the combined deadline; skips and seeks can shorten it.
+    state.until = Math.max(0, Number(until) || 0);
     const videos = getVideos();
     if (!state.extensionPaused) {
       state.shouldResume = videos.some((video) => !video.paused && !video.ended);

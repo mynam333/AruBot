@@ -72,6 +72,7 @@ jobs:
           npm run lint
           npx tsc --noEmit --pretty false --incremental false
           npm test -- --runInBand
+          npm run test:drawing
           npm run build
 
       - name: Create backend artifact

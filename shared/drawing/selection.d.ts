@@ -1,0 +1,10 @@
+import type { DrawingDocument, DrawingPoint, SelectionFrame, SelectionRect } from './document.js';
+export const DEFAULT_QUAD: number[];
+export function validSelectionQuad(quad: unknown): boolean;
+export function selectionCorners(frame: SelectionFrame, rect: SelectionRect, document: Pick<DrawingDocument, 'width' | 'height'>): { x: number; y: number }[];
+export function distortSelection(start: SelectionFrame, rect: SelectionRect, selected: number[], pointerStart: { x: number; y: number }, pointer: { x: number; y: number }, document: DrawingDocument): SelectionFrame;
+export function selectionFrameAt(frames: SelectionFrame[], time?: number): SelectionFrame;
+export function constrainShapePoint(anchor: DrawingPoint, point: DrawingPoint, document: DrawingDocument): DrawingPoint;
+export function constrainLinePoint(anchor: DrawingPoint, point: DrawingPoint, document: DrawingDocument, angle?: number): { point: DrawingPoint; angle: number };
+export function selectionRect(a: { x: number; y: number }, b: { x: number; y: number }, document: DrawingDocument): SelectionRect;
+export function transformSelection(start: SelectionFrame, rect: SelectionRect, handle: string, pointerStart: { x: number; y: number }, pointer: { x: number; y: number }, document: DrawingDocument, keepRatio?: boolean): SelectionFrame;

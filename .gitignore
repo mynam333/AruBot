@@ -29,6 +29,7 @@ server/*.sqlite
 server/data.sqlite
 
 tsconfig.tsbuildinfo
+.drawing-donations/
 tmp
 
 backups/

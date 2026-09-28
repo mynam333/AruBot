@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 
 const page = fs.readFileSync(path.join(__dirname, '..', 'src', 'features', 'viewer', 'drawing-donation-page.tsx'), 'utf8');
+const studio = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'drawing', 'DrawingStudio.tsx'), 'utf8');
 const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
 
 describe('drawing live viewer regression', () => {
@@ -24,6 +25,19 @@ describe('drawing live viewer regression', () => {
     expect(page).toContain("setLivePlaybackStatus(offline ? 'offline' : 'error')");
     expect(page).toContain("if (offline) retryTimer = setTimeout");
     expect(page).toContain('onClick={() => setPlaybackRetryToken((current) => current + 1)}');
-    expect(page).toContain('onPointerDown={startStroke}');
+    expect(page).toContain('<DrawingStudio');
+    expect(studio).toContain('onPointerDown={beginStroke}');
+  });
+
+  test('keeps the brush cursor above the drawing without obscuring its center', () => {
+    const cursor = studio.slice(studio.indexOf('ref={cursorRef}'), studio.indexOf('ref={cursorRef}') + 800);
+    expect(studio).toContain('relative z-10 h-full w-full touch-none');
+    expect(cursor).toContain('pointer-events-none');
+    expect(cursor).toContain('z-30');
+    expect(cursor).toContain('border-black bg-transparent');
+    expect(cursor).toContain('shadow-[0_0_0_1px_#fff,inset_0_0_0_1px_#fff]');
+    expect(cursor).toContain('left-1/2 top-1/2');
+    expect(studio).toContain("busy ? '0' : '1'");
+    expect(studio).not.toContain('cursor.style.backgroundColor');
   });
 });

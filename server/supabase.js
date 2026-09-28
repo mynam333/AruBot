@@ -4,6 +4,8 @@ import pkg from 'pg';
 import fs from 'fs';
 import path from 'path';
 import { isPublicShortLinkCode, normalizePublicShortLinkTarget } from './public-short-links.js';
+import { canonicalDrawing } from '../shared/drawing/document.js';
+import { createLocalDrawingStorage } from './drawing-local-storage.js';
 const { Client, Pool } = pkg;
 
 let supabase;
@@ -98,11 +100,14 @@ function collectDrawingDonationObjectKeys(item) {
 
 export async function deleteDrawingDonationObjectKeys(keys = []) {
   const objectKeys = uniqueNonEmpty(keys);
+  const localKeys = objectKeys.filter((key) => key.startsWith('local:'));
+  const remoteKeys = objectKeys.filter((key) => !key.startsWith('local:'));
+  const local = localKeys.length ? await createLocalDrawingStorage().remove(localKeys) : { deleted: 0 };
   const storage = getSupabaseStorageClient();
-  if (!objectKeys.length || !storage) return { deleted: 0, skipped: objectKeys.length };
-  let deleted = 0;
-  for (let index = 0; index < objectKeys.length; index += 100) {
-    const chunk = objectKeys.slice(index, index + 100);
+  if (!remoteKeys.length || !storage) return { deleted: local.deleted, skipped: remoteKeys.length };
+  let deleted = local.deleted;
+  for (let index = 0; index < remoteKeys.length; index += 100) {
+    const chunk = remoteKeys.slice(index, index + 100);
     const { error } = await storage.client.storage.from(storage.bucket).remove(chunk);
     if (error) throw new Error(error.message || 'drawing_storage_delete_failed');
     deleted += chunk.length;
@@ -2861,8 +2866,9 @@ function normalizeDrawingDonationRow(row, { includeStrokes = false } = {}) {
 
 export async function uploadDrawingDonationObject(key, payload, contentType = 'application/json') {
   const storage = getSupabaseStorageClient();
-  if (!storage || !key) return null;
+  if (!key) return null;
   const body = typeof payload === 'string' || Buffer.isBuffer(payload) ? payload : JSON.stringify(payload);
+  if (!storage) return createLocalDrawingStorage().write(key, body);
   const { error } = await storage.client.storage.from(storage.bucket).upload(key, body, {
     contentType,
     upsert: true,
@@ -2872,6 +2878,7 @@ export async function uploadDrawingDonationObject(key, payload, contentType = 'a
 }
 
 export async function downloadDrawingDonationJson(key) {
+  if (String(key).startsWith('local:')) return JSON.parse((await createLocalDrawingStorage().read(key)).toString('utf8'));
   const storage = getSupabaseStorageClient();
   if (!storage || !key) return null;
   const { data, error } = await storage.client.storage.from(storage.bucket).download(key);
@@ -2880,13 +2887,46 @@ export async function downloadDrawingDonationJson(key) {
   return JSON.parse(text);
 }
 
+export async function downloadDrawingDonationObject(key) {
+  if (String(key).startsWith('local:')) return createLocalDrawingStorage().read(key);
+  const storage = getSupabaseStorageClient();
+  if (!storage || !key) throw new Error('drawing_storage_unavailable');
+  const { data, error } = await storage.client.storage.from(storage.bucket).download(key);
+  if (error || !data || data.size > 8 * 1024 * 1024) throw new Error('drawing_original_unavailable');
+  return Buffer.from(await data.arrayBuffer());
+}
+
+export async function cleanupDrawingDonationUploads() {
+  const local = await createLocalDrawingStorage().cleanupUploads();
+  const storage = getSupabaseStorageClient();
+  if (!storage) return local;
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  let deleted = local.deleted;
+  for (let offset = 0; offset < 10000; offset += 100) {
+    const { data: owners, error } = await storage.client.storage.from(storage.bucket).list('drawing-donations/uploads', { limit: 100, offset, sortBy: { column: 'name', order: 'asc' } });
+    if (error) throw new Error(error.message);
+    for (const owner of owners || []) {
+      if (!/^[a-f0-9]{32}$/.test(owner.name)) continue;
+      const prefix = `drawing-donations/uploads/${owner.name}`;
+      const { data: files, error: listError } = await storage.client.storage.from(storage.bucket).list(prefix, { limit: 1000, sortBy: { column: 'name', order: 'asc' } });
+      if (listError) continue;
+      const keys = (files || []).filter((file) => /^[0-9]{13}-[a-f0-9-]{36}\.png$/.test(file.name) && Number(file.name.slice(0, 13)) < cutoff).map((file) => `${prefix}/${file.name}`);
+      if (keys.length) deleted += (await deleteDrawingDonationObjectKeys(keys)).deleted || 0;
+    }
+    if (!owners || owners.length < 100) break;
+  }
+  return { deleted };
+}
+
 async function hydrateDrawingDonationStrokes(item) {
   if (!item || !item.strokeObjectKey || (Array.isArray(item.strokes) && item.strokes.length)) return item;
   try {
     const strokes = await downloadDrawingDonationJson(item.strokeObjectKey);
+    if (item.canvas?.document?.version === 2 && crypto.createHash('sha256').update(canonicalDrawing(strokes)).digest('hex') !== item.metrics?.documentHash) throw new Error('drawing_original_mismatch');
     item.strokes = Array.isArray(strokes) ? strokes : Array.isArray(strokes?.strokes) ? strokes.strokes : [];
   } catch (error) {
     console.warn('[Drawing Donation] stroke object load failed:', error?.message || error);
+    if (item.canvas?.document?.version === 2) throw error;
     item.strokes = [];
   }
   return item;
@@ -3470,6 +3510,7 @@ export async function cleanupPrivacyRetentionData(options = {}) {
   });
   summary.objectKeysDeleted = objectDelete.deleted || 0;
   summary.objectKeysSkipped = objectDelete.skipped || 0;
+  summary.drawingUploads = await cleanupDrawingDonationUploads().catch(() => ({ deleted: 0 }));
   return summary;
 }
 

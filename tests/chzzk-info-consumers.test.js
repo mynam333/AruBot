@@ -149,13 +149,14 @@ describe('CHZZK live state consumers', () => {
     const bindings = {
       chzzkInfoClient: { getLiveDetail: jest.fn() },
       DEFAULT_TIMEOUT: 8000, CHZZK_LIVE_STATUS_TTL_MS: 15000,
+      singleFlightRequests: new Map(),
       liveStatusCache: new Map(), liveSession: new Map(), chzzkRuntimeErrors: new Map(),
       compactLogText: (value) => String(value),
       ensureChzzkChatSessionForLiveSid: jest.fn().mockResolvedValue(null),
       closeChzzkChatSessionForOfflineSid: jest.fn(), updateSessionState: jest.fn(),
       providerObservationBootstrapPending: false, console: { warn: jest.fn(), error: jest.fn() },
     };
-    return { ...bindings, ...loadServerFunctions(['refreshChzzkLiveStatusForSid', 'isChzzkLiveDetailOpen', 'parseChzzkLiveTimestamp'], bindings) };
+    return { ...bindings, ...loadServerFunctions(['singleFlight', 'refreshChzzkLiveStatusForSid', 'loadChzzkLiveStatusForSid', 'isChzzkLiveDetailOpen', 'parseChzzkLiveTimestamp'], bindings) };
   }
   const options = { settings: {}, force: true, channelUids: ['a'] };
 
@@ -194,13 +195,33 @@ describe('CHZZK live state consumers', () => {
     expect(await h.refreshChzzkLiveStatusForSid('sid', options)).toMatchObject({ live: true, startTs: 123 });
   });
 
-  test('closes chat only for an explicit successful offline response', async () => {
+  test('keeps chat subscribed across a confirmed broadcast end', async () => {
     const h = liveHarness();
     h.liveStatusCache.set('sid', { provider: 'chzzk', live: true, channelId: 'a', ts: 1 });
     h.chzzkInfoClient.getLiveDetail.mockResolvedValue({ status: 'CLOSE' });
     expect(await h.refreshChzzkLiveStatusForSid('sid', options)).toMatchObject({ live: false });
-    expect(h.closeChzzkChatSessionForOfflineSid).toHaveBeenCalledTimes(1);
+    expect(h.closeChzzkChatSessionForOfflineSid).not.toHaveBeenCalled();
+    expect(h.ensureChzzkChatSessionForLiveSid).toHaveBeenCalledWith('sid', 'a');
     expect(h.updateSessionState).toHaveBeenCalledWith('sid', false, null, 'chzzk');
+  });
+
+  test('cached offline state still prepares chat before broadcast start', async () => {
+    const h = liveHarness();
+    h.liveStatusCache.set('sid', { provider: 'chzzk', live: false, channelId: 'a', ts: Date.now() });
+    expect(await h.refreshChzzkLiveStatusForSid('sid')).toMatchObject({ live: false, cached: true });
+    expect(h.ensureChzzkChatSessionForLiveSid).toHaveBeenCalledWith('sid', 'a');
+    expect(h.chzzkInfoClient.getLiveDetail).not.toHaveBeenCalled();
+  });
+
+  test('coalesces simultaneous live checks from chat bursts and background polling', async () => {
+    const h = liveHarness();
+    h.chzzkInfoClient.getLiveDetail.mockResolvedValue({ status: 'OPEN' });
+    const results = await Promise.all([
+      h.refreshChzzkLiveStatusForSid('sid', options),
+      h.refreshChzzkLiveStatusForSid('sid', options),
+    ]);
+    expect(results.every((result) => result.live)).toBe(true);
+    expect(h.chzzkInfoClient.getLiveDetail).toHaveBeenCalledTimes(1);
   });
 
   test('an explicit closed status takes precedence over stale live flags', () => {
@@ -219,5 +240,66 @@ describe('CHZZK live state consumers', () => {
     });
     expect(await resolveDrawingLivePlaybackUrl('chzzk', 'channel-a')).toMatchObject({ playbackUrl: 'https://media.example/live.m3u8' });
     expect(chzzkInfoClient.getLiveDetail).toHaveBeenCalledWith('channel-a', expect.objectContaining({ deadlineAt: expect.any(Number) }));
+  });
+});
+
+describe('CHZZK early event live gate', () => {
+  function harness() {
+    const bindings = {
+      singleFlightRequests: new Map(), liveStatusCache: new Map(),
+      refreshChzzkLiveStatusForSid: jest.fn(), sleep: jest.fn().mockResolvedValue(undefined),
+    };
+    return { ...bindings, ...loadServerFunctions(['singleFlight', 'refreshChzzkLiveStatusForEvent'], bindings) };
+  }
+
+  test('holds the first chat during a brief offline-to-live metadata delay', async () => {
+    const h = harness();
+    h.refreshChzzkLiveStatusForSid.mockResolvedValueOnce({ live: false }).mockResolvedValue({ live: true });
+    expect(await h.refreshChzzkLiveStatusForEvent('sid')).toEqual({ live: true });
+    expect(h.sleep).toHaveBeenCalledWith(1000);
+    expect(h.refreshChzzkLiveStatusForSid).toHaveBeenCalledWith('sid', { ttlMs: 5000, force: true });
+  });
+
+  test('offline events stay rejected after bounded retries', async () => {
+    const h = harness();
+    h.refreshChzzkLiveStatusForSid.mockResolvedValue({ live: false });
+    expect(await h.refreshChzzkLiveStatusForEvent('sid')).toEqual({ live: false });
+    expect(h.refreshChzzkLiveStatusForSid).toHaveBeenCalledTimes(3);
+    expect(h.sleep).toHaveBeenCalledTimes(2);
+  });
+
+  test('already-live events do not wait or force a fresh request for every chat', async () => {
+    const h = harness();
+    h.liveStatusCache.set('sid', { live: true });
+    h.refreshChzzkLiveStatusForSid.mockResolvedValue({ live: true });
+    expect(await h.refreshChzzkLiveStatusForEvent('sid')).toEqual({ live: true });
+    expect(h.sleep).not.toHaveBeenCalled();
+    expect(h.refreshChzzkLiveStatusForSid).toHaveBeenCalledWith('sid', { ttlMs: 5000, force: false });
+  });
+
+  test('each offline chat bypasses even a fresh offline cache', async () => {
+    const h = harness();
+    h.liveStatusCache.set('sid', { live: false, ts: Date.now() });
+    h.refreshChzzkLiveStatusForSid.mockResolvedValue({ live: false });
+    await h.refreshChzzkLiveStatusForEvent('sid');
+    await h.refreshChzzkLiveStatusForEvent('sid');
+    expect(h.refreshChzzkLiveStatusForSid).toHaveBeenCalledTimes(6);
+    for (const [, options] of h.refreshChzzkLiveStatusForSid.mock.calls) {
+      expect(options.force).toBe(true);
+    }
+  });
+
+  test('a new chat checks immediately while the previous chat is waiting to retry', async () => {
+    const h = harness();
+    let releaseRetry;
+    h.sleep.mockImplementationOnce(() => new Promise((resolve) => { releaseRetry = resolve; }));
+    h.refreshChzzkLiveStatusForSid.mockResolvedValueOnce({ live: false }).mockResolvedValue({ live: true });
+    const previousChat = h.refreshChzzkLiveStatusForEvent('sid');
+    await Promise.resolve();
+    expect(h.sleep).toHaveBeenCalledTimes(1);
+    expect(await h.refreshChzzkLiveStatusForEvent('sid')).toEqual({ live: true });
+    expect(h.refreshChzzkLiveStatusForSid).toHaveBeenCalledTimes(2);
+    releaseRetry();
+    expect(await previousChat).toEqual({ live: true });
   });
 });
