@@ -12,6 +12,7 @@ import dotenv from 'dotenv';
 import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, getBotSettingsStrict, setBotSettings, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, revokeSession, getSessionUserId, listChannelPoints, listChannelPointsPage, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, deductChannelPointsIfEnough, getChannelPoints, getChannelPointBalanceSummary, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, getUserAttendanceSummary, incrementBotCounter, getOrCreatePublicShortLink, resolvePublicShortLink, issueApiKey, revokeApiKey, getOwnerPidForApiKey, issueApiWebSocketTicket, consumeApiWebSocketTicket, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, findSidByChannelViewerTokenSupabase, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, listPlatformAccountsForUserIds, findAppUserIdByChannelUid, findExactPublicChannelIdentity, getPublicChannelPointsSnapshot, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, markPlatformTokenValidated, deletePlatformTokens, deletePlatformAccount, getAppUserAdminStatus, getArubotAdminConsoleSnapshot, getArubotAdminStreamerFeatureDetails, getYoutubeBotProfile, upsertYoutubeBotProfile, updateYoutubeBotProfileTokens, markYoutubeBotProfileStatus, deleteYoutubeBotProfile, getYoutubeStreamerChannel, upsertYoutubeStreamerChannel, markYoutubeStreamerChannelModeratorRegistered, deleteYoutubeStreamerChannel, listYoutubeStreamerChannelsByYoutubeChannelId, updateYoutubeStreamerChannelLive, updateYoutubeStreamerChannelWebsub, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, claimBotRuleCooldown, enqueueDurableRuntimeJob, enqueuePaidDurableRuntimeJob, claimDurableRuntimeJobs, completeDurableRuntimeJob, failDurableRuntimeJob, claimRuntimeLease, releaseRuntimeLease, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps, recordBotEventLog, listBotEventLogs, getBotEventLog, insertDrawingDonationItem, listDrawingDonationItems, getDrawingDonationItem, getCurrentDrawingDonationItem, updateDrawingDonationItemStatus, deleteDrawingDonationItem, reorderDrawingDonationItems, uploadDrawingDonationObject, deleteDrawingDonationObjectKeys, deleteAccountData, cleanupPrivacyRetentionData, validateSecretEncryptionConfig, getPgPoolStatus, checkDatabaseReady, closeDatabaseConnections } from './supabase.js';
 import { confirmPlatformTokenConsent, confirmYoutubeBotProfileConsent, countActiveDurableRuntimeJobs, touchPlatformTokenUsed, touchYoutubeBotProfileUsed } from './supabase.js';
 import { createPlatformProfileService } from './platform-profiles.js';
+import { createChzzkInfoClient, chzzkChannelIdentityMatches, chzzkNonNegativeNumber } from './chzzk-info.js';
 import { executeAndStripLiveChangeTokens, filterLiveInfoByProvider, selectCategorySearchResult } from './live-command-actions.js';
 import { canManageLiveSettings, createLiveManagerRoleResolver, getLiveRoleLevel } from './live-command-permissions.js';
 import { buildYoutubeLiveInfoFallback, buildYoutubeLiveLookupContext, buildYoutubeOfflineLiveInfo } from './youtube-live-info.js';
@@ -10221,8 +10222,8 @@ async function resolveDrawingLivePlaybackUrl(provider, channelId, ownerUserId = 
     let embedUrl = null;
     try {
       if (normalizedProvider === 'chzzk') {
-        const url = `https://api.chzzk.naver.com/service/v3.3/channels/${encodeURIComponent(normalizedChannelId)}/live-detail`;
-        playbackUrl = parseChzzkLivePlaybackUrl(await fetchJsonWithTimeout(url, { headers: { referer: `https://chzzk.naver.com/live/${encodeURIComponent(normalizedChannelId)}` } }));
+        const content = await chzzkInfoClient.getLiveDetail(normalizedChannelId, { deadlineAt: Date.now() + 6000 });
+        if (isChzzkLiveDetailOpen(content)) playbackUrl = parseChzzkLivePlaybackUrl({ content });
       } else if (normalizedProvider === 'cime') {
         let slug = normalizedChannelId;
         if (/^\d+$/.test(slug)) {
@@ -11849,19 +11850,18 @@ app.post('/api/video-donation/control', async (req, res) => {
   }
 });
 
-// Fetch live-detail once (no auth required) for a given uid and return normalized info
+// Read public live status and metadata using the current CHZZK web contracts.
 async function fetchLiveDetail(uid) {
-  const r = await axiosGetWithRetry(`https://api.chzzk.naver.com/service/v2/channels/${encodeURIComponent(uid)}/live-detail`);
-  const content = r?.data?.content || r?.data || {};
+  const content = await chzzkInfoClient.getLiveDetail(uid, { deadlineAt: Date.now() + DEFAULT_TIMEOUT });
   const status = String(content?.status || '').toLowerCase();
   const live = isChzzkLiveDetailOpen(content);
   const title = content?.liveTitle || content?.title || '';
   const category = content?.liveCategoryValue || content?.liveCategory?.categoryValue || content?.liveCategoryName || content?.liveCategory?.categoryType || content?.categoryType || '';
-  const viewers = Number(content?.concurrentUserCount || content?.currentViewerCount || 0);
+  const viewers = chzzkNonNegativeNumber(content?.concurrentUserCount, content?.currentViewerCount);
   const openCandidate = content?.startedAt || content?.started_at || content?.openDate || content?.openTime || content?.openedAt || content?.liveStartAt || content?.startTime || content?.createdAt || null;
   const startedAtTs = parseChzzkLiveTimestamp(openCandidate, null);
   const startedAt = startedAtTs ? new Date(startedAtTs + 9 * 60 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 16) : '';
-  const channel = content?.channel?.channelName || content?.channel?.name || '';
+  const channel = content?.channel?.channelName || content?.channel?.name || content?.channelName || '';
   return { status, title, category, viewers, startedAt, startedAtTs, channel, live, raw: content, provider: 'chzzk' };
 }
 
@@ -12666,29 +12666,15 @@ async function getChannelFollowersCountForSid(sid, provider = '', options = {}) 
     let chzzkLookupError = null;
     if (channelId) {
       try {
-        const accessToken = await getValidAccessToken(sid);
-        const r1 = await axios.get(`${OPENAPI_BASE}/open/v1/channels/${encodeURIComponent(channelId)}/followers/count`, {
-          headers: { Authorization: `Bearer ${accessToken}` },
+        count = await chzzkInfoClient.getFollowerCount(channelId, {
           timeout: lookupRequestTimeout(options, DEFAULT_TIMEOUT),
+          deadlineAt: options.deadlineAt || Date.now() + DEFAULT_TIMEOUT,
         });
-        count = Number(r1?.data?.content?.totalCount ?? r1?.data?.totalCount ?? r1?.data?.count ?? NaN);
       } catch (error) {
         chzzkLookupError = error;
       }
     }
-    if (channelId && (count == null || Number.isNaN(count))) {
-      try {
-        if (lookupDeadlineReached(options)) return null;
-        const r2 = await axios.get(`https://api.chzzk.naver.com/service/v1/channels/${encodeURIComponent(channelId)}/followers/count`, {
-          timeout: lookupRequestTimeout(options, DEFAULT_TIMEOUT),
-        });
-        count = Number(r2?.data?.content?.totalCount ?? r2?.data?.totalCount ?? r2?.data?.count ?? NaN);
-      } catch (error) {
-        if (strict) throw error;
-        chzzkLookupError = chzzkLookupError || error;
-      }
-    }
-    if (count != null && !Number.isNaN(count)) {
+    if (count != null && Number.isFinite(count) && count >= 0) {
       followersCountCache.set(cacheKey, { ts: now, count });
       return count;
     }
@@ -12730,50 +12716,39 @@ async function findUserFollowedAtForSid(sid, userId, username = '', provider = '
   const maxCimePages = Math.max(1, Math.min(1000, Number(process.env.CIME_FOLLOWER_SCAN_PAGES || process.env.FOLLOWER_SCAN_PAGES || 1000)));
   const lookupTimeout = Math.max(500, Math.min(30000, Number(process.env.FOLLOWER_LOOKUP_HTTP_TIMEOUT_MS || DEFAULT_TIMEOUT)));
   const uids = (!normalizedProvider || normalizedProvider === 'chzzk') ? await getChannelUidsForSid(sid) : [];
+  let chzzkScanComplete = false;
   if (uids.length) {
-    const channelId = uids[0];
     try {
       const accessToken = await getValidAccessToken(sid);
-      // Best-effort: paginate followers list to find the user
       const size = 50;
-      for (let page = 1; page <= maxChzzkPages; page++) {
+      for (let page = 0; page < maxChzzkPages; page++) {
         if (lookupDeadlineReached(options)) return null;
-        let data;
-        try {
-          const r = await axios.get(`${OPENAPI_BASE}/open/v1/channels/followers`, {
-            params: { page, size },
-            headers: { Authorization: `Bearer ${accessToken}` },
-            timeout: lookupRequestTimeout(options, lookupTimeout),
-          });
-          data = r?.data?.content || r?.data || {};
-        } catch {
-          // Fallback to service API
-          if (lookupDeadlineReached(options)) return null;
-          const r2 = await axios.get(`https://api.chzzk.naver.com/service/v1/channels/${encodeURIComponent(channelId)}/followers`, {
-            params: { page, size },
-            timeout: lookupRequestTimeout(options, lookupTimeout),
-          });
-          data = r2?.data?.content || r2?.data || {};
-        }
-        const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data?.followers) ? data.followers : []);
-        if (!Array.isArray(list) || list.length === 0) break;
+        const list = await chzzkInfoClient.getFollowersPage(accessToken, page, {
+          timeout: lookupRequestTimeout(options, lookupTimeout),
+          deadlineAt: options.deadlineAt,
+        });
         for (const item of list) {
-          if (followerItemMatches(item, matchCandidates)) {
+          if (chzzkChannelIdentityMatches(item, userId)) {
             const iso = getFollowerItemDate(item);
+            if (!iso) throw new Error('CHZZK follower date is unavailable');
             userFollowedAtCache.set(key, { ts: now, date: iso });
             return iso;
           }
         }
-        if (list.length < size) break;
+        if (list.length < size) {
+          chzzkScanComplete = true;
+          break;
+        }
       }
+      if (!chzzkScanComplete) throw new Error('CHZZK follower scan limit reached');
     } catch (e) {
       if (options?.strict === true) throw e;
-      console.error(e);
+      return null;
     }
   }
   if (lookupDeadlineReached(options)) return null;
   if (normalizedProvider === 'chzzk' || normalizedProvider === 'youtube') {
-    userFollowedAtCache.set(key, { ts: now, date: '' });
+    if (chzzkScanComplete) userFollowedAtCache.set(key, { ts: now, date: '' });
     return null;
   }
   try {
@@ -12835,48 +12810,37 @@ async function getUserSubscriptionMonthsForSid(sid, userId, provider = '', optio
     if (cimeCached && (now - cimeCached.ts) < 24 * 60 * 60 * 1000) return cimeCached.months;
     return null;
   }
-  const channelId = uids[0];
+  let chzzkScanComplete = false;
   try {
     const accessToken = await getValidAccessToken(sid);
-    // Try open subscriptions API
-    const size = 100;
-    for (let page = 1; page <= 50; page++) {
+    const size = 50;
+    for (let page = 0; page < 100; page++) {
       if (lookupDeadlineReached(options)) return null;
-      let data;
-      try {
-        const r = await axios.get(`${OPENAPI_BASE}/open/v1/channels/${encodeURIComponent(channelId)}/subscriptions`, {
-          params: { page, size },
-          headers: { Authorization: `Bearer ${accessToken}` },
-          timeout: lookupRequestTimeout(options, DEFAULT_TIMEOUT),
-        });
-        data = r?.data?.content || r?.data || {};
-      } catch {
-        // Fallback service API
-        if (lookupDeadlineReached(options)) return null;
-        const r2 = await axios.get(`https://api.chzzk.naver.com/service/v1/channels/${encodeURIComponent(channelId)}/subscriptions`, {
-          params: { page, size },
-          timeout: lookupRequestTimeout(options, DEFAULT_TIMEOUT),
-        });
-        data = r2?.data?.content || r2?.data || {};
-      }
-      const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data?.subscriptions) ? data.subscriptions : []);
-      if (!Array.isArray(list) || list.length === 0) break;
+      const list = await chzzkInfoClient.getSubscribersPage(accessToken, page, {
+        timeout: lookupRequestTimeout(options, DEFAULT_TIMEOUT),
+        deadlineAt: options.deadlineAt,
+      });
       for (const item of list) {
-        const uid = String(item?.userId || item?.subscriberId || item?.user?.userId || '');
-        if (uid && uid === String(userId)) {
-          const months = Number(item?.totalMonth || item?.months || item?.subscriptionMonths || 0);
+        if (chzzkChannelIdentityMatches(item, userId)) {
+          const months = chzzkNonNegativeNumber(item?.month, item?.totalMonth, item?.months, item?.subscriptionMonths);
+          if (months == null) throw new Error('CHZZK subscription month is unavailable');
           userSubMonthsCache.set(key, { ts: now, months });
           return months;
         }
       }
-      if (list.length < size) break;
+      if (list.length < size) {
+        chzzkScanComplete = true;
+        break;
+      }
     }
+    if (!chzzkScanComplete) throw new Error('CHZZK subscriber scan limit reached');
   } catch (error) {
     if (options?.strict === true) throw error;
+    return null;
   }
   if (lookupDeadlineReached(options)) return null;
   if (normalizedProvider === 'chzzk') {
-    userSubMonthsCache.set(key, { ts: now, months: null });
+    if (chzzkScanComplete) userSubMonthsCache.set(key, { ts: now, months: null });
     return null;
   }
   const cimeCached = userSubMonthsCache.get(`${sid}:cime:${userId}`) || userSubMonthsCache.get(`${sid}:${userId}`);
@@ -13429,12 +13393,16 @@ function parseChzzkLiveTimestamp(value, fallback = Date.now()) {
   if (Number.isFinite(numeric) && numeric > 0) {
     return numeric < 1000000000000 ? numeric * 1000 : numeric;
   }
-  const parsed = Date.parse(String(value));
+  const text = String(value).trim();
+  const parsed = Date.parse(/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(text)
+    ? `${text.replace(' ', 'T')}+09:00`
+    : text);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function isChzzkLiveDetailOpen(content) {
   const status = String(content?.status || content?.liveStatus || content?.state || '').toLowerCase();
+  if (status === 'close' || status === 'closed' || status === 'offline') return false;
   return status === 'open' || status === 'live' || status === 'onair' || status === 'on_air' || content?.openLive === true || content?.isLive === true || content?.live === true;
 }
 
@@ -13542,9 +13510,8 @@ async function refreshChzzkLiveStatusForSid(sid, options = {}) {
   let lastLiveCheckError = null;
   for (const uid of channelUids) {
     try {
-      const r = await axiosGetWithRetry(`https://api.chzzk.naver.com/service/v2/channels/${encodeURIComponent(uid)}/live-detail`);
+      const content = await chzzkInfoClient.getLiveDetail(uid, { deadlineAt: Date.now() + DEFAULT_TIMEOUT });
       successfulLiveChecks += 1;
-      const content = r?.data?.content || r?.data || {};
       if (isChzzkLiveDetailOpen(content)) {
         anyLive = true;
         liveChannelId = String(uid);
@@ -13558,7 +13525,7 @@ async function refreshChzzkLiveStatusForSid(sid, options = {}) {
     }
   }
 
-  if (successfulLiveChecks === 0) {
+  if (successfulLiveChecks === 0 || (!anyLive && successfulLiveChecks < channelUids.length)) {
     const message = compactLogText(lastLiveCheckError?.message || lastLiveCheckError || 'chzzk_live_status_unavailable', 400);
     chzzkRuntimeErrors.set(String(sid), {
       message,
@@ -13581,6 +13548,9 @@ async function refreshChzzkLiveStatusForSid(sid, options = {}) {
     return { live: false, channelId: channelUids[0] || null, startTs: null, stale: true, error: message };
   }
 
+  if (anyLive && startTs == null && cached?.provider === 'chzzk' && cached.live && cached.channelId === liveChannelId) {
+    startTs = cached.startTs || null;
+  }
   const previousLive = cached?.provider === 'chzzk' ? !!cached.live : undefined;
   const cachedSession = liveSession.get(sid);
   const sessionLastUpdate = Number(cachedSession?.lastUpdate || 0);
@@ -13988,8 +13958,20 @@ const YOUTUBE_WEBSUB_CALLBACK_PATH = process.env.YOUTUBE_WEBSUB_CALLBACK_PATH ||
 const YOUTUBE_WEBSUB_VERIFY_TOKEN = process.env.YOUTUBE_WEBSUB_VERIFY_TOKEN || '';
 const YOUTUBE_WEBSUB_RETRY_DELAYS_MS = [15 * 1000, 60 * 1000, 3 * 60 * 1000, 5 * 60 * 1000];
 const PLATFORM_PROFILE_TIMEOUT_MS = Number(process.env.PLATFORM_PROFILE_TIMEOUT_MS || 2500);
+const chzzkInfoClient = createChzzkInfoClient({
+  apiBase: CHZZK_UNOFFICIAL_API_BASE,
+  openApiBase: OPENAPI_BASE,
+  clientId: CHZZK_CLIENT_ID,
+  clientSecret: CHZZK_CLIENT_SECRET,
+  timeoutMs: DEFAULT_TIMEOUT,
+  httpGet: async (url, options) => (await axiosGetWithRetry(url, {
+    ...options,
+    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AruBot/1.0)', ...options.headers },
+  }, 0)).data,
+});
 const platformProfiles = createPlatformProfileService({
   chzzkApiBase: CHZZK_UNOFFICIAL_API_BASE,
+  chzzkInfoClient,
   cimeAppApiBase: CIME_APP_API_BASE,
   cimeProfileUrlTemplate: CIME_UNOFFICIAL_PROFILE_URL_TEMPLATE,
   timeoutMs: PLATFORM_PROFILE_TIMEOUT_MS,

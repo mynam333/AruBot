@@ -8,12 +8,12 @@ describe('CHZZK live status failure preservation regression', () => {
     const refreshStart = server.indexOf('async function refreshChzzkLiveStatusForSid');
     const refreshEnd = server.indexOf('async function isLiveAllowedForSid', refreshStart);
     const refresh = server.slice(refreshStart, refreshEnd);
-    const failureStart = refresh.indexOf('if (successfulLiveChecks === 0)');
+    const failureStart = refresh.indexOf('if (successfulLiveChecks === 0 ||');
     const cacheWriteStart = refresh.indexOf('liveStatusCache.set(sid, {', failureStart);
     const offlineCloseStart = refresh.indexOf('closeChzzkChatSessionForOfflineSid', failureStart);
 
     expect(refresh).toContain('successfulLiveChecks += 1');
-    expect(refresh).toContain('if (successfulLiveChecks === 0)');
+    expect(refresh).toContain('if (successfulLiveChecks === 0 || (!anyLive && successfulLiveChecks < channelUids.length))');
     expect(refresh).toContain('stale: true');
     expect(refresh).toContain('live: !!cached.live');
     expect(failureStart).toBeGreaterThan(-1);

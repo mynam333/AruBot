@@ -1,3 +1,5 @@
+import { chzzkNonNegativeNumber, validateChzzkChannel } from './chzzk-info.js';
+
 export function firstString(...values) {
   for (const value of values) {
     if (typeof value === 'string' && value.trim()) return value.trim();
@@ -59,9 +61,9 @@ export function normalizeChzzkPublicProfile(payload) {
     channelHandle: firstString(content.channelHandle, content.channelUrl, content.handle),
     channelImageUrl: firstString(content.channelImageUrl, content.profileImageUrl, content.profileImage, content.imageUrl, content.avatarUrl),
     description: firstString(content.channelDescription, content.description, content.bio),
-    followerCount: firstNumber(content.followerCount, content.followers, content.followCount),
-    verified: Boolean(content.verified || content.isVerified || content.official),
-    openLive: Boolean(content.openLive || content.isLive || content.live),
+    followerCount: chzzkNonNegativeNumber(content.followerCount, content.followers, content.followCount),
+    verified: Boolean(content.verifiedMark ?? content.officialChannel ?? content.verified ?? content.isVerified ?? content.official),
+    openLive: [content.openLive, content.isLive, content.live].find((value) => typeof value === 'boolean') ?? null,
     channelType: firstString(content.channelType, content.type),
     raw: content || {}
   };
@@ -95,6 +97,7 @@ export function createPlatformProfileService({
   cimeProfileUrlTemplate = '',
   timeoutMs = 2500,
   httpGet,
+  chzzkInfoClient,
   now = () => new Date().toISOString(),
   nowMs = () => Date.now(),
 } = {}) {
@@ -143,10 +146,18 @@ export function createPlatformProfileService({
   async function enrichChzzkProfile(profile, { forceRefresh = false } = {}) {
     const channelId = firstString(profile?.channelId, profile?.platformUserId);
     if (!channelId) return withPublicProfileStatus(profile, 'chzzk', 'skipped', { error: 'missing_channel_id' });
-    if (hasFreshPublicProfile(profile, forceRefresh)) return profile;
+    if (profile?.metadata?.publicProfile?.status === 'ok' && hasFreshPublicProfile(profile, forceRefresh)) return profile;
 
     const url = `${chzzkApiBase}/service/v1/channels/${encodeURIComponent(channelId)}`;
-    const result = await readProfileCandidate(url);
+    let result;
+    try {
+      result = chzzkInfoClient
+        ? { ok: true, payload: await chzzkInfoClient.getChannel(channelId, { timeout: timeoutMs, deadlineAt: nowMs() + timeoutMs }) }
+        : await readProfileCandidate(url);
+      if (result.ok) validateChzzkChannel(result.payload, channelId);
+    } catch (error) {
+      result = { ok: false, error: error?.message || 'invalid_profile_response' };
+    }
     if (!result.ok) {
       return withPublicProfileStatus(profile, 'chzzk', 'failed', {
         source: url,
