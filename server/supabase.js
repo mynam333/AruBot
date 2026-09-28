@@ -5866,16 +5866,34 @@ async function findExactPublicChannelIdentityWithClient(pg, normalizedProvider, 
   return matches.length === 1 ? { ...matches[0], channelUid: exactChannelUid } : null;
 }
 
+async function readPublicChannelDisplayNameWithClient(pg, identity) {
+  const { rows } = await pg.query(
+    `select u.display_name,
+            (select pa.channel_name
+               from platform_accounts pa
+              where pa.user_id = u.id and pa.provider = $2
+                and (pa.channel_id = $3 or pa.platform_user_id = $3)
+                and nullif(btrim(pa.channel_name), '') is not null
+              order by pa.last_login_at desc nulls last, pa.connected_at desc nulls last
+              limit 1) as channel_name
+       from app_users u
+      where u.id = $1
+      limit 1`,
+    [identity.ownerUserId, identity.provider, identity.channelUid],
+  );
+  return String(rows?.[0]?.display_name || '').trim() || String(rows?.[0]?.channel_name || '').trim() || null;
+}
+
 export async function findExactPublicChannelIdentity(provider, channelUid) {
   const identity = normalizeExactPublicChannelIdentity(provider, channelUid);
   if (!identity || !getDbUrl()) return null;
 
   await ensurePlatformIdentityTables();
-  return withPgClient((pg) => findExactPublicChannelIdentityWithClient(
-    pg,
-    identity.normalizedProvider,
-    identity.exactChannelUid,
-  ));
+  return withPgClient(async (pg) => {
+    const resolved = await findExactPublicChannelIdentityWithClient(pg, identity.normalizedProvider, identity.exactChannelUid);
+    if (!resolved) return null;
+    return { ...resolved, displayName: await readPublicChannelDisplayNameWithClient(pg, resolved) };
+  });
 }
 
 export async function findExactAppUserIdByPublicChannelUid(provider, channelUid) {

@@ -4,15 +4,16 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type
 import { ArrowDown, ArrowUp, Check, Circle, Download, Eye, EyeOff, Hand, Heart, Layers, Loader2, Lock, Maximize, Minus, MousePointer2, PaintBucket, Pause, PenLine, Pipette, Play, Plus, Redo2, RotateCw, Send, Slash, Square, Star, Trash2, Undo2, Unlock, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
+import { Tooltip } from '@/components/ui/tooltip';
 import { apiUrl } from '@/shared/api/http';
 import { readDraft, writeDraft } from '@/shared/drawing/draft-store';
-import { BRUSHES, buildTimeline, createBrush, createDrawing, drawingCost, hashDrawing, rememberDrawingColor, validateDrawing, visibleStrokes, type BrushType, type DrawingDocument, type DrawingBrush, type DrawingPoint, type DrawingStroke, type DrawingKind, type DrawingShapeStyle, type SelectionFrame, type SelectionRect } from '../../../shared/drawing/document.js';
+import { BRUSH_SHORTCUTS, TOOL_SHORTCUTS, drawingShortcut, type DrawingTool as Tool } from '@/shared/drawing/shortcuts';
+import { BRUSHES, buildTimeline, createBrush, createDrawing, drawingCost, hashDrawing, rememberDrawingColor, validateDrawing, visibleStrokes, type BrushType, type DrawingDocument, type DrawingBrush, type DrawingPoint, type DrawingStroke, type DrawingShapeStyle, type SelectionFrame, type SelectionRect } from '../../../shared/drawing/document.js';
 import { createDrawingRenderer, floodFillRuns, type DrawingRenderer } from '../../../shared/drawing/renderer.js';
-import { constrainLinePoint, constrainShapePoint, distortSelection, selectionCorners, selectionRect, transformSelection } from '../../../shared/drawing/selection.js';
+import { constrainLinePoint, constrainShapePoint, distortSelection, rotateSelection, selectionCorners, selectionRect, transformSelection } from '../../../shared/drawing/selection.js';
 
 export type DrawingStudioSettings = { pricingMode: string; costPoints: number; inkCostPerUnit: number; replayMaxSec: number; canvas: { widthRatio: number; heightRatio: number }; maxStrokes?: number; maxPoints?: number; blocked?: boolean };
 type Props = { channelUid: string; viewerUserId: string; points: number; settings: DrawingStudioSettings; background?: ReactNode; onSubmitted?: (cost: number) => void; localOnly?: boolean };
-type Tool = Exclude<DrawingKind, 'selection'> | 'pan' | 'select' | 'picker';
 type Selection = { rect: SelectionRect; frame: SelectionFrame; layerId: string; operationId: string | null };
 const CLOSED_SHAPES = ['rectangle', 'ellipse', 'star', 'heart'];
 const HANDLES = [ ['nw', '왼쪽 위', 0, 0], ['n', '위', 50, 0], ['ne', '오른쪽 위', 100, 0], ['e', '오른쪽', 100, 50], ['se', '오른쪽 아래', 100, 100], ['s', '아래', 50, 100], ['sw', '왼쪽 아래', 0, 100], ['w', '왼쪽', 0, 50] ] as const;
@@ -35,8 +36,12 @@ function BrushSample({ brush }: { brush: DrawingBrush }) {
   return <canvas ref={ref} width={220} height={48} className="h-6 w-full" aria-hidden="true" />;
 }
 
-function IconButton({ label, active, children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { label: string; active?: boolean }) {
-  return <button type="button" title={label} aria-label={label} aria-pressed={active === undefined ? undefined : active} {...props} className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors disabled:opacity-35 ${active ? 'border-primary bg-primary/10 text-primary' : 'border-transparent hover:bg-muted'} ${props.className || ''}`}>{children}</button>;
+function ToolHint({ label, shortcut }: { label: string; shortcut?: string }) {
+  return <span className="inline-flex items-center gap-2"><span>{label}</span>{shortcut ? <kbd className="shrink-0 rounded border border-current/30 px-1 text-[11px]">{shortcut}</kbd> : null}</span>;
+}
+
+function IconButton({ label, shortcut, active, children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { label: string; shortcut?: string; active?: boolean }) {
+  return <Tooltip content={<ToolHint label={label} shortcut={shortcut} />}><button type="button" aria-label={label} aria-pressed={active === undefined ? undefined : active} {...props} className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors disabled:opacity-35 ${active ? 'border-primary bg-primary/10 text-primary' : 'border-transparent hover:bg-muted'} ${props.className || ''}`}>{children}</button></Tooltip>;
 }
 
 export function DrawingStudio({ channelUid, viewerUserId, points, settings, background, onSubmitted, localOnly = false }: Props) {
@@ -44,6 +49,7 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
   const docRef = useRef(doc), rendererRef = useRef<DrawingRenderer | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null), cursorRef = useRef<HTMLDivElement>(null), viewportRef = useRef<HTMLDivElement>(null);
   const [brush, setBrush] = useState(() => createBrush()), [tool, setTool] = useState<Tool>('freehand');
+  const lastBrushRef = useRef(brush);
   const [layerId, setLayerId] = useState('layer-1'), [selection, setSelection] = useState<Selection | null>(null);
   const [selectedCorners, setSelectedCorners] = useState<number[]>([]);
   const [shapeStyle, setShapeStyle] = useState<DrawingShapeStyle>({ fillEnabled: false, fillColor: '#517ee1', fillAlpha: 1, strokeEnabled: true });
@@ -125,6 +131,7 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
 
   useEffect(() => () => { cancelAnimationFrame(animationRef.current); cancelAnimationFrame(frameRef.current); if (airTimerRef.current) clearInterval(airTimerRef.current); rendererRef.current?.clear(); }, []);
   useEffect(() => { viewRef.current = view; }, [view]);
+  useEffect(() => { if (brush.type !== 'eraser') lastBrushRef.current = brush; }, [brush]);
   useEffect(() => { setSelection(null); setSelectedCorners([]); }, [layerId, tool]);
   useEffect(() => {
     if (review) { dialogRef.current?.showModal(); draw(Infinity, review.doc, true); }
@@ -142,14 +149,27 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
     const next = redoRef.current.pop(); if (!next) return;
     stopPlayback(); historyRef.current.push(docRef.current); assign({ ...next, revision: docRef.current.revision + 1 }); setHistoryVersion((n) => n + 1); setSelection(null);
   }, [assign, busy, stopPlayback]);
-  useEffect(() => {
-    const key = (event: KeyboardEvent) => {
-      if (/INPUT|TEXTAREA|SELECT/.test((event.target as HTMLElement)?.tagName) || review) return;
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); if (event.shiftKey) redo(); else undo(); }
-      if (event.key === 'Escape' && !activeRef.current) setSelection(null);
-    };
-    window.addEventListener('keydown', key); return () => window.removeEventListener('keydown', key);
-  }, [redo, review, undo]);
+  function chooseTool(next: Tool) {
+    if (activeRef.current || busy || review) return;
+    if (next === 'freehand' && brush.type === 'eraser') setBrush({ ...lastBrushRef.current, color: brush.color });
+    setTool(next); stopPlayback();
+  }
+  function chooseBrush(type: BrushType) {
+    if (activeRef.current || busy || review) return;
+    setBrush((current) => current.type === type ? current : { ...createBrush(type, current.color), alpha: current.alpha });
+    setTool('freehand'); stopPlayback();
+  }
+  function handleShortcut(event: React.KeyboardEvent<HTMLDivElement>) {
+    const shortcut = drawingShortcut(event.nativeEvent, busy || !!review || !!activeRef.current || !draftReady || !!recoverable);
+    if (!shortcut) return;
+    event.preventDefault(); event.stopPropagation();
+    if (shortcut.action === 'tool') chooseTool(shortcut.tool);
+    else if (shortcut.action === 'brush') chooseBrush(shortcut.brush);
+    else if (shortcut.action === 'size') setBrush((current) => ({ ...current, size: Math.max(0.001, Math.min(0.2, (Math.round(current.size * 1000) + shortcut.delta) / 1000)) }));
+    else if (shortcut.action === 'undo') undo();
+    else if (shortcut.action === 'redo') redo();
+    else { setSelection(null); setSelectedCorners([]); }
+  }
 
   function chooseColor(color: string) {
     setBrush((b) => ({ ...b, color }));
@@ -222,8 +242,8 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
     const current = docRef.current;
     if (current.strokes.length >= (settings.maxStrokes || 120) || pointCount(current) + 3 >= (settings.maxPoints || 6000)) { toast.error('그림 기록 한도에 도달했습니다.'); return; }
     if (selection.operationId && current.strokes.filter((s) => s.layerId === layerId).at(-1)?.id !== selection.operationId) { setSelection(null); return; }
-    event.preventDefault(); event.stopPropagation(); event.currentTarget.setPointerCapture(event.pointerId); stopPlayback(); lastPointer.current = null;
-    const p = point(event.nativeEvent), handle = (event.target as HTMLElement).closest('[data-selection-handle]')?.getAttribute('data-selection-handle') || 'move';
+    event.preventDefault(); event.stopPropagation(); canvasRef.current?.focus({ preventScroll: true }); event.currentTarget.setPointerCapture(event.pointerId); stopPlayback(); lastPointer.current = null;
+    const p = point(event.nativeEvent, false), handle = (event.target as HTMLElement).closest('[data-selection-handle]')?.getAttribute('data-selection-handle') || 'move';
     const corner = ['nw', 'ne', 'se', 'sw'].indexOf(handle);
     let corners: number[] | undefined, toggleCorner: number | undefined;
     if (corner >= 0 && (event.ctrlKey || event.metaKey)) {
@@ -235,7 +255,9 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
       corners = { n: [0, 1], e: [1, 2], s: [2, 3], w: [3, 0] }[handle as 'n' | 'e' | 's' | 'w']; setSelectedCorners(corners);
     } else setSelectedCorners([]);
     const frame = { ...selection.frame, t: p.t }, id = uid();
-    const stroke: DrawingStroke = { id, layerId, seed: 0, kind: 'selection', brush: createBrush('pen'), mirror: false, transform: { x: 0, y: 0, scale: 1 }, points: [p, p], selection: { rect: selection.rect, sourceId: selection.operationId, copy: event.altKey && handle === 'move' }, frames: [frame] };
+    // Only stored anchor points are bounded; transform gestures may start outside the canvas.
+    const anchor = { ...p, x: Math.max(0, Math.min(1, p.x)), y: Math.max(0, Math.min(1, p.y)) };
+    const stroke: DrawingStroke = { id, layerId, seed: 0, kind: 'selection', brush: createBrush('pen'), mirror: false, transform: { x: 0, y: 0, scale: 1 }, points: [anchor, anchor], selection: { rect: selection.rect, sourceId: selection.operationId, copy: event.altKey && handle === 'move' }, frames: [frame] };
     activeRef.current = { pointer: event.pointerId, before: current, mode: 'transform', strokeId: id, start: p, view: viewRef.current, selection, handle, corners, toggleCorner,
       rotation: { last: Math.atan2((p.y - frame.y) * current.height, (p.x - frame.x) * current.width), total: frame.angle } };
     docRef.current = { ...current, strokes: [...current.strokes, stroke] }; schedule();
@@ -250,12 +272,9 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
     let frame: SelectionFrame;
     if (active.corners) frame = distortSelection(base, active.selection.rect, active.corners, active.start, p, current);
     else if (active.handle === 'rotate') {
-      const radians = Math.atan2((p.y - base.y) * current.height, (p.x - base.x) * current.width), rotation = active.rotation!;
-      let delta = radians - rotation.last;
-      if (delta > Math.PI) delta -= Math.PI * 2; if (delta < -Math.PI) delta += Math.PI * 2;
-      rotation.total = Math.max(-36000, Math.min(36000, rotation.total + delta * 180 / Math.PI)); rotation.last = radians;
-      frame = { ...base, angle: shift ? Math.round(rotation.total / 15) * 15 : rotation.total };
-    } else frame = transformSelection(base, active.selection.rect, active.handle!, active.start, p, current, shift);
+      const result = rotateSelection(base, active.rotation!, p, current, shift);
+      frame = result.frame; active.rotation = result.rotation;
+    } else frame = transformSelection(base, active.selection.rect, active.handle!, active.start, p, current, shift, shift);
     frame = { ...frame, t: Math.max(stroke.frames!.at(-1)!.t, p.t) };
     active.moved ||= Math.hypot((p.x - active.start.x) * current.width, (p.y - active.start.y) * current.height) > 0.5;
     const strokes = current.strokes.slice(); strokes[index] = { ...stroke, points: [stroke.points[0], { ...stroke.points[0], t: frame.t }], frames: [...stroke.frames!, frame] };
@@ -276,7 +295,7 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
     }
     if (activeRef.current || (event.pointerType === 'mouse' && event.button !== 0 && event.button !== 1)) return;
     if (event.pointerType === 'pen') penPointerRef.current = event.pointerId;
-    event.currentTarget.setPointerCapture(event.pointerId); stopPlayback(); cursor(event); lastPointer.current = null;
+    event.currentTarget.focus({ preventScroll: true }); event.currentTarget.setPointerCapture(event.pointerId); stopPlayback(); cursor(event); lastPointer.current = null;
     const p = point(event.nativeEvent), current = docRef.current;
     if (tool === 'pan' || event.button === 1) { activeRef.current = { pointer: event.pointerId, before: current, mode: 'pan', start: { x: event.clientX, y: event.clientY }, view: viewRef.current }; return; }
     if (tool === 'picker') {
@@ -402,11 +421,11 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
   const handlePositions = corners ? [corners[0], { x: (corners[0].x + corners[1].x) / 2, y: (corners[0].y + corners[1].y) / 2 }, corners[1], { x: (corners[1].x + corners[2].x) / 2, y: (corners[1].y + corners[2].y) / 2 }, corners[2], { x: (corners[2].x + corners[3].x) / 2, y: (corners[2].y + corners[3].y) / 2 }, corners[3], { x: (corners[3].x + corners[0].x) / 2, y: (corners[3].y + corners[0].y) / 2 }] : [];
   const tools: [Tool, string, typeof Hand][] = [['freehand', '자유 그리기', PenLine], ['pan', '화면 이동', Hand], ['select', '선택 및 이동', MousePointer2], ['line', '직선', Slash], ['rectangle', '사각형', Square], ['ellipse', '타원', Circle], ['fill', '영역 채우기', PaintBucket], ['star', '별 도장', Star], ['heart', '하트 도장', Heart]];
 
-  return <div className="space-y-3" data-drawing-studio="v2">
+  return <div className="space-y-3" data-drawing-studio="v2" onKeyDown={handleShortcut}>
     {localOnly ? <Button size="sm" variant="ghost" onClick={() => { const url = URL.createObjectURL(new Blob([JSON.stringify(docRef.current)], { type: 'application/json' })); const a = document.createElement('a'); a.href = url; a.download = 'drawing-original.json'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }}><Download size={14} /> 원본 JSON</Button> : null}
     {recoverable && <div className="flex flex-wrap items-center justify-between gap-2 border-y bg-muted/50 p-3 text-sm"><span>저장된 그림이 있습니다.</span><div className="flex gap-2"><Button size="sm" onClick={() => { assign(recoverable); setLayerId(recoverable.layers[0].id); originRef.current = performance.now() - Math.max(0, ...recoverable.strokes.flatMap((s) => s.points.map((p) => p.t))); setRecoverable(null); }}>복구</Button><Button variant="ghost" size="sm" onClick={() => { if (window.confirm('저장된 초안을 삭제할까요?')) { setRecoverable(null); void writeDraft(draftKey, null); } }}>삭제</Button></div></div>}
     <div className="flex flex-wrap items-center justify-between gap-2 border-y py-2">
-      <div className="flex flex-wrap gap-1">{tools.map(([id, label, Icon]) => <IconButton key={id} label={label} active={tool === id} onClick={() => { setTool(id); stopPlayback(); }}><Icon size={17} /></IconButton>)}<span className="mx-1 border-l" /><IconButton label="실행 취소" onClick={undo} disabled={!historyRef.current.length || busy} data-history={historyVersion}><Undo2 size={17} /></IconButton><IconButton label="다시 실행" onClick={redo} disabled={!redoRef.current.length || busy}><Redo2 size={17} /></IconButton></div>
+      <div className="flex flex-wrap gap-1">{tools.map(([id, label, Icon]) => <IconButton key={id} label={label} shortcut={TOOL_SHORTCUTS[id]} aria-keyshortcuts={TOOL_SHORTCUTS[id]} active={tool === id} onClick={() => chooseTool(id)}><Icon size={17} /></IconButton>)}<span className="mx-1 border-l" /><IconButton label="실행 취소" shortcut="Ctrl/Cmd + Z" aria-keyshortcuts="Control+Z Meta+Z" onClick={undo} disabled={!historyRef.current.length || busy} data-history={historyVersion}><Undo2 size={17} /></IconButton><IconButton label="다시 실행" shortcut="Ctrl/Cmd + Shift + Z" aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z Control+Y Meta+Y" onClick={redo} disabled={!redoRef.current.length || busy}><Redo2 size={17} /></IconButton></div>
       <div className="flex items-center gap-1"><IconButton label="축소" onClick={() => zoomBy(0.8)}><Minus size={17} /></IconButton><output className="w-12 text-center text-xs tabular-nums">{Math.round(view.zoom * 100)}%</output><IconButton label="확대" onClick={() => zoomBy(1.25)}><Plus size={17} /></IconButton><IconButton label="화면에 맞춤" onClick={() => setView({ zoom: 1, x: 0, y: 0 })}><Maximize size={17} /></IconButton><IconButton label="PNG 원본 저장" onClick={download} disabled={!doc.strokes.length}><Download size={17} /></IconButton></div>
     </div>
     <div className="grid min-w-0 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_16rem]">
@@ -415,11 +434,11 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
           <div className="absolute inset-0" style={{ transform: `translate(${view.x}px,${view.y}px) scale(${view.zoom})`, transformOrigin: '0 0' }}>
             <div className="absolute inset-0" style={{ visibility: backgroundMode === 'live' ? 'visible' : 'hidden' }}>{background}</div>
             {backgroundMode !== 'live' || !background ? <div className="absolute inset-0" style={{ background: backgroundMode === 'dark' ? '#202124' : '#fafafa' }} /> : null}
-            <canvas ref={canvasRef} width={doc.width} height={doc.height} aria-label="그림 캔버스" className={`relative z-10 h-full w-full touch-none ${tool === 'pan' ? 'cursor-grab' : tool === 'select' ? 'cursor-crosshair' : 'cursor-none'}`} onPointerDown={beginStroke} onPointerMove={moveStroke} onPointerUp={(event) => finishStroke(event)} onPointerCancel={(event) => finishStroke(event, true)} onPointerEnter={cursor} onPointerLeave={() => { if (cursorRef.current) cursorRef.current.style.opacity = '0'; }} />
+            <canvas ref={canvasRef} width={doc.width} height={doc.height} tabIndex={0} aria-label="그림 캔버스" className={`relative z-10 h-full w-full touch-none ${tool === 'pan' ? 'cursor-grab' : tool === 'select' ? 'cursor-crosshair' : 'cursor-none'}`} onPointerDown={beginStroke} onPointerMove={moveStroke} onPointerUp={(event) => finishStroke(event)} onPointerCancel={(event) => finishStroke(event, true)} onPointerEnter={cursor} onPointerLeave={() => { if (cursorRef.current) cursorRef.current.style.opacity = '0'; }} />
             {corners && selection && tool === 'select' && !playing ? <div className="pointer-events-none absolute inset-0 z-20 touch-none" onPointerDown={beginSelection} onPointerMove={moveStroke} onPointerUp={(event) => finishStroke(event)} onPointerCancel={(event) => finishStroke(event, true)}>
               <svg className="absolute inset-0 h-full w-full overflow-visible" viewBox={`0 0 ${doc.width} ${doc.height}`} preserveAspectRatio="none" aria-hidden="true"><polygon data-selection-handle="move" points={corners.map((p) => `${p.x},${p.y}`).join(' ')} fill="transparent" stroke="#0284c7" strokeWidth={1 / view.zoom} strokeDasharray={`${4 / view.zoom} ${3 / view.zoom}`} vectorEffect="non-scaling-stroke" style={{ pointerEvents: 'all', cursor: 'move' }} /></svg>
-              {HANDLES.map(([handle, label], index) => <button type="button" key={handle} data-selection-handle={handle} aria-label={`선택 ${label} 조절점`} aria-pressed={index % 2 === 0 ? selectedCorners.includes(index / 2) : undefined} title={`${label} 조절점`} className={`pointer-events-auto absolute h-3 w-3 touch-none border border-sky-600 ${index % 2 === 0 && selectedCorners.includes(index / 2) ? 'bg-sky-500' : 'bg-white'}`} style={{ left: `${handlePositions[index].x / doc.width * 100}%`, top: `${handlePositions[index].y / doc.height * 100}%`, transform: `translate(-50%,-50%) scale(${1 / view.zoom})`, cursor: index % 2 === 0 && selectedCorners.includes(index / 2) ? 'move' : `${handle}-resize` }} />)}
-              <button type="button" data-selection-handle="rotate" aria-label="선택 회전" title="회전" className="pointer-events-auto absolute flex h-6 w-6 touch-none items-center justify-center rounded-full border border-sky-600 bg-white text-sky-700" style={{ left: `${handlePositions[1].x / doc.width * 100}%`, top: `${handlePositions[1].y / doc.height * 100}%`, transform: `translate(-50%,-50%) translate(${Math.sin(selection.frame.angle * Math.PI / 180) * 28 / view.zoom}px,${-Math.cos(selection.frame.angle * Math.PI / 180) * 28 / view.zoom}px) scale(${1 / view.zoom})`, cursor: 'grab' }}><RotateCw size={14} /></button>
+              {HANDLES.map(([handle, label], index) => <button type="button" key={handle} data-selection-handle={handle} aria-label={`선택 ${label} 조절점`} aria-pressed={index % 2 === 0 ? selectedCorners.includes(index / 2) : undefined} title={`${label} 조절점 · Shift: 중심 고정 비율 조절 · Ctrl/Cmd: 왜곡`} className={`pointer-events-auto absolute h-3 w-3 touch-none border border-sky-600 ${index % 2 === 0 && selectedCorners.includes(index / 2) ? 'bg-sky-500' : 'bg-white'}`} style={{ left: `${handlePositions[index].x / doc.width * 100}%`, top: `${handlePositions[index].y / doc.height * 100}%`, transform: `translate(-50%,-50%) scale(${1 / view.zoom})`, cursor: index % 2 === 0 && selectedCorners.includes(index / 2) ? 'move' : `${handle}-resize` }} />)}
+              <button type="button" data-selection-handle="rotate" aria-label="선택 회전" title="회전 · Shift: 15도 간격" className="pointer-events-auto absolute flex h-6 w-6 touch-none items-center justify-center rounded-full border border-sky-600 bg-white text-sky-700" style={{ left: `${handlePositions[1].x / doc.width * 100}%`, top: `${handlePositions[1].y / doc.height * 100}%`, transform: `translate(-50%,-50%) translate(${Math.sin(selection.frame.angle * Math.PI / 180) * 28 / view.zoom}px,${-Math.cos(selection.frame.angle * Math.PI / 180) * 28 / view.zoom}px) scale(${1 / view.zoom})`, cursor: 'grab' }}><RotateCw size={14} /></button>
             </div> : null}
           </div>
           <div ref={cursorRef} aria-hidden="true" className="pointer-events-none absolute left-0 top-0 z-30 rounded-full border border-black bg-transparent opacity-0 shadow-[0_0_0_1px_#fff,inset_0_0_0_1px_#fff]"><span className="absolute left-1/2 top-1/2 h-[3px] w-[3px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-[0_0_0_1px_#000]" /></div>
@@ -428,7 +447,7 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
         <div className="flex flex-wrap items-center gap-2 border-y py-2"><div className="inline-flex rounded-md border p-0.5">{([['live', '방송'], ['light', '밝게'], ['dark', '어둡게']] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={backgroundMode === value} onClick={() => setBackgroundMode(value)} className={`rounded px-3 py-1.5 text-xs ${backgroundMode === value ? 'bg-muted font-semibold' : ''}`}>{label}</button>)}</div><IconButton label={playing ? '미리보기 중지' : '방송 재생 미리보기'} onClick={() => playing ? stopPlayback() : play()} disabled={!visibleStrokes(doc).length}>{playing ? <Pause size={17} /> : <Play size={17} />}</IconButton><span className="text-xs tabular-nums">{(timeline.targetReplayMs / 1000).toFixed(1)}초 · {timeline.speed.toFixed(1)}배속 · 대기 제외</span><Button size="sm" variant="ghost" onClick={() => play(doc, false, true)} disabled={!doc.strokes.length}>원속도</Button></div>
         {playing ? <progress className="h-1 w-full accent-primary" value={playProgress} max={1} aria-label="재생 진행" /> : null}
         <section className="space-y-2" aria-label="레이어"><div className="flex items-center justify-between"><span className="inline-flex items-center gap-1 text-xs font-semibold"><Layers size={14} /> 레이어</span><IconButton label="레이어 추가" disabled={doc.layers.length >= 3} onClick={() => { const id = uid(); commit({ ...doc, layers: [...doc.layers, { id, name: `레이어 ${doc.layers.length + 1}`, visible: true, locked: false }] }); setLayerId(id); }}><Plus size={15} /></IconButton></div>{[...doc.layers].reverse().map((layer) => <div key={layer.id} className={`flex min-w-0 items-center gap-1 rounded-md border px-1 ${layer.id === layerId ? 'border-primary/50 bg-primary/5' : ''}`}><button type="button" className="h-9 min-w-0 flex-1 truncate px-2 text-left text-xs" onClick={() => setLayerId(layer.id)} onDoubleClick={() => { const name = window.prompt('레이어 이름', layer.name)?.trim().slice(0, 40); if (name) commit({ ...doc, layers: doc.layers.map((l) => l.id === layer.id ? { ...l, name } : l) }); }}>{layer.name}</button><IconButton label={layer.visible ? '레이어 숨기기' : '레이어 표시'} onClick={() => commit({ ...doc, layers: doc.layers.map((l) => l.id === layer.id ? { ...l, visible: !l.visible } : l) })}>{layer.visible ? <Eye size={14} /> : <EyeOff size={14} />}</IconButton><IconButton label={layer.locked ? '잠금 해제' : '레이어 잠금'} onClick={() => commit({ ...doc, layers: doc.layers.map((l) => l.id === layer.id ? { ...l, locked: !l.locked } : l) })}>{layer.locked ? <Lock size={14} /> : <Unlock size={14} />}</IconButton>{([-1, 1] as const).map((direction) => <IconButton key={direction} label={direction === 1 ? '레이어 위로' : '레이어 아래로'} disabled={doc.layers.indexOf(layer) + direction < 0 || doc.layers.indexOf(layer) + direction >= doc.layers.length} onClick={() => { const layers = [...doc.layers], index = layers.indexOf(layer); [layers[index], layers[index + direction]] = [layers[index + direction], layers[index]]; commit({ ...doc, layers }); }}>{direction === 1 ? <ArrowUp size={14} /> : <ArrowDown size={14} />}</IconButton>)}<IconButton label="레이어 삭제" disabled={doc.layers.length <= 1 || layer.locked} onClick={() => { if (window.confirm('이 레이어의 그림을 삭제할까요?')) { const layers = doc.layers.filter((l) => l.id !== layer.id); commit({ ...doc, layers, strokes: doc.strokes.filter((s) => s.layerId !== layer.id) }); setLayerId(layers[0].id); } }}><Trash2 size={14} /></IconButton></div>)}</section>
-        {selection && tool === 'select' ? <div className="flex flex-wrap items-center gap-3 border-y py-2 text-xs tabular-nums"><span>{Math.round(selection.rect.width * selection.frame.scaleX)} × {Math.round(selection.rect.height * selection.frame.scaleY)}px</span><span>{selection.frame.angle.toFixed(1)}°</span><IconButton label="선택 해제" onClick={() => { setSelection(null); setSelectedCorners([]); }}><X size={16} /></IconButton></div> : null}
+        {selection && tool === 'select' ? <div className="flex flex-wrap items-center gap-3 border-y py-2 text-xs tabular-nums"><span>{Math.round(selection.rect.width * selection.frame.scaleX)} × {Math.round(selection.rect.height * selection.frame.scaleY)}px</span><span>{selection.frame.angle.toFixed(1)}°</span><IconButton label="선택 해제" shortcut="Esc" aria-keyshortcuts="Escape" onClick={() => { setSelection(null); setSelectedCorners([]); }}><X size={16} /></IconButton></div> : null}
       </div>
       <aside className="min-w-0 space-y-4 lg:border-l lg:pl-4" aria-label="브러시 설정">
         {isShape ? <section className="space-y-3 border-y py-3" aria-label="도형 채움 설정">
@@ -437,10 +456,10 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
           <label className="flex items-center justify-between gap-3 text-xs">채움 색상<input aria-label="채움 색상" type="color" value={shapeStyle.fillColor} onChange={(e) => setShapeStyle({ ...shapeStyle, fillColor: e.target.value })} className="h-8 w-20 rounded border bg-transparent" /></label>
           <label className="grid gap-1.5 text-xs"><span className="flex justify-between"><span>채움 불투명도</span><span>{Math.round(shapeStyle.fillAlpha * 100)}%</span></span><input aria-label="채움 불투명도" type="range" min={0} max={100} value={Math.round(shapeStyle.fillAlpha * 100)} onChange={(e) => setShapeStyle({ ...shapeStyle, fillAlpha: Number(e.target.value) / 100 })} className="w-full accent-primary" /></label>
         </section> : null}
-        <div className="grid grid-cols-3 gap-1.5">{presets.map((preset) => <button type="button" key={preset.type} aria-pressed={brush.type === preset.type} onClick={() => { setBrush({ ...preset, alpha: brush.alpha }); setTool('freehand'); }} className={`min-w-0 rounded-md border px-1 py-2 ${brush.type === preset.type ? 'border-primary bg-primary/5' : 'hover:bg-muted'}`}><BrushSample brush={preset} /><span className="block truncate text-[11px] font-medium">{BRUSHES[preset.type].label}</span></button>)}</div>
-        <div className="space-y-2">{isShape ? <span className="text-xs font-medium">선 색상</span> : null}<div className="flex items-center gap-2"><input aria-label={isShape ? '선 색상' : '붓 색상'} type="color" value={brush.color} onChange={(e) => chooseColor(e.target.value)} className="h-9 min-w-0 flex-1 rounded-md border bg-transparent" /><IconButton label="그림에서 색 추출" active={tool === 'picker'} onClick={() => setTool('picker')}><Pipette size={17} /></IconButton></div><div className="grid grid-cols-10 gap-1">{SWATCHES.map((color) => <button type="button" key={color} title={color} aria-label={`${color} 색상`} onClick={() => chooseColor(color)} className="aspect-square rounded-sm border border-foreground/20" style={{ backgroundColor: color }} />)}</div>{recentColors.length ? <div className="flex gap-1" aria-label="최근 색상">{recentColors.map((color) => <button type="button" key={color} title={color} aria-label={`최근 ${color}`} onClick={() => chooseColor(color)} className="h-5 w-5 rounded-sm border border-foreground/20" style={{ backgroundColor: color }} />)}</div> : null}</div>
+        <div className="grid grid-cols-3 gap-1.5">{presets.map((preset) => <Tooltip key={preset.type} content={<ToolHint label={BRUSHES[preset.type].label} shortcut={BRUSH_SHORTCUTS[preset.type]} />}><button type="button" aria-keyshortcuts={BRUSH_SHORTCUTS[preset.type]} aria-pressed={brush.type === preset.type} onClick={() => chooseBrush(preset.type)} className={`min-w-0 rounded-md border px-1 py-2 ${brush.type === preset.type ? 'border-primary bg-primary/5' : 'hover:bg-muted'}`}><BrushSample brush={preset} /><span className="block truncate text-[11px] font-medium">{BRUSHES[preset.type].label}</span></button></Tooltip>)}</div>
+        <div className="space-y-2">{isShape ? <span className="text-xs font-medium">선 색상</span> : null}<div className="flex items-center gap-2"><input aria-label={isShape ? '선 색상' : '붓 색상'} type="color" value={brush.color} onChange={(e) => chooseColor(e.target.value)} className="h-9 min-w-0 flex-1 rounded-md border bg-transparent" /><IconButton label="그림에서 색 추출" shortcut={TOOL_SHORTCUTS.picker} aria-keyshortcuts={TOOL_SHORTCUTS.picker} active={tool === 'picker'} onClick={() => chooseTool('picker')}><Pipette size={17} /></IconButton></div><div className="grid grid-cols-10 gap-1">{SWATCHES.map((color) => <button type="button" key={color} title={color} aria-label={`${color} 색상`} onClick={() => chooseColor(color)} className="aspect-square rounded-sm border border-foreground/20" style={{ backgroundColor: color }} />)}</div>{recentColors.length ? <div className="flex gap-1" aria-label="최근 색상">{recentColors.map((color) => <button type="button" key={color} title={color} aria-label={`최근 ${color}`} onClick={() => chooseColor(color)} className="h-5 w-5 rounded-sm border border-foreground/20" style={{ backgroundColor: color }} />)}</div> : null}</div>
         <div className="flex flex-wrap items-center gap-1" aria-label="즐겨찾는 색상"><IconButton label="현재 색상 즐겨찾기" active={favoriteColors.includes(brush.color)} onClick={toggleFavorite}><Star size={15} fill={favoriteColors.includes(brush.color) ? 'currentColor' : 'none'} /></IconButton>{favoriteColors.map((color) => <button type="button" key={color} title={color} aria-label={`즐겨찾기 ${color}`} onClick={() => chooseColor(color)} className="h-5 w-5 rounded-sm border border-foreground/20" style={{ backgroundColor: color }} />)}</div>
-        {([{ key: 'size', label: isShape ? '선 두께' : '크기', min: 1, max: 200, scale: 1000, suffix: '' }, { key: 'alpha', label: isShape ? '선 불투명도' : '불투명도', min: 0, max: 100, scale: 100, suffix: '%' }, { key: 'smoothing', label: '선 보정', min: 0, max: 85, scale: 100, suffix: '%' }] as const).filter(({ key }) => !isShape || key !== 'smoothing').map(({ key, label, min, max, scale, suffix }) => <label key={key} className="grid gap-1.5 text-xs"><span className="flex justify-between"><span>{label}</span><span className="tabular-nums">{Math.round(brush[key] * scale)}{suffix}</span></span><input aria-label={label} type="range" min={min} max={max} value={Math.round(brush[key] * scale)} onChange={(e) => setBrush({ ...brush, [key]: Number(e.target.value) / scale })} className="w-full accent-primary" /></label>)}
+        {([{ key: 'size', label: isShape ? '선 두께' : '크기', min: 1, max: 200, scale: 1000, suffix: '' }, { key: 'alpha', label: isShape ? '선 불투명도' : '불투명도', min: 0, max: 100, scale: 100, suffix: '%' }, { key: 'smoothing', label: '선 보정', min: 0, max: 85, scale: 100, suffix: '%' }] as const).filter(({ key }) => !isShape || key !== 'smoothing').map(({ key, label, min, max, scale, suffix }) => <Tooltip key={key} content={<ToolHint label={label} shortcut={key === 'size' ? '[ / ]' : undefined} />}><label className="grid gap-1.5 text-xs"><span className="flex justify-between"><span>{label}</span><span className="tabular-nums">{Math.round(brush[key] * scale)}{suffix}</span></span><input aria-label={label} type="range" min={min} max={max} value={Math.round(brush[key] * scale)} onChange={(e) => setBrush({ ...brush, [key]: Number(e.target.value) / scale })} className="w-full accent-primary" /></label></Tooltip>)}
         <div className="space-y-2 border-y py-3"><label className="flex items-center justify-between text-xs">좌우 대칭<input type="checkbox" checked={mirror} onChange={(e) => setMirror(e.target.checked)} /></label><label className="flex items-center justify-between text-xs">상하 대칭<input type="checkbox" checked={mirrorY} onChange={(e) => setMirrorY(e.target.checked)} /></label></div>
         {!isShape ? <details className="border-y py-2"><summary className="cursor-pointer text-xs font-medium">재질 설정</summary><div className="mt-3 space-y-3">{(['texture', 'hardness', 'flow', 'angle'] as const).filter((key) => key === 'texture' ? !['pen', 'airbrush', 'eraser'].includes(brush.type) : key === 'hardness' ? brush.type === 'airbrush' : key === 'angle' ? ['marker', 'highlighter'].includes(brush.type) : ['airbrush', 'watercolor', 'highlighter'].includes(brush.type)).map((key) => <label key={key} className="grid gap-1 text-xs">{{ texture: brush.type === 'brush' ? '마른 붓결' : '종이 질감', hardness: '분사 경도', flow: '재질 농도', angle: '펜촉 각도' }[key]}<input type="range" min={key === 'flow' ? 5 : 0} max={key === 'angle' ? 180 : 100} value={brush[key] * (key === 'angle' ? 1 : 100)} onChange={(e) => setBrush({ ...brush, [key]: Number(e.target.value) / (key === 'angle' ? 1 : 100) })} /></label>)}<Button size="sm" variant="ghost" onClick={() => setBrush(createBrush(brush.type, brush.color))}>브러시 초기화</Button></div></details> : null}
         <div className="flex items-center justify-between text-sm"><span>사용 포인트</span><strong className={cost > points ? 'text-rose-500' : ''}>{cost.toLocaleString()}P</strong></div><div className="text-right text-xs text-muted-foreground">보유 {points.toLocaleString()}P</div>

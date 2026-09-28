@@ -2,6 +2,7 @@ import { readServerJson } from './server';
 import { decodeChannelRouteParam } from '@/shared/lib/channel-route-param';
 
 export type PublicChannelKind = 'commands' | 'points' | 'roulette' | 'rouletteLogs' | 'live';
+export type PublicChannelProfile = { uid: string; provider: string; displayName: string | null };
 
 const endpoints = {
   commands: (uid: string) => `/api/public/${encodeURIComponent(uid)}/rules`,
@@ -34,13 +35,22 @@ export async function readPublicChannelData(channelUid: string, kind: PublicChan
   });
 }
 
+export async function readPublicChannelProfile(channelUid: string) {
+  const uid = decodeChannelRouteParam(channelUid);
+  if (!uid) return null;
+  return readServerJson<PublicChannelProfile>(`/api/public/${encodeURIComponent(uid)}/profile`, {
+    next: { revalidate: 30 },
+  });
+}
+
 export async function readPublicChannelHub(channelUid: string) {
-  const [live, commands, points, roulette] = await Promise.all([
+  const [live, commands, points, roulette, profile] = await Promise.all([
     readPublicChannelData(channelUid, 'live'),
     readPublicChannelData(channelUid, 'commands'),
     readPublicChannelData(channelUid, 'points'),
     readPublicChannelData(channelUid, 'roulette'),
+    readPublicChannelProfile(channelUid),
   ]);
 
-  return { live, commands, points, roulette };
+  return { live, commands, points, roulette, profile };
 }

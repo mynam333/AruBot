@@ -15,7 +15,8 @@ const routingImport = { decodeChannelRouteParam };
 function loadPages() {
   const api = {
     readPublicChannelData: jest.fn().mockResolvedValue({ points: [], total: 0 }),
-    readPublicChannelHub: jest.fn().mockResolvedValue({ points: {}, live: {}, commands: [], roulette: [] }),
+    readPublicChannelProfile: jest.fn().mockResolvedValue({ uid, provider: 'chzzk', displayName: '대표 닉네임' }),
+    readPublicChannelHub: jest.fn().mockResolvedValue({ points: {}, live: {}, commands: [], roulette: [], profile: { displayName: '대표 닉네임' } }),
   };
   return {
     ...api,
@@ -58,12 +59,15 @@ describe('public channel UID encoding', () => {
     const h = loadPages();
     const hub = await h.PublicChannelHub({ channelUid: input });
     expect(h.readPublicChannelHub).toHaveBeenCalledWith(uid);
+    expect(hub.props.channelName).toBe('대표 닉네임');
     const hubLinks = linksIn(hub.type(hub.props));
     expect(hubLinks.some((link) => link.href === `/c/${encodedUid}/points`)).toBe(true);
 
     const page = await h.PublicChannelPage({ channelUid: input, kind: 'points' });
     expect(h.readPublicChannelData).toHaveBeenCalledWith(uid, 'points');
     expect(page.props.channelUid).toBe(uid);
+    expect(page.props.channelName).toBe('대표 닉네임');
+    expect(h.readPublicChannelProfile).toHaveBeenCalledWith(uid);
     const pageLinks = linksIn(page.type(page.props));
     expect(pageLinks.some((link) => link.href === `/c/${encodedUid}`)).toBe(true);
     for (const link of [...hubLinks, ...pageLinks].filter((entry) => entry.href.startsWith('/c/'))) {
@@ -87,6 +91,8 @@ describe('public channel UID encoding', () => {
     }
     await api.readPublicChannelData(input, 'points');
     expect(readServerJson).toHaveBeenCalledWith(`/api/public/${encodedUid}/points?limit=100`, expect.any(Object));
+    await api.readPublicChannelProfile(input);
+    expect(readServerJson).toHaveBeenCalledWith(`/api/public/${encodedUid}/profile`, expect.any(Object));
   });
 
   test.each([
@@ -108,5 +114,42 @@ describe('public channel UID encoding', () => {
     await expect(h.PublicChannelPage({ channelUid: `${encodedUid}%2Fpoints`, kind: 'points' })).rejects.toThrow('not found');
     expect(h.readPublicChannelHub).not.toHaveBeenCalled();
     expect(h.readPublicChannelData).not.toHaveBeenCalled();
+    expect(h.readPublicChannelProfile).not.toHaveBeenCalled();
+  });
+
+  test.each(['commands', 'points', 'roulette', 'rouletteLogs', 'live'])('%s header uses the representative nickname, never the broadcast title', async (kind) => {
+    const h = loadPages();
+    h.readPublicChannelData.mockResolvedValue({ uid, channelName: encodedUid, title: '오늘의 방송 제목' });
+    const page = await h.PublicChannelPage({ channelUid: encodedUid, kind });
+    expect(page.props.channelName).toBe('대표 닉네임');
+  });
+
+  test('hub name survives missing live data and empty channel names', async () => {
+    const h = loadPages();
+    for (const live of [null, { channelName: '', title: '오늘의 방송 제목' }]) {
+      h.readPublicChannelHub.mockResolvedValue({ live, points: {}, profile: { displayName: '대표 닉네임' } });
+      expect((await h.PublicChannelHub({ channelUid: uid })).props.channelName).toBe('대표 닉네임');
+    }
+  });
+
+  test('missing profile uses only real channel names, not title or identifier placeholders', async () => {
+    const h = loadPages(); h.readPublicChannelProfile.mockResolvedValue(null);
+    for (const channelName of ['', uid, encodedUid, uid.split(':')[1]]) {
+      h.readPublicChannelData.mockResolvedValue({ channelName, title: '오늘의 방송 제목' });
+      expect((await h.PublicChannelPage({ channelUid: uid, kind: 'commands' })).props.channelName).toBe('시청자 페이지');
+    }
+    h.readPublicChannelData.mockResolvedValue({ channelName: '플랫폼 닉네임', title: '오늘의 방송 제목' });
+    expect((await h.PublicChannelPage({ channelUid: uid, kind: 'live' })).props.channelName).toBe('플랫폼 닉네임');
+  });
+
+  test('a loaded profile does not hide the hub data error', async () => {
+    const h = loadPages();
+    h.readPublicChannelHub.mockResolvedValue({
+      live: null, commands: null, points: null, roulette: null,
+      profile: { displayName: '대표 닉네임' },
+    });
+    const hub = await h.PublicChannelHub({ channelUid: uid });
+    expect(hub.props.channelName).toBe('대표 닉네임');
+    expect(hub.props.children[0].props.description).toBe('채널 참여 정보를 불러오지 못했습니다. 잠시 후 다시 열어 주세요.');
   });
 });

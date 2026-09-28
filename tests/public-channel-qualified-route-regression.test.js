@@ -6,6 +6,7 @@ const serverIndex = fs.readFileSync(path.join(root, 'server', 'index.js'), 'utf8
 const databaseSource = fs.readFileSync(path.join(root, 'server', 'supabase.js'), 'utf8');
 const publicPage = fs.readFileSync(path.join(root, 'src', 'features', 'public', 'public-channel-page.tsx'), 'utf8');
 const drawingPage = fs.readFileSync(path.join(root, 'src', 'features', 'viewer', 'drawing-donation-page.tsx'), 'utf8');
+const drawingStudio = fs.readFileSync(path.join(root, 'src', 'components', 'drawing', 'DrawingStudio.tsx'), 'utf8');
 const publicRealtimeView = fs.readFileSync(path.join(root, 'src', 'features', 'public', 'public-realtime-data-view.tsx'), 'utf8');
 
 function sourceBetween(source, start, end) {
@@ -70,7 +71,9 @@ describe('qualified public channel route regression', () => {
     expect(drawingRoutes.match(/findViewerDrawingStreamer\(data\.streamers, channelUid, identity\)/g)).toHaveLength(2);
     expect(serverIndex).toContain('entries.push(attachInternalPointSettingsSid(entry, resolved.sid))');
     expect(drawingPage).toContain('loadStreamer(channelUid, controller.signal)');
-    expect(drawingPage).toContain('channelUid: streamer.publicUid || streamer.channelUid');
+    // Submission moved into DrawingStudio; the viewer passes the qualified UID as a prop.
+    expect(drawingPage).toContain('channelUid={streamer.publicUid || streamer.channelUid}');
+    expect(drawingStudio).toContain('JSON.stringify({ channelUid, document: review.doc');
     expect(publicPage).toContain('const drawingPath = `/viewer/drawing/${encodeURIComponent(channelUid)}`');
   });
 

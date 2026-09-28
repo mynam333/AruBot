@@ -8,7 +8,7 @@ import { ErrorState } from '@/components/ui/page';
 import { ShareLinkActions } from '@/components/ui/share-link-actions';
 import { cn } from '@/shared/lib/utils';
 import { decodeChannelRouteParam } from '@/shared/lib/channel-route-param';
-import { readPublicChannelData, readPublicChannelHub, type PublicChannelKind } from '@/shared/api/public';
+import { readPublicChannelData, readPublicChannelHub, readPublicChannelProfile, type PublicChannelKind } from '@/shared/api/public';
 import { PublicPointEarningSummary, type PublicPointEarningPolicy } from './public-point-earning-summary';
 import { PublicRealtimeDataView } from './public-realtime-data-view';
 
@@ -60,12 +60,18 @@ function readPublicPointEarningPolicy(data: unknown): PublicPointEarningPolicy |
   return policy && typeof policy === 'object' ? policy as PublicPointEarningPolicy : null;
 }
 
-function channelLabel(data: unknown, channelUid: string) {
-  if (!data || typeof data !== 'object') return channelUid;
-  const object = data as Record<string, unknown>;
-  const channel = object.channel && typeof object.channel === 'object' ? object.channel as Record<string, unknown> : null;
-  const value = object.channelName || object.channel_name || object.title || channel?.name || channel?.title;
-  return typeof value === 'string' && value.trim() ? value.trim() : channelUid;
+function channelLabel(channelUid: string, ...sources: unknown[]) {
+  for (const data of sources) {
+    if (!data || typeof data !== 'object') continue;
+    const object = data as Record<string, unknown>;
+    const channel = object.channel && typeof object.channel === 'object' ? object.channel as Record<string, unknown> : null;
+    for (const value of [object.displayName, object.channelName, object.channel_name, channel?.name]) {
+      if (typeof value !== 'string' || !value.trim()) continue;
+      const name = value.trim();
+      if (name !== channelUid && name !== encodeURIComponent(channelUid) && name !== channelUid.split(':').at(-1)) return name;
+    }
+  }
+  return '시청자 페이지';
 }
 
 function PublicCommands({ data }: { data: unknown }) {
@@ -138,7 +144,7 @@ function PublicShell({
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-5">
         <section className="border-b pb-5">
           <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
-            <div>
+            <div className="min-w-0">
               <Link href="/" className="mb-4 inline-flex items-center gap-2 text-sm font-semibold">
                 <span className="grid aspect-square w-[calc(var(--icon-box)*0.9)] place-items-center overflow-hidden rounded-[var(--radius-control)] bg-card shadow-subtle ring-1 ring-border">
                   <img
@@ -151,7 +157,7 @@ function PublicShell({
                 </span>
                 AruBot
               </Link>
-              <h1 className="break-keep text-2xl font-bold leading-tight tracking-tight md:text-3xl">{channelName}</h1>
+              <h1 className="break-words text-2xl font-bold leading-tight tracking-normal [overflow-wrap:anywhere] md:text-3xl">{channelName}</h1>
               <p className="mt-2 text-sm leading-6 text-muted-foreground">
                 명령어, 포인트, 룰렛, 라이브 정보를 모바일에서도 빠르게 열어볼 수 있어요.
               </p>
@@ -200,14 +206,17 @@ export async function PublicChannelPage({ channelUid: routeChannelUid, kind }: {
   if (!channelUid) notFound();
   const config = meta[kind];
   const Icon = config.icon;
-  const data = await readPublicChannelData(channelUid, kind);
+  const [data, profile] = await Promise.all([
+    readPublicChannelData(channelUid, kind),
+    readPublicChannelProfile(channelUid),
+  ]);
   const encodedChannelUid = encodeURIComponent(channelUid);
   const pagePath = kind === 'rouletteLogs'
     ? `/c/${encodedChannelUid}/roulette/logs`
     : `/c/${encodedChannelUid}/${kind}`;
 
   return (
-    <PublicShell channelUid={channelUid} channelName={channelLabel(data, channelUid)} active={kind} sharePath={pagePath}>
+    <PublicShell channelUid={channelUid} channelName={channelLabel(channelUid, profile, data)} active={kind} sharePath={pagePath}>
       <Card>
         <CardHeader>
           <div className="flex flex-wrap items-start justify-between gap-3">
@@ -253,8 +262,8 @@ export async function PublicChannelHub({ channelUid: routeChannelUid }: { channe
   ] as const;
 
   return (
-    <PublicShell channelUid={channelUid} channelName={channelLabel(data.live, channelUid)} active="hub" sharePath={`/c/${encodedChannelUid}`}>
-      {Object.values(data).every((value) => value == null) ? <ErrorState description="채널 참여 정보를 불러오지 못했습니다. 잠시 후 다시 열어 주세요." /> : null}
+    <PublicShell channelUid={channelUid} channelName={channelLabel(channelUid, data.profile, data.live)} active="hub" sharePath={`/c/${encodedChannelUid}`}>
+      {[data.live, data.commands, data.points, data.roulette].every((value) => value == null) ? <ErrorState description="채널 참여 정보를 불러오지 못했습니다. 잠시 후 다시 열어 주세요." /> : null}
       <PublicPointEarningSummary policy={pointEarning} />
       <section className="grid gap-4 sm:grid-cols-2">
         {cards.map((card) => {

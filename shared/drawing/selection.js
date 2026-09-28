@@ -42,6 +42,16 @@ export function selectionFrameAt(frames, time = Infinity) {
   return frame;
 }
 
+export function rotateSelection(start, rotation, pointer, document, snap = false) {
+  const radians = Math.atan2((pointer.y - start.y) * document.height, (pointer.x - start.x) * document.width);
+  let delta = radians - rotation.last;
+  if (delta > Math.PI) delta -= Math.PI * 2;
+  if (delta < -Math.PI) delta += Math.PI * 2;
+  // Keep turns unwrapped so replay retains direction and complete revolutions.
+  const total = Math.max(-36000, Math.min(36000, rotation.total + delta * 180 / Math.PI));
+  return { frame: { ...start, t: pointer.t, angle: snap ? Math.round(total / 15) * 15 : total }, rotation: { last: radians, total } };
+}
+
 export function constrainShapePoint(anchor, point, document) {
   const dx = (point.x - anchor.x) * document.width, dy = (point.y - anchor.y) * document.height;
   const sx = dx < 0 ? -1 : 1, sy = dy < 0 ? -1 : 1;
@@ -65,20 +75,22 @@ export function selectionRect(a, b, document) {
   return { x, y, width: Math.max(1, Math.min(document.width - x, Math.ceil(Math.max(a.x, b.x) * document.width) - x)), height: Math.max(1, Math.min(document.height - y, Math.ceil(Math.max(a.y, b.y) * document.height) - y)) };
 }
 
-export function transformSelection(start, rect, handle, pointerStart, pointer, document, keepRatio = false) {
+export function transformSelection(start, rect, handle, pointerStart, pointer, document, keepRatio = false, fromCenter = false) {
   const dx = (pointer.x - pointerStart.x) * document.width, dy = (pointer.y - pointerStart.y) * document.height;
   if (handle === 'move') return { ...start, x: Math.max(-4, Math.min(5, start.x + dx / document.width)), y: Math.max(-4, Math.min(5, start.y + dy / document.height)) };
   const angle = start.angle * Math.PI / 180, c = Math.cos(angle), s = Math.sin(angle);
   const lx = dx * c + dy * s, ly = -dx * s + dy * c;
   const hx = handle.includes('e') ? 1 : handle.includes('w') ? -1 : 0;
   const hy = handle.includes('s') ? 1 : handle.includes('n') ? -1 : 0;
-  let w = Math.max(rect.width * 0.1, Math.min(rect.width * 4, rect.width * start.scaleX + hx * lx));
-  let h = Math.max(rect.height * 0.1, Math.min(rect.height * 4, rect.height * start.scaleY + hy * ly));
+  const multiplier = fromCenter ? 2 : 1;
+  let w = Math.max(rect.width * 0.1, Math.min(rect.width * 4, rect.width * start.scaleX + hx * lx * multiplier));
+  let h = Math.max(rect.height * 0.1, Math.min(rect.height * 4, rect.height * start.scaleY + hy * ly * multiplier));
   if (keepRatio) {
     const factor = hx && hy ? Math.max(w / (rect.width * start.scaleX), h / (rect.height * start.scaleY)) : hx ? w / (rect.width * start.scaleX) : h / (rect.height * start.scaleY);
     const safe = Math.min(4 / start.scaleX, 4 / start.scaleY, Math.max(0.1 / start.scaleX, 0.1 / start.scaleY, factor));
     w = rect.width * start.scaleX * safe; h = rect.height * start.scaleY * safe;
   }
+  if (fromCenter) return { ...start, scaleX: w / rect.width, scaleY: h / rect.height };
   const localX = hx * (w - rect.width * start.scaleX) / 2, localY = hy * (h - rect.height * start.scaleY) / 2;
   return { ...start, x: Math.max(-4, Math.min(5, start.x + (localX * c - localY * s) / document.width)), y: Math.max(-4, Math.min(5, start.y + (localX * s + localY * c) / document.height)), scaleX: w / rect.width, scaleY: h / rect.height };
 }

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createCanvas } from '@napi-rs/canvas';
 import { createDrawing, createBrush, validateDrawing, buildTimeline, rememberDrawingColor } from '../shared/drawing/document.js';
 import { createDrawingRenderer } from '../shared/drawing/renderer.js';
-import { constrainShapePoint, constrainLinePoint, distortSelection, selectionCorners, selectionFrameAt, transformSelection } from '../shared/drawing/selection.js';
+import { constrainShapePoint, constrainLinePoint, distortSelection, rotateSelection, selectionCorners, selectionFrameAt, transformSelection } from '../shared/drawing/selection.js';
 import { verifyDrawingOriginal } from '../server/drawing-original.js';
 
 const pixel = (canvas, x, y) => [...canvas.getContext('2d').getImageData(x, y, 1, 1).data];
@@ -85,6 +85,69 @@ test('rotation and edge resize keep the opposite edge anchored with interpolated
   renderer.render(doc, 1250); assert.deepEqual(pixels(renderer.render(doc)), final);
   assert.notDeepEqual(pixels(renderer.render(doc, 1100)), final);
   assert.equal(rotation.frames.at(-1).angle, 90);
+});
+
+test('rotation records multiple turns and reversals at their actual sample times and replays identical pixels', async () => {
+  const doc = fixture(), op = operation(doc, 'rotate', 10000, {}), base = op.frames[0];
+  let rotation = { last: -Math.PI / 2, total: 0 };
+  op.frames = [base];
+  const turns = [0, 45, 100, 170, 190, 270, 350, 370, 460, 540, 630, 710, 720, 675, 620];
+  turns.forEach((angle, i) => {
+    const radians = (angle - 90) * Math.PI / 180;
+    const p = { x: base.x + Math.cos(radians) * 50 / doc.width, y: base.y + Math.sin(radians) * 50 / doc.height, p: 1, t: 10000 + i * i * 10 };
+    const next = rotateSelection(base, rotation, p, doc);
+    rotation = next.rotation;
+    assert.ok(Math.abs(next.frame.angle - angle) < 1e-9);
+    assert.equal(next.frame.t, p.t);
+    op.frames.push(next.frame);
+  });
+  op.points[1].t = op.frames.at(-1).t;
+  const saved = JSON.parse(JSON.stringify(doc)); validateDrawing(saved);
+  assert.equal(buildTimeline(saved, 60).sourceDurationMs, 1000 + turns.indexOf(620) ** 2 * 10);
+  const renderer = createDrawingRenderer(createCanvas);
+  for (let i = 1; i < op.frames.length; i++) {
+    const frame = op.frames[i], live = JSON.parse(JSON.stringify(saved)), active = live.strokes.at(-1);
+    active.frames = active.frames.slice(0, i + 1); active.points[1].t = frame.t;
+    assert.deepEqual(pixels(renderer.render(saved, 1000 + frame.t - 10000, 60)), pixels(createDrawingRenderer(createCanvas).render(live)));
+  }
+  const final = pixels(renderer.render(saved));
+  assert.deepEqual(pixels(renderer.render(saved, buildTimeline(saved, 60).targetReplayMs, 60)), final);
+  const result = await verifyDrawingOriginal(saved, renderer.render(saved).toBuffer('image/png'));
+  assert.equal(result.ok, true);
+});
+
+test('Shift rotation snapping retains the unsnapped motion for the next sample', () => {
+  const doc = fixture(), base = { x: 0.25, y: 0.25, scaleX: 1, scaleY: 1, angle: 350, t: 0 };
+  const p = (degrees, t) => ({ x: base.x + Math.cos(degrees * Math.PI / 180) * 30 / doc.width, y: base.y + Math.sin(degrees * Math.PI / 180) * 30 / doc.height, p: 1, t });
+  const snapped = rotateSelection(base, { last: 0, total: 350 }, p(12, 100), doc, true);
+  assert.equal(snapped.frame.angle, 360);
+  const free = rotateSelection(base, snapped.rotation, p(24, 250), doc);
+  assert.ok(Math.abs(free.frame.angle - 374) < 1e-9); assert.equal(free.frame.t, 250);
+});
+
+test('Shift resize expands and shrinks all edges around a fixed center, including rotated selections', () => {
+  const doc = fixture(), rect = { x: 20, y: 20, width: 40, height: 20 };
+  for (const angle of [0, 37, 90]) for (const handle of ['n', 'e', 's', 'w', 'nw', 'ne', 'se', 'sw']) for (const factor of [0.6, 1.5]) {
+    const start = { x: 0.5, y: 0.5, scaleX: 1.2, scaleY: 0.8, angle, t: 0 }, radians = angle * Math.PI / 180;
+    const hx = handle.includes('e') ? 1 : handle.includes('w') ? -1 : 0, hy = handle.includes('s') ? 1 : handle.includes('n') ? -1 : 0;
+    const lx = hx * rect.width * start.scaleX * (factor - 1) / 2, ly = hy * rect.height * start.scaleY * (factor - 1) / 2;
+    const next = transformSelection(start, rect, handle, { x: 0, y: 0 }, { x: (lx * Math.cos(radians) - ly * Math.sin(radians)) / doc.width, y: (lx * Math.sin(radians) + ly * Math.cos(radians)) / doc.height }, doc, true, true);
+    assert.equal(next.x, start.x); assert.equal(next.y, start.y); assert.equal(next.angle, start.angle);
+    assert.ok(Math.abs(next.scaleX - start.scaleX * factor) < 1e-9);
+    assert.ok(Math.abs(next.scaleY - start.scaleY * factor) < 1e-9);
+    const corners = selectionCorners(next, rect, doc);
+    assert.ok(Math.abs((corners[0].x + corners[2].x) / 2 - start.x * doc.width) < 1e-9);
+    assert.ok(Math.abs((corners[0].y + corners[2].y) / 2 - start.y * doc.height) < 1e-9);
+  }
+  const op = operation(doc, 'centered-resize', 15000, {});
+  const start = op.frames[0];
+  const expanded = transformSelection(start, rect, 'e', { x: 0, y: 0 }, { x: 0.05, y: 0 }, doc, true, true);
+  op.frames = [start, { ...expanded, t: 15200 }, { ...start, scaleX: 0.5, scaleY: 0.5, t: 15500 }];
+  validateDrawing(doc);
+  const half = selectionFrameAt(op.frames, 15100); assert.equal(half.x, start.x); assert.equal(half.y, start.y); assert.equal(half.scaleX, 1.2);
+  const renderer = createDrawingRenderer(createCanvas), final = pixels(renderer.render(doc));
+  assert.notDeepEqual(pixels(renderer.render(doc, 1200, 60)), final);
+  assert.deepEqual(pixels(renderer.render(doc, 1500, 60)), final);
 });
 
 test('Ctrl top-corner distortion fixes the lower corners and records independent corner timing', async () => {

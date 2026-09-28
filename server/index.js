@@ -449,7 +449,12 @@ async function resolveCachedPublicShortLink(code) {
 }
 
 function parsePublicPointPolicyUid(value) {
-  const raw = String(value || '').trim();
+  let raw = String(value || '').trim();
+  if (raw.length > PUBLIC_POINT_POLICY_UID_MAX_LENGTH) return null;
+  // Express decodes the path once; older shared links can retain another encoding layer.
+  for (let depth = 0; depth < 3 && raw.includes('%'); depth += 1) {
+    try { raw = decodeURIComponent(raw); } catch { return null; }
+  }
   if (!raw || raw.length > PUBLIC_POINT_POLICY_UID_MAX_LENGTH || /^user:/i.test(raw)) return null;
 
   const qualified = /^(chzzk|cime|youtube):(.+)$/i.exec(raw);
@@ -467,6 +472,11 @@ function parsePublicPointPolicyUid(value) {
     channelUid,
     cacheKey: provider ? `${provider}:${channelUid}` : `raw:${channelUid}`,
   };
+}
+
+function normalizePublicChannelUid(value) {
+  const parsed = parsePublicPointPolicyUid(value);
+  return parsed ? (parsed.provider ? `${parsed.provider}:${parsed.channelUid}` : parsed.channelUid) : null;
 }
 
 async function resolveVerifiedPublicChannelIdentity(value) {
@@ -6404,7 +6414,7 @@ app.post('/api/roulette/test', rateLimiters.userWrite, async (req, res) => {
 // GET /api/public/:uid/roulette-defs
 app.get('/api/public/:uid/roulette-defs', async (req, res) => {
   try {
-    const uid = String(req.params.uid || '').trim();
+    const uid = normalizePublicChannelUid(req.params.uid);
     if (!uid) return res.status(400).json({ error: 'uid required' });
     if (!parsePublicPointPolicyUid(uid)) return res.status(400).json({ error: 'invalid uid' });
     const result = await readRealtimeCached(`public:roulette-defs:${uid}`, { ttlMs: 5_000, staleMs: 15_000 }, async () => {
@@ -8673,7 +8683,7 @@ app.post('/api/drawing-donation/submit', rateLimiters.userWrite, async (req, res
 // Public compatibility lookup. Token creation is restricted to the authenticated viewer-url endpoint.
 app.get('/api/roulette/resolve-token', rateLimiters.externalLookup, async (req, res) => {
   try {
-    const uid = String(req.query.uid || '').trim();
+    const uid = normalizePublicChannelUid(req.query.uid);
     if (!uid) return res.status(400).json({ error: 'uid required' });
     const identity = await resolveVerifiedPublicChannelIdentity(uid);
     if (!identity?.ownerUserId) return res.status(404).json({ error: 'not_found' });
@@ -8709,7 +8719,7 @@ async function resolveCurrentViewerRouletteUserIds(req) {
 // GET /api/roulette/logs?uid=<channelUid>&q=&roulette=&mine=&limit=&offset=
 app.get('/api/roulette/logs', async (req, res) => {
   try {
-    const uid = String(req.query.uid || '').trim();
+    const uid = normalizePublicChannelUid(req.query.uid);
     if (!parsePublicPointPolicyUid(uid)) return res.status(400).json({ error: 'uid required' });
     const payload = await runPublicRouletteLogsOperation(async () => {
       const identity = await resolveVerifiedPublicChannelIdentity(uid);
@@ -21334,9 +21344,23 @@ app.delete('/api/automations/assets/sounds/:fileId', rateLimiters.userWrite, asy
   }
 });
 
+// Public identity does not depend on a live broadcast or upstream platform availability.
+app.get('/api/public/:uid/profile', async (req, res) => {
+  const uid = normalizePublicChannelUid(req.params.uid);
+  if (!uid) return res.status(400).json({ error: 'invalid uid' });
+  try {
+    const identity = await resolveVerifiedPublicChannelIdentity(uid);
+    if (!identity?.ownerUserId) return res.status(404).json({ error: 'not_found' });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ uid, provider: identity.provider, displayName: identity.displayName || null });
+  } catch {
+    return res.status(503).json({ error: 'Channel profile temporarily unavailable' });
+  }
+});
+
 // Public API: live status and basic info by channel UID (no auth)
 app.get('/api/public/:uid/live', async (req, res) => {
-  const uid = String(req.params.uid || '').trim();
+  const uid = normalizePublicChannelUid(req.params.uid);
   if (!uid) return res.status(400).json({ error: 'uid required' });
   if (!parsePublicPointPolicyUid(uid)) return res.status(400).json({ error: 'invalid uid' });
   try {
@@ -21354,7 +21378,7 @@ app.get('/api/public/:uid/live', async (req, res) => {
         live: info.live === true,
         status: String(info.status || '').toLowerCase(),
         provider: identity.provider,
-        channelName: String(info.channel || ''),
+        channelName: String(identity.displayName || info.channel || '').trim(),
         title: String(info.title || ''),
         category: String(info.category || ''),
         viewers: Math.max(0, Number(info.viewers || 0)),
@@ -22514,7 +22538,7 @@ app.post('/api/predictions/:id/settle', async (req, res) => {
 });
 
 app.get('/api/public/:uid/prediction', async (req, res) => {
-  const uid = String(req.params.uid || '').trim();
+  const uid = normalizePublicChannelUid(req.params.uid);
   if (!uid) return res.status(400).json({ error: 'uid required' });
   try {
     const prediction = await singleFlight(`public:prediction:${uid}`, () => (
@@ -22566,7 +22590,7 @@ function toPublicCommandRule(rule) {
 
 // Public API: list rules for streamer by channel UID
 app.get('/api/public/:uid/rules', async (req, res) => {
-  const uid = String(req.params.uid || '').trim();
+  const uid = normalizePublicChannelUid(req.params.uid);
   if (!uid) return res.status(400).json({ error: 'uid required' });
   if (!parsePublicPointPolicyUid(uid)) return res.status(400).json({ error: 'invalid uid' });
   try {
@@ -22586,7 +22610,7 @@ app.get('/api/public/:uid/rules', async (req, res) => {
 
 // Public API: list points for streamer by channel UID
 app.get('/api/public/:uid/points', async (req, res) => {
-  const uid = String(req.params.uid || '').trim();
+  const uid = normalizePublicChannelUid(req.params.uid);
   if (!uid) return res.status(400).json({ error: 'uid required' });
   const publicIdentity = parsePublicPointPolicyUid(uid);
   if (!publicIdentity) return res.status(400).json({ error: 'invalid uid' });
