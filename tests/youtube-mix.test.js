@@ -68,9 +68,10 @@ function setup(overrides = {}) {
     getPlaylistIndex() { return this.index; }
     getVideoData() { return { video_id: this.id }; }
     getDuration() { return this.duration; }
+    getPlayerState() { return this.state; }
     getCurrentTime() { return this.time; }
     ready() { this.options.events.onReady({ target: this }); }
-    emit(data) { this.options.events.onStateChange({ data, target: this }); }
+    emit(data) { this.state = data; this.options.events.onStateChange({ data, target: this }); }
     error(code = 150) { this.options.events.onError({ data: code, target: this }); }
     at(index, state = 1) { this.index = index; this.id = this.ids[index]; this.emit(state); }
   }
@@ -151,6 +152,45 @@ test('skips repeat recommendations and songs longer than ten minutes', async () 
   expect(h.player.playVideoAt).toHaveBeenLastCalledWith(2);
   h.player.duration = 601; h.player.at(2);
   expect(h.player.playVideoAt).toHaveBeenLastCalledWith(3);
+});
+
+test.each([1, 30, 59.999, 600.1])('skips Mix tracks outside the idle duration range: %s', async (duration) => {
+  const h = setup();
+  h.controller.start(playlist()); await flush(); h.player.ready();
+  h.player.duration = duration; h.player.emit(1);
+  expect(h.player.playVideoAt).toHaveBeenLastCalledWith(1);
+  expect(h.onPlaying).not.toHaveBeenCalledWith(true);
+});
+
+test.each([60, 600])('accepts the inclusive idle duration boundary: %s', async (duration) => {
+  const h = setup();
+  h.controller.start(playlist()); await flush(); h.player.ready();
+  h.player.duration = duration; h.player.emit(1);
+  expect(h.onPlaying).toHaveBeenLastCalledWith(true);
+});
+
+test('rechecks delayed duration metadata and skips a short video once known', async () => {
+  const h = setup();
+  h.controller.start(playlist()); await flush(); h.player.ready();
+  h.player.duration = 0; h.player.emit(1);
+  expect(h.onPlaying).not.toHaveBeenCalledWith(true);
+  h.player.duration = 30;
+  jest.advanceTimersByTime(1000);
+  expect(h.player.playVideoAt).toHaveBeenLastCalledWith(1);
+});
+
+test('uses multiple configured starting songs in order before repeating the seed rotation', async () => {
+  const h = setup();
+  const config = playlist({ mixUrl: '', tracks: [1, 4, 7].map((id) => ({ mediaId: video(id), durationSec: 180 })) });
+  h.controller.start(config); await flush(); h.player.ready();
+  expect(h.player.options.videoId).toBe(video(1));
+  h.player.at(2); h.player.emit(0);
+  expect(h.player.loadPlaylist).toHaveBeenLastCalledWith({ listType: 'playlist', list: `RD${video(4)}`, index: 0 });
+  h.player.ids = [video(4), video(5), video(6)]; h.player.at(2); h.player.emit(0);
+  expect(h.player.loadPlaylist).toHaveBeenLastCalledWith({ listType: 'playlist', list: `RD${video(7)}`, index: 0 });
+  h.player.ids = [video(7), video(8), video(9)]; h.player.at(2); h.player.emit(0);
+  expect(h.player.loadPlaylist).toHaveBeenLastCalledWith({ listType: 'playlist', list: `RD${video(1)}`, index: 0 });
+  expect(h.fetchSeed).not.toHaveBeenCalled();
 });
 
 test('does not accept a single-video fallback as a working Mix', async () => {

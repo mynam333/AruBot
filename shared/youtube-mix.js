@@ -1,3 +1,19 @@
+export function parseYouTubeVideoId(value) {
+  try {
+    const url = new URL(String(value || '').trim());
+    if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) return null;
+    let id = null;
+    if (url.hostname === 'youtu.be') id = url.pathname.slice(1);
+    else if (/^(?:www\.|music\.|m\.)?youtube\.com$/.test(url.hostname)) {
+      if (url.pathname === '/watch') id = url.searchParams.get('v');
+      else id = url.pathname.match(/^\/(?:shorts|embed|live)\/([A-Za-z0-9_-]{11})\/?$/)?.[1];
+    }
+    return /^[A-Za-z0-9_-]{11}$/.test(id || '') ? id : null;
+  } catch {
+    return null;
+  }
+}
+
 export function parseYouTubeMix(value) {
   const raw = String(value || '').trim();
   if (!raw || raw.length > 2048) return null;

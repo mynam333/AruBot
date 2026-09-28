@@ -13,16 +13,17 @@ import {
   Sparkles,
   Trash2,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useState, type Dispatch, type SetStateAction } from 'react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { apiUrl } from '@/shared/api/http';
 import { cn } from '@/shared/lib/utils';
-import { parseYouTubeMix } from '../../../shared/youtube-mix.js';
+import { parseYouTubeMix, parseYouTubeVideoId } from '../../../shared/youtube-mix.js';
 import {
   MAX_VIDEO_DONATION_IDLE_TRACKS,
+  mergeVideoDonationIdleTracks,
   normalizeVideoDonationIdleTracks,
   type VideoDonationIdlePlaylist,
   type VideoDonationIdleTrack,
@@ -44,6 +45,7 @@ type PlaylistLookupResult = {
   requestedCount?: number;
   excludedCount?: number;
   excludedTooLongCount?: number;
+  excludedTooShortCount?: number;
   cacheHit?: boolean;
 };
 
@@ -74,10 +76,14 @@ function formatDuration(value: number | null) {
 function formatExcludedSummary(result: PlaylistLookupResult) {
   const excludedCount = Math.max(0, Number(result.excludedCount) || 0);
   const tooLongCount = Math.max(0, Number(result.excludedTooLongCount) || 0);
+  const tooShortCount = Math.max(0, Number(result.excludedTooShortCount) || 0);
   if (!excludedCount) return '';
-  if (tooLongCount === excludedCount) return ` · 10분 초과 ${tooLongCount}개 제외`;
-  if (tooLongCount > 0) return ` · ${excludedCount}개 제외(10분 초과 ${tooLongCount}개)`;
-  return ` · 재생 시간/상태 미확인 ${excludedCount}개 제외`;
+  const reasons = [];
+  if (tooShortCount) reasons.push(`1분 미만 ${tooShortCount}개`);
+  if (tooLongCount) reasons.push(`10분 초과 ${tooLongCount}개`);
+  const unknownCount = Math.max(0, excludedCount - tooShortCount - tooLongCount);
+  if (unknownCount) reasons.push(`재생 시간/상태 미확인 ${unknownCount}개`);
+  return ` · ${reasons.join(', ')} 제외`;
 }
 
 function PlaylistToggle({
@@ -176,47 +182,40 @@ function PlaylistTrackList({
   );
 }
 
-function mergeTracks(current: VideoDonationIdleTrack[], incoming: VideoDonationIdleTrack[]) {
-  const next = current.slice();
-  const seen = new Set(current.map((track) => track.mediaId));
-  for (const track of normalizeVideoDonationIdleTracks(incoming)) {
-    if (seen.has(track.mediaId)) continue;
-    seen.add(track.mediaId);
-    next.push(track);
-    if (next.length >= MAX_VIDEO_DONATION_IDLE_TRACKS) break;
-  }
-  return next;
-}
-
 export function VideoDonationIdlePlaylistEditor({
   value,
   onChange,
 }: {
   value: VideoDonationIdlePlaylist;
-  onChange: (value: VideoDonationIdlePlaylist) => void;
+  onChange: Dispatch<SetStateAction<VideoDonationIdlePlaylist>>;
 }) {
   const [customInput, setCustomInput] = useState('');
+  const [seedInput, setSeedInput] = useState('');
   const [recommendPending, setRecommendPending] = useState(false);
   const [addPending, setAddPending] = useState(false);
   const activeTracks = value.mode === 'recommended' ? value.recommendedTracks : value.customTracks;
-  const hasMixUrl = !!value.mixUrl.trim();
-  const invalidMixUrl = hasMixUrl && !parseYouTubeMix(value.mixUrl);
+  const configuredMix = parseYouTubeMix(value.mixUrl);
+  const invalidSeedInput = !!seedInput.trim() && !parseYouTubeMix(seedInput) && !parseYouTubeVideoId(seedInput);
 
-  const update = (patch: Partial<VideoDonationIdlePlaylist>) => onChange({ ...value, ...patch });
+  const update = (patch: Partial<VideoDonationIdlePlaylist>) => onChange((current) => ({ ...current, ...patch }));
 
   const createRecommendations = async () => {
     const topic = value.topic.trim();
     if (!topic) return toast.warning('추천 주제를 입력해 주세요.');
+    if (recommendPending) return;
+    const remaining = MAX_VIDEO_DONATION_IDLE_TRACKS - value.recommendedTracks.length;
+    if (remaining <= 0) return toast.warning('시작곡은 최대 200곡까지 추가할 수 있습니다.');
     setRecommendPending(true);
     try {
       const result = await postPlaylistJson<PlaylistLookupResult>('/api/video-donation/idle-playlist/recommend', {
         topic,
-        limit: value.recommendationCount,
+        limit: Math.min(value.recommendationCount, remaining),
+        excludeIds: value.recommendedTracks.map((track) => track.mediaId),
       });
       const tracks = normalizeVideoDonationIdleTracks(result.tracks);
       if (!tracks.length) throw new Error('추천곡을 찾지 못했습니다.');
-      update({ recommendedTracks: tracks });
-      toast.success(`Mix 시작곡 후보 ${tracks.length}곡을 불러왔어요${formatExcludedSummary(result)}.`);
+      onChange((current) => ({ ...current, recommendedTracks: mergeVideoDonationIdleTracks(current.recommendedTracks, tracks) }));
+      toast.success(`Mix 시작곡 목록에 추가했어요${formatExcludedSummary(result)}.`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '추천 플레이리스트를 만들지 못했습니다.');
     } finally {
@@ -224,20 +223,48 @@ export function VideoDonationIdlePlaylistEditor({
     }
   };
 
+  const addSeedInput = async () => {
+    const input = seedInput.trim();
+    if (addPending) return;
+    const mix = parseYouTubeMix(input);
+    if (mix) {
+      update({ mixUrl: mix.url });
+      setSeedInput('');
+      return toast.success('시작 Mix를 설정했어요.');
+    }
+    const videoId = parseYouTubeVideoId(input);
+    if (!videoId) return toast.warning('YouTube 영상 또는 Mix 주소를 입력해 주세요.');
+    if (value.recommendedTracks.some((track) => track.mediaId === videoId)) return toast.info('이미 추가된 시작곡입니다.');
+    if (value.recommendedTracks.length >= MAX_VIDEO_DONATION_IDLE_TRACKS) return toast.warning('시작곡은 최대 200곡까지 추가할 수 있습니다.');
+    setAddPending(true);
+    try {
+      const result = await postPlaylistJson<PlaylistLookupResult>('/api/video-donation/idle-playlist/resolve', {
+        input: `https://www.youtube.com/watch?v=${videoId}`,
+      });
+      const tracks = normalizeVideoDonationIdleTracks(result.tracks);
+      if (!tracks.length) throw new Error('1분 이상 10분 이하 영상만 시작곡으로 추가할 수 있습니다.');
+      onChange((current) => ({ ...current, recommendedTracks: mergeVideoDonationIdleTracks(current.recommendedTracks, tracks) }));
+      setSeedInput((current) => current.trim() === input ? '' : current);
+      toast.success(`Mix 시작곡 목록에 추가했어요${formatExcludedSummary(result)}.`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '시작곡을 추가하지 못했습니다.');
+    } finally {
+      setAddPending(false);
+    }
+  };
+
   const addCustomInput = async () => {
     const input = customInput.trim();
     if (!input) return toast.warning('곡, 영상 또는 플레이리스트를 입력해 주세요.');
+    if (addPending) return;
+    if (value.customTracks.length >= MAX_VIDEO_DONATION_IDLE_TRACKS) return toast.warning('최대 200곡까지 추가할 수 있습니다.');
     setAddPending(true);
     try {
       const result = await postPlaylistJson<PlaylistLookupResult & { kind?: string }>('/api/video-donation/idle-playlist/resolve', { input });
       const incoming = normalizeVideoDonationIdleTracks(result.tracks);
-      const next = mergeTracks(value.customTracks, incoming);
-      const added = next.length - value.customTracks.length;
-      update({ customTracks: next });
-      setCustomInput('');
-      toast.success(added > 0
-        ? `${added}곡을 플레이리스트에 추가했어요${formatExcludedSummary(result)}.`
-        : '이미 추가된 곡입니다.');
+      onChange((current) => ({ ...current, customTracks: mergeVideoDonationIdleTracks(current.customTracks, incoming) }));
+      setCustomInput((current) => current.trim() === input ? '' : current);
+      toast.success(`플레이리스트에 추가했어요${formatExcludedSummary(result)}.`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '곡을 추가하지 못했습니다.');
     } finally {
@@ -305,21 +332,38 @@ export function VideoDonationIdlePlaylistEditor({
 
           {value.mode === 'recommended' ? (
             <div className="grid gap-3">
-              <label className="grid min-w-0 gap-2 text-sm font-semibold" htmlFor="video-donation-idle-mix-url">
-                Mix 주소 (선택)
+              <label className="text-sm font-semibold" htmlFor="video-donation-idle-mix-url">YouTube 영상 또는 Mix 주소</label>
+              <div className="flex min-w-0 flex-col gap-2 sm:flex-row">
                 <Input
                   id="video-donation-idle-mix-url"
-                  value={value.mixUrl}
-                  onChange={(event) => update({ mixUrl: event.target.value })}
-                  placeholder="https://www.youtube.com/watch?v=...&list=RD..."
+                  value={seedInput}
+                  onChange={(event) => setSeedInput(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') { event.preventDefault(); void addSeedInput(); }
+                  }}
+                  placeholder="https://www.youtube.com/watch?v=..."
                   maxLength={2048}
-                  aria-invalid={invalidMixUrl ? true : undefined}
-                  aria-describedby={invalidMixUrl ? 'video-donation-idle-mix-error' : undefined}
-                  className="min-w-0"
+                  aria-invalid={invalidSeedInput ? true : undefined}
+                  aria-describedby={invalidSeedInput ? 'video-donation-idle-mix-error' : undefined}
+                  className="min-w-0 flex-1"
                 />
-              </label>
-              {invalidMixUrl ? <span id="video-donation-idle-mix-error" className="text-xs text-destructive">올바른 YouTube Mix 주소를 입력해 주세요.</span> : null}
-              {!hasMixUrl ? (
+                <Button type="button" variant="soft" onClick={() => void addSeedInput()} disabled={addPending || !seedInput.trim() || invalidSeedInput}>
+                  {addPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                  추가
+                </Button>
+              </div>
+              {invalidSeedInput ? <span id="video-donation-idle-mix-error" className="text-xs text-destructive">올바른 YouTube 영상 또는 Mix 주소를 입력해 주세요.</span> : null}
+              {configuredMix ? (
+                <div className="flex min-w-0 items-center gap-3 border-b pb-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-semibold text-muted-foreground">시작 Mix</div>
+                    <a href={configuredMix.url} target="_blank" rel="noreferrer" className="mt-1 block break-all text-sm text-primary underline underline-offset-2">{configuredMix.url}</a>
+                  </div>
+                  <Button type="button" variant="ghost" size="icon" onClick={() => update({ mixUrl: '' })} aria-label="시작 Mix 삭제" title="시작 Mix 삭제">
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              ) : null}
               <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_8rem_auto] sm:items-end">
                 <label className="grid min-w-0 gap-2 text-sm font-semibold" htmlFor="video-donation-idle-topic">
                   추천 주제
@@ -327,7 +371,7 @@ export function VideoDonationIdlePlaylistEditor({
                     id="video-donation-idle-topic"
                     list="video-donation-idle-topic-presets"
                     value={value.topic}
-                    onChange={(event) => update({ topic: event.target.value, recommendedTracks: [] })}
+                    onChange={(event) => update({ topic: event.target.value })}
                     placeholder="예: 비 오는 밤 재즈"
                     className="min-w-0"
                   />
@@ -348,19 +392,18 @@ export function VideoDonationIdlePlaylistEditor({
                       value={value.recommendationCount}
                       onChange={(event) => {
                         const count = Math.max(1, Math.min(MAX_VIDEO_DONATION_IDLE_TRACKS, Math.floor(Number(event.target.value) || 1)));
-                        update({ recommendationCount: count, recommendedTracks: [] });
+                        update({ recommendationCount: count });
                       }}
                       className="min-w-0 pr-10 tabular-nums"
                     />
                     <span className="pointer-events-none absolute inset-y-0 right-3 grid place-items-center text-xs font-medium text-muted-foreground">곡</span>
                   </div>
                 </label>
-                <Button type="button" variant="soft" className="sm:self-end" onClick={() => void createRecommendations()} disabled={recommendPending}>
+                <Button type="button" variant="soft" className="sm:self-end" onClick={() => void createRecommendations()} disabled={recommendPending || value.recommendedTracks.length >= MAX_VIDEO_DONATION_IDLE_TRACKS}>
                   {recommendPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
                   시작곡 찾기
                 </Button>
               </div>
-              ) : null}
             </div>
           ) : (
             <div className="grid gap-3">
@@ -387,11 +430,11 @@ export function VideoDonationIdlePlaylistEditor({
             </div>
           )}
 
-          {value.mode === 'custom' || !hasMixUrl ? <div className="grid gap-3">
+          <div className="grid gap-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="text-sm font-semibold">{value.mode === 'recommended' ? 'Mix 시작곡 후보' : '재생 목록'}</div>
               <div className="flex flex-wrap items-center justify-end gap-2">
-                <Badge tone="neutral">최대 10분</Badge>
+                <Badge tone="neutral">1분~10분</Badge>
                 <Badge tone={activeTracks.length ? 'mint' : 'neutral'}>{activeTracks.length}곡</Badge>
               </div>
             </div>
@@ -399,7 +442,7 @@ export function VideoDonationIdlePlaylistEditor({
               tracks={activeTracks}
               onChange={(tracks) => update(value.mode === 'recommended' ? { recommendedTracks: tracks } : { customTracks: tracks })}
             />
-          </div> : null}
+          </div>
         </>
       ) : null}
     </div>

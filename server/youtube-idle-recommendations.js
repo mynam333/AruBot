@@ -30,6 +30,7 @@ export function createYoutubeIdleRecommendations({ search, hydrate, now = Date.n
       let detailRequests = 0;
       let excludedCount = 0;
       let excludedTooLongCount = 0;
+      let excludedTooShortCount = 0;
       let lookupError = null;
       const available = () => entry.tracks.filter((track) => !excluded.has(track.mediaId));
       const pageBudget = Math.max(1, Math.min(10, Number(maxPages) || 1));
@@ -60,6 +61,7 @@ export function createYoutubeIdleRecommendations({ search, hydrate, now = Date.n
           detailRequests += hydrated.detailRequests || 0;
           excludedCount += hydrated.excludedCount || 0;
           excludedTooLongCount += hydrated.excludedTooLongCount || 0;
+          excludedTooShortCount += hydrated.excludedTooShortCount || 0;
           for (const track of hydrated.tracks) {
             if (!known.has(track.mediaId)) {
               known.add(track.mediaId);
@@ -96,7 +98,7 @@ export function createYoutubeIdleRecommendations({ search, hydrate, now = Date.n
         tracks: tracks.slice(0, safeLimit),
         retryAfterMs: tracks.length ? 0 : Math.max(30000, entry.retryAt - now()),
         cacheHit: hadFreshCache && searchRequests === 0 && detailRequests === 0,
-        excludedCount, excludedTooLongCount,
+        excludedCount, excludedTooLongCount, excludedTooShortCount,
         apiRequests: { search: searchRequests, videos: detailRequests },
       };
     });

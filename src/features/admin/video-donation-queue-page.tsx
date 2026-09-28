@@ -242,6 +242,7 @@ export function VideoDonationQueuePage() {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
   const reconnectAttemptRef = useRef(0);
+  const queuePayloadVersionRef = useRef(0);
 
   const currentItem = items[0] || null;
   const waitingItems = useMemo(() => items.slice(1), [items]);
@@ -256,6 +257,7 @@ export function VideoDonationQueuePage() {
         : '재생 중';
 
   const applyQueuePayload = useCallback((data: VideoDonationQueueResponse | null) => {
+    queuePayloadVersionRef.current += 1;
     const nextItems = Array.isArray(data?.items) ? data.items : [];
     setItems(nextItems);
     setPaused(nextItems.length > 0 && data?.paused === true);
@@ -266,11 +268,13 @@ export function VideoDonationQueuePage() {
   }, []);
 
   const load = useCallback(() => {
+    const version = queuePayloadVersionRef.current;
     startTransition(async () => {
       const [data, settings] = await Promise.all([
         readJson<VideoDonationQueueResponse>('/api/video-donation/queue'),
         readJson<VideoDonationSettingsResponse>('/api/video-donation/settings').catch(() => null),
       ]);
+      if (version !== queuePayloadVersionRef.current) return;
       applyQueuePayload(data);
       if (settings?.volume != null) {
         setVolume(Math.max(0, Math.min(100, Math.round(Number(settings.volume)))));
@@ -412,8 +416,10 @@ export function VideoDonationQueuePage() {
   const controlPlayback = async (op: 'pause' | 'play') => {
     if (!currentItem || playbackPending) return;
     setPlaybackPending(op);
+    queuePayloadVersionRef.current += 1;
     try {
       const result = await postJson<VideoDonationQueueResponse>('/api/video-donation/control', { op });
+      queuePayloadVersionRef.current += 1;
       setPaused(result.paused === true);
       setIdleDeferred(result.idleDeferred === true);
       toast.success(op === 'pause' ? '영상 후원을 일시정지했어요.' : '영상 후원을 재생했어요.');

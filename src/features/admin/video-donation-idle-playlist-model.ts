@@ -22,6 +22,7 @@ export type VideoDonationIdlePlaylist = {
 };
 
 export const MAX_VIDEO_DONATION_IDLE_TRACKS = 200;
+export const MIN_VIDEO_DONATION_IDLE_TRACK_DURATION_SEC = 60;
 export const MAX_VIDEO_DONATION_IDLE_TRACK_DURATION_SEC = 10 * 60;
 export const DEFAULT_VIDEO_DONATION_IDLE_RECOMMENDATION_COUNT = 1;
 
@@ -45,7 +46,7 @@ function normalizeTrack(value: unknown): VideoDonationIdleTrack | null {
   const mediaId = String(source.mediaId || source.videoId || '').trim();
   if (!mediaId) return null;
   const duration = Number(source.durationSec);
-  if (!Number.isFinite(duration) || duration <= 0 || duration > MAX_VIDEO_DONATION_IDLE_TRACK_DURATION_SEC) return null;
+  if (!Number.isFinite(duration) || duration < MIN_VIDEO_DONATION_IDLE_TRACK_DURATION_SEC || duration > MAX_VIDEO_DONATION_IDLE_TRACK_DURATION_SEC) return null;
   return {
     id: String(source.id || `youtube:${mediaId}`),
     mediaProvider: 'youtube',
@@ -71,6 +72,10 @@ export function normalizeVideoDonationIdleTracks(value: unknown) {
   return tracks;
 }
 
+export function mergeVideoDonationIdleTracks(current: VideoDonationIdleTrack[], incoming: VideoDonationIdleTrack[]) {
+  return normalizeVideoDonationIdleTracks([...current, ...incoming]);
+}
+
 export function normalizeVideoDonationIdlePlaylist(value: unknown): VideoDonationIdlePlaylist {
   const defaults = createDefaultVideoDonationIdlePlaylist();
   if (!value || typeof value !== 'object') return defaults;
@@ -89,7 +94,7 @@ export function normalizeVideoDonationIdlePlaylist(value: unknown): VideoDonatio
     recommendationCount,
     loop: source.loop !== false,
     shuffle: source.shuffle === true,
-    recommendedTracks: normalizeVideoDonationIdleTracks(source.recommendedTracks ?? (mode === 'recommended' ? legacyTracks : [])).slice(0, recommendationCount),
+    recommendedTracks: normalizeVideoDonationIdleTracks(source.recommendedTracks ?? (mode === 'recommended' ? legacyTracks : [])),
     customTracks: normalizeVideoDonationIdleTracks(source.customTracks ?? (mode === 'custom' ? legacyTracks : [])),
   };
 }

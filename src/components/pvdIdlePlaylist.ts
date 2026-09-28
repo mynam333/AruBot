@@ -36,6 +36,8 @@ export function normalizePvdIdlePlaylist(value: unknown): PvdIdlePlaylist {
     const raw = item as Partial<PvdIdleTrack>;
     const mediaId = String(raw.mediaId || raw.videoId || '').trim();
     if (!mediaId || seen.has(mediaId)) continue;
+    const duration = Number(raw.durationSec);
+    if (raw.durationSec != null && (!Number.isFinite(duration) || duration < 60 || duration > 600)) continue;
     seen.add(mediaId);
     tracks.push({
       id: String(raw.id || `youtube:${mediaId}`),

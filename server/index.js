@@ -3626,6 +3626,7 @@ async function searchYouTubeVideoIdByQuery(query) {
 
 const PVD_IDLE_PLAYLIST_MAX_TRACKS = 200;
 const PVD_IDLE_RECOMMENDATION_TRACKS = 12;
+const PVD_IDLE_TRACK_MIN_DURATION_SEC = 60;
 const PVD_IDLE_TRACK_MAX_DURATION_SEC = 10 * 60;
 const recommendYouTubeIdleTracks = createYoutubeIdleRecommendations({
   search: (params) => youtubeApiGetPublic('search', params, { timeout: 7000 }),
@@ -3664,7 +3665,7 @@ function normalizePvdIdleTrack(value, options = {}) {
   const durationSec = Number.isFinite(durationValue) && durationValue > 0
     ? Math.min(24 * 60 * 60, Math.ceil(durationValue))
     : null;
-  if (durationSec != null && durationSec > PVD_IDLE_TRACK_MAX_DURATION_SEC) return null;
+  if (durationSec != null && (durationValue < PVD_IDLE_TRACK_MIN_DURATION_SEC || durationSec > PVD_IDLE_TRACK_MAX_DURATION_SEC)) return null;
   if (options.requireKnownDuration === true && durationSec == null) return null;
   return {
     id: `youtube:${mediaId}`,
@@ -3706,7 +3707,7 @@ function normalizePvdIdlePlaylist(value) {
     shuffle: source.shuffle === true,
     recommendedTracks: normalizePvdIdleTracks(
       Array.isArray(source.recommendedTracks) ? source.recommendedTracks : (mode === 'recommended' ? legacyTracks : []),
-      recommendationCount,
+      PVD_IDLE_PLAYLIST_MAX_TRACKS,
       { requireKnownDuration: true },
     ),
     customTracks: normalizePvdIdleTracks(
@@ -3756,11 +3757,12 @@ function mapYouTubeApiVideoToIdleTrack(item, fallback = null) {
 async function hydrateYouTubeIdleTracks(seedTracks, { strict = false } = {}) {
   const seeds = normalizePvdIdleTracks(seedTracks, PVD_IDLE_PLAYLIST_MAX_TRACKS, { requireKnownDuration: false });
   if (!seeds.length) {
-    return { tracks: [], requestedCount: 0, excludedCount: 0, excludedTooLongCount: 0, detailRequests: 0 };
+    return { tracks: [], requestedCount: 0, excludedCount: 0, excludedTooLongCount: 0, excludedTooShortCount: 0, detailRequests: 0 };
   }
   const hydrated = [];
   let detailRequests = 0;
   let excludedTooLongCount = 0;
+  let excludedTooShortCount = 0;
   let apiCompleted = false;
   try {
     for (let offset = 0; offset < seeds.length; offset += 50) {
@@ -3774,6 +3776,10 @@ async function hydrateYouTubeIdleTracks(seedTracks, { strict = false } = {}) {
       for (const fallback of batch) {
         const item = byId.get(fallback.mediaId);
         const durationSec = parseIso8601Duration(item?.contentDetails?.duration || '');
+        if (durationSec != null && durationSec > 0 && durationSec < PVD_IDLE_TRACK_MIN_DURATION_SEC) {
+          excludedTooShortCount += 1;
+          continue;
+        }
         if (durationSec != null && durationSec > PVD_IDLE_TRACK_MAX_DURATION_SEC) {
           excludedTooLongCount += 1;
           continue;
@@ -3790,6 +3796,7 @@ async function hydrateYouTubeIdleTracks(seedTracks, { strict = false } = {}) {
   if (!apiCompleted && hydrated.length === 0 && seeds.length === 1) {
     const info = await fetchYouTubeInfo(seeds[0].mediaId).catch(() => null);
     if (Number(info?.durationSec) > PVD_IDLE_TRACK_MAX_DURATION_SEC) excludedTooLongCount = 1;
+    if (Number(info?.durationSec) > 0 && Number(info?.durationSec) < PVD_IDLE_TRACK_MIN_DURATION_SEC) excludedTooShortCount = 1;
     const fallbackTracks = normalizePvdIdleTracks([{
       ...seeds[0],
       title: info?.title || seeds[0].title,
@@ -3804,6 +3811,7 @@ async function hydrateYouTubeIdleTracks(seedTracks, { strict = false } = {}) {
     requestedCount: seeds.length,
     excludedCount: Math.max(0, seeds.length - tracks.length),
     excludedTooLongCount,
+    excludedTooShortCount,
     detailRequests,
   };
 }
@@ -3812,6 +3820,7 @@ async function fetchYouTubePlaylistIdleTracks(playlistId) {
   let tracks = [];
   let excludedCount = 0;
   let excludedTooLongCount = 0;
+  let excludedTooShortCount = 0;
   let playlistItemRequests = 0;
   let detailRequests = 0;
   let apiFailed = false;
@@ -3840,13 +3849,14 @@ async function fetchYouTubePlaylistIdleTracks(playlistId) {
       detailRequests += hydrated.detailRequests;
       excludedCount += hydrated.excludedCount;
       excludedTooLongCount += hydrated.excludedTooLongCount;
+      excludedTooShortCount += hydrated.excludedTooShortCount;
       tracks = normalizePvdIdleTracks(
         [...tracks, ...hydrated.tracks],
         PVD_IDLE_PLAYLIST_MAX_TRACKS,
         { requireKnownDuration: true },
       );
       pageToken = String(response?.data?.nextPageToken || '');
-    } while (pageToken && tracks.length < PVD_IDLE_PLAYLIST_MAX_TRACKS && playlistItemRequests < PVD_IDLE_RECOMMENDATION_MAX_SEARCH_PAGES);
+    } while (pageToken && tracks.length < PVD_IDLE_PLAYLIST_MAX_TRACKS && playlistItemRequests < 10);
   } catch {
     apiFailed = true;
   }
@@ -3872,6 +3882,7 @@ async function fetchYouTubePlaylistIdleTracks(playlistId) {
       detailRequests += hydrated.detailRequests;
       excludedCount += hydrated.excludedCount;
       excludedTooLongCount += hydrated.excludedTooLongCount;
+      excludedTooShortCount += hydrated.excludedTooShortCount;
       tracks = hydrated.tracks;
     } catch { }
   }
@@ -3879,6 +3890,7 @@ async function fetchYouTubePlaylistIdleTracks(playlistId) {
     tracks,
     excludedCount,
     excludedTooLongCount,
+    excludedTooShortCount,
     apiRequests: { playlistItems: playlistItemRequests, videos: detailRequests },
   };
 }
@@ -3899,6 +3911,7 @@ async function resolvePvdIdlePlaylistInput(input) {
       tracks: hydrated.tracks,
       excludedCount: hydrated.excludedCount,
       excludedTooLongCount: hydrated.excludedTooLongCount,
+      excludedTooShortCount: hydrated.excludedTooShortCount,
       apiRequests: { videos: hydrated.detailRequests },
     };
   }
@@ -3942,6 +3955,10 @@ app.post('/api/video-donation/control-by-token', async (req, res) => {
     }
     const q = getVideoQueue(sid);
     if (!q[0]) return res.json({ ok: true, empty: true, paused: null, idleDeferred: false, atSec: 0 });
+    const expectedItemId = String(req.body?.itemId || '').trim();
+    if (expectedItemId && expectedItemId !== String(q[0].id || '') && expectedItemId !== getPvdQueueItemKey(q[0])) {
+      return res.status(409).json({ error: 'item_mismatch' });
+    }
     if (op === 'duration' || op === 'duration_sync') {
       const durationSec = Number(req.body?.durationSec ?? req.body?.duration ?? req.body?.value);
       const item = updateCurrentPvdDurationFromPlayer(sid, durationSec);
@@ -3949,6 +3966,13 @@ app.post('/api/video-donation/control-by-token', async (req, res) => {
       return res.json({ ok: true, item });
     }
     if (!['pause', 'play', 'seek'].includes(op)) return res.status(400).json({ error: 'invalid op' });
+    // Player state events report playback, but cannot override an explicit pause.
+    const playbackState = pvdPlaybackState.get(sid);
+    if (op === 'play' && req.body?.source === 'player' && playbackState?.paused === true) {
+      const atSec = getCurrentAtSec(sid);
+      await broadcastPvdControl(sid, { op: 'pause', paused: true, atSec });
+      return res.json({ ok: true, ignored: true, paused: true, idleDeferred: playbackState.idleDeferred === true, atSec });
+    }
     return res.json(await controlPvdPlaybackForSid(sid, op, req.body?.atSec));
   } catch (e) {
     return res.status(Number(e?.statusCode) || 500).json({ error: 'failed' });
@@ -7151,7 +7175,7 @@ async function broadcastPvdStart(sid, options = {}) {
     const q = getVideoQueue(sid);
     const viewerSettings = await getPvdViewerSettingsForSid(sid);
 
-    // Rebase playback state when a new head starts
+    // Keep the current item's pause/position when rebroadcasting an unchanged head.
     if (q[0]) {
       await refreshChzzkClipPlaybackForItem(q[0]);
       const currentState = pvdPlaybackState.get(sid) || null;
@@ -7160,12 +7184,12 @@ async function broadcastPvdStart(sid, options = {}) {
         && currentState?.idleDeferred === true
         && currentState?.itemKey === itemKey;
       const idleDeferred = options.deferForIdle === true
-        && viewerSettings.idlePlaylist?.enabled === true
-        && Array.isArray(viewerSettings.idlePlaylist?.tracks)
-        && viewerSettings.idlePlaylist.tracks.length > 0;
-      pvdPlaybackState.set(sid, createPvdPlaybackState(q[0], {
-        idleDeferred: activateDeferredPlayback ? false : idleDeferred,
-      }));
+        && viewerSettings.idlePlaylist?.enabled === true;
+      if (!currentState || currentState.itemKey !== itemKey || activateDeferredPlayback) {
+        pvdPlaybackState.set(sid, createPvdPlaybackState(q[0], {
+          idleDeferred: activateDeferredPlayback ? false : idleDeferred,
+        }));
+      }
     } else {
       pvdPlaybackState.delete(sid);
     }
@@ -7421,7 +7445,7 @@ app.post('/api/video-donation/idle-playlist/resolve', rateLimiters.externalLooku
     if (!input) return res.status(400).json({ error: '곡, 영상 또는 플레이리스트를 입력해 주세요.' });
     const result = await resolvePvdIdlePlaylistInput(input);
     if (!result.tracks.length) {
-      return res.status(404).json({ error: '10분 이하이며 재생 시간이 확인된 YouTube 영상만 추가할 수 있습니다.' });
+      return res.status(404).json({ error: '1분 이상 10분 이하이며 재생 시간이 확인된 YouTube 영상만 추가할 수 있습니다.' });
     }
     return res.json(result);
   } catch (error) {
@@ -7436,8 +7460,10 @@ app.post('/api/video-donation/idle-playlist/recommend', rateLimiters.externalLoo
     if (!sid) return res.status(401).json({ error: '로그인이 필요합니다.' });
     const topic = compactLogText(req.body?.topic || '로파이 집중', 80);
     const limit = normalizePvdIdleRecommendationCount(req.body?.limit);
-    const result = await recommendYouTubeIdleTracks(topic, limit);
-    if (!result.tracks.length) return res.status(404).json({ error: '이 주제에서 재생 가능한 10분 이하 추천곡을 찾지 못했습니다.' });
+    const excludeIds = (Array.isArray(req.body?.excludeIds) ? req.body.excludeIds : [])
+      .slice(-PVD_IDLE_PLAYLIST_MAX_TRACKS).filter((id) => typeof id === 'string' && /^[A-Za-z0-9_-]{11}$/.test(id));
+    const result = await recommendYouTubeIdleTracks(topic, limit, { excludeIds });
+    if (!result.tracks.length) return res.status(404).json({ error: '이 주제에서 추가할 수 있는 1분 이상 10분 이하 추천곡을 찾지 못했습니다.' });
     return res.json(result);
   } catch (error) {
     console.warn('[pvd:idle-playlist:recommend] failed', error?.message || error);
