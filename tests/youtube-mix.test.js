@@ -75,7 +75,7 @@ function setup(overrides = {}) {
     error(code = 150) { this.options.events.onError({ data: code, target: this }); }
     at(index, state = 1) { this.index = index; this.id = this.ids[index]; this.emit(state); }
   }
-  const controller = createPvdYouTubeMixPlayer({ getApi: async () => ({ Player }), getHost: () => host, fetchSeed, onPlaying, onBoundary, isVisible: () => visible, ...overrides });
+  const controller = createPvdYouTubeMixPlayer({ getApi: async () => ({ Player }), getHost: () => host, fetchSeed, onPlaying, onBoundary, isVisible: () => visible, random: () => 0, ...overrides });
   cleanup = () => controller.dispose();
   return { controller, fetchSeed, onPlaying, onBoundary, host, instances, get player() { return player; }, setDeferred(value) { deferred = value; }, setVisible(value) { visible = value; } };
 }
@@ -193,13 +193,84 @@ test('uses multiple configured starting songs in order before repeating the seed
   expect(h.fetchSeed).not.toHaveBeenCalled();
 });
 
-test('does not accept a single-video fallback as a working Mix', async () => {
+test('plays a valid seed while Mix playlist metadata is not available yet', async () => {
   const h = setup();
   h.controller.start(playlist()); await flush(); h.player.ready();
   h.player.ids = []; h.player.emit(1);
-  expect(h.host.dataset.mixError).toBe('mix_playlist_unavailable');
-  expect(h.player.destroy).toHaveBeenCalled();
+  expect(h.host.dataset.mixError).toBe('');
+  expect(h.player.destroy).not.toHaveBeenCalled();
+  expect(h.onPlaying).toHaveBeenLastCalledWith(true);
   jest.advanceTimersByTime(30000); await flush();
+  expect(h.instances).toHaveLength(1);
+});
+
+test('chooses a random configured seed even when a previous Mix URL is saved', async () => {
+  const h = setup({ random: () => 0.8 });
+  h.controller.start(playlist({ tracks: [1, 4, 7].map((n) => ({ mediaId: video(n), durationSec: 180 })) }));
+  await flush();
+  expect(h.player.options.videoId).toBe(video(7));
+  expect(h.player.options.playerVars.list).toBe(`RD${video(7)}`);
+  expect(h.fetchSeed).not.toHaveBeenCalled();
+});
+
+test('a newly opened player draws a fresh seed instead of resuming the previous Mix', async () => {
+  const config = playlist({ tracks: [1, 4, 7].map((n) => ({ mediaId: video(n), durationSec: 180 })) });
+  const first = setup({ random: () => 0 });
+  first.controller.start(config); await flush();
+  expect(first.player.options.videoId).toBe(video(1));
+  first.controller.dispose();
+  const reopened = setup({ random: () => 0.5 });
+  reopened.controller.start(config); await flush();
+  expect(reopened.player.options.videoId).toBe(video(4));
+});
+
+test('reports the actual Mix song title and duration, including native next-track changes', async () => {
+  const onTrack = jest.fn();
+  const h = setup({ onTrack });
+  h.controller.start(playlist()); await flush(); h.player.ready(); h.player.emit(1);
+  expect(onTrack).toHaveBeenLastCalledWith(expect.objectContaining({ mediaId: video(1), durationSec: 180 }));
+  h.player.getVideoData = () => ({ video_id: h.player.id, title: 'Current recommendation' });
+  h.player.at(1);
+  expect(onTrack).toHaveBeenLastCalledWith(expect.objectContaining({ mediaId: video(2), title: 'Current recommendation' }));
+});
+
+test('a web pause survives timer ticks and repeated startup snapshots', async () => {
+  const h = setup();
+  h.controller.start(playlist()); await flush(); h.player.ready(); h.player.emit(1);
+  h.controller.setPaused(true);
+  h.player.playVideo.mockClear();
+  h.controller.start(playlist()); jest.advanceTimersByTime(5000);
+  expect(h.player.playVideo).not.toHaveBeenCalled();
+  h.controller.setPaused(false);
+  expect(h.player.destroy).not.toHaveBeenCalled();
+});
+
+test('refreshes a delayed title without changing the current track identity', async () => {
+  const onTrack = jest.fn();
+  const h = setup({ onTrack });
+  h.controller.start(playlist()); await flush(); h.player.ready(); h.player.emit(1);
+  const initialTrack = onTrack.mock.calls.at(-1)[0];
+  h.player.getVideoData = () => ({ video_id: h.player.id, title: 'Delayed title' });
+  jest.advanceTimersByTime(1000);
+  expect(onTrack).toHaveBeenLastCalledWith({ ...initialTrack, title: 'Delayed title' });
+});
+
+test('skip yields to the queued donation and resumes at the next Mix song afterwards', async () => {
+  const h = setup();
+  h.controller.start(playlist()); await flush(); h.player.ready(); h.player.emit(1);
+  h.setDeferred(true); h.controller.skip();
+  expect(h.player.playVideoAt).not.toHaveBeenCalled();
+  h.setDeferred(false); h.controller.start(playlist());
+  expect(h.player.playVideoAt).toHaveBeenLastCalledWith(1);
+});
+
+test('waits for a visible host before initializing an autoplay iframe', async () => {
+  const h = setup();
+  h.host.clientWidth = 0;
+  h.controller.start(playlist()); await flush();
+  expect(h.instances).toHaveLength(0);
+  h.host.clientWidth = 1280;
+  jest.advanceTimersByTime(1000); await flush();
   expect(h.instances).toHaveLength(1);
 });
 

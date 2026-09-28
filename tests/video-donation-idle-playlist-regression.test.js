@@ -61,7 +61,7 @@ describe('영상 후원 대기 플레이리스트 회귀 방지', () => {
 
     expect(pvdViewer).toContain('if (payload.idleDeferred === true)');
     expect(pvdViewer).toContain('deferredDonationRef.current = item;');
-    expect(pvdViewer).toContain("playbackModeRef.current === 'idle' && idlePlayingRef.current");
+    expect(pvdViewer).toContain("if (playlist.enabled && playbackModeRef.current === 'idle') return;");
     expect(pvdViewer).toContain('if (e?.data === YT.PlayerState.PLAYING) idlePlayingRef.current = true;');
     expect(pvdViewer).toContain('activateDeferredDonation(deferredItem);');
     const nextTrackSelection = pvdViewer.indexOf('idleCurrentMediaIdRef.current = nextMediaId;');

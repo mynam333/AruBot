@@ -13,6 +13,7 @@ import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSett
 import { confirmPlatformTokenConsent, confirmYoutubeBotProfileConsent, countActiveDurableRuntimeJobs, touchPlatformTokenUsed, touchYoutubeBotProfileUsed } from './supabase.js';
 import { createPlatformProfileService } from './platform-profiles.js';
 import { createChzzkInfoClient, chzzkChannelIdentityMatches, chzzkNonNegativeNumber } from './chzzk-info.js';
+import { createPvdIdlePlaybackStore } from './pvd-idle-playback.js';
 import { executeAndStripLiveChangeTokens, filterLiveInfoByProvider, selectCategorySearchResult } from './live-command-actions.js';
 import { canManageLiveSettings, createLiveManagerRoleResolver, getLiveRoleLevel } from './live-command-permissions.js';
 import { buildYoutubeLiveInfoFallback, buildYoutubeLiveLookupContext, buildYoutubeOfflineLiveInfo } from './youtube-live-info.js';
@@ -2670,6 +2671,10 @@ const videoDonationQueues = new Map(); // sid -> array of requests
 const videoDonationTimers = new Map(); // sid -> NodeJS.Timeout
 const pvdSidSockets = new Map(); // sid -> Set<WebSocket>
 const pvdAdminSockets = new Map(); // sid -> Set<WebSocket>
+const pvdIdlePlayback = createPvdIdlePlaybackStore();
+setInterval(() => {
+  for (const sid of pvdIdlePlayback.expire()) notifyPvdAdminSubscribers(sid, 'idle_disconnected').catch(() => null);
+}, 5000).unref?.();
 const pvdTokenToSid = new Map(); // token -> sid (in-memory reverse index)
 const pvdDurationProbeCoordinator = createPvdDurationProbeCoordinator();
 
@@ -3937,6 +3942,12 @@ app.post('/api/video-donation/control-by-token', async (req, res) => {
       if (!settings.videoDonationViewerToken || settings.videoDonationViewerToken !== token) return res.status(404).json({ error: 'token not found' });
     } catch { }
     const op = String(req.body?.op || '').toLowerCase();
+    if (op === 'idle_status') {
+      if (settings.videoDonationViewerToken !== token) return res.status(404).json({ error: 'token not found' });
+      const result = pvdIdlePlayback.report(sid, req.body);
+      if (result.accepted) notifyPvdAdminSubscribers(sid, 'idle_status').catch(() => null);
+      return res.json({ ok: true, ...result });
+    }
     if (op === 'volume') {
       const volume = normalizePvdVolume(req.body?.volume ?? req.body?.value ?? 100);
       await setBotSettings(sid, { ...settings, videoDonationVolume: volume });
@@ -6767,24 +6778,44 @@ setInterval(() => { runDurableRuntimeWorker().catch(() => null); }, 5_000).unref
 async function getPvdQueueSnapshot(sid, reason = 'sync') {
   const q = getVideoQueue(sid);
   const state = pvdPlaybackState.get(sid) || null;
-  const current = q[0] || null;
+  const idle = getActivePvdIdlePlayback(sid);
+  const current = idle?.item || (state?.idleDeferred ? null : q[0]) || null;
   const volume = await getPvdVolumeForSid(sid).catch(() => 100);
   return {
     type: 'video-donation.queue',
     reason,
     items: q,
     currentItem: current,
-    waitingItems: q.slice(1),
+    playbackMode: idle ? 'idle' : current ? 'donation' : 'none',
+    waitingItems: idle || state?.idleDeferred ? q : q.slice(1),
     queueSize: q.length,
-    waitingSize: Math.max(0, q.length - 1),
-    startedAt: current ? state?.baseStartMs || null : null,
-    paused: current ? state?.paused === true : null,
-    idleDeferred: current ? state?.idleDeferred === true : false,
-    atSec: current ? getCurrentAtSec(sid) : 0,
-    elapsedSec: current ? getCurrentPvdElapsedSec(sid) : 0,
+    waitingSize: idle || state?.idleDeferred ? q.length : Math.max(0, q.length - 1),
+    startedAt: idle ? null : current ? state?.baseStartMs || null : null,
+    paused: idle ? idle.paused : current ? state?.paused === true : null,
+    idleDeferred: !!q[0] && state?.idleDeferred === true,
+    atSec: idle ? idle.atSec : current ? getCurrentAtSec(sid) : 0,
+    elapsedSec: idle ? idle.atSec : current ? getCurrentPvdElapsedSec(sid) : 0,
     volume,
     serverNow: Date.now(),
   };
+}
+
+function getActivePvdIdlePlayback(sid) {
+  if (getVideoQueue(sid)[0] && pvdPlaybackState.get(sid)?.idleDeferred !== true) return null;
+  return pvdIdlePlayback.snapshot(sid);
+}
+
+async function controlPvdIdlePlayback(sid, op, expectedItemId = '') {
+  if (!getActivePvdIdlePlayback(sid)) return null;
+  const command = pvdIdlePlayback.control(sid, op, expectedItemId);
+  if (!command) return null;
+  if (command.mismatch) {
+    const error = new Error('item_mismatch');
+    error.statusCode = 409;
+    throw error;
+  }
+  await broadcastPvdControl(sid, { op: 'idle-control', command });
+  return { ok: true, playbackMode: 'idle', paused: op === 'pause', idleDeferred: pvdPlaybackState.get(sid)?.idleDeferred === true };
 }
 
 async function notifyPvdAdminSubscribers(sid, reason = 'queue_changed') {
@@ -7522,6 +7553,8 @@ app.post('/api/video-donation/activate-by-token', async (req, res) => {
     }
 
     const expectedItemId = String(req.body?.itemId || req.body?.expectedItemId || '').trim();
+    const idle = getActivePvdIdlePlayback(sid);
+    if (idle && idle.clientId !== String(req.body?.clientId || '')) return res.status(409).json({ error: 'idle_player_owned' });
     const result = await activateDeferredPvdPlayback(sid, expectedItemId);
     if (result.mismatch) return res.status(409).json(result);
     return res.json(result);
@@ -11836,7 +11869,18 @@ app.post('/api/video-donation/control', async (req, res) => {
       const message = await broadcastPvdControl(sid, { op, volume });
       return res.json({ ok: true, message });
     }
+    if (['pause', 'play', 'skip'].includes(op)) {
+      const idleResult = await controlPvdIdlePlayback(sid, op, String(req.body?.itemId || ''));
+      if (idleResult) return res.json(idleResult);
+      if (req.body?.itemId && String(q[0]?.id || '') !== String(req.body.itemId)) return res.status(409).json({ error: 'item_mismatch' });
+    }
     if (!q[0]) return res.json({ ok: true, empty: true, paused: null, idleDeferred: false, atSec: 0 });
+    if (op === 'skip') {
+      const result = await popCurrentVideoDonationItem(sid, { cause: 'skipped', expectedItemId: req.body?.itemId });
+      if (result.mismatch) return res.status(409).json({ error: 'item_mismatch' });
+      if (result.popped) await broadcastPvdStart(sid);
+      return res.json({ ok: true });
+    }
     if (op === 'duration' || op === 'duration_sync') {
       const durationSec = Number(req.body?.durationSec ?? req.body?.duration ?? req.body?.value);
       const item = updateCurrentPvdDurationFromPlayer(sid, durationSec);
@@ -28872,6 +28916,7 @@ function registerPvdRoutes() {
     try {
       const url = new URL(req.url, `http://localhost:${PORT}`);
       token = String(url.searchParams.get('token') || '');
+      ws.pvdClientId = String(url.searchParams.get('clientId') || '').slice(0, 80);
       const ip = (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').toString();
       const userAgent = req.headers['user-agent'] || '';
 
@@ -28879,6 +28924,13 @@ function registerPvdRoutes() {
 
       sid = validationResult.sid;
       channelId = validationResult.channelId;
+      if (ws.readyState !== WebSocket.OPEN) {
+        if (![...(pvdSidSockets.get(sid) || [])].some((socket) => socket.readyState === WebSocket.OPEN && socket.pvdClientId === ws.pvdClientId)) {
+          if (pvdIdlePlayback.release(sid, ws.pvdClientId)) notifyPvdAdminSubscribers(sid, 'idle_disconnected').catch(() => null);
+        }
+        return;
+      }
+      pvdIdlePlayback.connect(sid, ws.pvdClientId);
 
       console.log('[PVD WS] Connection validated:', {
         channelId,
@@ -28938,6 +28990,31 @@ function registerPvdRoutes() {
         } catch { }
       });
 
+      ws.on('close', (code, reason) => {
+        try { clearInterval(ka); } catch { }
+
+        if (channelId && token) {
+          unregisterChannelConnection(channelId, 'pvd', token, ws);
+        }
+
+        try {
+          const set = pvdSidSockets.get(sid);
+          if (set) {
+            set.delete(ws);
+            if (![...set].some((socket) => socket.readyState === 1 && socket.pvdClientId === ws.pvdClientId)
+              && pvdIdlePlayback.release(sid, ws.pvdClientId)) {
+              notifyPvdAdminSubscribers(sid, 'idle_disconnected').catch(() => null);
+            }
+            if (set.size === 0) {
+              pvdSidSockets.delete(sid);
+            }
+          }
+        } catch { }
+
+        console.log(`[PVD WS] Disconnected - Channel: ${channelId}, SID: ${sid}, Code: ${code}, Reason: ${reason}`);
+      });
+
+      // Register cleanup before awaiting settings so a quickly closed OBS source is released.
       // Immediately send current now-playing to this socket so late joiners auto-start
       try {
         const q = getVideoQueue(sid);
@@ -28965,26 +29042,6 @@ function registerPvdRoutes() {
       } catch (error) {
         console.error('[PVD WS] Error sending initial payload:', error);
       }
-
-      ws.on('close', (code, reason) => {
-        try { clearInterval(ka); } catch { }
-
-        if (channelId && token) {
-          unregisterChannelConnection(channelId, 'pvd', token, ws);
-        }
-
-        try {
-          const set = pvdSidSockets.get(sid);
-          if (set) {
-            set.delete(ws);
-            if (set.size === 0) {
-              pvdSidSockets.delete(sid);
-            }
-          }
-        } catch { }
-
-        console.log(`[PVD WS] Disconnected - Channel: ${channelId}, SID: ${sid}, Code: ${code}, Reason: ${reason}`);
-      });
 
       ws.on('error', (error) => {
         const context = {

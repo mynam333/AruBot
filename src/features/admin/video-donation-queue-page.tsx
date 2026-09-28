@@ -1,6 +1,6 @@
 'use client';
 
-import { Clapperboard, GripVertical, Loader2, Pause, Play, RefreshCw, RotateCcw, Trash2, UserRound, Volume2, VolumeX } from 'lucide-react';
+import { Clapperboard, GripVertical, Loader2, Pause, Play, RefreshCw, RotateCcw, SkipForward, Trash2, UserRound, Volume2, VolumeX } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { toast } from 'sonner';
 import { VideoDonationSettingsDialog } from '@/features/admin/admin-action-dialogs';
@@ -26,6 +26,7 @@ type VideoDonationItem = {
   userId?: string;
   username?: string | null;
   status?: string;
+  idle?: boolean;
 };
 
 type VideoDonationQueueResponse = {
@@ -113,6 +114,7 @@ function VideoDonationItemCard({
   onDragEnd,
   onDelete,
   onRefundDelete,
+  onSkip,
 }: {
   item: VideoDonationItem;
   index?: number;
@@ -128,6 +130,7 @@ function VideoDonationItemCard({
   onDragEnd?: () => void;
   onDelete: () => void;
   onRefundDelete: () => void;
+  onSkip?: () => void;
 }) {
   const thumb = thumbnailUrl(item);
   const time = requestedAt(item);
@@ -168,7 +171,7 @@ function VideoDonationItemCard({
           )}
           {current ? (
             <Badge tone={idleDeferred ? 'lemon' : paused ? 'sky' : 'mint'} className="absolute left-2 top-2">
-              {idleDeferred ? '재생 대기' : paused ? '일시정지' : '재생 중'}
+              {paused ? '일시정지' : item.idle ? '대기 음악' : idleDeferred ? '재생 대기' : '재생 중'}
             </Badge>
           ) : null}
           {!current && index != null ? <Badge tone="neutral" className="absolute left-2 top-2">대기 {index + 1}</Badge> : null}
@@ -184,7 +187,7 @@ function VideoDonationItemCard({
               <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
                 <span className="inline-flex items-center gap-1">
                   <UserRound className="h-[1em] w-[1em]" />
-                  {item.username || item.userId || '신청자 정보 없음'}
+                  {item.idle ? '대기 음악' : item.username || item.userId || '신청자 정보 없음'}
                 </span>
                 {time ? <span>{time} 신청</span> : null}
               </div>
@@ -213,6 +216,8 @@ function VideoDonationItemCard({
           </div>
 
           <div className="flex flex-wrap justify-end gap-2">
+            {current && onSkip ? <Button type="button" size="icon" variant="outline" onClick={onSkip} disabled={busy} title="현재 영상 스킵" aria-label="현재 영상 스킵"><SkipForward className="h-4 w-4" /></Button> : null}
+            {!item.idle ? <>
             <Button type="button" variant="outline" onClick={onDelete} disabled={busy}>
               {busy ? <Loader2 className="h-[1em] w-[1em] animate-spin" /> : <Trash2 className="h-[1em] w-[1em]" />}
               삭제
@@ -221,6 +226,7 @@ function VideoDonationItemCard({
               {busy ? <Loader2 className="h-[1em] w-[1em] animate-spin" /> : <RotateCcw className="h-[1em] w-[1em]" />}
               삭제 후 반환
             </Button>
+            </> : null}
           </div>
         </div>
       </div>
@@ -230,13 +236,14 @@ function VideoDonationItemCard({
 
 export function VideoDonationQueuePage() {
   const [items, setItems] = useState<VideoDonationItem[]>([]);
+  const [currentItem, setCurrentItem] = useState<VideoDonationItem | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [volume, setVolume] = useState(100);
   const [volumePending, setVolumePending] = useState(false);
   const [paused, setPaused] = useState(false);
   const [idleDeferred, setIdleDeferred] = useState(false);
-  const [playbackPending, setPlaybackPending] = useState<'pause' | 'play' | null>(null);
+  const [playbackPending, setPlaybackPending] = useState<'pause' | 'play' | 'skip' | null>(null);
   const [realtimeState, setRealtimeState] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const [isPending, startTransition] = useTransition();
   const wsRef = useRef<WebSocket | null>(null);
@@ -244,12 +251,13 @@ export function VideoDonationQueuePage() {
   const reconnectAttemptRef = useRef(0);
   const queuePayloadVersionRef = useRef(0);
 
-  const currentItem = items[0] || null;
-  const waitingItems = useMemo(() => items.slice(1), [items]);
+  const waitingItems = useMemo(() => items.filter((item) => item.id !== currentItem?.id), [items, currentItem]);
   const totalCost = useMemo(() => items.reduce((sum, item) => sum + Number(item.cost || 0), 0), [items]);
   const totalDuration = useMemo(() => items.reduce((sum, item) => sum + Number(item.durationSec || 0), 0), [items]);
   const playbackStatus = !currentItem
     ? '비어 있음'
+    : currentItem.idle
+      ? paused ? '일시정지' : '대기 음악 재생 중'
     : idleDeferred
       ? '대기 음악 종료 대기'
       : paused
@@ -260,7 +268,10 @@ export function VideoDonationQueuePage() {
     queuePayloadVersionRef.current += 1;
     const nextItems = Array.isArray(data?.items) ? data.items : [];
     setItems(nextItems);
-    setPaused(nextItems.length > 0 && data?.paused === true);
+    const nextCurrent = data && Object.prototype.hasOwnProperty.call(data, 'currentItem')
+      ? data.currentItem || null : data?.idleDeferred ? null : nextItems[0] || null;
+    setCurrentItem(nextCurrent);
+    setPaused(!!nextCurrent && data?.paused === true);
     setIdleDeferred(nextItems.length > 0 && data?.idleDeferred === true);
     if (data?.volume != null) {
       setVolume(Math.max(0, Math.min(100, Math.round(Number(data.volume)))));
@@ -379,7 +390,7 @@ export function VideoDonationQueuePage() {
     const nextWaiting = waitingItems.slice();
     const [moved] = nextWaiting.splice(from, 1);
     nextWaiting.splice(to, 0, moved);
-    const nextItems = currentItem ? [currentItem, ...nextWaiting] : nextWaiting;
+    const nextItems = currentItem && !currentItem.idle ? [currentItem, ...nextWaiting] : nextWaiting;
     setDraggingId(null);
     void persistOrder(nextItems);
   };
@@ -413,16 +424,17 @@ export function VideoDonationQueuePage() {
     }
   };
 
-  const controlPlayback = async (op: 'pause' | 'play') => {
+  const controlPlayback = async (op: 'pause' | 'play' | 'skip') => {
     if (!currentItem || playbackPending) return;
     setPlaybackPending(op);
     queuePayloadVersionRef.current += 1;
     try {
-      const result = await postJson<VideoDonationQueueResponse>('/api/video-donation/control', { op });
+      const result = await postJson<VideoDonationQueueResponse>('/api/video-donation/control', { op, itemId: currentItem.id });
       queuePayloadVersionRef.current += 1;
       setPaused(result.paused === true);
       setIdleDeferred(result.idleDeferred === true);
-      toast.success(op === 'pause' ? '영상 후원을 일시정지했어요.' : '영상 후원을 재생했어요.');
+      toast.success(op === 'skip' ? '현재 영상을 건너뛰었어요.' : op === 'pause' ? '재생을 일시정지했어요.' : '재생을 시작했어요.');
+      if (op === 'skip') load();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '영상 재생 상태를 바꾸지 못했어요.');
     } finally {
@@ -474,6 +486,10 @@ export function VideoDonationQueuePage() {
                 title="영상 후원 일시정지"
               >
                 {playbackPending === 'pause' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Pause className="h-4 w-4" />}
+              </Button>
+              <Button type="button" size="icon" variant="ghost" onClick={() => void controlPlayback('skip')}
+                disabled={!currentItem || playbackPending !== null} aria-label="영상 후원 스킵" title="현재 영상 스킵">
+                {playbackPending === 'skip' ? <Loader2 className="h-4 w-4 animate-spin" /> : <SkipForward className="h-4 w-4" />}
               </Button>
             </div>
             <div className="flex min-h-[var(--control-height)] min-w-[min(100%,18rem)] items-center gap-2 rounded-[var(--radius-control)] border bg-card/74 px-[clamp(0.8rem,1.4vw,1rem)] shadow-subtle backdrop-blur">
@@ -552,8 +568,9 @@ export function VideoDonationQueuePage() {
               item={currentItem}
               current
               paused={paused}
-              idleDeferred={idleDeferred}
-              busy={busyId === currentItem.id}
+              idleDeferred={!currentItem.idle && idleDeferred}
+              busy={busyId === currentItem.id || playbackPending !== null}
+              onSkip={() => void controlPlayback('skip')}
               onDelete={() => void removeItem(currentItem, false)}
               onRefundDelete={() => void removeItem(currentItem, true)}
             />

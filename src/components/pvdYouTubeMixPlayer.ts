@@ -2,6 +2,7 @@ import { parseYouTubeMix } from '../../shared/youtube-mix.js';
 import { getPvdIdlePlaylistSignature, type PvdIdlePlaylist } from './pvdIdlePlaylist';
 
 type MixPlayer = {
+  getIframe?: () => HTMLIFrameElement;
   destroy?: () => void;
   getCurrentTime?: () => number;
   getDuration?: () => number;
@@ -31,6 +32,9 @@ type MixOptions = {
   isVisible: () => boolean;
   onPlaying: (playing: boolean) => void;
   onBoundary: () => boolean;
+  onTrack?: (track: { id: string; mediaId: string; title: string; durationSec: number } | null) => void;
+  onBlocked?: (blocked: boolean) => void;
+  random?: () => number;
   now?: () => number;
 };
 
@@ -55,7 +59,6 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
   let deadline = 0;
   let suspendedAt: number | null = null;
   let advancing = false;
-  let waitingForDuration = false;
   let advanceOnResume = false;
   let currentId = '';
   let currentIndex = -1;
@@ -65,6 +68,10 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
   let consecutiveSkips = 0;
   let rotationsWithoutPlay = 0;
   let configuredSeedCursor = 0;
+  let paused = false;
+  let trackSerial = 0;
+  let reportedTrackKey = '';
+  let reportedTrackTitle = '';
   let volume = 100;
   let captions = false;
   const seen = new Set<string>();
@@ -80,7 +87,7 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
     return '';
   };
 
-  const canPlay = () => active && !disposed && options.isVisible();
+  const canPlay = () => active && !paused && !disposed && options.isVisible();
   const remember = (id: string) => {
     if (!id) return;
     seen.add(id);
@@ -115,13 +122,15 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
     player = null;
     ready = false;
     advancing = false;
-    waitingForDuration = false;
     deadline = 0;
     suspendedAt = null;
     previous?.pauseVideo?.();
     previous?.destroy?.();
     options.getHost()?.replaceChildren();
     options.onPlaying(false);
+    options.onTrack?.(null);
+    reportedTrackKey = '';
+    reportedTrackTitle = '';
   };
   const fail = (message: string, delay = RETRY_MS) => {
     clearPlayer();
@@ -183,7 +192,6 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
     const hadCurrent = !!currentId;
     // Native Mix transitions can change the index without an ENDED event.
     if (changed) {
-      waitingForDuration = false;
       currentId = id;
       currentIndex = index;
       advancing = false;
@@ -203,15 +211,13 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
       return;
     }
     if (!id) return;
-    if (!tracks().length) { fail('mix_playlist_unavailable'); return; }
+    // Mix metadata may arrive after PLAYING, or omit the playlist in an embedded player.
     const duration = Number(player.getDuration?.() || 0);
     if (!Number.isFinite(duration) || duration <= 0) {
-      waitingForDuration = true;
       if (!deadline) deadline = now() + LOAD_TIMEOUT_MS;
       options.onPlaying(false);
       return;
     }
-    waitingForDuration = false;
     deadline = 0;
     if (((id !== acceptedId || index !== acceptedIndex) && seen.has(id)) || duration < MIN_DURATION_SEC || duration > MAX_DURATION_SEC) {
       remember(id);
@@ -228,6 +234,16 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
     consecutiveSkips = 0;
     rotationsWithoutPlay = 0;
     rotationSeeds.clear();
+    const trackKey = `${id}:${index}`;
+    const title = player.getVideoData?.()?.title || config?.tracks.find((track) => track.mediaId === id)?.title || `YouTube ${id}`;
+    const trackChanged = reportedTrackKey !== trackKey;
+    if (trackChanged) trackSerial += 1;
+    if (trackChanged || reportedTrackTitle !== title) {
+      reportedTrackKey = trackKey;
+      reportedTrackTitle = title;
+      options.onTrack?.({ id: `${id}:${trackSerial}`, mediaId: id, title, durationSec: duration });
+    }
+    options.onBlocked?.(false);
     options.onPlaying(true);
   };
 
@@ -246,7 +262,8 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
     try {
       let resolvedTarget = target;
       if (!resolvedTarget) {
-        resolvedTarget = parseYouTubeMix(config.mixUrl);
+        const configuredSeed = nextConfiguredSeed();
+        resolvedTarget = configuredSeed ? { videoId: configuredSeed, playlistId: `RD${configuredSeed}` } : parseYouTubeMix(config.mixUrl);
         if (!resolvedTarget) {
           const seed = nextConfiguredSeed() || await waitFor(options.fetchSeed(controller.signal));
           if (!/^[A-Za-z0-9_-]{11}$/.test(seed)) throw new Error('mix_seed_not_found');
@@ -263,6 +280,7 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
       if (!canPlay()) return;
       const host = options.getHost();
       if (!host) return;
+      if (host.clientWidth === 0 || host.clientHeight === 0) return;
       host.replaceChildren();
       const mount = document.createElement('div');
       host.appendChild(mount);
@@ -281,6 +299,7 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
           onReady: (event: MixEvent) => {
             if (version !== generation || event.target !== player) return;
             ready = true;
+            player?.getIframe?.()?.setAttribute('allow', 'autoplay; encrypted-media; fullscreen; picture-in-picture');
             player?.setLoop?.(false);
             applyOptions();
             annotate();
@@ -297,7 +316,13 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
             if (!tracks().length || consecutiveSkips >= 15) fail(`mix_player_error_${event.data}`);
             else advance();
           },
-          onAutoplayBlocked: () => { if (version === generation) fail('mix_autoplay_blocked'); },
+          onAutoplayBlocked: () => {
+            if (version !== generation) return;
+            deadline = 0;
+            annotate('mix_autoplay_blocked');
+            options.onPlaying(false);
+            options.onBlocked?.(true);
+          },
         },
       });
     } catch (error) {
@@ -319,10 +344,10 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
     if (!player) { void ensure(); return; }
     if (deadline && now() >= deadline) { fail('mix_player_timeout'); return; }
     if (ready) {
-      if (waitingForDuration && player.getPlayerState?.() === 1) onStateChange({ data: 1, target: player });
+      if (player.getPlayerState?.() === 1) onStateChange({ data: 1, target: player });
       if (!player) return;
       if (advanceOnResume) { advanceOnResume = false; advancing = false; advance(); }
-      else player.playVideo?.();
+      else if (player.getPlayerState?.() !== 1) player.playVideo?.();
     }
   };
   const timer = setInterval(sync, 1000);
@@ -343,7 +368,8 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
       rotationSeeds.clear();
       currentId = ''; acceptedId = ''; acceptedIndex = -1; lastAcceptedId = ''; currentIndex = -1;
       consecutiveSkips = 0; rotationsWithoutPlay = 0; advanceOnResume = false;
-      configuredSeedCursor = 0;
+      configuredSeedCursor = next.tracks.length ? Math.floor((options.random || Math.random)() * next.tracks.length) : 0;
+      paused = false;
     },
     start(next: PvdIdlePlaylist) {
       this.configure(next);
@@ -351,6 +377,16 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
       sync();
     },
     pause() { active = false; suspend(); },
+    setPaused(next: boolean) { paused = next; sync(); },
+    skip() {
+      paused = false;
+      advanceOnResume = true;
+      if (boundary()) return;
+      advanceOnResume = false;
+      advancing = false;
+      advance();
+    },
+    getCurrentTime() { return Number(player?.getCurrentTime?.() || 0); },
     setVolume(next: number) { volume = next; applyOptions(); },
     setCaptions(next: boolean) { captions = next; applyOptions(); },
     dispose() {

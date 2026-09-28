@@ -12,6 +12,7 @@ let savedGlobals;
 
 beforeEach(() => {
   jest.useFakeTimers();
+  jest.spyOn(Math, 'random').mockReturnValue(0);
   savedGlobals = Object.fromEntries(['window', 'document', 'WebSocket', 'fetch'].map((name) => [name, global[name]]));
 });
 
@@ -23,11 +24,13 @@ afterEach(() => {
   }
   jest.clearAllTimers();
   jest.useRealTimers();
+  jest.restoreAllMocks();
 });
 
 function mount(initial, getRecommendations) {
   let state = initial;
   let socket;
+  let socketCount = 0;
   let player;
   const effects = [];
   const loads = [];
@@ -70,7 +73,7 @@ function mount(initial, getRecommendations) {
   }
   global.window = { YT: { Player, PlayerState: { PLAYING: 1, PAUSED: 2, ENDED: 0 } }, location: { origin: 'http://localhost', pathname: '/pvd/test' }, addEventListener() {}, removeEventListener() {}, setTimeout };
   global.document = { hidden: false, createElement: node, addEventListener() {}, removeEventListener() {} };
-  global.WebSocket = class { constructor() { socket = this; } close() {} };
+  global.WebSocket = class { constructor() { socket = this; socketCount += 1; } close() {} };
   global.fetch = jest.fn(async (url, options = {}) => {
     const body = options.body ? JSON.parse(options.body) : {};
     calls.push({ url, body });
@@ -84,14 +87,18 @@ function mount(initial, getRecommendations) {
     'react/jsx-runtime': { jsx, jsxs: jsx },
     '@/components/pvdIdlePlaylist': idleModel,
     '@/components/pvdYouTubeMixPlayer': mixPlayer,
+    '@/components/pvdPlaybackVisibility': loadSource('src/components/pvdPlaybackVisibility.ts'),
     '@/components/youtubeDurationProbe': { createYouTubeDurationProbeRunner: () => ({ dispose() {} }) },
     '@/shared/api/http': { getBrowserApiBase: () => 'http://localhost' },
   });
   Viewer({ viewerToken: 'test' });
-  const disposers = effects.map((effect) => effect());
+  let disposers = effects.map((effect) => effect());
   cleanup = () => disposers.reverse().forEach((dispose) => { if (typeof dispose === 'function') dispose(); });
   return {
     loads, calls, mixLoads,
+    get socket() { return socket; },
+    get socketCount() { return socketCount; },
+    remountEffects() { cleanup(); disposers = effects.map((effect) => effect()); },
     emit: (data) => player.emit(data),
     push: (payload) => {
       state = payload;
@@ -155,4 +162,38 @@ test('finishes idle music, activates a deferred donation, then resumes at the ne
   harness.push({ item: null, idlePlaylist });
   await flush();
   expect(harness.loads).toEqual(['video000001', 'donation001', 'video000002']);
+});
+
+test.each([2, 3])('keeps a donation queued while the current idle track is paused or buffering (%s)', async (playerState) => {
+  const idlePlaylist = playlist([track(1), track(2)]);
+  const harness = mount({ item: null, idlePlaylist }, async () => ({}));
+  await flush();
+  harness.emit(playerState);
+  harness.push({ item: { id: 'donation-1', mediaProvider: 'youtube', videoId: 'donation001' }, idleDeferred: true, idlePlaylist });
+  await flush();
+  expect(harness.loads).toEqual(['video000001']);
+  expect(harness.calls.filter((call) => call.url.includes('/activate-by-token'))).toHaveLength(0);
+});
+
+test('autoplays in an OBS offscreen document and reports its actual idle song', async () => {
+  const harness = mount({ item: null, idlePlaylist: playlist([track(1)]) }, async () => ({}));
+  window.obsstudio = {};
+  document.hidden = true;
+  await flush();
+  expect(harness.loads).toEqual(['video000001']);
+  expect(harness.calls).toContainEqual(expect.objectContaining({ body: expect.objectContaining({
+    op: 'idle_status', source: 'obs', mode: 'idle', paused: false,
+    track: expect.objectContaining({ mediaId: 'video000001', durationSec: 180 }),
+  }) }));
+});
+
+test('a closed socket from a previous effect cannot reconnect after a remount', async () => {
+  const harness = mount({ item: null, idlePlaylist: playlist([track(1)]) }, async () => ({}));
+  const oldSocket = harness.socket;
+  harness.remountEffects();
+  await flush();
+  oldSocket.onclose();
+  jest.advanceTimersByTime(2000);
+  await flush();
+  expect(harness.socketCount).toBe(2);
 });

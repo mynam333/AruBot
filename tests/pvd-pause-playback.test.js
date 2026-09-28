@@ -81,6 +81,7 @@ function mount(initialPayload = {}) {
     },
     'react/jsx-runtime': { jsx, jsxs: jsx },
     '@/components/pvdIdlePlaylist': idleModel, '@/components/pvdYouTubeMixPlayer': mixPlayer,
+    '@/components/pvdPlaybackVisibility': loadSource('src/components/pvdPlaybackVisibility.ts'),
     '@/components/youtubeDurationProbe': { createYouTubeDurationProbeRunner: () => ({ dispose() {} }) },
     '@/shared/api/http': { getBrowserApiBase: () => 'http://localhost' },
   });

@@ -17,14 +17,14 @@ describe('영상 후원 재생 제어 회귀 방지', () => {
 
   test('관리 화면과 로컬 리모컨이 현재 재생 상태를 조회할 수 있어야 함', () => {
     expect(serverIndex).toContain("return res.json(await getPvdQueueSnapshot(sid, 'http_sync'))");
-    expect(serverIndex).toContain('idleDeferred: current ? state?.idleDeferred === true : false');
+    expect(serverIndex).toContain('idleDeferred: !!q[0] && state?.idleDeferred === true');
     expect(serverIndex).toContain('videoPlayback: {');
     expect(serverIndex).toContain('paused: videoQueue[0] ? videoPlaybackState?.paused === true : null');
   });
 
   test('홈페이지 영상 후원 큐에서 재생과 일시정지를 제어해야 함', () => {
-    expect(queuePage).toContain("const controlPlayback = async (op: 'pause' | 'play')");
-    expect(queuePage).toContain("postJson<VideoDonationQueueResponse>('/api/video-donation/control', { op })");
+    expect(queuePage).toContain("const controlPlayback = async (op: 'pause' | 'play' | 'skip')");
+    expect(queuePage).toContain("postJson<VideoDonationQueueResponse>('/api/video-donation/control', { op, itemId: currentItem.id })");
     expect(queuePage).toContain('aria-label="영상 후원 재생"');
     expect(queuePage).toContain('aria-label="영상 후원 일시정지"');
     expect(queuePage).toContain("'대기 음악 종료 대기'");
