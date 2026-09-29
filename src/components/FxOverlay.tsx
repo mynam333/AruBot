@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { getBrowserApiBase } from '@/shared/api/http';
+import { connectOverlaySocket } from '@/shared/api/overlay-socket';
 
 type FxPayload = {
   id?: string;
@@ -203,13 +204,9 @@ export function FxOverlay({ token }: { token: string }) {
 
   React.useEffect(() => {
     if (!token) return undefined;
-    let closed = false;
-    let reconnectTimer = 0;
-    let ws: WebSocket | null = null;
-
-    const connect = () => {
-      ws = new WebSocket(getWsUrl(token));
-      ws.onmessage = (event) => {
+    return connectOverlaySocket({
+      url: () => getWsUrl(token),
+      onMessage: (event) => {
         const message = JSON.parse(String(event.data || '{}'));
         const payload = message.payload as FxPayload;
         if (message?.type === 'fx:update') {
@@ -249,22 +246,9 @@ export function FxOverlay({ token }: { token: string }) {
             setItems((current) => current.filter((item) => item.id !== id));
           }, 700);
         }, duration);
-      };
-      ws.onclose = () => {
-        if (!closed) reconnectTimer = window.setTimeout(connect, 1500);
-      };
-      ws.onerror = () => {
-        try { ws?.close(); } catch { /* ignore */ }
-      };
-    };
-    connect();
-
-    return () => {
-      closed = true;
-      if (reconnectTimer) window.clearTimeout(reconnectTimer);
-      try { ws?.close(); } catch { /* ignore */ }
-    };
-    }, [speak, token]);
+      },
+    });
+  }, [speak, token]);
 
   return (
     <main className="fixed inset-0 overflow-hidden bg-transparent">

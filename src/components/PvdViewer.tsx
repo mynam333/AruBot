@@ -11,6 +11,7 @@ import { isPvdDocumentHidden } from '@/components/pvdPlaybackVisibility';
 import { Pause, Play, SkipForward } from 'lucide-react';
 import { createYouTubeDurationProbeRunner, type YouTubeDurationProbeRequest, type YouTubeDurationProbeResult } from '@/components/youtubeDurationProbe';
 import { getBrowserApiBase } from '@/shared/api/http';
+import { connectOverlaySocket } from '@/shared/api/overlay-socket';
 
 type PlaybackTarget = {
   atSec?: number;
@@ -153,7 +154,6 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const currentVidRef = useRef<string | null>(null);
   const currentStartRef = useRef<number>(0);
-  const reconnectRef = useRef<{ attempts: number; timer: ReturnType<typeof setTimeout> | null; closed: boolean }>({ attempts: 0, timer: null, closed: false });
   const volumeEmitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const ytReadyPromiseRef = useRef<Promise<YouTubeApi> | null>(null);
   const youtubeDurationProbeRunnerRef = useRef<ReturnType<typeof createYouTubeDurationProbeRunner> | null>(null);
@@ -1334,12 +1334,9 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
   useEffect(() => {
     if (!token) return;
     const apiBase = getViewerApiBase();
-    reconnectRef.current.closed = false;
     let apiUrl: URL;
     try { apiUrl = new URL(apiBase); } catch { apiUrl = new URL(window.location.origin); }
     const wsProto = apiUrl.protocol === 'https:' ? 'wss:' : 'ws:';
-    let ws: WebSocket | null = null;
-    let disposed = false;
 
     const startPolling = () => {
       if (pollTimerRef.current) return; // already polling
@@ -1353,24 +1350,14 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
       pollTimerRef.current = null;
     };
 
-    const connectWs = () => {
-      try {
-        ws = new WebSocket(`${wsProto}//${apiUrl.host}/api/pvd/ws?token=${encodeURIComponent(token)}&clientId=${encodeURIComponent(idleClientIdRef.current)}`);
-      } catch {
-        ws = null;
-        scheduleReconnect();
-        startPolling();
-        return;
-      }
-      ws.onopen = () => {
-        if (disposed) { ws?.close(); return; }
-        // Connected: stop polling and reset backoff
+    const disconnect = connectOverlaySocket({
+      url: `${wsProto}//${apiUrl.host}/api/pvd/ws?token=${encodeURIComponent(token)}&clientId=${encodeURIComponent(idleClientIdRef.current)}`,
+      onRetry: startPolling,
+      onOpen: () => {
         stopPolling();
-        reconnectRef.current.attempts = 0;
         void resyncFromServer(true);
-      };
-      ws.onmessage = (ev) => {
-        if (disposed) return;
+      },
+      onMessage: (ev, ws) => {
         try {
           const data = JSON.parse(ev.data) as Record<string, unknown>;
           if (data?.type === 'duration_probe') {
@@ -1413,38 +1400,11 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
             }
           }
         } catch {}
-      };
-      ws.onerror = () => {
-        if (!disposed) startPolling();
-      };
-      ws.onclose = () => {
-        if (!disposed && !reconnectRef.current.closed) {
-          scheduleReconnect();
-          startPolling();
-        }
-      };
-    };
-
-    const scheduleReconnect = () => {
-      const { attempts, timer } = reconnectRef.current;
-      if (timer) return;
-      const delay = Math.min(30000, 1000 * Math.pow(2, attempts)); // 1s -> 2s -> 4s ... max 30s
-      reconnectRef.current.timer = setTimeout(() => {
-        reconnectRef.current.timer = null;
-        reconnectRef.current.attempts = attempts + 1;
-        connectWs();
-      }, delay);
-    };
-
-    connectWs();
-    const reconnectState = reconnectRef.current;
+      },
+    });
 
     return () => {
-      disposed = true;
-      reconnectState.closed = true;
-      if (reconnectState.timer) clearTimeout(reconnectState.timer);
-      reconnectState.timer = null;
-      if (ws) { try { ws.close(); } catch {} }
+      disconnect();
       stopPolling();
       youtubeDurationProbeRunnerRef.current?.dispose();
       youtubeDurationProbeRunnerRef.current = null;

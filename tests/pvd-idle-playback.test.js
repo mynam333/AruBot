@@ -73,7 +73,12 @@ function mount(initial, getRecommendations, playerRole = 'video') {
   }
   global.window = { YT: { Player, PlayerState: { PLAYING: 1, PAUSED: 2, ENDED: 0 } }, location: { origin: 'http://localhost', pathname: '/pvd/test' }, addEventListener() {}, removeEventListener() {}, setTimeout };
   global.document = { hidden: false, createElement: node, addEventListener() {}, removeEventListener() {} };
-  global.WebSocket = class { constructor() { socket = this; socketCount += 1; } close() {} };
+  global.WebSocket = class {
+    static OPEN = 1; static CLOSING = 2; static CLOSED = 3;
+    constructor() { socket = this; socketCount += 1; this.readyState = 1; }
+    close() { this.readyState = 3; }
+    send(data) { if (JSON.parse(data).type === 'ping') this.onmessage?.({ data: '{"type":"pong"}' }); }
+  };
   global.fetch = jest.fn(async (url, options = {}) => {
     const body = options.body ? JSON.parse(options.body) : {};
     calls.push({ url, body });
@@ -91,6 +96,7 @@ function mount(initial, getRecommendations, playerRole = 'video') {
     '@/components/pvdPlaybackVisibility': loadSource('src/components/pvdPlaybackVisibility.ts'),
     '@/components/youtubeDurationProbe': { createYouTubeDurationProbeRunner: () => ({ dispose() {} }) },
     '@/shared/api/http': { getBrowserApiBase: () => 'http://localhost' },
+    '@/shared/api/overlay-socket': loadSource('src/shared/api/overlay-socket.ts'),
   });
   Viewer({ viewerToken: 'test', playerRole });
   let disposers = effects.map((effect) => effect());
@@ -233,9 +239,11 @@ test('autoplays in an OBS offscreen document and reports its actual idle song', 
 test('a closed socket from a previous effect cannot reconnect after a remount', async () => {
   const harness = mount({ item: null, idlePlaylist: playlist([track(1)]) }, async () => ({}));
   const oldSocket = harness.socket;
+  const oldCloseHandler = oldSocket.onclose;
   harness.remountEffects();
   await flush();
-  oldSocket.onclose();
+  expect(oldSocket.onclose).toBeNull();
+  oldCloseHandler();
   jest.advanceTimersByTime(2000);
   await flush();
   expect(harness.socketCount).toBe(2);

@@ -44,7 +44,12 @@ function mount(initialPayload = {}) {
   }
   global.window = { YT: { Player, PlayerState: { PLAYING: 1, PAUSED: 2, ENDED: 0 } }, location: { origin: 'http://localhost', pathname: '/pvd/test' }, addEventListener: (name, fn) => listeners.set(name, fn), removeEventListener() {}, setTimeout };
   global.document = { hidden: false, createElement: node, addEventListener() {}, removeEventListener() {} };
-  global.WebSocket = class { constructor() { socket = this; } close() {} };
+  global.WebSocket = class {
+    static OPEN = 1; static CLOSING = 2; static CLOSED = 3;
+    constructor() { socket = this; this.readyState = 1; }
+    close() { this.readyState = 3; }
+    send(data) { if (JSON.parse(data).type === 'ping') this.onmessage?.({ data: '{"type":"pong"}' }); }
+  };
   global.fetch = jest.fn(async (url, options = {}) => {
     const body = options.body ? JSON.parse(options.body) : {};
     calls.push({ url, body });
@@ -84,6 +89,7 @@ function mount(initialPayload = {}) {
     '@/components/pvdPlaybackVisibility': loadSource('src/components/pvdPlaybackVisibility.ts'),
     '@/components/youtubeDurationProbe': { createYouTubeDurationProbeRunner: () => ({ dispose() {} }) },
     '@/shared/api/http': { getBrowserApiBase: () => 'http://localhost' },
+    '@/shared/api/overlay-socket': loadSource('src/shared/api/overlay-socket.ts'),
   });
   const render = () => { stateIndex = 0; refIndex = 0; Viewer({ viewerToken: 'test' }); firstRender = false; };
   render();

@@ -1,6 +1,7 @@
 import React from 'react';
 import { createRouletteSpinRandom, resolveRouletteSpinSeed } from '@/components/roulette-spin-random';
 import { getBrowserApiBase } from '@/shared/api/http';
+import { connectOverlaySocket } from '@/shared/api/overlay-socket';
 import { RouletteThemeAtmosphere } from './rouletteThemeAtmosphere';
 import { getRouletteThemeMaterial } from './rouletteThemeMaterials';
 import { WheelGlassOverlay, WheelLabelsSvg, WheelPointer, WheelSegmentsSvg, WheelSelectedSegment, WheelSkinOrnaments } from './rouletteWheelSkins';
@@ -560,7 +561,6 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     channelId: null, // 추가: 현재 채널 ID
   });
   const wsRef = React.useRef<WebSocket | null>(null);
-  const reconnectTimeoutRef = React.useRef<number | null>(null);
   const reconnectAttemptsRef = React.useRef(0);
 
   // Deterministic label provider for any integer index (prevents blanks)
@@ -1061,18 +1061,14 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     }
 
     try {
-      const url = getRouletteWsUrl(token, testConnectionId);
-      
-      updateDebugInfo({ 
-        connectionState: 'connecting',
-        lastConnectionTime: Date.now()
-      });
-      updateDebugInfo((prev) => ({ connectionAttempts: prev.connectionAttempts + 1 }));
-
-      const ws = new WebSocket(url);
-      wsRef.current = ws;
-
-      ws.onopen = () => {
+      const disconnect = connectOverlaySocket({
+        url: () => getRouletteWsUrl(token, testConnectionId),
+        onConnecting: () => {
+          updateDebugInfo({ connectionState: 'connecting', lastConnectionTime: Date.now() });
+          updateDebugInfo((prev) => ({ connectionAttempts: prev.connectionAttempts + 1 }));
+        },
+        onOpen: (ws) => {
+        wsRef.current = ws;
         setError(null);
         reconnectAttemptsRef.current = 0;
         connectionEstablishedAtRef.current = Date.now();
@@ -1089,9 +1085,9 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
           channelId: null // 연결 시 채널 ID 초기화
         });
         if (!testConnectionId) postEmbeddedMessage({ type: 'arubot:roulette-ready' });
-      };
+      },
 
-      ws.onmessage = async (ev) => {
+      onMessage: async (ev) => {
         try {
           updateDebugInfo((prev) => ({ 
             lastMessageTime: Date.now(),
@@ -1280,19 +1276,20 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
         } catch (parseError) {
           console.error('[RouletteViewer] 메시지 파싱 오류:', parseError, '원본 데이터:', ev.data);
         }
-      };
+      },
 
-      ws.onerror = (event) => {
-        const errorMsg = `WebSocket 연결 오류: ${event.type}`;
+      onError: (event) => {
+        const errorMsg = 'WebSocket 연결 오류';
         console.error('[RouletteViewer]', errorMsg, event);
         setError('connection error');
         updateDebugInfo({ 
           connectionState: 'error',
           lastError: errorMsg
         });
-      };
+      },
 
-      ws.onclose = (event) => {
+      onClose: (event) => {
+        wsRef.current = null;
         const closeMsg = `WebSocket 연결 종료: code=${event.code}, reason=${event.reason}, wasClean=${event.wasClean}`;
         const intentionalTestClose = Boolean(
           testConnectionId && event.code === 1000 && event.reason === 'Test event delivered',
@@ -1312,8 +1309,8 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
           const reason = String(event.reason || '').trim();
           const serverErrorMsg = reason || (
             event.code === 1008 ? '토큰이 유효하지 않습니다' :
-            event.code === 1009 ? '채널 접근이 거부되었습니다' :
-            event.code === 1012 ? '채널을 찾을 수 없습니다' :
+            event.code === 1009 ? '메시지 크기가 한도를 초과했습니다' :
+            event.code === 1012 ? '서버가 재시작 중입니다' :
             '서버 검증 실패'
           );
           setError(serverErrorMsg);
@@ -1321,7 +1318,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
             connectionState: 'error',
             lastError: serverErrorMsg
           });
-          return; // 서버 검증 실패 시 재연결하지 않음
+          return;
         }
         
         // 채널 ID 검증 상태 정리
@@ -1334,28 +1331,17 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
           channelId: null // 연결 종료 시 채널 ID 정리
         });
 
-        // 비정상 종료인 경우 재연결 시도
-        if (!event.wasClean && reconnectAttemptsRef.current < 3) {
-          const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 10000); // 지수 백오프
-          reconnectAttemptsRef.current += 1;
-          updateDebugInfo({ reconnectAttempts: reconnectAttemptsRef.current });
+      },
+      shouldReconnect: (event) => !(testConnectionId && event.code === 1000 && event.reason === 'Test event delivered'),
+      onRetry: () => {
+        reconnectAttemptsRef.current += 1;
+        updateDebugInfo({ reconnectAttempts: reconnectAttemptsRef.current });
+      },
+      });
 
-          reconnectTimeoutRef.current = window.setTimeout(() => {
-            connectWebSocket();
-          }, delay);
-        }
-      };
-
-      return () => { 
-        if (reconnectTimeoutRef.current) {
-          clearTimeout(reconnectTimeoutRef.current);
-          reconnectTimeoutRef.current = null;
-        }
-        try { 
-          ws.close(); 
-        } catch (closeError) {
-          console.warn('[RouletteViewer] WebSocket 종료 중 오류:', closeError);
-        }
+      return () => {
+        disconnect();
+        wsRef.current = null;
       };
     } catch (connectionError) {
       const errorMsg = `WebSocket 연결 실패: ${connectionError}`;

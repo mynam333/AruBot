@@ -1,8 +1,9 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { PredictionOverlayCard } from '@/features/predictions/prediction-overlay-card';
 import { apiWsUrl, readJson } from '@/shared/api/http';
+import { connectOverlaySocket } from '@/shared/api/overlay-socket';
 
 type PredictionOption = {
   id: string;
@@ -51,12 +52,6 @@ export function PredictionOverlay({ channelUid }: { channelUid: string }) {
   const [hiddenResultId, setHiddenResultId] = useState<string | null>(null);
   const playedResultRef = useRef('');
   const hideTimerRef = useRef<number | null>(null);
-  const reconnectTimerRef = useRef<number | null>(null);
-
-  const load = useCallback(async () => {
-    const data = await readJson<PublicPredictionResponse>(`/api/public/${encodeURIComponent(channelUid)}/prediction`);
-    setPrediction(data?.prediction || null);
-  }, [channelUid]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -65,58 +60,47 @@ export function PredictionOverlay({ channelUid }: { channelUid: string }) {
 
   useEffect(() => {
     if (!channelUid) return;
-    if (typeof WebSocket === 'undefined') {
-      void load();
-      return;
-    }
-
-    let ws: WebSocket | null = null;
     let disposed = false;
-    let attempts = 0;
-
-    const connect = () => {
-      if (disposed) return;
+    let version = 0;
+    let fallback: AbortController | null = null;
+    const load = async () => {
+      if (disposed || fallback) return;
+      const requestedVersion = version;
+      const controller = new AbortController();
+      fallback = controller;
+      const timeout = setTimeout(() => controller.abort(), 10000);
       try {
-        ws = new WebSocket(apiWsUrl(`/api/prediction/ws?channelUid=${encodeURIComponent(channelUid)}`));
-      } catch {
-        void load();
-        return;
+        const data = await readJson<PublicPredictionResponse>(`/api/public/${encodeURIComponent(channelUid)}/prediction`, { signal: controller.signal });
+        if (!disposed && version === requestedVersion) setPrediction(data?.prediction || null);
+      } catch {} finally {
+        clearTimeout(timeout);
+        fallback = null;
       }
-
-      ws.onopen = () => {
-        attempts = 0;
-      };
-      ws.onmessage = (event) => {
+    };
+    const disconnect = connectOverlaySocket({
+      url: () => apiWsUrl(`/api/prediction/ws?channelUid=${encodeURIComponent(channelUid)}`),
+      onRetry: () => { void load(); },
+      onMessage: (event) => {
         try {
           const message = JSON.parse(String(event.data || '{}')) as { type?: string; prediction?: Prediction | null };
           if (message.type === 'prediction:clear') {
+            version += 1;
             setPrediction(null);
             return;
           }
           if (message.type === 'prediction:snapshot' || message.type === 'prediction:update') {
+            version += 1;
             setPrediction(message.prediction || null);
           }
         } catch {}
-      };
-      ws.onclose = () => {
-        if (disposed) return;
-        attempts += 1;
-        const delay = Math.min(10000, 800 * 2 ** Math.min(4, attempts));
-        reconnectTimerRef.current = window.setTimeout(connect, delay);
-      };
-      ws.onerror = () => {
-        try { ws?.close(); } catch {}
-      };
-    };
-
-    connect();
+      },
+    });
     return () => {
       disposed = true;
-      if (reconnectTimerRef.current) window.clearTimeout(reconnectTimerRef.current);
-      reconnectTimerRef.current = null;
-      try { ws?.close(); } catch {}
+      fallback?.abort();
+      disconnect();
     };
-  }, [channelUid, load]);
+  }, [channelUid]);
 
   useEffect(() => {
     if (prediction?.status !== 'settled' || !prediction.winningOptionId) {

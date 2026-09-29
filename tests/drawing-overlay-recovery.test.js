@@ -83,6 +83,15 @@ test('reconnects after server restart and receives the current drawing again', (
   expect(callbacks.onConnectionChange).toHaveBeenLastCalledWith(true);
 });
 
+test('keeps retrying drawing overlay connections after repeated server failures', () => {
+  connect();
+  for (let i = 0; i < 30; i += 1) {
+    sockets.at(-1).onclose();
+    jest.advanceTimersByTime(10000);
+    expect(sockets).toHaveLength(i + 2);
+  }
+});
+
 test('replaces a silently stalled socket even when no close event arrives', () => {
   connect();
   sockets[0].push({ type: 'drawing-donation.current', item: null });

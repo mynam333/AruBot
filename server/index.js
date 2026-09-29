@@ -29308,6 +29308,10 @@ function registerPvdRoutes() {
       ws.on('message', (raw) => {
         try {
           const message = JSON.parse(String(raw || '{}'));
+          if (message?.type === 'ping') {
+            ws.send(JSON.stringify({ type: 'pong', serverNow: Date.now() }), { compress: false });
+            return;
+          }
           if (message?.type === 'duration_probe_result') {
             pvdDurationProbeCoordinator.settle({
               sid,
@@ -29906,13 +29910,17 @@ function registerRouletteRoutes() {
       const ka = setInterval(() => { try { ws.ping(); } catch { } }, 30000);
 
       ws.on('message', (raw) => {
-        if (testConnectionId) return;
         let message = null;
         try {
           message = JSON.parse(String(raw));
         } catch {
           return;
         }
+        if (message?.type === 'ping') {
+          try { ws.send(JSON.stringify({ type: 'pong', serverNow: Date.now() }), { compress: false }); } catch {}
+          return;
+        }
+        if (testConnectionId) return;
         if (message?.type !== 'roulette:settled') return;
         void rouletteResultActionCoordinator.settle({
           token,
