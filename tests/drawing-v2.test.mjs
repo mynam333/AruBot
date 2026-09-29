@@ -301,6 +301,20 @@ test('compression budget exhaustion fails safely without saving a PNG fallback',
   await assert.rejects(optimizeDrawingOriginal(png, Date.now() - 1), { message: 'drawing_compression_failed', status: 503 });
 });
 
+test('maximum-size textured PNG compresses to WebP and retains every alpha value', async () => {
+  const width = 1920, height = 1920, rgba = Buffer.alloc(width * height * 4);
+  let seed = 1234;
+  for (let i = 0; i < rgba.length; i++) { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; rgba[i] = seed >>> 24; }
+  const png = await sharp(rgba, { raw: { width, height, channels: 4 } }).png({ compressionLevel: 0 }).toBuffer();
+  const result = await optimizeDrawingOriginal(png);
+  assert.equal(result.original.format, 'webp'); assert.ok(result.buffer.length < png.length);
+  assert.ok([4, 2].includes(result.original.effort));
+  const after = await sharp(result.buffer).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  assert.equal(after.info.width, width); assert.equal(after.info.height, height);
+  assert.equal(after.info.channels, 4);
+  for (let i = 3; i < rgba.length; i += 4) assert.equal(after.data[i], rgba[i]);
+});
+
 test('colour profiles are preserved and non-PNG input is not silently converted', async () => {
   const png = await sharp({ create: { width: 160, height: 80, channels: 4, background: { r: 12, g: 93, b: 231, alpha: 0.4 } } }).withIccProfile('p3').png({ compressionLevel: 0 }).toBuffer();
   const storage = await optimizeDrawingOriginal(png);

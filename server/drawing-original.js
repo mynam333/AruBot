@@ -3,8 +3,10 @@ import crypto from 'node:crypto';
 import sharp from 'sharp';
 import { canonicalDrawing, validateDrawing, drawingInk, buildTimeline } from '../shared/drawing/document.js';
 import { MAX_ORIGINAL_BYTES } from '../shared/drawing/limits.js';
+import { DRAWING_COMPRESSION_BUDGET_MS } from './drawing-original-storage.js';
 
 export const DRAWING_ORIGINAL_LIMIT = MAX_ORIGINAL_BYTES;
+const DRAWING_RENDER_WORKER_URL = new URL('./drawing-render-worker.js', import.meta.url);
 let running = 0;
 
 export function originalOwnerKey(owner) {
@@ -46,16 +48,26 @@ export function verifyDrawingOriginal(document, original) {
   return new Promise((resolve, reject) => {
     let worker;
     try {
-      worker = new Worker(new URL('./drawing-render-worker.js', import.meta.url), { workerData: { document, original }, resourceLimits: { maxOldGenerationSizeMb: 128 } });
+      worker = new Worker(DRAWING_RENDER_WORKER_URL, { workerData: { document, original }, resourceLimits: { maxOldGenerationSizeMb: 128 } });
     } catch (error) { running--; reject(Object.assign(error, { status: 503 })); return; }
-    let finished = false;
+    let finished = false, phase = 'verification';
     const finish = (error, result) => {
       if (finished) return;
       finished = true; clearTimeout(timer); running--; void worker.terminate();
       if (error) reject(Object.assign(error, { status: error.status || 400 })); else resolve(result);
     };
-    const timer = setTimeout(() => finish(Object.assign(new Error('drawing_render_timeout'), { status: 503 })), 20000);
-    worker.once('message', (result) => finish(result.ok ? null : Object.assign(new Error(result.error), { status: result.status || 400 }), result));
+    let timer = setTimeout(() => finish(Object.assign(new Error('drawing_render_timeout'), { status: 503 })), 20000);
+    worker.on('message', (result) => {
+      if (finished) return;
+      if (result.phase === 'compression' && phase === 'verification') {
+        phase = 'compression'; clearTimeout(timer);
+        timer = setTimeout(() => finish(Object.assign(new Error('drawing_compression_failed'), {
+          status: 503, diagnostics: { stage: 'compression', reason: 'drawing_compression_timeout' },
+        })), DRAWING_COMPRESSION_BUDGET_MS + 2000);
+        return;
+      }
+      finish(result.ok ? null : Object.assign(new Error(result.error), { status: result.status || 400, diagnostics: result.diagnostics }), result);
+    });
     worker.once('error', (error) => finish(error));
     worker.once('exit', (code) => { if (!finished) finish(new Error(`drawing_renderer_exit_${code}`)); });
   });

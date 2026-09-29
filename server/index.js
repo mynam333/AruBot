@@ -8660,7 +8660,7 @@ app.post('/api/drawing-donation/submit', rateLimiters.userWrite, async (req, res
     return res.json({ ok: true, item: savedItem, deduplicated: durable.created === false });
   } catch (e) {
     const status = e?.status || 500;
-    console.error('[Drawing Donation] submit failed:', e?.message || e);
+    console.error('[Drawing Donation] submit failed:', e?.message || e, e?.diagnostics || '');
     return res.status(status).json({ error: e?.message || 'Failed to submit drawing donation' });
   }
 });
