@@ -5,12 +5,14 @@ export type DrawingKind = 'freehand' | 'line' | 'rectangle' | 'ellipse' | 'star'
 export type SelectionFrame = { t: number; x: number; y: number; scaleX: number; scaleY: number; angle: number; quad?: number[] };
 export type SelectionRect = { x: number; y: number; width: number; height: number };
 export type DrawingShapeStyle = { fillEnabled: boolean; fillColor: string; fillAlpha: number; strokeEnabled: boolean };
-export type DrawingStroke = { id: string; layerId: string; seed: number; brush: DrawingBrush; points: DrawingPoint[]; kind: DrawingKind; transform: { x: number; y: number; scale: number }; mirror: boolean; mirrorY?: boolean; runs?: number[]; selection?: { rect: SelectionRect; sourceId: string | null; copy: boolean }; frames?: SelectionFrame[]; shape?: DrawingShapeStyle };
+export type DrawingOutlineStyle = { size: number; color: string; alpha: number };
+export type DrawingStroke = { id: string; layerId: string; seed: number; brush: DrawingBrush; points: DrawingPoint[]; kind: DrawingKind; transform: { x: number; y: number; scale: number }; mirror: boolean; mirrorY?: boolean; runs?: number[]; selection?: { rect: SelectionRect; sourceId: string | null; copy: boolean }; frames?: SelectionFrame[]; shape?: DrawingShapeStyle; outline?: DrawingOutlineStyle };
 export type DrawingLayer = { id: string; name: string; visible: boolean; locked: boolean };
 export type DrawingDocument = { version: number; rendererVersion: string; id: string; revision: number; width: number; height: number; layers: DrawingLayer[]; strokes: DrawingStroke[]; replayMode: 'drawing-only' | 'original' | 'trim-gaps' };
 export type DrawingTimeline = { entries: { id: string; start: number; end: number; offset: number }[]; speed: number; sourceDurationMs: number; targetReplayMs: number; mode: string };
 export const DRAWING_VERSION: number;
 export const RENDERER_VERSION: string;
+export const SUPPORTED_RENDERER_VERSIONS: string[];
 export const MAX_DOCUMENT_BYTES: number;
 export const BRUSHES: Record<BrushType, { label: string; size: number; texture: number; hardness: number; flow: number; angle: number }>;
 export function createBrush(type?: BrushType, color?: string, alpha?: number): DrawingBrush;

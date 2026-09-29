@@ -1,14 +1,16 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type PointerEvent as ReactPointerEvent } from 'react';
-import { ArrowDown, ArrowUp, Check, Circle, Download, Eye, EyeOff, Hand, Heart, Layers, Loader2, Lock, Maximize, Minus, MousePointer2, PaintBucket, Pause, PenLine, Pipette, Play, Plus, Redo2, RotateCw, Send, Slash, Square, Star, Trash2, Undo2, Unlock, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, Check, Circle, Download, Eye, EyeOff, Hand, Heart, Layers, Loader2, Lock, Maximize, Minus, MousePointer2, PaintBucket, Pause, PenLine, Pipette, Play, Plus, Redo2, RotateCw, Save, Send, Slash, Square, Star, Trash2, Undo2, Unlock, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Tooltip } from '@/components/ui/tooltip';
+import { DrawingArchiveDialog } from './DrawingArchiveDialog';
+import { saveDrawingArchive } from '@/shared/drawing/archive-files';
 import { apiUrl } from '@/shared/api/http';
 import { readDraft, writeDraft } from '@/shared/drawing/draft-store';
 import { BRUSH_SHORTCUTS, TOOL_SHORTCUTS, drawingShortcut, type DrawingTool as Tool } from '@/shared/drawing/shortcuts';
-import { BRUSHES, buildTimeline, createBrush, createDrawing, drawingCost, hashDrawing, rememberDrawingColor, validateDrawing, visibleStrokes, type BrushType, type DrawingDocument, type DrawingBrush, type DrawingPoint, type DrawingStroke, type DrawingShapeStyle, type SelectionFrame, type SelectionRect } from '../../../shared/drawing/document.js';
+import { BRUSHES, RENDERER_VERSION, buildTimeline, createBrush, createDrawing, drawingCost, hashDrawing, rememberDrawingColor, validateDrawing, visibleStrokes, type BrushType, type DrawingDocument, type DrawingBrush, type DrawingPoint, type DrawingStroke, type DrawingShapeStyle, type DrawingOutlineStyle, type SelectionFrame, type SelectionRect } from '../../../shared/drawing/document.js';
 import { createDrawingRenderer, floodFillRuns, type DrawingRenderer } from '../../../shared/drawing/renderer.js';
 import { MAX_DOCUMENT_BYTES, MAX_ORIGINAL_BYTES, RECORDING_HEADROOM_BYTES, drawingJsonBytes, drawingUsage, updateDrawingUsage, drawingLimitError } from '../../../shared/drawing/limits.js';
 import { constrainLinePoint, constrainShapePoint, distortSelection, rotateSelection, selectionCorners, selectionRect, transformSelection } from '../../../shared/drawing/selection.js';
@@ -23,6 +25,8 @@ const SWATCHES = ['#f05b84', '#eb5757', '#f3a43b', '#f3d457', '#68b984', '#39afc
 const makeCanvas = (w: number, h: number) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
 const uid = () => crypto.randomUUID();
 const errorMessages: Record<string, string> = { too_many_points: '그리기 점 수 한도에 도달했습니다. 한도까지 그린 부분은 보존됩니다.', too_many_strokes: '획 수 한도에 도달했습니다.', drawing_too_large: '그리기 기록 용량 한도에 도달했습니다. 한도까지 그린 부분은 보존되며, 실행 취소나 레이어 삭제로 공간을 확보할 수 있습니다.', drawing_original_too_large: 'PNG 원본 이미지가 전송 용량 한도를 초과했습니다. 그림은 그대로 보존되어 있습니다.', drawing_too_complex: '선택 변형 기록 한도에 도달했습니다. 기존 그림은 보존됩니다.', drawing_fill_too_complex: '이 영역은 너무 복잡해 채울 수 없습니다.', insufficient_points: '포인트가 부족합니다.', drawing_price_changed: '후원 비용이 변경되었습니다. 정보를 새로 불러온 뒤 다시 확인해 주세요.', drawing_original_mismatch: '원본 일치 검증에 실패했습니다. 그림은 보존되어 있습니다.', drawing_storage_unavailable: '원본 저장소에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.', blocked_user: '이 방송에서는 봇 기능을 사용할 수 없습니다.', drawing_queue_limit: '대기 중인 그림 후원이 너무 많습니다.', drawing_submit_cooldown: '잠시 후 다시 보내 주세요.' };
+errorMessages.drawing_compression_failed = 'WebP 압축에 실패했습니다. 그림은 보존되어 있으며 포인트는 차감되지 않았습니다. 다시 시도해 주세요.';
+errorMessages.drawing_webp_unsupported = '이 브라우저에서는 WebP 저장을 지원하지 않습니다. 최신 Chrome 또는 Edge에서 저장해 주세요.';
 
 function BrushSample({ brush }: { brush: DrawingBrush }) {
   const ref = useRef<HTMLCanvasElement>(null);
@@ -55,6 +59,7 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
   const [layerId, setLayerId] = useState('layer-1'), [selection, setSelection] = useState<Selection | null>(null);
   const [selectedCorners, setSelectedCorners] = useState<number[]>([]);
   const [shapeStyle, setShapeStyle] = useState<DrawingShapeStyle>({ fillEnabled: false, fillColor: '#517ee1', fillAlpha: 1, strokeEnabled: true });
+  const [outlineStyle, setOutlineStyle] = useState<DrawingOutlineStyle & { enabled: boolean }>({ enabled: false, size: 0.004, color: '#191b20', alpha: 1 });
   const [mirror, setMirror] = useState(false), [mirrorY, setMirrorY] = useState(false), [view, setView] = useState({ zoom: 1, x: 0, y: 0 });
   const viewRef = useRef(view), [backgroundMode, setBackgroundMode] = useState<'live' | 'light' | 'dark'>('live');
   const historyRef = useRef<DrawingDocument[]>([]), redoRef = useRef<DrawingDocument[]>([]);
@@ -75,6 +80,7 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
   const count = usage.pointCount;
   const timeline = useMemo(() => buildTimeline(doc, settings.replayMaxSec), [doc, settings.replayMaxSec]);
   const isShape = CLOSED_SHAPES.includes(tool);
+  const canOutline = isShape || (['freehand', 'line'].includes(tool) && brush.type !== 'eraser');
   const activeLayer = doc.layers.find((layer) => layer.id === layerId);
   const presets = useMemo(() => Object.keys(BRUSHES).map((type) => createBrush(type as BrushType, brush.color)), [brush.color]);
 
@@ -212,7 +218,7 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
   function cursor(event: ReactPointerEvent<HTMLElement>) {
     const element = cursorRef.current, rect = viewportRef.current?.getBoundingClientRect(); if (!element || !rect) return;
     const canvasRect = canvasRef.current!.getBoundingClientRect();
-    const diameter = Math.max(8, Math.min(canvasRect.width, canvasRect.height) * brush.size * (brush.type === 'airbrush' ? 1.7 : 1));
+    const diameter = Math.max(8, Math.min(canvasRect.width, canvasRect.height) * (brush.size * (brush.type === 'airbrush' ? 1.7 : 1) + (canOutline && outlineStyle.enabled && outlineStyle.alpha > 0 ? outlineStyle.size * 2 : 0)));
     element.style.width = `${diameter}px`; element.style.height = `${diameter}px`;
     element.style.transform = `translate(${event.clientX - rect.left - diameter / 2}px, ${event.clientY - rect.top - diameter / 2}px)`;
     element.style.opacity = ['pan', 'select'].includes(tool) || busy ? '0' : '1';
@@ -224,7 +230,7 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
     if (error) { toast.error(errorMessages[error]); return false; }
     const strokes = current.strokes.slice();
     if (index < 0) strokes.push(stroke); else strokes[index] = stroke;
-    docRef.current = { ...current, strokes }; usageRef.current = nextUsage; schedule();
+    docRef.current = { ...current, rendererVersion: RENDERER_VERSION, strokes }; usageRef.current = nextUsage; schedule();
     return true;
   }
   function updateStroke(p: DrawingPoint, shift = false) {
@@ -324,7 +330,7 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
     }
     if (current.strokes.length >= (settings.maxStrokes || 120)) { toast.error(errorMessages.too_many_strokes); return; }
     if (pointCount(current) >= (settings.maxPoints || 6000)) { toast.error(errorMessages.too_many_points); return; }
-    const stroke: DrawingStroke = { id: uid(), layerId, seed: crypto.getRandomValues(new Uint32Array(1))[0], brush: isShape ? { ...brush, type: 'pen' } : { ...brush }, kind: tool, mirror, mirrorY, transform: { x: 0, y: 0, scale: 1 }, points: [p], ...(isShape ? { shape: { ...shapeStyle } } : {}) };
+    const stroke: DrawingStroke = { id: uid(), layerId, seed: crypto.getRandomValues(new Uint32Array(1))[0], brush: isShape ? { ...brush, type: 'pen' } : { ...brush }, kind: tool, mirror, mirrorY, transform: { x: 0, y: 0, scale: 1 }, points: [p], ...(isShape ? { shape: { ...shapeStyle } } : {}), ...(canOutline && outlineStyle.enabled ? { outline: { size: outlineStyle.size, color: outlineStyle.color, alpha: outlineStyle.alpha } } : {}) };
     if (tool === 'fill') {
       try {
         const layerCanvas = renderer().render(current, Infinity, settings.replayMaxSec, layerId);
@@ -407,8 +413,21 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
     const output = renderer().render(source);
     return await new Promise<Blob>((resolve, reject) => output.toBlob((blob) => blob ? resolve(blob) : reject(new Error('drawing_export_failed')), 'image/png'));
   }
+  async function webp(source = docRef.current) {
+    return new Promise<Blob>((resolve, reject) => renderer().render(source).toBlob((result) => result?.type === 'image/webp' ? resolve(result) : reject(new Error('drawing_webp_unsupported')), 'image/webp', 0.6));
+  }
   async function download() {
-    try { const blob = await png(), url = URL.createObjectURL(blob), a = document.createElement('a'); a.href = url; a.download = 'arubot-drawing.png'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); } catch (error) { report(error); }
+    try {
+      const blob = await webp();
+      const url = URL.createObjectURL(blob), a = document.createElement('a'); a.href = url; a.download = 'arubot-drawing.webp'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) { report(error); }
+  }
+  async function downloadArchive() {
+    if (busy) return;
+    stopPlayback(); setBusy(true);
+    try { const source = structuredClone(docRef.current); await saveDrawingArchive(source, await webp(source), settings.replayMaxSec); }
+    catch (error) { report(error); }
+    finally { setBusy(false); }
   }
   async function openReview() {
     stopPlayback(); setBusy(true);
@@ -433,7 +452,7 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
       const empty = createDrawing(settings.canvas.widthRatio, settings.canvas.heightRatio, uid());
       historyRef.current = []; redoRef.current = []; originRef.current = 0; assign(empty); setLayerId('layer-1'); setSelection(null); setReview(null); onSubmitted?.(review.cost);
       await writeDraft(draftKey, null).catch(() => toast.warning('후원은 접수되었지만 이 기기의 초안을 삭제하지 못했습니다.'));
-      toast.success('그림 원본을 보존하여 후원 대기열에 등록했습니다.');
+      toast.success('그림을 후원 대기열에 등록했습니다.');
     } catch (error) { report(error); } finally { setBusy(false); }
   }
   const corners = selection ? selectionCorners(selection.frame, selection.rect, doc) : null;
@@ -445,7 +464,7 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
     {recoverable && <div className="flex flex-wrap items-center justify-between gap-2 border-y bg-muted/50 p-3 text-sm"><span>저장된 그림이 있습니다.</span><div className="flex gap-2"><Button size="sm" onClick={() => { assign(recoverable); setLayerId(recoverable.layers[0].id); originRef.current = performance.now() - Math.max(0, ...recoverable.strokes.flatMap((s) => s.points.map((p) => p.t))); setRecoverable(null); }}>복구</Button><Button variant="ghost" size="sm" onClick={() => { if (window.confirm('저장된 초안을 삭제할까요?')) { setRecoverable(null); void writeDraft(draftKey, null); } }}>삭제</Button></div></div>}
     <div className="flex flex-wrap items-center justify-between gap-2 border-y py-2">
       <div className="flex flex-wrap gap-1">{tools.map(([id, label, Icon]) => <IconButton key={id} label={label} shortcut={TOOL_SHORTCUTS[id]} aria-keyshortcuts={TOOL_SHORTCUTS[id]} active={tool === id} onClick={() => chooseTool(id)}><Icon size={17} /></IconButton>)}<span className="mx-1 border-l" /><IconButton label="실행 취소" shortcut="Ctrl/Cmd + Z" aria-keyshortcuts="Control+Z Meta+Z" onClick={undo} disabled={!historyRef.current.length || busy} data-history={historyVersion}><Undo2 size={17} /></IconButton><IconButton label="다시 실행" shortcut="Ctrl/Cmd + Shift + Z" aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z Control+Y Meta+Y" onClick={redo} disabled={!redoRef.current.length || busy}><Redo2 size={17} /></IconButton></div>
-      <div className="flex items-center gap-1"><IconButton label="축소" onClick={() => zoomBy(0.8)}><Minus size={17} /></IconButton><output className="w-12 text-center text-xs tabular-nums">{Math.round(view.zoom * 100)}%</output><IconButton label="확대" onClick={() => zoomBy(1.25)}><Plus size={17} /></IconButton><IconButton label="화면에 맞춤" onClick={() => setView({ zoom: 1, x: 0, y: 0 })}><Maximize size={17} /></IconButton><IconButton label="PNG 원본 저장" onClick={download} disabled={!doc.strokes.length}><Download size={17} /></IconButton></div>
+      <div className="flex flex-wrap items-center gap-1"><IconButton label="축소" onClick={() => zoomBy(0.8)}><Minus size={17} /></IconButton><output className="w-12 text-center text-xs tabular-nums">{Math.round(view.zoom * 100)}%</output><IconButton label="확대" onClick={() => zoomBy(1.25)}><Plus size={17} /></IconButton><IconButton label="화면에 맞춤" onClick={() => setView({ zoom: 1, x: 0, y: 0 })}><Maximize size={17} /></IconButton><IconButton label="WebP 저장" onClick={download} disabled={!doc.strokes.length || busy}><Download size={17} /></IconButton><IconButton label="그리기 기록 저장 (.aruart)" onClick={downloadArchive} disabled={!doc.strokes.length || busy}><Save size={17} /></IconButton><DrawingArchiveDialog compact onOpen={stopPlayback} /></div>
     </div>
     <div className="grid min-w-0 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_16rem]">
       <div className="min-w-0 space-y-3">
@@ -479,6 +498,14 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
         <div className="space-y-2">{isShape ? <span className="text-xs font-medium">선 색상</span> : null}<div className="flex items-center gap-2"><input aria-label={isShape ? '선 색상' : '붓 색상'} type="color" value={brush.color} onChange={(e) => chooseColor(e.target.value)} className="h-9 min-w-0 flex-1 rounded-md border bg-transparent" /><IconButton label="그림에서 색 추출" shortcut={TOOL_SHORTCUTS.picker} aria-keyshortcuts={TOOL_SHORTCUTS.picker} active={tool === 'picker'} onClick={() => chooseTool('picker')}><Pipette size={17} /></IconButton></div><div className="grid grid-cols-10 gap-1">{SWATCHES.map((color) => <button type="button" key={color} title={color} aria-label={`${color} 색상`} onClick={() => chooseColor(color)} className="aspect-square rounded-sm border border-foreground/20" style={{ backgroundColor: color }} />)}</div>{recentColors.length ? <div className="flex gap-1" aria-label="최근 색상">{recentColors.map((color) => <button type="button" key={color} title={color} aria-label={`최근 ${color}`} onClick={() => chooseColor(color)} className="h-5 w-5 rounded-sm border border-foreground/20" style={{ backgroundColor: color }} />)}</div> : null}</div>
         <div className="flex flex-wrap items-center gap-1" aria-label="즐겨찾는 색상"><IconButton label="현재 색상 즐겨찾기" active={favoriteColors.includes(brush.color)} onClick={toggleFavorite}><Star size={15} fill={favoriteColors.includes(brush.color) ? 'currentColor' : 'none'} /></IconButton>{favoriteColors.map((color) => <button type="button" key={color} title={color} aria-label={`즐겨찾기 ${color}`} onClick={() => chooseColor(color)} className="h-5 w-5 rounded-sm border border-foreground/20" style={{ backgroundColor: color }} />)}</div>
         {([{ key: 'size', label: isShape ? '선 두께' : '크기', min: 1, max: 200, scale: 1000, suffix: '' }, { key: 'alpha', label: isShape ? '선 불투명도' : '불투명도', min: 0, max: 100, scale: 100, suffix: '%' }, { key: 'smoothing', label: '선 보정', min: 0, max: 85, scale: 100, suffix: '%' }] as const).filter(({ key }) => !isShape || key !== 'smoothing').map(({ key, label, min, max, scale, suffix }) => <Tooltip key={key} content={<ToolHint label={label} shortcut={key === 'size' ? '[ / ]' : undefined} />}><label className="grid gap-1.5 text-xs"><span className="flex justify-between"><span>{label}</span><span className="tabular-nums">{Math.round(brush[key] * scale)}{suffix}</span></span><input aria-label={label} type="range" min={min} max={max} value={Math.round(brush[key] * scale)} onChange={(e) => setBrush({ ...brush, [key]: Number(e.target.value) / scale })} className="w-full accent-primary" /></label></Tooltip>)}
+        {canOutline ? <section className="space-y-3 border-y py-3" aria-label="외곽선 설정">
+          <label className="flex items-center justify-between text-xs font-medium">외곽선<input aria-label="외곽선 사용" type="checkbox" checked={outlineStyle.enabled} onChange={(e) => { const enabled = e.target.checked; setOutlineStyle((current) => ({ ...current, enabled })); }} /></label>
+          <fieldset disabled={!outlineStyle.enabled} className="min-w-0 space-y-3 disabled:opacity-40">
+            <label className="flex items-center justify-between gap-3 text-xs">외곽선 색상<input aria-label="외곽선 색상" type="color" value={outlineStyle.color} onInput={(e) => { const color = e.currentTarget.value; setOutlineStyle((current) => ({ ...current, color })); }} className="h-8 w-20 rounded border bg-transparent" /></label>
+            <label className="grid gap-1.5 text-xs"><span className="flex justify-between"><span>외곽선 두께</span><span className="tabular-nums">{Math.round(outlineStyle.size * 1000)}</span></span><input aria-label="외곽선 두께" type="range" min={1} max={100} value={Math.round(outlineStyle.size * 1000)} onChange={(e) => { const size = Number(e.target.value) / 1000; setOutlineStyle((current) => ({ ...current, size })); }} className="w-full accent-primary" /></label>
+            <label className="grid gap-1.5 text-xs"><span className="flex justify-between"><span>외곽선 불투명도</span><span className="tabular-nums">{Math.round(outlineStyle.alpha * 100)}%</span></span><input aria-label="외곽선 불투명도" type="range" min={0} max={100} value={Math.round(outlineStyle.alpha * 100)} onChange={(e) => { const alpha = Number(e.target.value) / 100; setOutlineStyle((current) => ({ ...current, alpha })); }} className="w-full accent-primary" /></label>
+          </fieldset>
+        </section> : null}
         <div className="space-y-2 border-y py-3"><label className="flex items-center justify-between text-xs">좌우 대칭<input type="checkbox" checked={mirror} onChange={(e) => setMirror(e.target.checked)} /></label><label className="flex items-center justify-between text-xs">상하 대칭<input type="checkbox" checked={mirrorY} onChange={(e) => setMirrorY(e.target.checked)} /></label></div>
         {!isShape ? <details className="border-y py-2"><summary className="cursor-pointer text-xs font-medium">재질 설정</summary><div className="mt-3 space-y-3">{(['texture', 'hardness', 'flow', 'angle'] as const).filter((key) => key === 'texture' ? !['pen', 'airbrush', 'eraser'].includes(brush.type) : key === 'hardness' ? brush.type === 'airbrush' : key === 'angle' ? ['marker', 'highlighter'].includes(brush.type) : ['airbrush', 'watercolor', 'highlighter'].includes(brush.type)).map((key) => <label key={key} className="grid gap-1 text-xs">{{ texture: brush.type === 'brush' ? '마른 붓결' : '종이 질감', hardness: '분사 경도', flow: '재질 농도', angle: '펜촉 각도' }[key]}<input type="range" min={key === 'flow' ? 5 : 0} max={key === 'angle' ? 180 : 100} value={brush[key] * (key === 'angle' ? 1 : 100)} onChange={(e) => setBrush({ ...brush, [key]: Number(e.target.value) / (key === 'angle' ? 1 : 100) })} /></label>)}<Button size="sm" variant="ghost" onClick={() => setBrush(createBrush(brush.type, brush.color))}>브러시 초기화</Button></div></details> : null}
         <div className="flex items-center justify-between text-sm"><span>사용 포인트</span><strong className={cost > points ? 'text-rose-500' : ''}>{cost.toLocaleString()}P</strong></div><div className="text-right text-xs text-muted-foreground">보유 {points.toLocaleString()}P</div>
@@ -487,6 +514,7 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
         {settings.blocked ? <p className="text-xs text-rose-500">이 방송에서는 후원할 수 없습니다.</p> : null}
       </aside>
     </div>
+    {!localOnly ? <p className="text-xs text-muted-foreground">그림과 재생 기록은 접수 후 30일이 지나면 자동 정리됩니다. 대기 중인 후원은 취소·환불됩니다.</p> : null}
     <dialog ref={dialogRef} onCancel={(e) => { if (busy) e.preventDefault(); else { stopPlayback(); setReview(null); } }} onClose={() => { if (!busy) setReview(null); }} className="m-auto max-h-[calc(100dvh-2rem)] w-[min(44rem,calc(100%-2rem))] overflow-y-auto rounded-lg border bg-background p-4 text-foreground shadow-xl backdrop:bg-black/60">
       {review ? <><div className="mb-3 flex items-center justify-between"><h2 className="text-base font-semibold">전송할 그림 원본</h2><IconButton label="닫기" disabled={busy} onClick={() => { stopPlayback(); setReview(null); }}><X size={18} /></IconButton></div><canvas ref={previewRef} width={review.doc.width} height={review.doc.height} className="w-full rounded-md border bg-white" style={{ aspectRatio: `${review.doc.width}/${review.doc.height}` }} /><div className="my-3 flex items-center justify-between gap-2"><Button size="sm" variant="outline" disabled={busy} onClick={() => playing ? (cancelAnimationFrame(animationRef.current), setPlaying(false), draw(Infinity, review.doc, true)) : play(review.doc, true)}>{playing ? <Pause size={15} /> : <Play size={15} />} 재생 확인</Button><span className="text-sm font-semibold">{review.cost.toLocaleString()}P</span></div><div className="flex justify-end gap-2"><Button variant="outline" disabled={busy} onClick={() => { stopPlayback(); setReview(null); }}>수정</Button><Button onClick={submit} disabled={busy}>{busy ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />} 이 그림 보내기</Button></div></> : null}
     </dialog>

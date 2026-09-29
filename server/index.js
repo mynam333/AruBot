@@ -1,6 +1,10 @@
 import express from 'express';
 import { downloadDrawingDonationObject, getDurableRuntimeJob } from './supabase.js';
 import { DRAWING_ORIGINAL_LIMIT, inspectOriginal, originalOwnerKey, validateDrawingSubmission, verifyDrawingOriginal } from './drawing-original.js';
+import { optimizeDrawingOriginal } from './drawing-original-storage.js';
+import { encodeDrawingRecording } from './drawing-recording-storage.js';
+import { refundDrawingDonationItem } from './supabase.js';
+import { drawingRetentionDays } from './drawing-retention.js';
 import { RENDERER_VERSION, canonicalDrawing, drawingCost } from '../shared/drawing/document.js';
 import path from 'path';
 import fs from 'fs';
@@ -4292,6 +4296,7 @@ app.post('/api/privacy/retention-cleanup', requireOpsAuth, async (req, res) => {
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
     const result = await cleanupPrivacyRetentionData(req.body || {});
+    await applyDrawingRetentionResult(result);
     return res.json({
       ok: result.ok !== false,
       result,
@@ -8130,17 +8135,9 @@ app.post('/api/drawing-donation/reject', rateLimiters.userWrite, async (req, res
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
     const id = String(req.body?.id || '').trim();
-    let item = await getDrawingItemForSid(sid, id, { includeStrokes: true });
-    if (!item) return res.status(404).json({ error: 'not_found' });
-    let refundedAmount = 0;
-    if (!item.pointRefunded) {
-      for (const deduction of item.pointDeductions || []) {
-        await incrChannelPoints(item.channelUid, deduction.userId, deduction.username || item.viewerName || null, Number(deduction.amount || 0)).catch(() => null);
-        refundedAmount += Number(deduction.amount || 0);
-      }
-      item.pointRefunded = true;
-    }
-    item = await updateDrawingItemStatusForSid(sid, id, 'rejected', { pointRefunded: true }) || item;
+    const refund = await refundDrawingItemForSid(sid, id);
+    if (!refund) return res.status(404).json({ error: 'not_found' });
+    const { item, refundedAmount } = refund;
     if (refundedAmount > 0) {
       await recordBotEventLogSafe(sid, {
         category: 'drawing_donation',
@@ -8197,16 +8194,10 @@ app.post('/api/drawing-donation/delete-refund', rateLimiters.userWrite, async (r
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
     const id = String(req.body?.id || '').trim();
-    let item = await getDrawingItemForSid(sid, id, { includeStrokes: true });
-    if (!item) return res.status(404).json({ error: 'not_found' });
-    let refundedAmount = 0;
-    if (!item.pointRefunded) {
-      for (const deduction of item.pointDeductions || []) {
-        await incrChannelPoints(item.channelUid, deduction.userId, deduction.username || item.viewerName || null, Number(deduction.amount || 0)).catch(() => null);
-        refundedAmount += Number(deduction.amount || 0);
-      }
-      item.pointRefunded = true;
-    }
+    const refund = await refundDrawingItemForSid(sid, id);
+    if (!refund) return res.status(404).json({ error: 'not_found' });
+    const { refundedAmount } = refund;
+    let { item } = refund;
     item = await deleteDrawingItemForSid(sid, id) || item;
     if (refundedAmount > 0) {
       await recordBotEventLogSafe(sid, {
@@ -8237,17 +8228,9 @@ app.post('/api/drawing-donation/moderate-block', rateLimiters.userWrite, async (
     if (!sid) return res.status(401).json({ error: 'Login required' });
     const id = String(req.body?.id || '').trim();
     const reason = String(req.body?.reason || '그림 후원 검수 차단').trim();
-    let item = await getDrawingItemForSid(sid, id, { includeStrokes: true });
-    if (!item) return res.status(404).json({ error: 'not_found' });
-
-    let refundedAmount = 0;
-    if (!item.pointRefunded) {
-      for (const deduction of item.pointDeductions || []) {
-        await incrChannelPoints(item.channelUid, deduction.userId, deduction.username || item.viewerName || null, Number(deduction.amount || 0)).catch(() => null);
-        refundedAmount += Number(deduction.amount || 0);
-      }
-      item.pointRefunded = true;
-    }
+    const refund = await refundDrawingItemForSid(sid, id);
+    if (!refund) return res.status(404).json({ error: 'not_found' });
+    const { item, refundedAmount } = refund;
 
     const settings = await getBotSettings(sid) || {};
     const userId = String(item.viewerUserId || '').trim();
@@ -8262,7 +8245,6 @@ app.post('/api/drawing-donation/moderate-block', rateLimiters.userWrite, async (
       await setBotSettings(sid, { ...settings, blockedBotUsers: items.slice(0, 500) });
     }
 
-    item = await updateDrawingItemStatusForSid(sid, id, 'rejected', { pointRefunded: true }) || item;
     await recordBotEventLogSafe(sid, {
       category: 'drawing_donation',
       eventType: 'drawing_donation_moderation_block',
@@ -8492,7 +8474,7 @@ app.get('/api/drawing-donation/originals/:id', async (req, res) => {
     if (crypto.createHash('sha256').update(buffer).digest('hex') !== item.metrics?.original?.hash) throw new Error('drawing_original_mismatch');
     res.set('Cache-Control', 'private, no-store');
     res.set('X-Content-Type-Options', 'nosniff');
-    return res.type('png').send(buffer);
+    return res.type(item.metrics?.original?.format === 'webp' ? 'image/webp' : 'image/png').send(buffer);
   } catch (error) {
     return res.status(503).json({ error: error.message || 'drawing_original_unavailable' });
   }
@@ -8511,10 +8493,10 @@ async function submitDrawingV2(req, res, ownerUserId, streamer, resolved) {
   const previous = await getDurableRuntimeJob(runtimeJobId);
   if (previous) {
     const accepted = previous.payload?.item;
-    if (!accepted || accepted.viewerUserId !== ownerUserId || accepted.metrics?.documentHash !== body.documentHash || accepted.metrics?.original?.hash !== body.original?.hash) return res.status(409).json({ error: 'drawing_request_conflict' });
+    if (!accepted || accepted.viewerUserId !== ownerUserId || accepted.metrics?.documentHash !== body.documentHash || (accepted.metrics?.original?.sourceHash || accepted.metrics?.original?.hash) !== body.original?.hash) return res.status(409).json({ error: 'drawing_request_conflict' });
     if (['failed', 'dead', 'cancelled'].includes(previous.status)) return res.status(409).json({ error: 'drawing_previous_request_failed' });
     if (uploadPattern.test(originalKey)) await deleteDrawingDonationObjectKeys([originalKey]).catch(() => null);
-    return res.json({ ok: true, item: accepted, documentHash: accepted.metrics.documentHash, originalHash: accepted.metrics.original.hash, deduplicated: true });
+    return res.json({ ok: true, item: accepted, documentHash: accepted.metrics.documentHash, originalHash: accepted.metrics.original.sourceHash || accepted.metrics.original.hash, deduplicated: true });
   }
   const validated = validateDrawingSubmission(body, resolved.drawing);
   const { document, documentHash, strokes, pointCount, rawPointCount, jsonSize, ink, replay } = validated;
@@ -8528,11 +8510,14 @@ async function submitDrawingV2(req, res, ownerUserId, streamer, resolved) {
   if (Date.now() - last < resolved.drawing.submitCooldownSec * 1000) return res.status(429).json({ error: 'drawing_submit_cooldown' });
   if (!uploadPattern.test(originalKey)) return res.status(400).json({ error: 'drawing_invalid_original' });
   const originalBuffer = await downloadDrawingDonationObject(originalKey);
-  const original = await inspectOriginal(originalBuffer);
-  if (original.hash !== body.original?.hash) return res.status(400).json({ error: 'drawing_original_mismatch' });
+  const uploadedOriginal = await inspectOriginal(originalBuffer);
+  if (uploadedOriginal.hash !== body.original?.hash) return res.status(400).json({ error: 'drawing_original_mismatch' });
   const verification = await verifyDrawingOriginal(document, originalBuffer);
+  const original = verification.storage.original, storedBuffer = Buffer.from(verification.storage.buffer);
+  if (original.sourceHash !== uploadedOriginal.hash || original.format !== 'webp' || crypto.createHash('sha256').update(storedBuffer).digest('hex') !== original.hash) throw new Error('drawing_original_mismatch');
   const base = `drawing-donations/${originalOwnerKey(resolved.sid)}/${runtimeJobId}`;
-  const strokeObjectKey = `${base}/${documentHash}.json`, previewObjectKey = `${base}/${original.hash}.png`;
+  const recording = await encodeDrawingRecording(document);
+  const strokeObjectKey = `${base}/${documentHash}.json.gz`, previewObjectKey = `${base}/${original.hash}.${original.format}`;
   const { strokes: _strokes, ...metadata } = document;
   const item = {
     id: runtimeJobId, runtimeJobId, ownerSid: resolved.sid, channelUid: streamer.channelUid,
@@ -8540,19 +8525,19 @@ async function submitDrawingV2(req, res, ownerUserId, streamer, resolved) {
     cost, pointDeductions: [{ userId: ownerUserId, username: null, amount: cost }], pointRefunded: false,
     canvas: { ...resolved.drawing.canvas, document: metadata }, strokes: [], strokeObjectKey, previewObjectKey,
     previewImage: verification.previewImage,
-    metrics: { strokeCount: strokes.length, pointCount, rawPointCount, jsonSize, ink, documentHash, rendererVersion: RENDERER_VERSION, pricingVersion: 2, original, comparison: verification.comparison },
+    metrics: { strokeCount: strokes.length, pointCount, rawPointCount, jsonSize, ink, documentHash, rendererVersion: document.rendererVersion, pricingVersion: 2, original, recording: { encoding: recording.encoding, byteLength: recording.byteLength, rawByteLength: recording.rawByteLength }, comparison: verification.comparison },
     replay, resultHoldSec: resolved.drawing.resultHoldSec, createdAt: new Date().toISOString(),
     approvedAt: resolved.drawing.approvalMode === 'auto' ? new Date().toISOString() : null,
   };
-  item.strokeObjectKey = await uploadDrawingDonationObject(strokeObjectKey, canonicalDrawing(document), 'application/json');
-  item.previewObjectKey = await uploadDrawingDonationObject(previewObjectKey, originalBuffer, 'image/png');
+  item.strokeObjectKey = await uploadDrawingDonationObject(strokeObjectKey, recording.buffer, recording.contentType);
+  item.previewObjectKey = await uploadDrawingDonationObject(previewObjectKey, storedBuffer, `image/${original.format}`);
   if (!item.strokeObjectKey || !item.previewObjectKey) {
     throw Object.assign(new Error('drawing_storage_unavailable'), { status: 503 });
   }
   const durable = await enqueuePaidDurableRuntimeJob({ id: runtimeJobId, sid: resolved.sid, jobType: 'drawing-donation', idempotencyKey, channelUid: streamer.channelUid, userId: ownerUserId, pointsCost: cost, payload: { item }, maxAttempts: 8 });
   if (durable.deduction && !durable.deduction.deducted) return res.status(400).json({ error: 'insufficient_points' });
   const accepted = durable.job?.payload?.item || item;
-  if (accepted.metrics.documentHash !== documentHash || accepted.metrics.original.hash !== original.hash) return res.status(409).json({ error: 'drawing_request_conflict' });
+  if (accepted.metrics.documentHash !== documentHash || (accepted.metrics.original.sourceHash || accepted.metrics.original.hash) !== uploadedOriginal.hash) return res.status(409).json({ error: 'drawing_request_conflict' });
   await runDurableRuntimeWorker();
   await deleteDrawingDonationObjectKeys([originalKey]).catch(() => null);
   if (durable.created !== false) await recordBotEventLogSafe(resolved.sid, {
@@ -8560,7 +8545,7 @@ async function submitDrawingV2(req, res, ownerUserId, streamer, resolved) {
     viewerUserId: ownerUserId, pointDelta: -cost, pointBefore: durable.deduction?.balanceBefore ?? null, pointAfter: durable.deduction?.balanceAfter ?? null,
     targetName: '그림 후원', summary: `그림 후원 신청 (${cost}P 사용)`, metadata: { drawingId: accepted.id, documentHash, rendererVersion: RENDERER_VERSION, strokeCount: strokes.length, pointCount, ink },
   });
-  return res.json({ ok: true, item: accepted, documentHash, originalHash: original.hash, deduplicated: durable.created === false });
+  return res.json({ ok: true, item: accepted, documentHash, originalHash: uploadedOriginal.hash, deduplicated: durable.created === false });
 }
 
 app.post('/api/drawing-donation/submit', rateLimiters.userWrite, async (req, res) => {
@@ -10649,7 +10634,11 @@ async function getDrawingSidByToken(token) {
 
 function getCurrentDrawingItem(sid) {
   const queue = getDrawingQueue(sid);
-  return queue.find((item) => item.status === 'approved' || item.status === 'playing') || null;
+  return queue.find((item) => item.status === 'playing' || (item.status === 'approved' && !isDrawingExpired(item))) || null;
+}
+
+function isDrawingExpired(item) {
+  return new Date(item.createdAt || 0).getTime() < Date.now() - drawingRetentionDays(process.env.ARUBOT_DRAWING_DONATION_RETENTION_DAYS) * 86400000;
 }
 
 async function listDrawingQueueForSid(sid) {
@@ -10750,6 +10739,7 @@ async function updateDrawingItemStatusForSid(sid, id, status, extra = {}) {
     console.warn('[Drawing Donation] DB status update failed; using memory fallback:', error?.message || error);
     const item = getDrawingQueue(sid).find((entry) => entry.id === id) || null;
     if (!item) return null;
+    if (['queued', 'approved', 'playing'].includes(status) && (isDrawingExpired(item) || ['rejected', 'deleted'].includes(item.status))) return null;
     item.status = status;
     item.updatedAt = new Date().toISOString();
     if (status === 'approved') item.approvedAt = item.approvedAt || item.updatedAt;
@@ -10759,6 +10749,13 @@ async function updateDrawingItemStatusForSid(sid, id, status, extra = {}) {
     if (extra.pointRefunded != null) item.pointRefunded = extra.pointRefunded === true;
     return item;
   }
+}
+
+async function refundDrawingItemForSid(sid, id) {
+  const refund = await refundDrawingDonationItem(sid, id);
+  const cached = getDrawingQueue(sid).find((item) => item.id === id);
+  if (refund && cached) Object.assign(cached, refund.item);
+  return refund;
 }
 
 async function reorderDrawingItemsForSid(sid, ids = []) {
@@ -14630,21 +14627,42 @@ console.log('[Memory] Periodic cleanup and monitoring started');
 
 const PRIVACY_RETENTION_CLEANUP_INTERVAL_MS = Math.max(
   60 * 60 * 1000,
-  Number(process.env.ARUBOT_PRIVACY_RETENTION_CLEANUP_INTERVAL_MS || 24 * 60 * 60 * 1000)
+  Number(process.env.ARUBOT_PRIVACY_RETENTION_CLEANUP_INTERVAL_MS || 60 * 60 * 1000)
 );
 const PRIVACY_RETENTION_CLEANUP_ENABLED = String(process.env.ARUBOT_PRIVACY_RETENTION_CLEANUP || 'true').trim().toLowerCase() !== 'false';
 let privacyRetentionCleanupRunning = false;
+
+async function applyDrawingRetentionResult(result) {
+  const sids = new Set();
+  for (const entry of result.drawingExpired || []) {
+    sids.add(entry.sid);
+    const queue = drawingDonationQueues.get(entry.sid);
+    if (queue) drawingDonationQueues.set(entry.sid, queue.filter((item) => item.id !== entry.id));
+    if (entry.refundedAmount > 0) await recordBotEventLogSafe(entry.sid, {
+      category: 'drawing_donation', eventType: 'drawing_donation_expired_refund', provider: 'system',
+      channelUid: entry.channelUid, viewerUserId: entry.viewerUserId, viewerName: entry.viewerName,
+      pointDelta: entry.refundedAmount, targetName: '그림 후원', status: 'refunded',
+      summary: `보관 기간이 지난 그림 후원 취소 및 ${entry.refundedAmount}P 반환`, metadata: { drawingId: entry.id },
+    });
+  }
+  for (const sid of sids) {
+    await notifyDrawingSubscribers(sid, 'expired').catch(() => null);
+    await notifyDrawingAdminSubscribers(sid, 'expired').catch(() => null);
+  }
+}
 
 async function runPrivacyRetentionCleanup(reason = 'scheduled') {
   if (!PRIVACY_RETENTION_CLEANUP_ENABLED || privacyRetentionCleanupRunning) return null;
   privacyRetentionCleanupRunning = true;
   try {
     const result = await cleanupPrivacyRetentionData();
+    await applyDrawingRetentionResult(result);
     console.log('[Privacy] Retention cleanup completed:', {
       reason,
       deleted: result.deleted,
       objectKeysDeleted: result.objectKeysDeleted,
-      objectKeysSkipped: result.objectKeysSkipped
+      objectKeysSkipped: result.objectKeysSkipped,
+      drawingFailed: result.drawingFailed?.length || 0
     });
     return result;
   } catch (error) {
@@ -20716,17 +20734,9 @@ app.post('/api/local-remote/drawing-donation/reject', requireAutomationLocalAgen
     if (!sid) return res.status(401).json({ error: 'Invalid local program token' });
     const id = String(req.body?.id || '').trim();
     if (!id) return res.status(400).json({ error: 'id is required' });
-    let item = await getDrawingItemForSid(sid, id, { includeStrokes: true });
-    if (!item) return res.status(404).json({ error: 'not_found' });
-    let refundedAmount = 0;
-    if (!item.pointRefunded) {
-      for (const deduction of item.pointDeductions || []) {
-        await incrChannelPoints(item.channelUid, deduction.userId, deduction.username || item.viewerName || null, Number(deduction.amount || 0)).catch(() => null);
-        refundedAmount += Number(deduction.amount || 0);
-      }
-      item.pointRefunded = true;
-    }
-    item = await updateDrawingItemStatusForSid(sid, id, 'rejected', { pointRefunded: true }) || item;
+    const refund = await refundDrawingItemForSid(sid, id);
+    if (!refund) return res.status(404).json({ error: 'not_found' });
+    const { item, refundedAmount } = refund;
     if (refundedAmount > 0) {
       await recordBotEventLogSafe(sid, {
         category: 'drawing_donation',
@@ -20757,16 +20767,10 @@ app.post('/api/local-remote/drawing-donation/delete-refund', requireAutomationLo
     if (!sid) return res.status(401).json({ error: 'Invalid local program token' });
     const id = String(req.body?.id || '').trim();
     if (!id) return res.status(400).json({ error: 'id is required' });
-    let item = await getDrawingItemForSid(sid, id, { includeStrokes: true });
-    if (!item) return res.status(404).json({ error: 'not_found' });
-    let refundedAmount = 0;
-    if (!item.pointRefunded) {
-      for (const deduction of item.pointDeductions || []) {
-        await incrChannelPoints(item.channelUid, deduction.userId, deduction.username || item.viewerName || null, Number(deduction.amount || 0)).catch(() => null);
-        refundedAmount += Number(deduction.amount || 0);
-      }
-      item.pointRefunded = true;
-    }
+    const refund = await refundDrawingItemForSid(sid, id);
+    if (!refund) return res.status(404).json({ error: 'not_found' });
+    const { refundedAmount } = refund;
+    let { item } = refund;
     item = await deleteDrawingItemForSid(sid, id) || item;
     if (refundedAmount > 0) {
       await recordBotEventLogSafe(sid, {
@@ -22231,8 +22235,12 @@ async function replayDrawingDonationLog(sid, ownerUserId, log) {
     const base = `drawing-donations/${originalOwnerKey(sid)}/${id}`;
     const original = await downloadDrawingDonationObject(source.previewObjectKey);
     if (crypto.createHash('sha256').update(original).digest('hex') !== source.metrics?.original?.hash) throw new Error('drawing_original_mismatch');
-    item.strokeObjectKey = await uploadDrawingDonationObject(`${base}/${source.metrics.documentHash}.json`, canonicalDrawing(document), 'application/json');
-    item.previewObjectKey = await uploadDrawingDonationObject(`${base}/${source.metrics.original.hash}.png`, original, 'image/png');
+    const storage = source.metrics.original.format === 'webp' ? { buffer: original, original: source.metrics.original } : await optimizeDrawingOriginal(original);
+    item.metrics.original = storage.original;
+    const recording = await encodeDrawingRecording(document);
+    item.metrics.recording = { encoding: recording.encoding, byteLength: recording.byteLength, rawByteLength: recording.rawByteLength };
+    item.strokeObjectKey = await uploadDrawingDonationObject(`${base}/${source.metrics.documentHash}.json.gz`, recording.buffer, recording.contentType);
+    item.previewObjectKey = await uploadDrawingDonationObject(`${base}/${storage.original.hash}.webp`, storage.buffer, 'image/webp');
     if (!item.strokeObjectKey || !item.previewObjectKey) throw new Error('drawing_storage_unavailable');
     item.strokes = [];
   }

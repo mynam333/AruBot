@@ -2,8 +2,10 @@ import { parentPort, workerData } from 'node:worker_threads';
 import { createCanvas, loadImage } from '@napi-rs/canvas';
 import sharp from 'sharp';
 import { createDrawingRenderer } from '../shared/drawing/renderer.js';
+import { optimizeDrawingOriginal } from './drawing-original-storage.js';
 
 try {
+  const compressionDeadline = Date.now() + 18000;
   const { document, original } = workerData;
   const bytes = Buffer.from(original);
   const metadata = await sharp(bytes, { limitInputPixels: 3686400 }).metadata();
@@ -25,7 +27,8 @@ try {
   }
   if (!occupied || different / occupied > 0.06 || alphaDifference / occupied > 9) throw new Error('drawing_original_mismatch');
   const thumbnail = await sharp(bytes, { limitInputPixels: 3686400 }).resize({ width: 512, height: 512, fit: 'inside', withoutEnlargement: true }).webp({ quality: 78 }).toBuffer();
-  parentPort.postMessage({ ok: true, previewImage: `data:image/webp;base64,${thumbnail.toString('base64')}`, comparison: { occupied, different, meanAlphaError: alphaDifference / occupied } });
+  const storage = await optimizeDrawingOriginal(bytes, compressionDeadline);
+  parentPort.postMessage({ ok: true, previewImage: `data:image/webp;base64,${thumbnail.toString('base64')}`, comparison: { occupied, different, meanAlphaError: alphaDifference / occupied }, storage });
 } catch (error) {
-  parentPort.postMessage({ ok: false, error: error.message || 'drawing_render_failed' });
+  parentPort.postMessage({ ok: false, error: error.message || 'drawing_render_failed', status: error.status || 400 });
 }

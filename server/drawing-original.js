@@ -55,7 +55,7 @@ export function verifyDrawingOriginal(document, original) {
       if (error) reject(Object.assign(error, { status: error.status || 400 })); else resolve(result);
     };
     const timer = setTimeout(() => finish(Object.assign(new Error('drawing_render_timeout'), { status: 503 })), 20000);
-    worker.once('message', (result) => finish(result.ok ? null : new Error(result.error), result));
+    worker.once('message', (result) => finish(result.ok ? null : Object.assign(new Error(result.error), { status: result.status || 400 }), result));
     worker.once('error', (error) => finish(error));
     worker.once('exit', (code) => { if (!finished) finish(new Error(`drawing_renderer_exit_${code}`)); });
   });

@@ -2,7 +2,7 @@
 
 import * as Switch from '@radix-ui/react-switch';
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
-import { Ban, Check, Copy, Eraser, Eye, GripVertical, ImagePlus, Play, RefreshCw, RotateCw, Settings, ShieldAlert, Trash2, Undo2, Wifi, X } from 'lucide-react';
+import { Ban, Check, Copy, Download, Eraser, Eye, GripVertical, ImagePlus, Play, RefreshCw, RotateCw, Settings, ShieldAlert, Trash2, Undo2, Wifi, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -13,6 +13,9 @@ import { apiUrl, apiWsUrl } from '@/shared/api/http';
 import { writeClipboardText } from '@/shared/lib/share-links';
 import { formatNumber } from '@/shared/lib/utils';
 import { createItemRenderer, loadDrawingOriginal } from '@/shared/drawing/item-renderer';
+import { saveDrawingItemArchive } from '@/shared/drawing/archive-files';
+import { DrawingArchiveDialog } from '@/components/drawing/DrawingArchiveDialog';
+import { drawingFromItem } from '../../../shared/drawing/document.js';
 
 type DrawingSettings = {
   enabled: boolean;
@@ -102,6 +105,7 @@ export function DrawingDonationPage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [reviewItem, setReviewItem] = useState<DrawingItem | null>(null);
   const [reviewLoading, setReviewLoading] = useState(false);
+  const [archiveSaving, setArchiveSaving] = useState(false);
   const [realtimeState, setRealtimeState] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const reviewRendererRef = useRef<ReturnType<typeof createItemRenderer> | null>(null);
   const reviewOriginalRef = useRef<HTMLImageElement | null>(null);
@@ -389,10 +393,11 @@ export function DrawingDonationPage() {
             </div>
             <h1 className="mt-3 text-2xl font-bold tracking-normal">시청자가 그린 순간을 방송 화면에 띄워요.</h1>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
-              그림을 그리는 과정부터 완성본까지 OBS 오버레이로 재생합니다. 승인 방식과 비용을 정하고, 불편한 시청자는 봇 기능 사용을 막을 수 있어요.
+              그림과 재생 기록은 접수 후 30일이 지나면 자동 정리됩니다. 대기 중인 후원은 취소·환불됩니다.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
+            <DrawingArchiveDialog />
             <ShareLinkActions
               path={viewerDonationPath}
               title="AruBot 그림 후원"
@@ -613,6 +618,7 @@ export function DrawingDonationPage() {
                 <Button type="button" variant="secondary" className="w-full" onClick={playReview} disabled={reviewLoading || !reviewItem.strokes?.length}>
                   <Play className="h-[1em] w-[1em]" /> 리플레이 보기
                 </Button>
+                <Button type="button" variant="outline" className="w-full" disabled={reviewLoading || archiveSaving || !drawingFromItem(reviewItem)} onClick={async () => { setArchiveSaving(true); try { await saveDrawingItemArchive(reviewItem); } catch { toast.error('보관 파일을 저장하지 못했어요.'); } finally { setArchiveSaving(false); } }}><Download size={17} />{archiveSaving ? '저장 중' : '.aruart 저장'}</Button>
                 {reviewItem.status === 'queued' ? <Button type="button" className="w-full" onClick={() => { runItemAction('/api/drawing-donation/approve', reviewItem.id, '그림을 승인했어요.'); closeReview(); }}><Check className="h-[1em] w-[1em]" /> 승인</Button> : null}
                 <Button type="button" variant="secondary" className="w-full" onClick={() => { runItemAction('/api/drawing-donation/reject', reviewItem.id, '거절하고 포인트를 반환했어요.'); closeReview(); }}><Undo2 className="h-[1em] w-[1em]" /> 거절/환불</Button>
                 <Button type="button" variant="outline" className="w-full" onClick={() => { removeItem(reviewItem, true); closeReview(); }}><Trash2 className="h-[1em] w-[1em]" /> 삭제/환불</Button>

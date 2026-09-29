@@ -18,7 +18,7 @@ export function createItemRenderer() {
   };
 }
 
-export async function loadDrawingOriginal(item: { id: string }, token?: string, signal?: AbortSignal) {
+export async function loadDrawingOriginalBlob(item: { id: string }, token?: string, signal?: AbortSignal) {
   const document = drawingFromItem(item);
   if (!document) return null;
   if (!document.strokes.length) throw new Error('drawing_original_unavailable');
@@ -30,6 +30,13 @@ export async function loadDrawingOriginal(item: { id: string }, token?: string, 
   const blob = await response.blob();
   const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', await blob.arrayBuffer())), (n) => n.toString(16).padStart(2, '0')).join('');
   if (hash !== metrics.original?.hash) throw new Error('drawing_original_mismatch');
+  return blob;
+}
+
+export async function loadDrawingOriginal(item: { id: string }, token?: string, signal?: AbortSignal) {
+  const document = drawingFromItem(item);
+  const blob = await loadDrawingOriginalBlob(item, token, signal);
+  if (!document || !blob) return null;
   const url = URL.createObjectURL(blob);
   try {
     const image = new Image(); image.src = url; await image.decode();

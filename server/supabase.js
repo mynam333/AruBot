@@ -6,6 +6,9 @@ import path from 'path';
 import { isPublicShortLinkCode, normalizePublicShortLinkTarget } from './public-short-links.js';
 import { canonicalDrawing } from '../shared/drawing/document.js';
 import { createLocalDrawingStorage } from './drawing-local-storage.js';
+import { decodeDrawingRecording } from './drawing-recording-storage.js';
+import { cleanupDrawingBatch, drawingRetentionDays, refundDrawingWithClient } from './drawing-retention.js';
+import { MAX_ORIGINAL_BYTES } from '../shared/drawing/limits.js';
 const { Client, Pool } = pkg;
 
 let supabase;
@@ -2878,13 +2881,7 @@ export async function uploadDrawingDonationObject(key, payload, contentType = 'a
 }
 
 export async function downloadDrawingDonationJson(key) {
-  if (String(key).startsWith('local:')) return JSON.parse((await createLocalDrawingStorage().read(key)).toString('utf8'));
-  const storage = getSupabaseStorageClient();
-  if (!storage || !key) return null;
-  const { data, error } = await storage.client.storage.from(storage.bucket).download(key);
-  if (error || !data) throw new Error(error?.message || 'drawing_storage_download_failed');
-  const text = await data.text();
-  return JSON.parse(text);
+  return decodeDrawingRecording(await downloadDrawingDonationObject(key));
 }
 
 export async function downloadDrawingDonationObject(key) {
@@ -2892,7 +2889,7 @@ export async function downloadDrawingDonationObject(key) {
   const storage = getSupabaseStorageClient();
   if (!storage || !key) throw new Error('drawing_storage_unavailable');
   const { data, error } = await storage.client.storage.from(storage.bucket).download(key);
-  if (error || !data || data.size > 8 * 1024 * 1024) throw new Error('drawing_original_unavailable');
+  if (error || !data || data.size > MAX_ORIGINAL_BYTES) throw new Error('drawing_original_unavailable');
   return Buffer.from(await data.arrayBuffer());
 }
 
@@ -3039,6 +3036,7 @@ export async function getCurrentDrawingDonationItem(sid) {
               from public.drawing_donation_items
              where sid = $1
                and status = 'approved'
+               and created_at >= $2::timestamptz
                and not exists (select 1 from existing)
              order by position asc, created_at asc
              limit 1
@@ -3050,7 +3048,7 @@ export async function getCurrentDrawingDonationItem(sid) {
        union all
        select * from promoted
        limit 1`,
-      [String(sid)]
+      [String(sid), cutoffIsoForDays(drawingRetentionDays(process.env.ARUBOT_DRAWING_DONATION_RETENTION_DAYS))]
     );
     return hydrateDrawingDonationStrokes(normalizeDrawingDonationRow(result.rows?.[0], { includeStrokes: true }));
   });
@@ -3072,14 +3070,33 @@ export async function updateDrawingDonationItemStatus(sid, id, status, extra = {
       params.push(extra.pointRefunded === true);
       setParts.push(`point_refunded = $${params.length}`);
     }
+    const active = ['queued', 'approved', 'playing'].includes(nextStatus);
+    if (active) params.push(cutoffIsoForDays(drawingRetentionDays(process.env.ARUBOT_DRAWING_DONATION_RETENTION_DAYS)));
     const result = await pg.query(
       `update public.drawing_donation_items
           set ${setParts.join(', ')}
         where sid = $1 and id = $2
+          ${active ? `and created_at >= $${params.length}::timestamptz and status not in ('rejected', 'deleted')` : ''}
         returning *`,
       params
     );
     return hydrateDrawingDonationStrokes(normalizeDrawingDonationRow(result.rows?.[0], { includeStrokes: true }));
+  });
+}
+
+async function creditDrawingRefund(pg, row, deduction) {
+  const channel = await resolvePointChannelIdentity(pg, row.channel_uid);
+  const user = await resolvePointUserIdentity(pg, deduction.userId);
+  if (!channel.canonicalChannelUid || !user.canonicalUserId) throw new Error('drawing_refund_identity_invalid');
+  await pg.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`${channel.canonicalChannelUid}:${user.canonicalUserId}`]);
+  await upsertCanonicalPointDelta(pg, channel.canonicalChannelUid, user.canonicalUserId, deduction.username || row.viewer_name, deduction.amount);
+}
+
+export async function refundDrawingDonationItem(sid, id) {
+  await ensureDrawingDonationTables();
+  return withPgClient(async (pg) => {
+    const refund = await refundDrawingWithClient(pg, sid, id, creditDrawingRefund);
+    return refund ? { item: normalizeDrawingDonationRow(refund.row), refundedAmount: refund.refundedAmount } : null;
   });
 }
 
@@ -3455,15 +3472,14 @@ export async function cleanupPrivacyRetentionData(options = {}) {
   if (!getDbUrl()) return { ok: false, deleted: {}, reason: 'missing_database' };
   const config = {
     botEventLogDays: retentionDays(options.botEventLogDays ?? process.env.ARUBOT_BOT_EVENT_LOG_RETENTION_DAYS, 365),
-    drawingDonationDays: retentionDays(options.drawingDonationDays ?? process.env.ARUBOT_DRAWING_DONATION_RETENTION_DAYS, 365),
+    drawingDonationDays: drawingRetentionDays(options.drawingDonationDays ?? process.env.ARUBOT_DRAWING_DONATION_RETENTION_DAYS),
     predictionDays: retentionDays(options.predictionDays ?? process.env.ARUBOT_PREDICTION_RETENTION_DAYS, 365),
     videoDonationDays: retentionDays(options.videoDonationDays ?? process.env.ARUBOT_VIDEO_DONATION_RETENTION_DAYS, 365),
     automationJobDays: retentionDays(options.automationJobDays ?? process.env.ARUBOT_AUTOMATION_JOB_RETENTION_DAYS, 90),
     actionRunDays: retentionDays(options.actionRunDays ?? process.env.ARUBOT_ACTION_RUN_RETENTION_DAYS, 180),
     attendanceArchiveDays: retentionDays(options.attendanceArchiveDays ?? process.env.ARUBOT_ATTENDANCE_ARCHIVE_RETENTION_DAYS, 90),
   };
-  const summary = { ok: true, deleted: {}, objectKeysDeleted: 0, objectKeysSkipped: 0, config };
-  const drawingObjectKeys = [];
+  const summary = { ok: true, deleted: {}, objectKeysDeleted: 0, objectKeysSkipped: 0, drawingExpired: [], drawingFailed: [], config };
 
   await withPgClient(async (pg) => {
     const botEventLogCutoff = cutoffIsoForDays(config.botEventLogDays);
@@ -3473,9 +3489,18 @@ export async function cleanupPrivacyRetentionData(options = {}) {
 
     const drawingCutoff = cutoffIsoForDays(config.drawingDonationDays);
     if (drawingCutoff && await tableExistsPg(pg, 'public.drawing_donation_items')) {
-      const where = `status in ('done', 'rejected', 'deleted') and created_at < $1::timestamptz`;
-      drawingObjectKeys.push(...await collectDrawingDonationKeysWhere(pg, where, [drawingCutoff]));
-      await deleteRowsWhere(pg, summary, 'public.drawing_donation_items', where, [drawingCutoff]);
+      const hasJobs = await tableExistsPg(pg, 'public.durable_runtime_jobs');
+      let batch;
+      do {
+        batch = await cleanupDrawingBatch(pg, { cutoff: drawingCutoff, after: batch?.after, hasJobs,
+          credit: creditDrawingRefund, deleteObjects: deleteDrawingDonationObjectKeys });
+        summary.deleted.drawing_donation_items = (summary.deleted.drawing_donation_items || 0) + batch.deleted;
+        summary.objectKeysDeleted += batch.objectKeysDeleted;
+        summary.objectKeysSkipped += batch.objectKeysSkipped;
+        summary.drawingExpired.push(...batch.expired);
+        summary.drawingFailed.push(...batch.failed);
+      } while (batch.hasMore);
+      if (summary.drawingFailed.length) summary.ok = false;
     }
 
     const predictionCutoff = cutoffIsoForDays(config.predictionDays);
@@ -3504,12 +3529,6 @@ export async function cleanupPrivacyRetentionData(options = {}) {
     }
   });
 
-  const objectDelete = await deleteDrawingDonationObjectKeys(drawingObjectKeys).catch((error) => {
-    console.warn('[Privacy] Retention object cleanup failed:', error?.message || error);
-    return { deleted: 0, skipped: uniqueNonEmpty(drawingObjectKeys).length };
-  });
-  summary.objectKeysDeleted = objectDelete.deleted || 0;
-  summary.objectKeysSkipped = objectDelete.skipped || 0;
   summary.drawingUploads = await cleanupDrawingDonationUploads().catch(() => ({ deleted: 0 }));
   return summary;
 }

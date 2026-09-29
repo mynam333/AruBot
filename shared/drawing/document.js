@@ -3,7 +3,8 @@ import { MAX_DOCUMENT_BYTES, MAX_FILL_RUNS, MAX_SELECTION_PIXELS, drawingJsonByt
 export { MAX_DOCUMENT_BYTES } from './limits.js';
 
 export const DRAWING_VERSION = 2;
-export const RENDERER_VERSION = '2.0.0';
+export const RENDERER_VERSION = '2.1.0';
+export const SUPPORTED_RENDERER_VERSIONS = ['2.0.0', RENDERER_VERSION];
 export const BRUSHES = {
   pen: { label: '정밀 펜', size: 0.007, texture: 0, hardness: 1, flow: 1, angle: 35 },
   pencil: { label: '연필', size: 0.005, texture: 0.7, hardness: 0.8, flow: 1, angle: 35 },
@@ -24,7 +25,7 @@ export function createBrush(type = 'pen', color = '#ff6b9a', alpha = 1) {
 export function rememberDrawingColor(colors, stroke) {
   const color = stroke?.brush?.color?.toLowerCase();
   if (!stroke?.points?.length || stroke.kind === 'selection' || stroke.brush.type === 'eraser' || !/^#[0-9a-f]{6}$/.test(color || '')) return colors;
-  const used = stroke.shape ? [...(stroke.shape.fillEnabled && stroke.shape.fillAlpha > 0 ? [stroke.shape.fillColor] : []), ...(stroke.shape.strokeEnabled && stroke.brush.alpha > 0 ? [color] : [])] : stroke.brush.alpha > 0 ? [color] : [];
+  const used = [...(stroke.outline?.alpha > 0 ? [stroke.outline.color] : []), ...(stroke.shape ? [...(stroke.shape.fillEnabled && stroke.shape.fillAlpha > 0 ? [stroke.shape.fillColor] : []), ...(stroke.shape.strokeEnabled && stroke.brush.alpha > 0 ? [color] : [])] : stroke.brush.alpha > 0 ? [color] : [])];
   return used.reduce((previous, next) => [next.toLowerCase(), ...previous.filter((c) => c.toLowerCase() !== next.toLowerCase())].slice(0, 8), colors);
 }
 
@@ -67,7 +68,7 @@ function keys(value, allowed) {
 
 export function validateDrawing(document, limits = {}) {
   keys(document, ['version', 'rendererVersion', 'id', 'revision', 'width', 'height', 'layers', 'strokes', 'replayMode']);
-  if (document.version !== DRAWING_VERSION || document.rendererVersion !== RENDERER_VERSION) invalid('drawing_version_unsupported');
+  if (document.version !== DRAWING_VERSION || !SUPPORTED_RENDERER_VERSIONS.includes(document.rendererVersion)) invalid('drawing_version_unsupported');
   if (typeof document.id !== 'string' || !/^[\w-]{1,80}$/.test(document.id) || !Number.isInteger(document.revision) || document.revision < 0) invalid('drawing_invalid_identity');
   if (![document.width, document.height].every((n) => Number.isInteger(n) && n >= 32 && n <= 1920) || document.width * document.height > 3686400) invalid('drawing_invalid_canvas');
   if (!['drawing-only', 'original', 'trim-gaps'].includes(document.replayMode)) invalid('drawing_invalid_replay');
@@ -84,7 +85,7 @@ export function validateDrawing(document, limits = {}) {
   const ids = new Set();
   const lastInLayer = new Map();
   for (const stroke of document.strokes) {
-    keys(stroke, ['id', 'layerId', 'seed', 'brush', 'points', 'kind', 'transform', 'mirror', 'mirrorY', 'runs', 'selection', 'frames', 'shape']);
+    keys(stroke, ['id', 'layerId', 'seed', 'brush', 'points', 'kind', 'transform', 'mirror', 'mirrorY', 'runs', 'selection', 'frames', 'shape', 'outline']);
     if (!layerIds.has(stroke.layerId) || typeof stroke.id !== 'string' || !/^[\w-]{1,80}$/.test(stroke.id) || ids.has(stroke.id) || !Number.isInteger(stroke.seed) || !number(stroke.seed, 0, 4294967295)) invalid('drawing_invalid_stroke');
     ids.add(stroke.id);
     if (!['freehand', 'line', 'rectangle', 'ellipse', 'star', 'heart', 'fill', 'selection'].includes(stroke.kind) || typeof stroke.mirror !== 'boolean') invalid('drawing_invalid_tool');
@@ -96,6 +97,11 @@ export function validateDrawing(document, limits = {}) {
     const b = stroke.brush;
     keys(b, ['type', 'version', 'color', 'alpha', 'size', 'texture', 'hardness', 'flow', 'angle', 'smoothing']);
     if (!Object.hasOwn(BRUSHES, b.type) || b.version !== 1 || !/^#[0-9a-f]{6}$/i.test(b.color) || !number(b.alpha, 0, 1) || !number(b.size, 0.001, 0.2) || !number(b.texture, 0, 1) || !number(b.hardness, 0, 1) || !number(b.flow, 0.05, 1) || !number(b.angle, 0, 180) || !number(b.smoothing, 0, 0.85)) invalid('drawing_invalid_brush');
+    if (stroke.outline !== undefined) {
+      keys(stroke.outline, ['size', 'color', 'alpha']);
+      if (document.rendererVersion === '2.0.0') invalid('drawing_version_unsupported');
+      if (['fill', 'selection'].includes(stroke.kind) || b.type === 'eraser' || !number(stroke.outline.size, 0.001, 0.1) || !/^#[0-9a-f]{6}$/i.test(stroke.outline.color) || !number(stroke.outline.alpha, 0, 1)) invalid('drawing_invalid_outline');
+    }
     keys(stroke.transform, ['x', 'y', 'scale']);
     if (!number(stroke.transform.x, -1, 1) || !number(stroke.transform.y, -1, 1) || !number(stroke.transform.scale, 0.1, 4)) invalid('drawing_invalid_transform');
     if (!Array.isArray(stroke.points) || stroke.points.length < 1) invalid('drawing_invalid_points');
@@ -183,6 +189,18 @@ export function drawingInk(document) {
     if (stroke.shape) {
       if (!stroke.shape.strokeEnabled) amount = 0;
       if (stroke.shape.fillEnabled) amount += Math.abs(points.at(-1).x - points[0].x) * Math.abs(points.at(-1).y - points[0].y) * stroke.shape.fillAlpha;
+    }
+    if (stroke.outline?.alpha > 0) {
+      const dx = Math.abs(points.at(-1).x - points[0].x), dy = Math.abs(points.at(-1).y - points[0].y);
+      let perimeter = 0;
+      if (stroke.kind === 'rectangle') perimeter = 2 * (dx + dy);
+      else if (stroke.kind === 'ellipse') perimeter = Math.PI * Math.hypot(dx, dy) / Math.SQRT2;
+      else if (['star', 'heart'].includes(stroke.kind)) perimeter = 4 * Math.hypot(dx, dy);
+      else {
+        for (let i = 1; i < points.length; i++) perimeter += 2 * Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+        perimeter += Math.PI * b.size;
+      }
+      amount += (perimeter + Math.PI * stroke.outline.size) * stroke.outline.size * stroke.outline.alpha;
     }
     raw += amount * factor * scale ** 2 * (stroke.mirror ? 2 : 1) * (stroke.mirrorY ? 2 : 1);
   }

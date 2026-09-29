@@ -1,5 +1,5 @@
 import { getStroke } from 'perfect-freehand';
-import { buildTimeline, canonicalDrawing, pointsAtTime, RENDERER_VERSION } from './document.js';
+import { buildTimeline, canonicalDrawing, pointsAtTime, SUPPORTED_RENDERER_VERSIONS } from './document.js';
 import { selectionCorners, selectionFrameAt } from './selection.js';
 import { drawSelectionImage } from './perspective.js';
 
@@ -40,6 +40,22 @@ function curvePath(ctx, points, offset = 0) {
   if (coords.length > 1) ctx.lineTo(...coords.at(-1));
 }
 
+function freehandOutline(points, size, type) {
+  return getStroke(points, { size, thinning: type === 'brush' ? 0.85 : type === 'pencil' ? 0.45 : type === 'crayon' ? 0.2 : 0,
+    smoothing: 0.65, streamline: 0, simulatePressure: false, last: true, start: { cap: true, taper: 0 }, end: { cap: true, taper: 0 } });
+}
+
+function nibPath(ctx, points, size, degrees) {
+  const angle = degrees * Math.PI / 180, nx = Math.cos(angle) * size * 0.5, ny = Math.sin(angle) * size * 0.5;
+  const tx = -Math.sin(angle) * size * 0.12, ty = Math.cos(angle) * size * 0.12;
+  ctx.beginPath();
+  for (let i = 0; i < points.length; i++) {
+    const a = points[Math.max(0, i - 1)], p = points[i];
+    const corners = convexNib([a, p].flatMap((point) => [[point[0] - nx - tx, point[1] - ny - ty], [point[0] + nx - tx, point[1] + ny - ty], [point[0] + nx + tx, point[1] + ny + ty], [point[0] - nx + tx, point[1] - ny + ty]]));
+    ctx.moveTo(...corners[0]); for (const corner of corners.slice(1)) ctx.lineTo(...corner); ctx.closePath();
+  }
+}
+
 export function strokeBounds(stroke, doc) {
   if (stroke.kind === 'selection') {
     const corners = selectionCorners(stroke.frames.at(-1), stroke.selection.rect, doc), xs = corners.map((p) => p.x), ys = corners.map((p) => p.y);
@@ -54,7 +70,7 @@ export function strokeBounds(stroke, doc) {
   } else for (const point of stroke.points) {
     minX = Math.min(minX, point.x); maxX = Math.max(maxX, point.x); minY = Math.min(minY, point.y); maxY = Math.max(maxY, point.y);
   }
-  const tr = stroke.transform, padding = stroke.brush.size * Math.min(doc.width, doc.height) * tr.scale;
+  const tr = stroke.transform, padding = (stroke.brush.size + (stroke.outline?.alpha > 0 ? stroke.outline.size : 0)) * Math.min(doc.width, doc.height) * tr.scale;
   const x = (minX * tr.scale + tr.x) * doc.width - padding, w = (maxX - minX) * tr.scale * doc.width + padding * 2;
   const left = stroke.mirror ? Math.min(x, doc.width - x - w) : x;
   const right = stroke.mirror ? Math.max(x + w, doc.width - x) : x + w;
@@ -84,7 +100,7 @@ function shapePoints(stroke, width, height, until) {
 
 /** The canvas factory is injected so Node verification and browsers run identical brush code. */
 export function createDrawingRenderer(createCanvas) {
-  let width = 0, height = 0, scratch, work, output;
+  let width = 0, height = 0, scratch, work, output, border;
   const layers = new Map(), patterns = new Map();
   const strokeKeys = new WeakMap();
   const keyOf = (stroke) => {
@@ -148,20 +164,11 @@ export function createDrawingRenderer(createCanvas) {
       return;
     }
     if (type === 'marker' || type === 'highlighter') {
-      const angle = b.angle * Math.PI / 180, nx = Math.cos(angle) * size * 0.5, ny = Math.sin(angle) * size * 0.5;
-      const tx = -Math.sin(angle) * size * 0.12, ty = Math.cos(angle) * size * 0.12;
-      ctx.beginPath();
-      for (let i = 0; i < points.length; i++) {
-        const a = points[Math.max(0, i - 1)], p = points[i];
-        const corners = convexNib([a, p].flatMap((point) => [[point[0] - nx - tx, point[1] - ny - ty], [point[0] + nx - tx, point[1] + ny - ty], [point[0] + nx + tx, point[1] + ny + ty], [point[0] - nx + tx, point[1] - ny + ty]]));
-        // Convex nib sweeps are filled once, so intersections do not accumulate alpha.
-        ctx.moveTo(...corners[0]); for (const corner of corners.slice(1)) ctx.lineTo(...corner); ctx.closePath();
-      }
+      // Convex nib sweeps are filled once, so intersections do not accumulate alpha.
+      nibPath(ctx, points, size, b.angle);
       ctx.fill();
     } else {
-      const outline = stroke.kind === 'freehand' ? getStroke(points, { size, thinning: type === 'brush' ? 0.85 : type === 'pencil' ? 0.45 : type === 'crayon' ? 0.2 : 0,
-        smoothing: 0.65, streamline: 0, simulatePressure: false, last: true, start: { cap: true, taper: 0 }, end: { cap: true, taper: 0 } })
-        : null;
+      const outline = stroke.kind === 'freehand' ? freehandOutline(points, size, type) : null;
       if (outline) { outlinePath(ctx, outline); ctx.fill(); } else simplePath(size);
       if (outline && type === 'brush' && b.texture > 0 && points.length > 1) {
         ctx.save(); outlinePath(ctx, outline); ctx.clip(); ctx.globalCompositeOperation = 'destination-out';
@@ -238,6 +245,35 @@ export function createDrawingRenderer(createCanvas) {
     ctx.closePath();
   }
 
+  function paintOutline(stroke, until) {
+    border ||= createCanvas(width, height);
+    const ctx = border.getContext('2d'), b = stroke.brush, size = b.size * Math.min(width, height);
+    ctx.clearRect(0, 0, width, height); ctx.save();
+    ctx.translate(stroke.transform.x * width, stroke.transform.y * height); ctx.scale(stroke.transform.scale, stroke.transform.scale);
+    let edgeWidth = 0, closed = true;
+    if (['rectangle', 'ellipse', 'star', 'heart'].includes(stroke.kind)) {
+      closedShapePath(ctx, stroke, until);
+      edgeWidth = stroke.shape?.strokeEnabled === false || (!stroke.shape && ['star', 'heart'].includes(stroke.kind)) ? 0 : size;
+    } else {
+      const points = stroke.kind === 'freehand' ? pointsAtTime(stroke.points, until).map((p) => [p.x * width, p.y * height, p.p, p.t]) : shapePoints(stroke, width, height, until);
+      if (['marker', 'highlighter'].includes(b.type)) nibPath(ctx, points, size, b.angle);
+      else if (b.type === 'airbrush') outlinePath(ctx, getStroke(points, { size: size * 1.7 * 0.825, thinning: 0.35 / 1.65, smoothing: 0.65, streamline: 0, simulatePressure: false, last: true }));
+      else if (stroke.kind === 'freehand') outlinePath(ctx, freehandOutline(points, size, b.type));
+      else {
+        closed = false; edgeWidth = size;
+        ctx.beginPath(); ctx.moveTo(points[0][0], points[0][1]);
+        for (const point of points.slice(1)) ctx.lineTo(point[0], point[1]);
+      }
+    }
+    ctx.lineJoin = stroke.kind === 'rectangle' ? 'miter' : 'round'; ctx.lineCap = 'round';
+    ctx.strokeStyle = stroke.outline.color; ctx.lineWidth = edgeWidth + stroke.outline.size * Math.min(width, height) * 2; ctx.stroke();
+    // Remove the entire body footprint, not its textured alpha: outlines must not tint translucent interiors.
+    ctx.globalCompositeOperation = 'destination-out'; ctx.fillStyle = '#000000'; ctx.strokeStyle = '#000000';
+    if (closed) ctx.fill();
+    if (edgeWidth) { ctx.lineWidth = edgeWidth; ctx.stroke(); }
+    ctx.restore();
+  }
+
   function paintStroke(target, stroke, until, state, cache) {
     if (until < stroke.points[0].t) return;
     if (stroke.kind === 'selection') { paintSelection(target, stroke, until, state, cache); return; }
@@ -268,19 +304,23 @@ export function createDrawingRenderer(createCanvas) {
       ctx.restore();
     };
     paint(false);
+    const outlined = stroke.outline?.alpha > 0 && stroke.brush.type !== 'eraser' && stroke.kind !== 'fill';
+    if (outlined) paintOutline(stroke, until);
     target.save(); target.globalCompositeOperation = stroke.brush.type === 'eraser' ? 'destination-out' : 'source-over';
-    target.globalAlpha = stroke.shape ? 1 : stroke.brush.alpha * (['highlighter', 'watercolor'].includes(stroke.brush.type) ? stroke.brush.flow : 1);
+    const alpha = stroke.shape ? 1 : stroke.brush.alpha * (['highlighter', 'watercolor'].includes(stroke.brush.type) ? stroke.brush.flow : 1);
     for (const flipX of stroke.mirror ? [false, true] : [false]) for (const flipY of stroke.mirrorY ? [false, true] : [false]) {
       target.save(); target.translate(flipX ? width : 0, flipY ? height : 0); target.scale(flipX ? -1 : 1, flipY ? -1 : 1);
+      if (outlined) { target.globalAlpha = stroke.outline.alpha; target.drawImage(border, 0, 0); }
+      target.globalAlpha = alpha;
       target.drawImage(scratch, 0, 0); target.restore();
     }
     target.restore();
   }
 
   function render(doc, time = Infinity, maxSeconds = 12, onlyLayer = null) {
-    if (doc.rendererVersion !== RENDERER_VERSION) throw new Error('drawing_version_unsupported');
+    if (!SUPPORTED_RENDERER_VERSIONS.includes(doc.rendererVersion) || (doc.rendererVersion === '2.0.0' && doc.strokes.some((stroke) => stroke.outline))) throw new Error('drawing_version_unsupported');
     if (width !== doc.width || height !== doc.height) {
-      width = doc.width; height = doc.height; layers.clear();
+      width = doc.width; height = doc.height; layers.clear(); border = null;
       scratch = createCanvas(width, height); work = createCanvas(width, height); output = createCanvas(width, height);
     }
     const timeline = buildTimeline(doc, maxSeconds), times = new Map(timeline.entries.map((entry) => [entry.id, time * timeline.speed + entry.offset]));

@@ -48,7 +48,7 @@
     "lint": "eslint .",
     "preview": "next start",
     "test": "jest",
-    "test:drawing": "node --test tests/drawing-v2.test.mjs tests/drawing-selection.test.mjs tests/drawing-local-storage.test.mjs",
+    "test:drawing": "node --test tests/drawing-v2.test.mjs tests/drawing-selection.test.mjs tests/drawing-local-storage.test.mjs tests/drawing-archive.test.mjs tests/drawing-retention.test.mjs",
     "test:watch": "jest --watch"
   },
   "dependencies": {
