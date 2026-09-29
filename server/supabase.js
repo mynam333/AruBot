@@ -8075,6 +8075,20 @@ export async function findSidByViewerToken(token) {
   }
 }
 
+export async function findSidByDrawingViewerToken(token) {
+  const text = String(token || '').trim();
+  if (!text) return null;
+  ensure();
+  const { data, error } = await supabase
+    .from('bot_settings')
+    .select('sid')
+    .eq('settings->>drawingDonationViewerToken', text)
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data?.sid ? String(data.sid) : null;
+}
+
 // Resolve sid by roulette viewer token stored at bot_settings.settings.rouletteViewerToken
 export async function findSidByRouletteToken(token) {
   ensure();

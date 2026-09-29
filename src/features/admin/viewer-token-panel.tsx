@@ -1,6 +1,6 @@
 'use client';
 
-import { Copy, RefreshCw, RotateCcw } from 'lucide-react';
+import { Copy, ExternalLink, RefreshCw, RotateCcw } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState, useTransition } from 'react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
@@ -12,6 +12,7 @@ type TokenResponse = {
   token?: string;
   path?: string;
   sid?: string;
+  bgmPath?: string;
 };
 
 export function ViewerTokenPanel({
@@ -78,6 +79,11 @@ export function ViewerTokenPanel({
             <CardDescription>{description}</CardDescription>
           </div>
           <div className="flex flex-wrap gap-2">
+            {data?.bgmPath ? (
+              <Button type="button" variant="secondary" onClick={() => window.open(data.bgmPath, 'arubot-bgm', 'popup,width=960,height=600')}>
+                <ExternalLink className="h-4 w-4" />BGM 플레이어 열기
+              </Button>
+            ) : null}
             <Button type="button" variant="outline" onClick={load} disabled={isPending}>
               <RefreshCw className={isPending ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
               새로고침

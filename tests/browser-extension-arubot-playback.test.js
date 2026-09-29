@@ -252,6 +252,15 @@ describe('AruBot extension playback synchronization', () => {
     expect(ext.page.video.paused).toBe(true);
   });
 
+  test('switching from a video to BGM clears the video donation pause', async () => {
+    const ext = await createExtension();
+    await ext.emit(playback('video', 120));
+    expect(ext.page.video.paused).toBe(true);
+    await ext.emit(playback('bgm', 180, { item: { id: 'bgm', kind: 'bgm', durationSec: 180 } }));
+    expect(ext.page.video.paused).toBe(false);
+    expect(ext.getPublicState().services.arubot.queue).toEqual([]);
+  });
+
   test('ending AruBot playback preserves another service pause and shortens the combined deadline', async () => {
     const ext = await createExtension();
     await ext.enqueuePause('cime', 8, { id: 'other-donation' });

@@ -39,18 +39,17 @@ describe('CHZZK clip video donation regression', () => {
     expect(serverIndex).toContain('await broadcastPvdStart(sid)');
   });
 
-  test('enqueue starts or idle-defers playback based on pre-push queue emptiness', () => {
+  test('enqueue starts or idle-defers playback when the prioritized queue head changes', () => {
     const dispatchStart = serverIndex.indexOf('async function dispatchDurableRuntimeJob');
     const workerStart = serverIndex.indexOf('async function runDurableRuntimeWorker', dispatchStart);
     const dispatchBody = serverIndex.slice(dispatchStart, workerStart);
-    expect(dispatchBody).toContain('const shouldStartPlayback = queue.length === 0');
-    expect(dispatchBody).toContain('queue.push(runtimeItem)');
+    expect(dispatchBody).toContain('const shouldStartPlayback = insertPvdRequest(queue, runtimeItem, pvdPlaybackState.get(job.sid), getCurrentAtSec(job.sid))');
     expect(dispatchBody).toContain('if (shouldStartPlayback) await broadcastPvdStart(job.sid, { deferForIdle: true })');
 
     const replayStart = serverIndex.indexOf('async function replayVideoDonationLog');
     const replayEnd = serverIndex.indexOf('async function replayDrawingDonationLog', replayStart);
     const replayBody = serverIndex.slice(replayStart, replayEnd);
-    expect(replayBody).toContain('const shouldStartPlayback = q.length === 0');
+    expect(replayBody).toContain('const shouldStartPlayback = insertPvdRequest(q, item, pvdPlaybackState.get(sid), getCurrentAtSec(sid))');
     expect(replayBody).toMatch(/if \(shouldStartPlayback\) \{\s+await broadcastPvdStart\(sid, \{ deferForIdle: true \}\);/);
   });
 });

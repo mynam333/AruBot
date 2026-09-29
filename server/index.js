@@ -1,5 +1,5 @@
 import express from 'express';
-import { downloadDrawingDonationObject, getDurableRuntimeJob } from './supabase.js';
+import { downloadDrawingDonationObject, getDurableRuntimeJob, findSidByDrawingViewerToken } from './supabase.js';
 import { DRAWING_ORIGINAL_LIMIT, inspectOriginal, originalOwnerKey, validateDrawingSubmission, verifyDrawingOriginal } from './drawing-original.js';
 import { optimizeDrawingOriginal } from './drawing-original-storage.js';
 import { encodeDrawingRecording } from './drawing-recording-storage.js';
@@ -21,6 +21,7 @@ import { confirmPlatformTokenConsent, confirmYoutubeBotProfileConsent, countActi
 import { createPlatformProfileService } from './platform-profiles.js';
 import { createChzzkInfoClient, chzzkChannelIdentityMatches, chzzkNonNegativeNumber } from './chzzk-info.js';
 import { createPvdIdlePlaybackStore } from './pvd-idle-playback.js';
+import { createBgmPlayerPresence, getPvdBgmSettings, insertPvdRequest, updateBgmPlaybackAvailability } from './pvd-bgm.js';
 import { executeAndStripLiveChangeTokens, filterLiveInfoByProvider, selectCategorySearchResult } from './live-command-actions.js';
 import { canManageLiveSettings, createLiveManagerRoleResolver, getLiveRoleLevel } from './live-command-permissions.js';
 import { buildYoutubeLiveInfoFallback, buildYoutubeLiveLookupContext, buildYoutubeOfflineLiveInfo } from './youtube-live-info.js';
@@ -3959,9 +3960,47 @@ app.post('/api/video-donation/control-by-token', async (req, res) => {
       if (!settings.videoDonationViewerToken || settings.videoDonationViewerToken !== token) return res.status(404).json({ error: 'token not found' });
     } catch { }
     const op = String(req.body?.op || '').toLowerCase();
+    if (op === 'bgm_status') {
+      if (settings.videoDonationViewerToken !== token) return res.status(404).json({ error: 'token not found' });
+      const bgm = getPvdBgmSettings(settings);
+      const wasOwner = bgmPlayerPresence.current(sid)?.clientId === req.body.clientId;
+      const accepted = bgmPlayerPresence.report(sid, { ...req.body, visible: bgm.enabled && req.body.visible === true });
+      const head = getVideoQueue(sid)[0];
+      const state = pvdPlaybackState.get(sid);
+      const reportedAt = Number(req.body.atSec);
+      if (wasOwner && head?.kind === 'bgm' && head.id === req.body.itemId && !state?.paused && Number.isFinite(reportedAt)) {
+        const atSec = Math.max(getPvdItemStartSec(head), Math.min(getPvdItemStartSec(head) + head.durationSec, reportedAt));
+        setPvdPlaybackBaseFromAtSec(state, head, atSec);
+        scheduleNextPvdAutoPop(sid);
+      }
+      if (updateBgmPlaybackAvailability(state, head, bgm.enabled && bgmPlayerPresence.current(sid)?.readyItemId === head?.id)) {
+        await broadcastPvdStart(sid);
+      }
+      return res.json({ ok: true, accepted });
+    }
+    if (op === 'bgm_checkpoint') {
+      if (settings.videoDonationViewerToken !== token) return res.status(404).json({ error: 'token not found' });
+      if (bgmPlayerPresence.current(sid)?.clientId !== req.body.clientId) return res.status(409).json({ error: 'bgm_player_owned' });
+      const item = getVideoQueue(sid).slice(1).find((entry) => entry.kind === 'bgm' && entry.id === req.body.itemId);
+      const atSec = Number(req.body.atSec);
+      if (item?.resumePlayback && Number.isFinite(atSec)) {
+        item.resumePlayback.atSec = Math.max(Number(item.startSec) || 0, Math.min((Number(item.startSec) || 0) + item.durationSec, atSec));
+      }
+      return res.json({ ok: true });
+    }
+    if (op === 'bgm_idle_control') {
+      if (settings.videoDonationViewerToken !== token) return res.status(404).json({ error: 'token not found' });
+      if (bgmPlayerPresence.current(sid)?.clientId !== req.body.clientId) return res.status(409).json({ error: 'bgm_player_owned' });
+      const result = await controlPvdIdlePlayback(sid, String(req.body.action || ''), String(req.body.itemId || ''));
+      return result ? res.json(result) : res.status(409).json({ error: 'idle_not_playing' });
+    }
     if (op === 'idle_status') {
       if (settings.videoDonationViewerToken !== token) return res.status(404).json({ error: 'token not found' });
-      const result = pvdIdlePlayback.report(sid, req.body);
+      const isBgm = req.body?.playerRole === 'bgm';
+      if (isBgm && (!getPvdBgmSettings(settings).enabled || bgmPlayerPresence.current(sid)?.clientId !== req.body.clientId)) {
+        return res.json({ ok: true, accepted: false });
+      }
+      const result = pvdIdlePlayback.report(sid, { ...req.body, kind: isBgm ? 'bgm' : 'video' });
       if (result.accepted) notifyPvdAdminSubscribers(sid, 'idle_status').catch(() => null);
       return res.json({ ok: true, ...result });
     }
@@ -6186,6 +6225,18 @@ function makeQuickStartCommandRules() {
       lastUsed: 0,
     },
     {
+      id: 'tpl_cmd_bgm_request',
+      name: 'BGM 신청',
+      keywords: ['!bgm', '!노래'],
+      responses: ['${bgm_request}'],
+      enabled: true,
+      adminOnly: false,
+      requiredRoleLevel: 1,
+      pointsCost: 0,
+      cooldown: 5000,
+      lastUsed: 0,
+    },
+    {
       id: 'tpl_cmd_video_donation',
       name: '영상 후원 신청',
       keywords: ['!영상', '!영도'],
@@ -6556,6 +6607,10 @@ app.post('/api/video-donation/reorder', async (req, res) => {
     // Rebuild queue
     const byId = new Map(q.map(it => [String(it.id), it]));
     const reordered = ids.map(id => byId.get(String(id))).filter(Boolean);
+    const firstBgm = reordered.findIndex((item) => item.kind === 'bgm');
+    if (firstBgm >= 0 && reordered.slice(firstBgm).some((item) => item.kind !== 'bgm')) {
+      return res.status(400).json({ error: '영상 후원은 BGM보다 먼저 재생됩니다. 같은 종류 안에서 순서를 바꿔 주세요.' });
+    }
     videoDonationQueues.set(sid, reordered);
     const afterHead = reordered[0] ? String(reordered[0].id) : null;
     // If head changed, broadcast start (clients dedupe) and reschedule
@@ -6699,6 +6754,15 @@ function getVideoQueue(sid) {
   return q;
 }
 
+const bgmPlayerPresence = createBgmPlayerPresence();
+setInterval(() => {
+  for (const [sid, state] of pvdPlaybackState) {
+    if (getVideoQueue(sid)[0]?.kind === 'bgm' && !state.bgmBlocked && !bgmPlayerPresence.current(sid)) {
+      broadcastPvdStart(sid).catch(() => null);
+    }
+  }
+}, 5000).unref?.();
+
 async function getVideoDonationReceiptQueueSize(sid, acceptedItem, durableStatus) {
   const queue = getVideoQueue(sid);
   const fallbackSize = countVideoDonationQueueIncludingItem(queue, acceptedItem, durableStatus);
@@ -6730,8 +6794,7 @@ async function dispatchDurableRuntimeJob(job) {
   if (job.jobType === 'video-donation') {
     const queue = getVideoQueue(job.sid);
     if (!queue.some((queued) => queued?.runtimeJobId === job.id)) {
-      const shouldStartPlayback = queue.length === 0;
-      queue.push(runtimeItem);
+      const shouldStartPlayback = insertPvdRequest(queue, runtimeItem, pvdPlaybackState.get(job.sid), getCurrentAtSec(job.sid));
       if (shouldStartPlayback) await broadcastPvdStart(job.sid, { deferForIdle: true });
       else notifyPvdAdminSubscribers(job.sid, 'queued').catch(() => null);
     }
@@ -6819,7 +6882,7 @@ async function getPvdQueueSnapshot(sid, reason = 'sync') {
 }
 
 function getActivePvdIdlePlayback(sid) {
-  if (getVideoQueue(sid)[0] && pvdPlaybackState.get(sid)?.idleDeferred !== true) return null;
+  if (getVideoQueue(sid)[0] && pvdPlaybackState.get(sid)?.idleDeferred !== true && !pvdPlaybackState.get(sid)?.bgmBlocked) return null;
   return pvdIdlePlayback.snapshot(sid);
 }
 
@@ -6884,7 +6947,13 @@ async function getPvdViewerSettingsForSid(sid) {
   return {
     volume: normalizePvdVolume(settings.videoDonationVolume ?? 100),
     idlePlaylist: getPvdIdlePlaylistForViewer(settings.videoDonationIdlePlaylist),
+    bgm: getPvdBgmViewerSettings(settings),
   };
+}
+
+function getPvdBgmViewerSettings(settings) {
+  const bgm = getPvdBgmSettings(settings);
+  return { ...bgm, idlePlaylist: getPvdIdlePlaylistForViewer({ ...settings.bgmIdlePlaylist, enabled: bgm.enabled && settings.bgmIdlePlaylist?.enabled === true }) };
 }
 
 function getPvdItemStartSec(item) {
@@ -6904,10 +6973,15 @@ function getPvdPlayDurationSec({ maxDurationSec, ytDurationSec = null, startSec 
 
 function createPvdPlaybackState(item, options = {}) {
   const idleDeferred = options.idleDeferred === true;
+  const resume = item?.resumePlayback;
+  const bgmBlocked = item?.kind === 'bgm';
+  const paused = idleDeferred || bgmBlocked || resume?.paused === true;
+  const atSec = Math.max(getPvdItemStartSec(item), Number(resume?.atSec) || getPvdItemStartSec(item));
   return {
-    baseStartMs: Date.now(),
-    paused: idleDeferred,
-    pausedAtSec: idleDeferred ? getPvdItemStartSec(item) : null,
+    baseStartMs: Date.now() - (atSec - getPvdItemStartSec(item)) * 1000,
+    paused,
+    pausedAtSec: paused ? atSec : null,
+    ...(bgmBlocked ? { bgmBlocked: true, bgmResumePaused: resume?.paused === true } : {}),
     idleDeferred,
     itemKey: getPvdQueueItemKey(item),
     durationWaitStartedAtMs: item?.awaitDurationSync && !idleDeferred ? Date.now() : null,
@@ -7083,6 +7157,10 @@ function scheduleNextPvdAutoPop(sid) {
   }
   // If paused, do not schedule auto-pop
   if (state.paused) return;
+  if (item.kind === 'bgm' && !bgmPlayerPresence.current(sid)) {
+    void broadcastPvdStart(sid);
+    return;
+  }
   if (item.awaitDurationSync && !item.mediaDurationSec) {
     if (!state.durationWaitStartedAtMs) state.durationWaitStartedAtMs = Date.now();
     const waitedMs = Math.max(0, Date.now() - Number(state.durationWaitStartedAtMs || Date.now()));
@@ -7110,6 +7188,7 @@ function scheduleNextPvdAutoPop(sid) {
       const head = getVideoQueue(sid)[0];
       const st = pvdPlaybackState.get(sid);
       if (!head || (st && st.paused)) return; // safety check
+      if (head.kind === 'bgm' && !bgmPlayerPresence.current(sid)) return void broadcastPvdStart(sid);
       if (getPvdQueueItemKey(head) !== scheduledItemKey) {
         return;
       }
@@ -7191,6 +7270,12 @@ async function controlPvdPlaybackForSid(sid, op, requestedAtSec) {
   if (!Number.isFinite(atSec) || atSec < 0) atSec = getCurrentAtSec(sid);
   const safeAtSec = Math.max(0, Math.floor(atSec));
 
+  if (state.bgmBlocked) {
+    if (op === 'play' || op === 'pause') state.bgmResumePaused = op === 'pause';
+    if (op === 'seek') state.pausedAtSec = safeAtSec;
+    return { ok: true, paused: true, bgmBlocked: true, atSec: state.pausedAtSec };
+  }
+
   if (op === 'pause') {
     state.paused = true;
     state.pausedAtSec = safeAtSec;
@@ -7240,6 +7325,9 @@ async function broadcastPvdStart(sid, options = {}) {
           idleDeferred: activateDeferredPlayback ? false : idleDeferred,
         }));
       }
+      if (q[0].kind === 'bgm') {
+        updateBgmPlaybackAvailability(pvdPlaybackState.get(sid), q[0], viewerSettings.bgm?.enabled === true && bgmPlayerPresence.current(sid)?.readyItemId === q[0].id);
+      }
     } else {
       pvdPlaybackState.delete(sid);
     }
@@ -7256,6 +7344,7 @@ async function broadcastPvdStart(sid, options = {}) {
       elapsedSec: q[0] ? getCurrentPvdElapsedSec(sid) : 0,
       volume: viewerSettings.volume,
       idlePlaylist: viewerSettings.idlePlaylist,
+      bgm: viewerSettings.bgm,
       serverNow: Date.now()
     };
 
@@ -7480,7 +7569,9 @@ app.get('/api/video-donation/settings', async (req, res) => {
     const volume = normalizePvdVolume(settings.videoDonationVolume ?? 100);
     const providers = normalizePvdProviders(settings.videoDonationProviders);
     const idlePlaylist = normalizePvdIdlePlaylist(settings.videoDonationIdlePlaylist);
-    return res.json({ pointsPerSecond: pps, acceptEnabled: enabled, maxDurationSec: maxDur, perUserLimit, volume, providers, idlePlaylist });
+    return res.json({ pointsPerSecond: pps, acceptEnabled: enabled, maxDurationSec: maxDur, perUserLimit, volume, providers, idlePlaylist,
+      bgm: { ...getPvdBgmSettings(settings), idlePlaylist: normalizePvdIdlePlaylist(settings.bgmIdlePlaylist) },
+    });
   } catch (e) {
     console.error('[pvd:settings:get] error', e?.message || e);
     return res.status(500).json({ error: 'Failed to get settings' });
@@ -7531,7 +7622,9 @@ app.post('/api/video-donation/idle-playlist/next-by-token', rateLimiters.externa
     if (!settings || settings.videoDonationViewerToken !== token) {
       return res.status(404).json({ error: 'token not found' });
     }
-    const playlist = normalizePvdIdlePlaylist(settings.videoDonationIdlePlaylist);
+    const isBgm = req.body?.playerRole === 'bgm';
+    if (isBgm && !getPvdBgmSettings(settings).enabled) return res.json({ tracks: [], retryAfterMs: 60000 });
+    const playlist = normalizePvdIdlePlaylist(isBgm ? settings.bgmIdlePlaylist : settings.videoDonationIdlePlaylist);
     if (!playlist.enabled || playlist.mode !== 'recommended') {
       return res.json({ tracks: [], topic: playlist.topic, retryAfterMs: 60000 });
     }
@@ -7667,6 +7760,22 @@ app.post('/api/video-donation/settings', async (req, res) => {
     if (idlePlaylist.enabled && idlePlaylist.mode === 'custom' && idlePlaylist.customTracks.length === 0) {
       return res.status(400).json({ error: '직접 구성 플레이리스트에 곡을 하나 이상 추가해 주세요.' });
     }
+    const bgm = {
+      enabled: body.bgm?.enabled ?? settings.bgmEnabled ?? false,
+      acceptEnabled: body.bgm?.acceptEnabled ?? settings.bgmAcceptEnabled ?? false,
+      pointsPerSecond: Number(body.bgm?.pointsPerSecond ?? settings.bgmPointsPerSecond ?? 1),
+      idlePlaylist: normalizePvdIdlePlaylist(body.bgm?.idlePlaylist ?? settings.bgmIdlePlaylist),
+    };
+    if (bgm.enabled && idlePlaylist.enabled) return res.status(400).json({ error: '대기 음악을 끈 후 BGM을 켜 주세요.' });
+    if (!Number.isFinite(bgm.pointsPerSecond) || bgm.pointsPerSecond < 0) return res.status(400).json({ error: 'BGM 초당 포인트는 0 이상의 숫자여야 합니다.' });
+    if (bgm.idlePlaylist.mixUrl) {
+      const mix = parseYouTubeMix(bgm.idlePlaylist.mixUrl);
+      if (!mix) return res.status(400).json({ error: '올바른 BGM YouTube Mix 주소를 입력해 주세요.' });
+      bgm.idlePlaylist.mixUrl = mix.url;
+    }
+    if (bgm.idlePlaylist.enabled && bgm.idlePlaylist.mode === 'custom' && !bgm.idlePlaylist.customTracks.length) {
+      return res.status(400).json({ error: '대기 BGM에 곡을 하나 이상 추가해 주세요.' });
+    }
     const next = {
       ...settings,
       videoDonationPointsPerSecond: pps,
@@ -7676,6 +7785,10 @@ app.post('/api/video-donation/settings', async (req, res) => {
       videoDonationVolume: volume,
       videoDonationProviders: providers,
       videoDonationIdlePlaylist: idlePlaylist,
+      bgmEnabled: bgm.enabled === true,
+      bgmAcceptEnabled: bgm.acceptEnabled === true,
+      bgmPointsPerSecond: bgm.pointsPerSecond,
+      bgmIdlePlaylist: bgm.idlePlaylist,
     };
     await setBotSettings(sid, next);
     const viewerIdlePlaylist = getPvdIdlePlaylistForViewer(idlePlaylist);
@@ -7686,7 +7799,8 @@ app.post('/api/video-donation/settings', async (req, res) => {
     if (!viewerIdlePlaylist.enabled && pvdPlaybackState.get(sid)?.idleDeferred) {
       await activateDeferredPvdPlayback(sid);
     }
-    return res.json({ ok: true, idlePlaylist });
+    await broadcastPvdStart(sid);
+    return res.json({ ok: true, idlePlaylist, bgm });
   } catch (e) {
     console.error('[pvd:settings:post] error', e?.message || e);
     return res.status(500).json({ error: 'Failed to save settings' });
@@ -7701,9 +7815,11 @@ app.post('/api/video-donation/request', rateLimiters.userWrite, async (req, res)
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
     const settings = await getBotSettings(sid) || {};
-    const enabled = settings.videoDonationAcceptEnabled === true;
-    if (!enabled) return res.status(400).json({ error: 'Video donation is disabled' });
-    const pps = Math.max(0, Number(settings.videoDonationPointsPerSecond ?? 1));
+    const isBgm = req.body?.kind === 'bgm';
+    const bgm = isBgm ? getPvdBgmSettings(settings) : null;
+    const enabled = isBgm ? bgm.enabled && bgm.acceptEnabled : settings.videoDonationAcceptEnabled === true;
+    if (!enabled) return res.status(400).json({ error: isBgm ? 'BGM 신청이 꺼져 있습니다.' : 'Video donation is disabled' });
+    const pps = isBgm ? bgm.pointsPerSecond : Math.max(0, Number(settings.videoDonationPointsPerSecond ?? 1));
     const maxDur = Math.max(1, Number(settings.videoDonationMaxDurationSec ?? 600));
     const perUserLimit = Math.max(0, Number(settings.videoDonationPerUserQueueLimit ?? 0));
     let { videoUrl, title, startSec, endSec, playSec, requesterUserId, requesterUsername } = req.body || {};
@@ -7711,7 +7827,7 @@ app.post('/api/video-donation/request', rateLimiters.userWrite, async (req, res)
     const durationProbeSid = [endSec, playSec].some((value) => value != null && String(value).trim() !== '') ? null : sid;
     let media;
     try {
-      media = await resolvePvdMedia(input, settings, { allowSearch: true, durationProbeSid });
+      media = await resolvePvdMedia(input, isBgm ? { ...settings, videoDonationProviders: { youtube: true, tiktok: false, chzzk_clip: false, cime_clip: false } } : settings, { allowSearch: true, durationProbeSid });
     } catch (e) {
       if (e?.code === 'provider_disabled') return res.status(400).json({ error: 'provider_disabled', provider: e.provider, message: `${getPvdProviderLabel(e.provider)} 요청은 꺼져 있습니다.` });
       if (e?.code === 'clip_playback_unavailable') {
@@ -7783,6 +7899,7 @@ app.post('/api/video-donation/request', rateLimiters.userWrite, async (req, res)
     const item = {
       id: runtimeJobId,
       runtimeJobId,
+      kind: isBgm ? 'bgm' : 'video',
       ts: Date.now(),
       mediaProvider: media.provider,
       mediaId: media.mediaId,
@@ -7807,7 +7924,7 @@ app.post('/api/video-donation/request', rateLimiters.userWrite, async (req, res)
       id: runtimeJobId,
       sid,
       jobType: 'video-donation',
-      idempotencyKey: requestId || fallbackIdempotencyKey,
+      idempotencyKey: (isBgm ? 'bgm:' : '') + (requestId || fallbackIdempotencyKey),
       channelUid: uid,
       userId,
       username,
@@ -7827,7 +7944,7 @@ app.post('/api/video-donation/request', rateLimiters.userWrite, async (req, res)
     await runDurableRuntimeWorker();
     await recordBotEventLogSafe(sid, {
       category: 'video_donation',
-      eventType: 'video_donation_request',
+      eventType: isBgm ? 'bgm_request' : 'video_donation_request',
       provider: 'viewer',
       channelUid: uid,
       viewerUserId: userId,
@@ -7836,8 +7953,9 @@ app.post('/api/video-donation/request', rateLimiters.userWrite, async (req, res)
       pointBefore: durable.deduction?.balanceBefore ?? null,
       pointAfter: durable.deduction?.balanceAfter ?? null,
       targetName: acceptedItem.title || acceptedItem.mediaId || acceptedItem.mediaUrl || '영상 후원',
-      summary: `영상 후원 신청: ${acceptedItem.title || acceptedItem.mediaId || acceptedItem.mediaUrl || '영상'} (${cost}P 사용)`,
+      summary: `${isBgm ? 'BGM' : '영상 후원'} 신청: ${acceptedItem.title || acceptedItem.mediaId || acceptedItem.mediaUrl || '영상'} (${cost}P 사용)`,
       metadata: {
+        kind: acceptedItem.kind,
         mediaProvider: acceptedItem.mediaProvider,
         mediaId: acceptedItem.mediaId,
         mediaUrl: acceptedItem.mediaUrl,
@@ -7923,6 +8041,7 @@ app.get('/api/video-donation/now-playing', async (req, res) => {
       volume: normalizePvdVolume(settings.videoDonationVolume ?? 100),
       durationProbes: pvdDurationProbeCoordinator.listPending(sid),
       idlePlaylist: getPvdIdlePlaylistForViewer(settings.videoDonationIdlePlaylist),
+      bgm: getPvdBgmViewerSettings(settings),
       serverNow: Date.now()
     });
   } catch (e) {
@@ -7977,7 +8096,7 @@ app.get('/api/video-donation/viewer-url', async (req, res) => {
     if (token) pvdTokenToSid.set(token, sid);
     // Public viewer path uses frontend route
     const path = `/pvd/${encodeURIComponent(token)}`;
-    return res.json({ sid, token, path });
+    return res.json({ sid, token, path, bgmPath: `/viewer/bgm/${encodeURIComponent(token)}` });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to get viewer url' });
   }
@@ -7997,7 +8116,7 @@ app.post('/api/video-donation/rotate-viewer-token', async (req, res) => {
     await setBotSettings(sid, next);
     // refresh reverse index
     try { pvdTokenToSid.set(token, sid); } catch { }
-    return res.json({ ok: true, token, path: `/pvd/${encodeURIComponent(token)}` });
+    return res.json({ ok: true, token, path: `/pvd/${encodeURIComponent(token)}`, bgmPath: `/viewer/bgm/${encodeURIComponent(token)}` });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to rotate token' });
   }
@@ -9357,8 +9476,8 @@ async function executeBlueprintCommandNode({
   };
   await emitBlueprintCommandEvent(sid, selectedPlatform, commandPayload);
 
-  const videoDonationToken = /\$\{\s*video_donation\s*\}/i;
-  const videoDonationTokens = /\$\{\s*video_donation\s*\}/ig;
+  const videoDonationToken = /\$\{\s*(?:video_donation|bgm_request)\s*\}/i;
+  const videoDonationTokens = /\$\{\s*(?:video_donation|bgm_request)\s*\}/ig;
   if (videoDonationToken.test(response)) {
     response = await enqueueVideoDonationFromArgs({
       sid,
@@ -10622,6 +10741,12 @@ async function getDrawingSidByToken(token) {
   const text = String(token || '').trim();
   if (!text) return null;
   if (drawingTokenToSid.has(text)) return drawingTokenToSid.get(text);
+  // Overlay recovery must not depend on a bot runtime having started in this process.
+  const storedSid = await findSidByDrawingViewerToken(text);
+  if (storedSid) {
+    drawingTokenToSid.set(text, storedSid);
+    return storedSid;
+  }
   for (const sid of Array.from(activeSids?.keys?.() || [])) {
     const settings = await getBotSettings(sid).catch(() => null) || {};
     if (settings.drawingDonationViewerToken === text) {
@@ -11798,7 +11923,7 @@ async function executeRouletteResultCommand(sid, commandText, userId, username, 
       console.log(`[Roulette Command] Command cost: ${commandCost}, skipping points check due to roulette context`);
 
 
-      const vdRe = /\$\{\s*video_donation\s*\}/i;
+      const vdRe = /\$\{\s*(?:video_donation|bgm_request)\s*\}/i;
       const rlRe = /\$\{\s*roulette::([^}]+)\s*\}/i;
 
       const counterPlan = prepareCounterVariablePlan(response);
@@ -11824,7 +11949,7 @@ async function executeRouletteResultCommand(sid, commandText, userId, username, 
 
       if (allowExecute && typeof responseToSend === 'string' && vdRe.test(responseToSend)) {
         console.log('[Roulette Command] Processing video donation trigger (no points deduction)');
-        responseToSend = String(responseToSend).replace(/\$\{\s*video_donation\s*\}/ig, '').trim() || '룰렛 결과로 실행되었습니다. 포인트는 차감하지 않았습니다.';
+        responseToSend = String(responseToSend).replace(/\$\{\s*(?:video_donation|bgm_request)\s*\}/ig, '').trim() || '룰렛 결과로 실행되었습니다. 포인트는 차감하지 않았습니다.';
       }
 
       if (typeof responseToSend === 'string' && rlRe.test(responseToSend)) {
@@ -21471,6 +21596,7 @@ app.post('/api/bot/settings', rateLimiters.userWrite, async (req, res) => {
 
 const BOT_VARIABLE_PROVIDERS = ['chzzk', 'cime', 'youtube'];
 const BOT_VARIABLES = [
+  { key: '${bgm_request}', label: 'BGM 신청 실행', group: '특수 실행', description: 'YouTube 곡을 BGM 대기열에 넣고 BGM 초당 요금으로 포인트를 차감합니다.', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command'], caveat: 'BGM과 BGM 신청을 모두 켜야 합니다. 사용법: <주소 또는 검색어> [<시작초>] [<종료초>]. 시간은 초 또는 분:초 형식이며 영상 후원과 최대 길이 설정을 공유합니다. 영상 후원이 들어오면 멈추고 종료 후 이어 재생합니다.' },
   { key: '{user.name}', label: '시청자 이름', description: '채팅을 보낸 시청자의 표시 이름입니다.', group: '시청자', providers: BOT_VARIABLE_PROVIDERS },
   { key: '{user.id}', label: '시청자 ID', description: '채팅을 보낸 시청자의 플랫폼/아루봇 식별자입니다.', group: '시청자', providers: BOT_VARIABLE_PROVIDERS },
   { key: '{user.username}', label: '시청자 이름', description: '시청자 이름과 같은 값입니다.', group: '시청자', providers: BOT_VARIABLE_PROVIDERS },
@@ -22160,6 +22286,7 @@ function buildReplayVideoDonationItem(log = {}) {
   return {
     id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     ts: Date.now(),
+    kind: (snapshot.kind || metadata.kind) === 'bgm' ? 'bgm' : 'video',
     mediaProvider,
     mediaId,
     mediaUrl: mediaUrl || null,
@@ -22186,8 +22313,7 @@ async function replayVideoDonationLog(sid, ownerUserId, log) {
   const item = buildReplayVideoDonationItem(log);
   if (!item) return { ok: false, error: 'video_replay_metadata_missing' };
   const q = getVideoQueue(sid);
-  const shouldStartPlayback = q.length === 0;
-  q.push(item);
+  const shouldStartPlayback = insertPvdRequest(q, item, pvdPlaybackState.get(sid), getCurrentAtSec(sid));
   await recordBotEventLogSafe(sid, {
     category: 'video_donation',
     eventType: 'video_donation_replay',
@@ -24411,8 +24537,8 @@ async function ensureSession(sid, channelId) {
             } catch { }
 
             // Special trigger: ${video_donation} -> enqueue video donation instead of printing token
-            const vdRe = /\$\{\s*video_donation\s*\}/i;
-            const vdReAll = /\$\{\s*video_donation\s*\}/ig;
+            const vdRe = /\$\{\s*(?:video_donation|bgm_request)\s*\}/i;
+            const vdReAll = /\$\{\s*(?:video_donation|bgm_request)\s*\}/ig;
             if (allowExecute && typeof responseToSend === 'string' && vdRe.test(responseToSend)) {
               // args were parsed above as 'args' from user message
               const firstArg = Array.isArray(argsVd) ? (argsVd[0] || '') : '';
@@ -25952,8 +26078,8 @@ async function processYoutubeChatAutomation(entry, ev) {
         try { broadcastToDesktop(sid, { ...payload, metadata: payload.executionContext }); } catch { }
       }
 
-      const vdRe = /\$\{\s*video_donation\s*\}/i;
-      const vdReAll = /\$\{\s*video_donation\s*\}/ig;
+      const vdRe = /\$\{\s*(?:video_donation|bgm_request)\s*\}/i;
+      const vdReAll = /\$\{\s*(?:video_donation|bgm_request)\s*\}/ig;
       if (allowExecute && vdRe.test(cleaned)) {
         try {
           cleaned = await enqueueVideoDonationFromArgs({
@@ -26740,6 +26866,8 @@ async function isCimeLiveAllowed(ownerUserId, sid, channelId) {
 }
 
 async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username, args, response, vdReAll, context = {} }) {
+  const isBgm = /\$\{\s*bgm_request\s*\}/i.test(String(response || ''));
+  const requestLabel = isBgm ? 'BGM' : '영상 후원';
   const commandArgs = Array.isArray(args) ? args : [];
   const firstArg = commandArgs[0] || '';
   const looksLikeUrl = /^https?:\/\//i.test(firstArg) || /youtu/i.test(firstArg) || /tiktok/i.test(firstArg) || /chzzk/i.test(firstArg) || /ci\.me/i.test(firstArg) || /^[A-Za-z0-9_-]{11}$/.test(firstArg);
@@ -26750,15 +26878,18 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
   if (!urlArg) return cleaned || '링크를 입력해 주세요.';
 
   const settings = await getBotSettings(sid) || {};
-  if (settings.videoDonationAcceptEnabled !== true) return cleaned || '지금은 영상 요청을 받을 수 없습니다.';
+  const bgm = isBgm ? getPvdBgmSettings(settings) : null;
+  if (isBgm ? !bgm.enabled || !bgm.acceptEnabled : settings.videoDonationAcceptEnabled !== true) {
+    return cleaned || (isBgm ? '지금은 BGM 신청을 받을 수 없습니다.' : '지금은 영상 요청을 받을 수 없습니다.');
+  }
 
-  const pps = Math.max(0, Number(settings.videoDonationPointsPerSecond ?? 1));
+  const pps = isBgm ? bgm.pointsPerSecond : Math.max(0, Number(settings.videoDonationPointsPerSecond ?? 1));
   const maxDur = Math.max(1, Number(settings.videoDonationMaxDurationSec ?? 600));
   const inputArg = String(urlArg || '').trim();
   const durationProbeSid = endArgRaw != null && String(endArgRaw).trim() !== '' ? null : sid;
   let media;
   try {
-    media = await resolvePvdMedia(inputArg, settings, { allowSearch: true, durationProbeSid });
+    media = await resolvePvdMedia(inputArg, isBgm ? { ...settings, videoDonationProviders: { youtube: true, tiktok: false, chzzk_clip: false, cime_clip: false } } : settings, { allowSearch: true, durationProbeSid });
   } catch (e) {
     if (e?.code === 'provider_disabled') return cleaned || `${getPvdProviderLabel(e.provider)} 요청은 꺼져 있습니다.`;
     if (e?.code === 'clip_playback_unavailable') {
@@ -26795,6 +26926,7 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
   const queueItem = {
     id: runtimeJobId,
     runtimeJobId,
+    kind: isBgm ? 'bgm' : 'video',
     ts: Date.now(),
     mediaProvider: media.provider,
     mediaId: media.mediaId,
@@ -26822,7 +26954,7 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
     id: runtimeJobId,
     sid,
     jobType: 'video-donation',
-    idempotencyKey,
+    idempotencyKey: (isBgm ? 'bgm:' : '') + idempotencyKey,
     channelUid,
     userId: String(userId),
     username: String(username || ''),
@@ -26838,7 +26970,7 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
   await runDurableRuntimeWorker();
   await recordBotEventLogSafe(sid, {
     category: 'video_donation',
-    eventType: 'video_donation_request',
+    eventType: isBgm ? 'bgm_request' : 'video_donation_request',
     provider: providerFromLogContext(context),
     channelUid,
     viewerUserId: String(userId),
@@ -26848,8 +26980,9 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
     pointAfter: durable.deduction?.balanceAfter ?? null,
     triggerName: context.command?.keyword || context.triggerName || null,
     targetName: media.title || media.mediaId || media.mediaUrl || '영상 후원',
-    summary: `영상 후원 신청: ${media.title || media.mediaId || media.mediaUrl || '영상'} (${cost}P 사용)`,
+    summary: `${requestLabel} 신청: ${media.title || media.mediaId || media.mediaUrl || '영상'} (${cost}P 사용)`,
     metadata: {
+      kind: queueItem.kind,
       mediaProvider: media.provider,
       mediaId: media.mediaId,
       mediaUrl: media.mediaUrl,
@@ -27118,8 +27251,8 @@ async function processCimeChatAutomation(entry, ev) {
         try { broadcastToDesktop(sid, { ...payload, metadata: payload.executionContext }); } catch { }
       }
 
-      const vdRe = /\$\{\s*video_donation\s*\}/i;
-      const vdReAll = /\$\{\s*video_donation\s*\}/ig;
+      const vdRe = /\$\{\s*(?:video_donation|bgm_request)\s*\}/i;
+      const vdReAll = /\$\{\s*(?:video_donation|bgm_request)\s*\}/ig;
       if (allowExecute && vdRe.test(cleaned)) {
         try {
           cleaned = await enqueueVideoDonationFromArgs({
@@ -29234,6 +29367,7 @@ function registerPvdRoutes() {
           elapsedSec: q[0] ? getCurrentPvdElapsedSec(sid) : 0,
           volume: viewerSettings.volume,
           idlePlaylist: viewerSettings.idlePlaylist,
+          bgm: viewerSettings.bgm,
           serverNow: Date.now()
         };
         ws.send(JSON.stringify(payload), { compress: false });
@@ -29350,6 +29484,7 @@ function registerDrawingDonationWsRoutes() {
       const token = String(url.searchParams.get('token') || '').trim();
       ws.drawingRendererVersion = url.searchParams.get('renderer') || '';
       sid = await getDrawingSidByToken(token);
+      if (ws.readyState !== WebSocket.OPEN) return;
       if (!sid) {
         try { ws.close(1008, 'Invalid token'); } catch {}
         return;
@@ -29363,7 +29498,20 @@ function registerDrawingDonationWsRoutes() {
         try { ws.ping(); } catch {}
       }, 30000);
 
+      ws.on('close', () => {
+        clearInterval(keepAlive);
+        const sockets = drawingOverlaySockets.get(sid);
+        if (sockets) {
+          sockets.delete(ws);
+          if (sockets.size === 0) drawingOverlaySockets.delete(sid);
+        }
+      });
+      ws.on('error', () => {
+        try { ws.close(); } catch {}
+      });
+
       const item = await getCurrentDrawingItemForSid(sid).catch(() => null);
+      if (ws.readyState !== WebSocket.OPEN) return;
       try {
         const compatible = item?.canvas?.document?.version !== 2 || ws.drawingRendererVersion === RENDERER_VERSION;
         ws.send(JSON.stringify(compatible ? { type: 'drawing-donation.current', reason: 'connected', item, serverNow: Date.now() } : { type: 'drawing-donation.update-required', rendererVersion: RENDERER_VERSION }), { compress: false });
@@ -29378,17 +29526,6 @@ function registerDrawingDonationWsRoutes() {
         } catch {}
       });
 
-      ws.on('close', () => {
-        try { clearInterval(keepAlive); } catch {}
-        const sockets = drawingOverlaySockets.get(sid);
-        if (sockets) {
-          sockets.delete(ws);
-          if (sockets.size === 0) drawingOverlaySockets.delete(sid);
-        }
-      });
-      ws.on('error', () => {
-        try { ws.close(); } catch {}
-      });
     } catch (error) {
       console.error('[drawing donation ws] connection error', error?.message || error);
       try { ws.close(1011, 'Drawing donation websocket error'); } catch {}

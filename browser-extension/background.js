@@ -942,7 +942,7 @@ async function createAruBotConnector(overlayUrl, attempt) {
     if (itemId !== dismissedItemId) dismissedItemId = '';
     const state = runtime.serviceState.arubot;
     const now = Date.now();
-    if (!item || payload.idleDeferred === true || item.isIdle === true || dismissedItemId) {
+    if (!item || item.kind === 'bgm' || payload.idleDeferred === true || item.isIdle === true || dismissedItemId) {
       state.endAt = 0;
       state.queue = [];
       state.message = payload.idleDeferred ? 'Waiting for idle music to finish' : 'Connected, waiting';
@@ -1000,7 +1000,7 @@ async function createAruBotConnector(overlayUrl, attempt) {
       setServiceState('arubot', { status: 'connected', message: `Connected: ${new URL(apiBase).host}` });
       refreshSnapshot();
       syncTimer = setInterval(() => {
-        if (!snapshot || (snapshot.item && !snapshot.idleDeferred && !dismissedItemId)) refreshSnapshot();
+        if (!snapshot || (snapshot.item && snapshot.item.kind !== 'bgm' && !snapshot.idleDeferred && !dismissedItemId)) refreshSnapshot();
       }, 15000);
     },
     onMessage: (event) => {

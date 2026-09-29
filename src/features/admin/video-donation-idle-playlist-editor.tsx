@@ -185,9 +185,13 @@ function PlaylistTrackList({
 export function VideoDonationIdlePlaylistEditor({
   value,
   onChange,
+  title = '대기 음악',
+  idPrefix = 'video-donation-idle',
 }: {
   value: VideoDonationIdlePlaylist;
   onChange: Dispatch<SetStateAction<VideoDonationIdlePlaylist>>;
+  title?: string;
+  idPrefix?: string;
 }) {
   const [customInput, setCustomInput] = useState('');
   const [seedInput, setSeedInput] = useState('');
@@ -280,7 +284,7 @@ export function VideoDonationIdlePlaylistEditor({
             <ListMusic className="h-5 w-5" />
           </span>
           <div className="min-w-0">
-            <div className="text-sm font-semibold">대기 음악</div>
+            <div className="text-sm font-semibold">{title}</div>
             <div className="mt-0.5 text-xs text-muted-foreground">후원 대기열이 비었을 때 재생</div>
           </div>
         </div>
@@ -288,7 +292,7 @@ export function VideoDonationIdlePlaylistEditor({
           checked={value.enabled}
           onCheckedChange={(enabled) => update({ enabled })}
           className="relative h-[1.9rem] w-[3.55rem] shrink-0 rounded-full border bg-muted transition data-[state=checked]:border-primary/35 data-[state=checked]:bg-primary/75"
-          aria-label="대기 음악 사용"
+          aria-label={`${title} 사용`}
         >
           <Switch.Thumb className="block h-[1.45rem] w-[1.45rem] translate-x-[0.22rem] rounded-full bg-card shadow-subtle transition data-[state=checked]:translate-x-[1.82rem]" />
         </Switch.Root>
@@ -332,10 +336,10 @@ export function VideoDonationIdlePlaylistEditor({
 
           {value.mode === 'recommended' ? (
             <div className="grid gap-3">
-              <label className="text-sm font-semibold" htmlFor="video-donation-idle-mix-url">YouTube 영상 또는 Mix 주소</label>
+              <label className="text-sm font-semibold" htmlFor={`${idPrefix}-mix-url`}>YouTube 영상 또는 Mix 주소</label>
               <div className="flex min-w-0 flex-col gap-2 sm:flex-row">
                 <Input
-                  id="video-donation-idle-mix-url"
+                  id={`${idPrefix}-mix-url`}
                   value={seedInput}
                   onChange={(event) => setSeedInput(event.target.value)}
                   onKeyDown={(event) => {
@@ -344,7 +348,7 @@ export function VideoDonationIdlePlaylistEditor({
                   placeholder="https://www.youtube.com/watch?v=..."
                   maxLength={2048}
                   aria-invalid={invalidSeedInput ? true : undefined}
-                  aria-describedby={invalidSeedInput ? 'video-donation-idle-mix-error' : undefined}
+                  aria-describedby={invalidSeedInput ? `${idPrefix}-mix-error` : undefined}
                   className="min-w-0 flex-1"
                 />
                 <Button type="button" variant="soft" onClick={() => void addSeedInput()} disabled={addPending || !seedInput.trim() || invalidSeedInput}>
@@ -352,7 +356,7 @@ export function VideoDonationIdlePlaylistEditor({
                   추가
                 </Button>
               </div>
-              {invalidSeedInput ? <span id="video-donation-idle-mix-error" className="text-xs text-destructive">올바른 YouTube 영상 또는 Mix 주소를 입력해 주세요.</span> : null}
+              {invalidSeedInput ? <span id={`${idPrefix}-mix-error`} className="text-xs text-destructive">올바른 YouTube 영상 또는 Mix 주소를 입력해 주세요.</span> : null}
               {configuredMix ? (
                 <div className="flex min-w-0 items-center gap-3 border-b pb-3">
                   <div className="min-w-0 flex-1">
@@ -365,25 +369,25 @@ export function VideoDonationIdlePlaylistEditor({
                 </div>
               ) : null}
               <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_8rem_auto] sm:items-end">
-                <label className="grid min-w-0 gap-2 text-sm font-semibold" htmlFor="video-donation-idle-topic">
+                <label className="grid min-w-0 gap-2 text-sm font-semibold" htmlFor={`${idPrefix}-topic`}>
                   추천 주제
                   <Input
-                    id="video-donation-idle-topic"
-                    list="video-donation-idle-topic-presets"
+                    id={`${idPrefix}-topic`}
+                    list={`${idPrefix}-topic-presets`}
                     value={value.topic}
                     onChange={(event) => update({ topic: event.target.value })}
                     placeholder="예: 비 오는 밤 재즈"
                     className="min-w-0"
                   />
                 </label>
-                <datalist id="video-donation-idle-topic-presets">
+                <datalist id={`${idPrefix}-topic-presets`}>
                   {TOPIC_PRESETS.map((topic) => <option key={topic} value={topic} />)}
                 </datalist>
-                <label className="grid min-w-0 gap-2 text-sm font-semibold" htmlFor="video-donation-idle-recommendation-count">
+                <label className="grid min-w-0 gap-2 text-sm font-semibold" htmlFor={`${idPrefix}-recommendation-count`}>
                   시작곡 후보 수
                   <div className="relative min-w-0">
                     <Input
-                      id="video-donation-idle-recommendation-count"
+                      id={`${idPrefix}-recommendation-count`}
                       type="number"
                       min={1}
                       max={MAX_VIDEO_DONATION_IDLE_TRACKS}
@@ -407,10 +411,10 @@ export function VideoDonationIdlePlaylistEditor({
             </div>
           ) : (
             <div className="grid gap-3">
-              <label className="grid gap-2 text-sm font-semibold" htmlFor="video-donation-idle-custom-input">곡 또는 YouTube 플레이리스트</label>
+              <label className="grid gap-2 text-sm font-semibold" htmlFor={`${idPrefix}-custom-input`}>곡 또는 YouTube 플레이리스트</label>
               <div className="flex min-w-0 flex-col gap-2 sm:flex-row">
                 <Input
-                  id="video-donation-idle-custom-input"
+                  id={`${idPrefix}-custom-input`}
                   value={customInput}
                   onChange={(event) => setCustomInput(event.target.value)}
                   onKeyDown={(event) => {

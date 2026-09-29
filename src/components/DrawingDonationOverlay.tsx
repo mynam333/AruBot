@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiWsUrl, getBrowserApiBase } from '@/shared/api/http';
 import { createItemRenderer, loadDrawingOriginal } from '@/shared/drawing/item-renderer';
+import { connectDrawingOverlay, scheduleDrawingOverlayReload } from '@/shared/drawing/overlay-connection';
 import { RENDERER_VERSION } from '../../shared/drawing/document.js';
 
 type BrushState = { type?: string; color?: string; alpha?: number; size?: number };
@@ -37,6 +38,8 @@ export default function DrawingDonationOverlay({ viewerToken }: { viewerToken: s
   const originalRef = useRef<HTMLImageElement | null>(null);
   const [originalReady, setOriginalReady] = useState(false);
   const [renderError, setRenderError] = useState('');
+  const [connectionLost, setConnectionLost] = useState(false);
+  const [updateRequired, setUpdateRequired] = useState(false);
   useEffect(() => () => {
     playingIdRef.current = null;
     if (completionTimerRef.current) window.clearTimeout(completionTimerRef.current);
@@ -45,13 +48,38 @@ export default function DrawingDonationOverlay({ viewerToken }: { viewerToken: s
   useEffect(() => {
     originalRef.current = null; setOriginalReady(false); setRenderError('');
     if (!item) return;
-    const controller = new AbortController();
-    loadDrawingOriginal(item, viewerToken, controller.signal).then((original) => {
-      if (controller.signal.aborted) return;
-      originalRef.current = original; setOriginalReady(true);
-    }).catch(() => { if (!controller.signal.aborted) setRenderError('그림 원본을 불러오지 못했습니다. 브라우저 소스를 새로고침해 주세요.'); });
-    return () => controller.abort();
+    let disposed = false;
+    let controller: AbortController | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    const load = async () => {
+      controller = new AbortController();
+      timeout = setTimeout(() => controller?.abort(), 20000);
+      try {
+        const original = await loadDrawingOriginal(item, viewerToken, controller.signal);
+        if (disposed) return;
+        originalRef.current = original;
+        setRenderError('');
+        setOriginalReady(true);
+      } catch {
+        if (disposed) return;
+        setRenderError('그림 원본을 다시 불러오는 중입니다. 복구되지 않으면 자동으로 새로고침합니다.');
+        retryTimer = setTimeout(() => { void load(); }, 3000);
+      } finally {
+        if (timeout !== null) clearTimeout(timeout);
+      }
+    };
+    void load();
+    return () => {
+      disposed = true;
+      controller?.abort();
+      if (retryTimer !== null) clearTimeout(retryTimer);
+      if (timeout !== null) clearTimeout(timeout);
+    };
   }, [item, viewerToken]);
+
+  const reloadDelay = updateRequired ? 15000 : renderError ? 60000 : connectionLost ? 120000 : 0;
+  useEffect(() => reloadDelay ? scheduleDrawingOverlayReload(reloadDelay) : undefined, [reloadDelay]);
 
   const resizeCanvas = useCallback(() => {
     const canvas = canvasRef.current;
@@ -103,11 +131,14 @@ export default function DrawingDonationOverlay({ viewerToken }: { viewerToken: s
   const pop = useCallback(async (completedItemId: string) => {
     const complete = async () => {
       if (playingIdRef.current !== completedItemId) return;
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 10000);
       const response = await fetch(`${apiBase}/api/drawing-donation/pop-by-token`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token: viewerToken, itemId: completedItemId }),
-      }).catch(() => null);
+        signal: controller.signal,
+      }).catch(() => null).finally(() => window.clearTimeout(timeout));
       if (playingIdRef.current !== completedItemId) return;
       if (!response || (!response.ok && response.status !== 409)) {
         completionTimerRef.current = window.setTimeout(() => { void complete(); }, 3000);
@@ -144,41 +175,12 @@ export default function DrawingDonationOverlay({ viewerToken }: { viewerToken: s
   }, []);
 
   useEffect(() => {
-    let disposed = false;
-    let reconnectTimer: number | null = null;
-    let ws: WebSocket | null = null;
-
-    const connect = () => {
-      if (disposed) return;
-      try {
-        ws = new WebSocket(apiWsUrl(`/api/drawing-donation/ws?token=${encodeURIComponent(viewerToken)}&renderer=${encodeURIComponent(RENDERER_VERSION)}`, apiBase));
-        ws.onmessage = (event) => {
-          try {
-            const payload = JSON.parse(String(event.data || '{}')) as { type?: string; item?: DrawingItem | null };
-            if (payload.type === 'drawing-donation.current') applyIncomingItem(payload.item || null);
-            if (payload.type === 'drawing-donation.update-required') setRenderError('그림 렌더러 업데이트가 필요합니다. OBS 브라우저를 새로고침해 주세요.');
-          } catch {
-            // Ignore malformed overlay payloads.
-          }
-        };
-        ws.onclose = () => {
-          if (disposed) return;
-          reconnectTimer = window.setTimeout(connect, 1800);
-        };
-        ws.onerror = () => {
-          try { ws?.close(); } catch {}
-        };
-      } catch {
-        reconnectTimer = window.setTimeout(connect, 1800);
-      }
-    };
-
-    connect();
-    return () => {
-      disposed = true;
-      if (reconnectTimer) window.clearTimeout(reconnectTimer);
-      try { ws?.close(); } catch {}
-    };
+    return connectDrawingOverlay<DrawingItem>({
+      url: apiWsUrl(`/api/drawing-donation/ws?token=${encodeURIComponent(viewerToken)}&renderer=${encodeURIComponent(RENDERER_VERSION)}`, apiBase),
+      onItem: applyIncomingItem,
+      onUpdateRequired: setUpdateRequired,
+      onConnectionChange: (connected) => setConnectionLost(!connected),
+    });
   }, [apiBase, applyIncomingItem, viewerToken]);
 
   useEffect(() => {
@@ -248,7 +250,7 @@ export default function DrawingDonationOverlay({ viewerToken }: { viewerToken: s
   return (
     <>
       <audio ref={alertAudioRef} src={DRAWING_ALERT_AUDIO_SRC} preload="auto" playsInline aria-hidden="true" />
-      {renderError ? <div role="alert" style={{ position: 'fixed', left: 16, bottom: 16, color: '#fff', background: '#991b1b', padding: 10, fontSize: 14 }}>{renderError}</div> : null}
+      {updateRequired || renderError ? <div role="alert" style={{ position: 'fixed', left: 16, bottom: 16, color: '#fff', background: '#991b1b', padding: 10, fontSize: 14 }}>{updateRequired ? '그림 렌더러를 업데이트하기 위해 자동으로 새로고침합니다.' : renderError}</div> : null}
       <canvas ref={canvasRef} style={{ position: 'fixed', inset: 0, width: '100vw', height: '100vh', background: 'transparent', opacity: 0, willChange: 'opacity' }} />
     </>
   );

@@ -351,13 +351,15 @@ export function CommandCreateDialog({ variant = 'secondary', label = '명령어 
   );
 }
 
-function SwitchRow({ checked, onCheckedChange, label, className }: { checked: boolean; onCheckedChange: (value: boolean) => void; label: string; className?: string }) {
+function SwitchRow({ checked, onCheckedChange, label, className, disabled }: { checked: boolean; onCheckedChange: (value: boolean) => void; label: string; className?: string; disabled?: boolean }) {
   return (
     <div className={cn('flex min-h-[var(--control-height)] min-w-0 items-center justify-between gap-3 rounded-[var(--radius-control)] border bg-background/70 px-[clamp(0.85rem,1.6vw,1.1rem)]', className)}>
       <span className="min-w-0 truncate text-sm font-semibold">{label}</span>
       <Switch.Root
         checked={checked}
         onCheckedChange={onCheckedChange}
+        disabled={disabled}
+        aria-label={label}
         className="relative h-[1.75rem] w-[3.25rem] rounded-full border bg-muted transition data-[state=checked]:border-primary/35 data-[state=checked]:bg-primary/75"
       >
         <Switch.Thumb className="block h-[1.35rem] w-[1.35rem] translate-x-[0.2rem] rounded-full bg-card shadow-subtle transition data-[state=checked]:translate-x-[1.55rem]" />
@@ -478,6 +480,10 @@ export function VideoDonationSettingsDialog({ variant = 'secondary', label = '�
     cime_clip: false,
   });
   const [idlePlaylist, setIdlePlaylist] = useState<VideoDonationIdlePlaylist>(() => createDefaultVideoDonationIdlePlaylist());
+  const [bgmEnabled, setBgmEnabled] = useState(false);
+  const [bgmAcceptEnabled, setBgmAcceptEnabled] = useState(false);
+  const [bgmPointsPerSecond, setBgmPointsPerSecond] = useState('1');
+  const [bgmIdlePlaylist, setBgmIdlePlaylist] = useState<VideoDonationIdlePlaylist>(() => createDefaultVideoDonationIdlePlaylist());
   const [isPending, startTransition] = useTransition();
 
   const load = async () => {
@@ -497,6 +503,10 @@ export function VideoDonationSettingsDialog({ variant = 'secondary', label = '�
         cime_clip: payload.providers?.cime_clip === true,
       });
       setIdlePlaylist(normalizeVideoDonationIdlePlaylist(payload.idlePlaylist));
+      setBgmEnabled(payload.bgm?.enabled === true);
+      setBgmAcceptEnabled(payload.bgm?.acceptEnabled === true);
+      setBgmPointsPerSecond(String(payload.bgm?.pointsPerSecond ?? 1));
+      setBgmIdlePlaylist(normalizeVideoDonationIdlePlaylist(payload.bgm?.idlePlaylist));
     } catch {
       // Existing values remain editable when loading fails.
     }
@@ -513,6 +523,7 @@ export function VideoDonationSettingsDialog({ variant = 'secondary', label = '�
           volume: Math.max(0, Math.min(100, Math.round(Number(volume || 0)))),
           providers,
           idlePlaylist,
+          bgm: { enabled: bgmEnabled, acceptEnabled: bgmAcceptEnabled, pointsPerSecond: Number(bgmPointsPerSecond), idlePlaylist: bgmIdlePlaylist },
         });
         toast.success('영상 후원 설정을 저장했어요.');
         refreshResource('/api/video-donation/queue');
@@ -527,7 +538,7 @@ export function VideoDonationSettingsDialog({ variant = 'secondary', label = '�
     <ActionDialogFrame
       icon={<Clapperboard className="h-[1em] w-[1em]" />}
       badge="영상 후원"
-      title="영상 후원 접수 방식을 설정해요."
+      title="영상 후원 · BGM 설정"
       description="시청자가 포인트로 영상을 신청하고 방송 화면에 자연스럽게 이어지도록 비용과 길이를 정합니다."
       submitLabel="설정 저장"
       pending={isPending}
@@ -561,9 +572,25 @@ export function VideoDonationSettingsDialog({ variant = 'secondary', label = '�
           label="CIME 클립 받기"
         />
       </div>
-      <VideoDonationIdlePlaylistEditor value={idlePlaylist} onChange={setIdlePlaylist} />
+      <fieldset disabled={bgmEnabled} className="min-w-0 disabled:opacity-50">
+        <VideoDonationIdlePlaylistEditor value={idlePlaylist} onChange={setIdlePlaylist} />
+      </fieldset>
+      <section className="grid min-w-0 gap-4 border-y py-5" aria-label="BGM 설정">
+        <h3 className="text-base font-semibold">BGM</h3>
+        <div className="grid gap-3 md:grid-cols-2">
+          <SwitchRow checked={bgmEnabled} onCheckedChange={setBgmEnabled} disabled={idlePlaylist.enabled} label="BGM 사용" />
+          <SwitchRow checked={bgmAcceptEnabled} onCheckedChange={setBgmAcceptEnabled} disabled={!bgmEnabled} label="BGM 신청 받기" />
+        </div>
+        {idlePlaylist.enabled ? <p className="text-sm text-muted-foreground">대기 음악을 끈 후 BGM을 켤 수 있습니다.</p> : null}
+        <Field label="BGM 초당 포인트">
+          <Input type="number" min={0} step="any" value={bgmPointsPerSecond} onChange={(event) => setBgmPointsPerSecond(event.target.value)} />
+        </Field>
+        <fieldset disabled={!bgmEnabled} className="min-w-0 disabled:opacity-50">
+          <VideoDonationIdlePlaylistEditor value={bgmIdlePlaylist} onChange={setBgmIdlePlaylist} title="대기 BGM" idPrefix="bgm-idle" />
+        </fieldset>
+      </section>
       <div className="grid min-w-0 gap-[clamp(1.15rem,2.4vw,1.65rem)] rounded-[var(--radius-card)] border bg-background/62 p-[clamp(1rem,2vw,1.25rem)] md:grid-cols-[repeat(2,minmax(0,1fr))]">
-        <Field label="초당 포인트">
+        <Field label="영상 후원 초당 포인트">
           <Input value={pointsPerSecond} onChange={(event) => setPointsPerSecond(event.target.value)} inputMode="decimal" />
         </Field>
         <Field label="최대 재생 시간(분)">

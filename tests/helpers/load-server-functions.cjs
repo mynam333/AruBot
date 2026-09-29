@@ -13,9 +13,10 @@ module.exports = function loadServerFunctions(names, bindings = {}) {
   return new Function(...Object.keys(bindings), `${functions.join('\n')}\nreturn {${names.join(',')}};`)(...Object.values(bindings));
 };
 
-module.exports.route = function loadServerRoute(route, bindings = {}) {
+module.exports.route = function loadServerRoute(route, bindings = {}, method) {
   const statement = source.statements.find((node) => ts.isExpressionStatement(node)
-    && ts.isCallExpression(node.expression) && node.expression.arguments[0]?.text === route);
+    && ts.isCallExpression(node.expression) && node.expression.arguments[0]?.text === route
+    && (!method || node.expression.expression.name?.text === method));
   if (!statement) throw new Error(`Missing route: ${route}`);
   const handler = statement.expression.arguments.at(-1).getText(source);
   return new Function(...Object.keys(bindings), `return (${handler});`)(...Object.values(bindings));

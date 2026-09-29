@@ -27,7 +27,7 @@ afterEach(() => {
   jest.restoreAllMocks();
 });
 
-function mount(initial, getRecommendations) {
+function mount(initial, getRecommendations, playerRole = 'video') {
   let state = initial;
   let socket;
   let socketCount = 0;
@@ -78,6 +78,7 @@ function mount(initial, getRecommendations) {
     const body = options.body ? JSON.parse(options.body) : {};
     calls.push({ url, body });
     if (url.includes('/next-by-token')) return { ok: true, json: () => getRecommendations(body) };
+    if (body.op === 'bgm_status') return { ok: true, json: async () => ({ accepted: body.visible === true }) };
     if (url.includes('/activate-by-token')) state = { ...state, idleDeferred: false };
     return { ok: true, json: async () => state };
   });
@@ -91,7 +92,7 @@ function mount(initial, getRecommendations) {
     '@/components/youtubeDurationProbe': { createYouTubeDurationProbeRunner: () => ({ dispose() {} }) },
     '@/shared/api/http': { getBrowserApiBase: () => 'http://localhost' },
   });
-  Viewer({ viewerToken: 'test' });
+  Viewer({ viewerToken: 'test', playerRole });
   let disposers = effects.map((effect) => effect());
   cleanup = () => disposers.reverse().forEach((dispose) => { if (typeof dispose === 'function') dispose(); });
   return {
@@ -106,6 +107,48 @@ function mount(initial, getRecommendations) {
     },
   };
 }
+
+test('the video overlay never plays BGM requests or the BGM idle playlist', async () => {
+  const bgm = { enabled: true, idlePlaylist: playlist([track(1)]) };
+  const harness = mount({ item: { id: 'bgm-1', kind: 'bgm', mediaProvider: 'youtube', videoId: 'video000001' }, idlePlaylist: { enabled: false }, bgm }, async () => ({}));
+  await flush();
+  expect(harness.loads).toEqual([]);
+  harness.push({ item: null, idlePlaylist: { enabled: false }, bgm });
+  await flush();
+  expect(harness.loads).toEqual([]);
+});
+
+test('the BGM window suspends a Mix immediately for video and resumes the same Mix', async () => {
+  const state = { item: null, idlePlaylist: { enabled: false }, bgm: { enabled: true, idlePlaylist: playlist([track(1), track(2)]) } };
+  const harness = mount(state, async () => ({}), 'bgm');
+  await flush();
+  jest.advanceTimersByTime(3000);
+  await flush();
+  expect(harness.loads).toEqual(['video000001']);
+  harness.push({ ...state, item: { id: 'video-1', mediaProvider: 'youtube', videoId: 'donation001' } });
+  await flush();
+  expect(harness.loads).toEqual(['video000001']);
+  harness.push(state);
+  await flush();
+  expect(harness.loads).toEqual(['video000001']);
+  expect(harness.calls.filter((call) => call.url.includes('/activate-by-token'))).toHaveLength(0);
+});
+
+test('BGM request interruption reports an exact checkpoint and ignores the video item', async () => {
+  const state = { item: { id: 'bgm-1', kind: 'bgm', mediaProvider: 'youtube', videoId: 'video000001' }, idlePlaylist: { enabled: false }, bgm: { enabled: true, idlePlaylist: { enabled: false } } };
+  const harness = mount(state, async () => ({}), 'bgm');
+  await flush();
+  jest.advanceTimersByTime(3000);
+  await flush();
+  expect(harness.loads).toEqual(['video000001']);
+  harness.push({ ...state, item: { id: 'video-1', mediaProvider: 'youtube', videoId: 'donation001' } });
+  await flush();
+  expect(harness.loads).toEqual(['video000001']);
+  expect(harness.calls.find((call) => call.body.op === 'bgm_checkpoint')?.body).toMatchObject({ itemId: 'bgm-1', atSec: 0 });
+  harness.push(state);
+  await flush();
+  expect(harness.loads).toEqual(['video000001', 'video000001']);
+});
 
 test('autoplays an empty topic and retains fetched songs across server resynchronization', async () => {
   const original = { item: null, idlePlaylist: playlist() };

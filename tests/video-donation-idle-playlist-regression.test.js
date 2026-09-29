@@ -53,7 +53,7 @@ describe('영상 후원 대기 플레이리스트 회귀 방지', () => {
 
   test('대기곡 재생 중 들어온 첫 후원은 곡이 끝날 때까지 정지된 대기열 head로 유지해야 함', () => {
     expect(serverIndex).toContain('broadcastPvdStart(job.sid, { deferForIdle: true })');
-    expect(serverIndex).toContain('pausedAtSec: idleDeferred ? getPvdItemStartSec(item) : null');
+    expect(serverIndex).toContain('pausedAtSec: paused ? atSec : null');
     expect(serverIndex).toContain('if (state.paused) return;');
     expect(serverIndex).toContain("app.post('/api/video-donation/activate-by-token'");
     expect(serverIndex).toContain('if (!state?.idleDeferred || state.itemKey !== itemKey)');

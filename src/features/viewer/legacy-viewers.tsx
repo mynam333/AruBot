@@ -10,8 +10,8 @@ const RouletteViewer = dynamic(() => import('@/components/RouletteViewer').then(
   ssr: false,
 });
 
-export function PvdViewerRoute({ token }: { token: string }) {
-  return <PvdViewer viewerToken={token} />;
+export function PvdViewerRoute({ token, playerRole = 'video' }: { token: string; playerRole?: 'video' | 'bgm' }) {
+  return <PvdViewer viewerToken={token} playerRole={playerRole} />;
 }
 
 export function RouletteViewerRoute({ token }: { token: string }) {

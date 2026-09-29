@@ -45,6 +45,7 @@ export function createPvdIdlePlaybackStore({ now = Date.now } = {}) {
         id: `idle:${clientId}:${trackKey}`, mediaProvider: 'youtube', mediaId, videoId: mediaId,
         title: String(track.title || `YouTube ${mediaId}`).slice(0, 500), durationSec: duration, startSec: 0,
         thumbnailUrl: `https://i.ytimg.com/vi/${mediaId}/hqdefault.jpg`, idle: true,
+        kind: report.kind === 'bgm' ? 'bgm' : 'video',
       };
       state.paused = state.command?.op === 'pause' || (pendingControl ? false : report.paused === true);
       state.playing = report.playing === true;

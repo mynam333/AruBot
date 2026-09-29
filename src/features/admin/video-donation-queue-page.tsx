@@ -27,6 +27,7 @@ type VideoDonationItem = {
   username?: string | null;
   status?: string;
   idle?: boolean;
+  kind?: 'video' | 'bgm';
 };
 
 type VideoDonationQueueResponse = {
@@ -175,7 +176,7 @@ function VideoDonationItemCard({
             </Badge>
           ) : null}
           {!current && index != null ? <Badge tone="neutral" className="absolute left-2 top-2">대기 {index + 1}</Badge> : null}
-          <Badge tone="sky" className="absolute bottom-2 left-2">{providerLabel(item.mediaProvider)}</Badge>
+          <Badge tone="sky" className="absolute bottom-2 left-2">{item.kind === 'bgm' ? `BGM · ${providerLabel(item.mediaProvider)}` : providerLabel(item.mediaProvider)}</Badge>
         </div>
 
         <div className="grid min-w-0 gap-[clamp(0.75rem,1.4vw,1rem)]">
@@ -187,7 +188,7 @@ function VideoDonationItemCard({
               <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
                 <span className="inline-flex items-center gap-1">
                   <UserRound className="h-[1em] w-[1em]" />
-                  {item.idle ? '대기 음악' : item.username || item.userId || '신청자 정보 없음'}
+                  {item.idle ? item.kind === 'bgm' ? '대기 BGM' : '대기 음악' : item.username || item.userId || '신청자 정보 없음'}
                 </span>
                 {time ? <span>{time} 신청</span> : null}
               </div>
@@ -458,7 +459,7 @@ export function VideoDonationQueuePage() {
                 {realtimeState === 'connected' ? '실시간 연결' : realtimeState === 'connecting' ? '실시간 연결 중' : '실시간 재연결 대기'}
               </Badge>
             </div>
-            <h1 className="text-2xl font-bold leading-tight tracking-tight md:text-3xl">영상 후원 큐</h1>
+            <h1 className="text-2xl font-bold leading-tight tracking-tight md:text-3xl">영상 후원 · BGM 큐</h1>
             <p className="mt-3 max-w-3xl text-sm leading-7 text-muted-foreground md:text-base">
               시청자가 신청한 영상을 지금 재생 중인 항목과 다음 순서로 나눠 보여줍니다. 순서를 바꾸거나 맞지 않는 신청을 정리할 수 있어요.
             </p>
