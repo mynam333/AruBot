@@ -10,6 +10,7 @@ import { DrawingHoverControls } from './DrawingHoverControls';
 import { saveDrawingArchive } from '@/shared/drawing/archive-files';
 import { apiUrl } from '@/shared/api/http';
 import { readDraft, writeDraft } from '@/shared/drawing/draft-store';
+import { pickScreenColor, sampleDrawingColor, type DrawingColorTarget } from '@/shared/drawing/color-picker';
 import { BRUSH_SHORTCUTS, TOOL_SHORTCUTS, drawingShortcut, type DrawingTool as Tool } from '@/shared/drawing/shortcuts';
 import { BRUSHES, RENDERER_VERSION, buildTimeline, createBrush, createDrawing, drawingCost, hashDrawing, rememberDrawingColor, validateDrawing, visibleStrokes, type BrushType, type DrawingDocument, type DrawingBrush, type DrawingPoint, type DrawingStroke, type DrawingShapeStyle, type DrawingOutlineStyle, type SelectionFrame, type SelectionRect } from '../../../shared/drawing/document.js';
 import { createDrawingRenderer, floodFillRuns, type DrawingRenderer } from '../../../shared/drawing/renderer.js';
@@ -61,6 +62,8 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
   const [selectedCorners, setSelectedCorners] = useState<number[]>([]);
   const [shapeStyle, setShapeStyle] = useState<DrawingShapeStyle>({ fillEnabled: false, fillColor: '#517ee1', fillAlpha: 1, strokeEnabled: true });
   const [outlineStyle, setOutlineStyle] = useState<DrawingOutlineStyle & { enabled: boolean }>({ enabled: false, size: 0.004, color: '#191b20', alpha: 1 });
+  const [colorPicker, setColorPicker] = useState<{ target: DrawingColorTarget; previousTool: Tool } | null>(null);
+  const colorPickerRef = useRef<(NonNullable<typeof colorPicker> & { controller: AbortController }) | null>(null);
   const [mirror, setMirror] = useState(false), [mirrorY, setMirrorY] = useState(false), [view, setView] = useState({ zoom: 1, x: 0, y: 0 });
   const viewRef = useRef(view), [backgroundMode, setBackgroundMode] = useState<'live' | 'light' | 'dark'>('live');
   const historyRef = useRef<DrawingDocument[]>([]), redoRef = useRef<DrawingDocument[]>([]);
@@ -80,8 +83,9 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
   const cost = useMemo(() => drawingCost(doc, settings), [doc, settings]);
   const count = usage.pointCount;
   const timeline = useMemo(() => buildTimeline(doc, settings.replayMaxSec), [doc, settings.replayMaxSec]);
-  const isShape = CLOSED_SHAPES.includes(tool);
-  const canOutline = isShape || (['freehand', 'line'].includes(tool) && brush.type !== 'eraser');
+  const drawingTool = tool === 'picker' ? colorPicker?.previousTool || 'freehand' : tool;
+  const isShape = CLOSED_SHAPES.includes(drawingTool);
+  const canOutline = isShape || (['freehand', 'line'].includes(drawingTool) && brush.type !== 'eraser');
   const activeLayer = doc.layers.find((layer) => layer.id === layerId);
   const presets = useMemo(() => Object.keys(BRUSHES).map((type) => createBrush(type as BrushType, brush.color)), [brush.color]);
 
@@ -139,6 +143,11 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
   }, [draftKey, draftReady, recoverable]);
 
   useEffect(() => () => { cancelAnimationFrame(animationRef.current); cancelAnimationFrame(frameRef.current); if (airTimerRef.current) clearInterval(airTimerRef.current); rendererRef.current?.clear(); }, []);
+  useEffect(() => {
+    setColorPicker(null);
+    setTool((current) => current === 'picker' ? 'freehand' : current);
+    return () => { colorPickerRef.current?.controller.abort(); colorPickerRef.current = null; };
+  }, [draftKey]);
   useEffect(() => { viewRef.current = view; }, [view]);
   useEffect(() => { if (brush.type !== 'eraser') lastBrushRef.current = brush; }, [brush]);
   useEffect(() => { setSelection(null); setSelectedCorners([]); }, [layerId, tool]);
@@ -160,11 +169,14 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
   }, [assign, busy, stopPlayback]);
   function chooseTool(next: Tool) {
     if (activeRef.current || busy || review) return;
+    if (next === 'picker') { void startColorPicker('brush'); return; }
+    cancelColorPicker();
     if (next === 'freehand' && brush.type === 'eraser') setBrush({ ...lastBrushRef.current, color: brush.color });
     setTool(next); stopPlayback();
   }
   function chooseBrush(type: BrushType) {
     if (activeRef.current || busy || review) return;
+    cancelColorPicker();
     setBrush((current) => current.type === type ? current : { ...createBrush(type, current.color), alpha: current.alpha });
     setTool('freehand'); stopPlayback();
   }
@@ -177,11 +189,50 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
     else if (shortcut.action === 'size') setBrush((current) => ({ ...current, size: Math.max(0.001, Math.min(0.2, (Math.round(current.size * 1000) + shortcut.delta) / 1000)) }));
     else if (shortcut.action === 'undo') undo();
     else if (shortcut.action === 'redo') redo();
-    else { setSelection(null); setSelectedCorners([]); }
+    else { cancelColorPicker(); setSelection(null); setSelectedCorners([]); }
   }
 
   function chooseColor(color: string) {
     setBrush((b) => ({ ...b, color }));
+  }
+  function applyPickedColor(target: DrawingColorTarget, color: string) {
+    if (target === 'outline') setOutlineStyle((current) => ({ ...current, color }));
+    else if (target === 'fill') setShapeStyle((current) => ({ ...current, fillColor: color }));
+    else chooseColor(color);
+  }
+  function cancelColorPicker() {
+    const current = colorPickerRef.current;
+    colorPickerRef.current = null;
+    current?.controller.abort();
+    setColorPicker(null);
+    if (current) setTool(current.previousTool);
+  }
+  async function startColorPicker(target: DrawingColorTarget) {
+    if (activeRef.current || busy || review) return;
+    const previousTool = colorPickerRef.current?.previousTool || (tool === 'picker' ? 'freehand' : tool);
+    const toggleOff = colorPickerRef.current?.target === target;
+    cancelColorPicker();
+    if (toggleOff) return;
+    const request = { target, previousTool, controller: new AbortController() };
+    colorPickerRef.current = request;
+    setColorPicker({ target, previousTool });
+    stopPlayback();
+    if (cursorRef.current) cursorRef.current.style.opacity = '0';
+    try {
+      const result = await pickScreenColor(request.controller.signal);
+      if (colorPickerRef.current !== request) return;
+      if (result.status === 'unsupported') {
+        setTool('picker');
+        toast.info('이 브라우저에서는 그림 캔버스의 색만 추출할 수 있습니다.');
+        return;
+      }
+      if (result.status === 'picked') applyPickedColor(target, result.color);
+      cancelColorPicker();
+    } catch {
+      if (colorPickerRef.current !== request) return;
+      setTool('picker');
+      toast.error('화면 스포이드를 열지 못해 캔버스 스포이드로 전환했습니다.');
+    }
   }
   function recordUsedColor(stroke?: DrawingStroke) {
     const colors = rememberDrawingColor(recentColors, stroke);
@@ -222,7 +273,7 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
     const diameter = Math.max(8, Math.min(canvasRect.width, canvasRect.height) * (brush.size * (brush.type === 'airbrush' ? 1.7 : 1) + (canOutline && outlineStyle.enabled && outlineStyle.alpha > 0 ? outlineStyle.size * 2 : 0)));
     element.style.width = `${diameter}px`; element.style.height = `${diameter}px`;
     element.style.transform = `translate(${event.clientX - rect.left - diameter / 2}px, ${event.clientY - rect.top - diameter / 2}px)`;
-    element.style.opacity = ['pan', 'select'].includes(tool) || busy ? '0' : '1';
+    element.style.opacity = ['pan', 'select', 'picker'].includes(tool) || colorPickerRef.current || busy ? '0' : '1';
   }
   function recordStroke(stroke: DrawingStroke, byteDelta?: number) {
     const current = docRef.current, index = current.strokes.findIndex((s) => s.id === stroke.id);
@@ -320,9 +371,15 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
     const p = point(event.nativeEvent), current = docRef.current;
     if (tool === 'pan' || event.button === 1) { activeRef.current = { pointer: event.pointerId, before: current, mode: 'pan', start: { x: event.clientX, y: event.clientY }, view: viewRef.current }; return; }
     if (tool === 'picker') {
-      const pixel = renderer().render(current).getContext('2d')!.getImageData(Math.min(current.width - 1, Math.floor(p.x * current.width)), Math.min(current.height - 1, Math.floor(p.y * current.height)), 1, 1).data;
-      if (pixel[3]) chooseColor(`#${[pixel[0], pixel[1], pixel[2]].map((n) => n.toString(16).padStart(2, '0')).join('')}`);
-      setTool('freehand'); return;
+      try {
+        const base = backgroundMode === 'dark' ? '#202124' : backgroundMode !== 'live' || !background ? '#fafafa' : null;
+        const color = sampleDrawingColor(canvasRef.current!, p.x, p.y, base);
+        if (color) { applyPickedColor(colorPickerRef.current?.target || 'brush', color); cancelColorPicker(); }
+        else toast.info('이 위치에는 추출할 그림 색상이 없습니다.');
+      } catch { toast.error('이 위치의 색상을 읽을 수 없습니다.'); }
+      event.currentTarget.releasePointerCapture(event.pointerId);
+      penPointerRef.current = null;
+      return;
     }
     if (!activeLayer?.visible || activeLayer.locked) { toast.error('표시 중인 잠금 해제 레이어를 선택해 주세요.'); return; }
     if (tool === 'select') {
@@ -473,7 +530,7 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
           <div className="absolute inset-0" style={{ transform: `translate(${view.x}px,${view.y}px) scale(${view.zoom})`, transformOrigin: '0 0' }}>
             <div className="absolute inset-0" style={{ visibility: backgroundMode === 'live' ? 'visible' : 'hidden' }}>{background}</div>
             {backgroundMode !== 'live' || !background ? <div className="absolute inset-0" style={{ background: backgroundMode === 'dark' ? '#202124' : '#fafafa' }} /> : null}
-            <canvas ref={canvasRef} width={doc.width} height={doc.height} tabIndex={0} aria-label="그림 캔버스" className={`relative z-10 h-full w-full touch-none ${tool === 'pan' ? 'cursor-grab' : tool === 'select' ? 'cursor-crosshair' : 'cursor-none'}`} onPointerDown={beginStroke} onPointerMove={moveStroke} onPointerUp={(event) => finishStroke(event)} onPointerCancel={(event) => finishStroke(event, true)} onPointerEnter={cursor} onPointerLeave={() => { if (cursorRef.current) cursorRef.current.style.opacity = '0'; }} />
+            <canvas ref={canvasRef} width={doc.width} height={doc.height} tabIndex={0} aria-label="그림 캔버스" className={`relative z-10 h-full w-full touch-none ${tool === 'pan' ? 'cursor-grab' : ['select', 'picker'].includes(tool) ? 'cursor-crosshair' : 'cursor-none'}`} onPointerDown={beginStroke} onPointerMove={moveStroke} onPointerUp={(event) => finishStroke(event)} onPointerCancel={(event) => finishStroke(event, true)} onPointerEnter={cursor} onPointerLeave={() => { if (cursorRef.current) cursorRef.current.style.opacity = '0'; }} />
             {corners && selection && tool === 'select' && !playing ? <div className="pointer-events-none absolute inset-0 z-20 touch-none" onPointerDown={beginSelection} onPointerMove={moveStroke} onPointerUp={(event) => finishStroke(event)} onPointerCancel={(event) => finishStroke(event, true)}>
               <svg className="absolute inset-0 h-full w-full overflow-visible" viewBox={`0 0 ${doc.width} ${doc.height}`} preserveAspectRatio="none" aria-hidden="true"><polygon data-selection-handle="move" points={corners.map((p) => `${p.x},${p.y}`).join(' ')} fill="transparent" stroke="#0284c7" strokeWidth={1 / view.zoom} strokeDasharray={`${4 / view.zoom} ${3 / view.zoom}`} vectorEffect="non-scaling-stroke" style={{ pointerEvents: 'all', cursor: 'move' }} /></svg>
               {HANDLES.map(([handle, label], index) => <button type="button" key={handle} data-selection-handle={handle} aria-label={`선택 ${label} 조절점`} aria-pressed={index % 2 === 0 ? selectedCorners.includes(index / 2) : undefined} title={`${label} 조절점 · Shift: 중심 고정 비율 조절 · Ctrl/Cmd: 왜곡`} className={`pointer-events-auto absolute h-3 w-3 touch-none border border-sky-600 ${index % 2 === 0 && selectedCorners.includes(index / 2) ? 'bg-sky-500' : 'bg-white'}`} style={{ left: `${handlePositions[index].x / doc.width * 100}%`, top: `${handlePositions[index].y / doc.height * 100}%`, transform: `translate(-50%,-50%) scale(${1 / view.zoom})`, cursor: index % 2 === 0 && selectedCorners.includes(index / 2) ? 'move' : `${handle}-resize` }} />)}
@@ -493,17 +550,17 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
         {isShape ? <section className="space-y-3 border-y py-3" aria-label="도형 채움 설정">
           <label className="flex items-center justify-between text-xs">선 표시<input type="checkbox" checked={shapeStyle.strokeEnabled} onChange={(e) => setShapeStyle({ ...shapeStyle, strokeEnabled: e.target.checked })} /></label>
           <label className="flex items-center justify-between text-xs">채우기<input type="checkbox" checked={shapeStyle.fillEnabled} onChange={(e) => setShapeStyle({ ...shapeStyle, fillEnabled: e.target.checked })} /></label>
-          <label className="flex items-center justify-between gap-3 text-xs">채움 색상<input aria-label="채움 색상" type="color" value={shapeStyle.fillColor} onChange={(e) => setShapeStyle({ ...shapeStyle, fillColor: e.target.value })} className="h-8 w-20 rounded border bg-transparent" /></label>
+          <div className="flex items-center gap-2"><label className="flex min-w-0 flex-1 items-center justify-between gap-2 text-xs">채움 색상<input aria-label="채움 색상" type="color" value={shapeStyle.fillColor} onChange={(e) => setShapeStyle({ ...shapeStyle, fillColor: e.target.value })} className="h-8 w-20 rounded border bg-transparent" /></label><IconButton label="채움 색상 추출" active={colorPicker?.target === 'fill'} onClick={() => void startColorPicker('fill')}><Pipette size={17} /></IconButton></div>
           <label className="grid gap-1.5 text-xs"><span className="flex justify-between"><span>채움 불투명도</span><span>{Math.round(shapeStyle.fillAlpha * 100)}%</span></span><input aria-label="채움 불투명도" type="range" min={0} max={100} value={Math.round(shapeStyle.fillAlpha * 100)} onChange={(e) => setShapeStyle({ ...shapeStyle, fillAlpha: Number(e.target.value) / 100 })} className="w-full accent-primary" /></label>
         </section> : null}
         <div className="grid grid-cols-3 gap-1.5">{presets.map((preset) => <Tooltip key={preset.type} content={<ToolHint label={BRUSHES[preset.type].label} shortcut={BRUSH_SHORTCUTS[preset.type]} />}><button type="button" aria-keyshortcuts={BRUSH_SHORTCUTS[preset.type]} aria-pressed={brush.type === preset.type} onClick={() => chooseBrush(preset.type)} className={`min-w-0 rounded-md border px-1 py-2 ${brush.type === preset.type ? 'border-primary bg-primary/5' : 'hover:bg-muted'}`}><BrushSample brush={preset} /><span className="block truncate text-[11px] font-medium">{BRUSHES[preset.type].label}</span></button></Tooltip>)}</div>
-        <div className="space-y-2">{isShape ? <span className="text-xs font-medium">선 색상</span> : null}<div className="flex items-center gap-2"><input aria-label={isShape ? '선 색상' : '붓 색상'} type="color" value={brush.color} onChange={(e) => chooseColor(e.target.value)} className="h-9 min-w-0 flex-1 rounded-md border bg-transparent" /><IconButton label="그림에서 색 추출" shortcut={TOOL_SHORTCUTS.picker} aria-keyshortcuts={TOOL_SHORTCUTS.picker} active={tool === 'picker'} onClick={() => chooseTool('picker')}><Pipette size={17} /></IconButton></div><div className="grid grid-cols-10 gap-1">{SWATCHES.map((color) => <button type="button" key={color} title={color} aria-label={`${color} 색상`} onClick={() => chooseColor(color)} className="aspect-square rounded-sm border border-foreground/20" style={{ backgroundColor: color }} />)}</div>{recentColors.length ? <div className="flex gap-1" aria-label="최근 색상">{recentColors.map((color) => <button type="button" key={color} title={color} aria-label={`최근 ${color}`} onClick={() => chooseColor(color)} className="h-5 w-5 rounded-sm border border-foreground/20" style={{ backgroundColor: color }} />)}</div> : null}</div>
+        <div className="space-y-2">{isShape ? <span className="text-xs font-medium">선 색상</span> : null}<div className="flex items-center gap-2"><input aria-label={isShape ? '선 색상' : '붓 색상'} type="color" value={brush.color} onChange={(e) => chooseColor(e.target.value)} className="h-9 min-w-0 flex-1 rounded-md border bg-transparent" /><IconButton label="화면에서 색 추출" shortcut={TOOL_SHORTCUTS.picker} aria-keyshortcuts={TOOL_SHORTCUTS.picker} active={colorPicker?.target === 'brush'} onClick={() => void startColorPicker('brush')}><Pipette size={17} /></IconButton></div><div className="grid grid-cols-10 gap-1">{SWATCHES.map((color) => <button type="button" key={color} title={color} aria-label={`${color} 색상`} onClick={() => chooseColor(color)} className="aspect-square rounded-sm border border-foreground/20" style={{ backgroundColor: color }} />)}</div>{recentColors.length ? <div className="flex gap-1" aria-label="최근 색상">{recentColors.map((color) => <button type="button" key={color} title={color} aria-label={`최근 ${color}`} onClick={() => chooseColor(color)} className="h-5 w-5 rounded-sm border border-foreground/20" style={{ backgroundColor: color }} />)}</div> : null}</div>
         <div className="flex flex-wrap items-center gap-1" aria-label="즐겨찾는 색상"><IconButton label="현재 색상 즐겨찾기" active={favoriteColors.includes(brush.color)} onClick={toggleFavorite}><Star size={15} fill={favoriteColors.includes(brush.color) ? 'currentColor' : 'none'} /></IconButton>{favoriteColors.map((color) => <button type="button" key={color} title={color} aria-label={`즐겨찾기 ${color}`} onClick={() => chooseColor(color)} className="h-5 w-5 rounded-sm border border-foreground/20" style={{ backgroundColor: color }} />)}</div>
         {([{ key: 'size', label: isShape ? '선 두께' : '크기', min: 1, max: 200, scale: 1000, suffix: '' }, { key: 'alpha', label: isShape ? '선 불투명도' : '불투명도', min: 0, max: 100, scale: 100, suffix: '%' }, { key: 'smoothing', label: '선 보정', min: 0, max: 85, scale: 100, suffix: '%' }] as const).filter(({ key }) => !isShape || key !== 'smoothing').map(({ key, label, min, max, scale, suffix }) => <Tooltip key={key} content={<ToolHint label={label} shortcut={key === 'size' ? '[ / ]' : undefined} />}><label className="grid gap-1.5 text-xs"><span className="flex justify-between"><span>{label}</span><span className="tabular-nums">{Math.round(brush[key] * scale)}{suffix}</span></span><input aria-label={label} type="range" min={min} max={max} value={Math.round(brush[key] * scale)} onChange={(e) => setBrush({ ...brush, [key]: Number(e.target.value) / scale })} className="w-full accent-primary" /></label></Tooltip>)}
         {canOutline ? <section className="space-y-3 border-y py-3" aria-label="외곽선 설정">
           <label className="flex items-center justify-between text-xs font-medium">외곽선<input aria-label="외곽선 사용" type="checkbox" checked={outlineStyle.enabled} onChange={(e) => { const enabled = e.target.checked; setOutlineStyle((current) => ({ ...current, enabled })); }} /></label>
           <fieldset disabled={!outlineStyle.enabled} className="min-w-0 space-y-3 disabled:opacity-40">
-            <label className="flex items-center justify-between gap-3 text-xs">외곽선 색상<input aria-label="외곽선 색상" type="color" value={outlineStyle.color} onInput={(e) => { const color = e.currentTarget.value; setOutlineStyle((current) => ({ ...current, color })); }} className="h-8 w-20 rounded border bg-transparent" /></label>
+            <div className="flex items-center gap-2"><label className="flex min-w-0 flex-1 items-center justify-between gap-2 text-xs">외곽선 색상<input aria-label="외곽선 색상" type="color" value={outlineStyle.color} onInput={(e) => { const color = e.currentTarget.value; setOutlineStyle((current) => ({ ...current, color })); }} className="h-8 w-20 rounded border bg-transparent" /></label><IconButton label="외곽선 색상 추출" active={colorPicker?.target === 'outline'} onClick={() => void startColorPicker('outline')}><Pipette size={17} /></IconButton></div>
             <label className="grid gap-1.5 text-xs"><span className="flex justify-between"><span>외곽선 두께</span><span className="tabular-nums">{Math.round(outlineStyle.size * 1000)}</span></span><input aria-label="외곽선 두께" type="range" min={1} max={100} value={Math.round(outlineStyle.size * 1000)} onChange={(e) => { const size = Number(e.target.value) / 1000; setOutlineStyle((current) => ({ ...current, size })); }} className="w-full accent-primary" /></label>
             <label className="grid gap-1.5 text-xs"><span className="flex justify-between"><span>외곽선 불투명도</span><span className="tabular-nums">{Math.round(outlineStyle.alpha * 100)}%</span></span><input aria-label="외곽선 불투명도" type="range" min={0} max={100} value={Math.round(outlineStyle.alpha * 100)} onChange={(e) => { const alpha = Number(e.target.value) / 100; setOutlineStyle((current) => ({ ...current, alpha })); }} className="w-full accent-primary" /></label>
           </fieldset>
