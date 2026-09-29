@@ -3,8 +3,8 @@ import { MAX_DOCUMENT_BYTES, MAX_FILL_RUNS, MAX_SELECTION_PIXELS, drawingJsonByt
 export { MAX_DOCUMENT_BYTES } from './limits.js';
 
 export const DRAWING_VERSION = 2;
-export const RENDERER_VERSION = '2.1.0';
-export const SUPPORTED_RENDERER_VERSIONS = ['2.0.0', RENDERER_VERSION];
+export const RENDERER_VERSION = '2.2.0';
+export const SUPPORTED_RENDERER_VERSIONS = ['2.0.0', '2.1.0', RENDERER_VERSION];
 export const BRUSHES = {
   pen: { label: '정밀 펜', size: 0.007, texture: 0, hardness: 1, flow: 1, angle: 35 },
   pencil: { label: '연필', size: 0.005, texture: 0.7, hardness: 0.8, flow: 1, angle: 35 },

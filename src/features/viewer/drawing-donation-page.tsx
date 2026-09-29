@@ -376,27 +376,25 @@ export function DrawingDonationEditorPage({ channelUid }: { channelUid: string }
                   </div>
                 </div>
               ) : null}
-              {selectedSurface?.hlsSupported ? (
-                <div className="absolute right-3 top-3 z-20 flex max-w-[min(18rem,calc(100%-1.5rem))] items-center gap-2 rounded-full border bg-card/88 px-2 py-1.5 shadow-subtle backdrop-blur-xl">
-                  <Button type="button" size="icon" variant="ghost" onClick={() => setLiveMuted((current) => !current)} aria-label={liveMuted ? '방송 소리 켜기' : '방송 소리 끄기'}>
-                    {liveMuted ? <VolumeX className="h-[1em] w-[1em]" /> : <Volume2 className="h-[1em] w-[1em]" />}
-                  </Button>
-                  <input
-                    type="range"
-                    min="0"
-                    max="100"
-                    value={Math.round(liveVolume * 100)}
-                    onChange={(event) => {
-                      const next = Math.max(0, Math.min(100, Number(event.target.value || 0))) / 100;
-                      setLiveVolume(next);
-                      if (next > 0) setLiveMuted(false);
-                    }}
-                    className="h-[var(--control-height-sm)] w-[clamp(5rem,12vw,8rem)] accent-primary"
-                    aria-label="방송 배경 음량"
-                  />
-                </div>
-              ) : null}
             </>}
+            backgroundControls={selectedSurface?.hlsSupported ? <>
+              <Button type="button" size="icon" variant="ghost" onClick={() => setLiveMuted((current) => !current)} aria-label={liveMuted ? '방송 소리 켜기' : '방송 소리 끄기'} title={liveMuted ? '방송 소리 켜기' : '방송 소리 끄기'}>
+                {liveMuted ? <VolumeX className="h-[1em] w-[1em]" /> : <Volume2 className="h-[1em] w-[1em]" />}
+              </Button>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={Math.round(liveVolume * 100)}
+                onChange={(event) => {
+                  const next = Math.max(0, Math.min(100, Number(event.target.value || 0))) / 100;
+                  setLiveVolume(next);
+                  if (next > 0) setLiveMuted(false);
+                }}
+                className="h-[var(--control-height-sm)] w-[clamp(5rem,12vw,8rem)] accent-primary"
+                aria-label="방송 배경 음량"
+              />
+            </> : null}
           />
         ) : null}
       </section>

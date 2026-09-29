@@ -98,9 +98,28 @@ function shapePoints(stroke, width, height, until) {
   return points;
 }
 
+const overlaps = (a, b) => a.x <= b.x + b.width && b.x <= a.x + a.width && a.y <= b.y + b.height && b.y <= a.y + a.height;
+
+function sharedOutlineGroups(list, doc, times) {
+  const peers = new Map();
+  let groups = new Map();
+  for (let index = 0; index < list.length; index++) {
+    const stroke = list[index], { brush, outline } = stroke;
+    // Raster edits commit the preceding outlines before modifying their pixels.
+    if (['selection', 'fill'].includes(stroke.kind) || brush.type === 'eraser') { groups = new Map(); continue; }
+    if (!outline?.alpha || !['line', 'freehand'].includes(stroke.kind)) continue;
+    const key = `${brush.color.toLowerCase()}:${brush.alpha}:${outline.color.toLowerCase()}:${outline.alpha}`;
+    let group = groups.get(key);
+    if (!group) { group = []; groups.set(key, group); }
+    const entry = { stroke, index, until: times.get(stroke.id) ?? Infinity, bounds: strokeBounds(stroke, doc), group };
+    group.push(entry); peers.set(stroke, entry);
+  }
+  return peers;
+}
+
 /** The canvas factory is injected so Node verification and browsers run identical brush code. */
 export function createDrawingRenderer(createCanvas) {
-  let width = 0, height = 0, scratch, work, output, border;
+  let width = 0, height = 0, scratch, work, output, border, mask, rendererVersion;
   const layers = new Map(), patterns = new Map();
   const strokeKeys = new WeakMap();
   const keyOf = (stroke) => {
@@ -245,10 +264,9 @@ export function createDrawingRenderer(createCanvas) {
     ctx.closePath();
   }
 
-  function paintOutline(stroke, until) {
-    border ||= createCanvas(width, height);
-    const ctx = border.getContext('2d'), b = stroke.brush, size = b.size * Math.min(width, height);
-    ctx.clearRect(0, 0, width, height); ctx.save();
+  function outlineFootprint(ctx, stroke, until, body = false) {
+    const b = stroke.brush, size = b.size * Math.min(width, height);
+    ctx.save();
     ctx.translate(stroke.transform.x * width, stroke.transform.y * height); ctx.scale(stroke.transform.scale, stroke.transform.scale);
     let edgeWidth = 0, closed = true;
     if (['rectangle', 'ellipse', 'star', 'heart'].includes(stroke.kind)) {
@@ -266,15 +284,43 @@ export function createDrawingRenderer(createCanvas) {
       }
     }
     ctx.lineJoin = stroke.kind === 'rectangle' ? 'miter' : 'round'; ctx.lineCap = 'round';
-    ctx.strokeStyle = stroke.outline.color; ctx.lineWidth = edgeWidth + stroke.outline.size * Math.min(width, height) * 2; ctx.stroke();
-    // Remove the entire body footprint, not its textured alpha: outlines must not tint translucent interiors.
-    ctx.globalCompositeOperation = 'destination-out'; ctx.fillStyle = '#000000'; ctx.strokeStyle = '#000000';
-    if (closed) ctx.fill();
-    if (edgeWidth) { ctx.lineWidth = edgeWidth; ctx.stroke(); }
+    ctx.fillStyle = stroke.outline.color; ctx.strokeStyle = stroke.outline.color;
+    if (body) {
+      if (closed) ctx.fill();
+      if (edgeWidth) { ctx.lineWidth = edgeWidth; ctx.stroke(); }
+    } else { ctx.lineWidth = edgeWidth + stroke.outline.size * Math.min(width, height) * 2; ctx.stroke(); }
     ctx.restore();
   }
 
-  function paintStroke(target, stroke, until, state, cache) {
+  function mirrored(ctx, stroke, paint) {
+    for (const flipX of stroke.mirror ? [false, true] : [false]) for (const flipY of stroke.mirrorY ? [false, true] : [false]) {
+      ctx.save(); ctx.translate(flipX ? width : 0, flipY ? height : 0); ctx.scale(flipX ? -1 : 1, flipY ? -1 : 1);
+      paint(); ctx.restore();
+    }
+  }
+
+  function paintOutline(stroke, until, shared) {
+    border ||= createCanvas(width, height);
+    const ctx = border.getContext('2d');
+    ctx.clearRect(0, 0, width, height); ctx.save();
+    if (shared) mirrored(ctx, stroke, () => outlineFootprint(ctx, stroke, until));
+    else outlineFootprint(ctx, stroke, until);
+    // Cut geometric footprints, not brush alpha, so translucent or textured ink stays untinted.
+    ctx.globalCompositeOperation = 'destination-out';
+    if (shared) {
+      for (const peer of shared.group) {
+        if (!overlaps(shared.bounds, peer.bounds)) continue;
+        mirrored(ctx, peer.stroke, () => {
+          outlineFootprint(ctx, peer.stroke, peer.until, true);
+          // The latest matching border owns overlaps, applying outline opacity only once.
+          if (peer.index > shared.index) outlineFootprint(ctx, peer.stroke, peer.until);
+        });
+      }
+    } else outlineFootprint(ctx, stroke, until, true);
+    ctx.restore();
+  }
+
+  function paintStroke(target, stroke, until, state, cache, shared, withOutline = true) {
     if (until < stroke.points[0].t) return;
     if (stroke.kind === 'selection') { paintSelection(target, stroke, until, state, cache); return; }
     state.selection = null;
@@ -304,23 +350,78 @@ export function createDrawingRenderer(createCanvas) {
       ctx.restore();
     };
     paint(false);
-    const outlined = stroke.outline?.alpha > 0 && stroke.brush.type !== 'eraser' && stroke.kind !== 'fill';
-    if (outlined) paintOutline(stroke, until);
+    const outlined = withOutline && stroke.outline?.alpha > 0 && stroke.brush.type !== 'eraser' && stroke.kind !== 'fill';
+    if (outlined) paintOutline(stroke, until, shared);
     target.save(); target.globalCompositeOperation = stroke.brush.type === 'eraser' ? 'destination-out' : 'source-over';
+    if (outlined && shared) { target.globalAlpha = stroke.outline.alpha; target.drawImage(border, 0, 0); }
     const alpha = stroke.shape ? 1 : stroke.brush.alpha * (['highlighter', 'watercolor'].includes(stroke.brush.type) ? stroke.brush.flow : 1);
     for (const flipX of stroke.mirror ? [false, true] : [false]) for (const flipY of stroke.mirrorY ? [false, true] : [false]) {
       target.save(); target.translate(flipX ? width : 0, flipY ? height : 0); target.scale(flipX ? -1 : 1, flipY ? -1 : 1);
-      if (outlined) { target.globalAlpha = stroke.outline.alpha; target.drawImage(border, 0, 0); }
+      if (outlined && !shared) { target.globalAlpha = stroke.outline.alpha; target.drawImage(border, 0, 0); }
       target.globalAlpha = alpha;
       target.drawImage(scratch, 0, 0); target.restore();
     }
     target.restore();
   }
 
+  function paintOutlineRun(target, entries, state, cache) {
+    let count = 0;
+    while (count < entries.length - 1 && entries[count].until >= entries[count].stroke.points.at(-1).t) count++;
+    const keys = entries.slice(0, count).map((entry) => keyOf(entry.stroke));
+    const run = cache.outlineRun ||= { ink: createCanvas(width, height), outer: createCanvas(width, height), body: createCanvas(width, height), keys: [] };
+    const ink = run.ink.getContext('2d'), outer = run.outer.getContext('2d'), body = run.body.getContext('2d');
+    if (run.keys.length > keys.length || run.keys.some((key, i) => key !== keys[i])) {
+      for (const ctx of [ink, outer, body]) ctx.clearRect(0, 0, width, height);
+      run.keys = [];
+    }
+    // Cache completed ink and both geometric unions; only the live line is redrawn per frame.
+    for (let i = run.keys.length; i < count; i++) {
+      const { stroke } = entries[i];
+      paintStroke(ink, stroke, Infinity, state, cache, undefined, false);
+      mirrored(outer, stroke, () => outlineFootprint(outer, stroke, Infinity));
+      mirrored(body, stroke, () => outlineFootprint(body, stroke, Infinity, true));
+    }
+    run.keys = keys;
+    border ||= createCanvas(width, height); mask ||= createCanvas(width, height);
+    const ctx = border.getContext('2d'), cutout = mask.getContext('2d');
+    ctx.clearRect(0, 0, width, height); ctx.drawImage(run.outer, 0, 0);
+    cutout.clearRect(0, 0, width, height); cutout.drawImage(run.body, 0, 0);
+    for (let i = count; i < entries.length; i++) {
+      const { stroke, until } = entries[i];
+      mirrored(ctx, stroke, () => outlineFootprint(ctx, stroke, until));
+      mirrored(cutout, stroke, () => outlineFootprint(cutout, stroke, until, true));
+    }
+    ctx.save(); ctx.globalCompositeOperation = 'destination-out'; ctx.drawImage(mask, 0, 0);
+    const first = entries[0], last = entries.at(-1);
+    for (const peer of first.group) {
+      if ((peer.index >= first.index && peer.index <= last.index) || !entries.some((entry) => overlaps(entry.bounds, peer.bounds))) continue;
+      mirrored(ctx, peer.stroke, () => {
+        outlineFootprint(ctx, peer.stroke, peer.until, true);
+        if (peer.index > last.index) outlineFootprint(ctx, peer.stroke, peer.until);
+      });
+    }
+    ctx.restore(); target.save(); target.globalAlpha = first.stroke.outline.alpha; target.drawImage(border, 0, 0);
+    target.globalAlpha = 1; target.drawImage(run.ink, 0, 0); target.restore();
+    for (let i = count; i < entries.length; i++) paintStroke(target, entries[i].stroke, entries[i].until, state, cache, undefined, false);
+    state.selection = null;
+  }
+
+  function paintRange(target, list, start, end, times, state, cache, shared, completed = false) {
+    for (let i = start; i < end;) {
+      const entry = shared.get(list[i]);
+      let next = i + 1;
+      if (entry) while (next < end && shared.get(list[next])?.group === entry.group) next++;
+      if (next > i + 1) paintOutlineRun(target, list.slice(i, next).map((stroke) => shared.get(stroke)), state, cache);
+      else paintStroke(target, list[i], completed ? Infinity : times.get(list[i].id) ?? Infinity, state, cache, entry);
+      if (completed) cache.generation++;
+      i = next;
+    }
+  }
+
   function render(doc, time = Infinity, maxSeconds = 12, onlyLayer = null) {
     if (!SUPPORTED_RENDERER_VERSIONS.includes(doc.rendererVersion) || (doc.rendererVersion === '2.0.0' && doc.strokes.some((stroke) => stroke.outline))) throw new Error('drawing_version_unsupported');
-    if (width !== doc.width || height !== doc.height) {
-      width = doc.width; height = doc.height; layers.clear(); border = null;
+    if (width !== doc.width || height !== doc.height || rendererVersion !== doc.rendererVersion) {
+      width = doc.width; height = doc.height; rendererVersion = doc.rendererVersion; layers.clear(); border = null; mask = null;
       scratch = createCanvas(width, height); work = createCanvas(width, height); output = createCanvas(width, height);
     }
     const timeline = buildTimeline(doc, maxSeconds), times = new Map(timeline.entries.map((entry) => [entry.id, time * timeline.speed + entry.offset]));
@@ -328,8 +429,14 @@ export function createDrawingRenderer(createCanvas) {
     for (const layer of doc.layers) {
       if ((!layer.visible && onlyLayer !== layer.id) || (onlyLayer && onlyLayer !== layer.id)) continue;
       const list = doc.strokes.filter((s) => s.layerId === layer.id && (time === Infinity || (times.get(s.id) ?? -1) >= s.points[0].t));
+      const shared = doc.rendererVersion === '2.2.0' ? sharedOutlineGroups(list, doc, times) : new Map();
       let prefix = 0;
       while (prefix < list.length - 1 && (times.get(list[prefix].id) ?? Infinity) >= list[prefix].points.at(-1).t) prefix++;
+      // A growing line can remove an earlier matching outline, including across other colours.
+      for (let i = list.length - 1; i >= prefix; i--) {
+        const entry = shared.get(list[i]);
+        if (entry) for (const peer of entry.group) if (peer.index < prefix && overlaps(entry.bounds, peer.bounds)) prefix = peer.index;
+      }
       const keys = list.slice(0, prefix).map(keyOf);
       let cache = layers.get(layer.id);
       if (!cache) { cache = { canvas: createCanvas(width, height), keys: [], generation: 0, state: { selection: null } }; layers.set(layer.id, cache); }
@@ -337,11 +444,11 @@ export function createDrawingRenderer(createCanvas) {
       if (cache.keys.length > keys.length || cache.keys.some((key, i) => key !== keys[i])) {
         base.clearRect(0, 0, width, height); cache.keys = []; cache.state.selection = null; cache.prepared = null; cache.generation++;
       }
-      for (let i = cache.keys.length; i < prefix; i++) { paintStroke(base, list[i], Infinity, cache.state, cache); cache.generation++; }
+      paintRange(base, list, cache.keys.length, prefix, times, cache.state, cache, shared, true);
       cache.keys = keys;
       const layerCtx = work.getContext('2d'); layerCtx.clearRect(0, 0, width, height); layerCtx.drawImage(cache.canvas, 0, 0);
       const state = { selection: cache.state.selection };
-      for (let i = prefix; i < list.length; i++) paintStroke(layerCtx, list[i], times.get(list[i].id) ?? Infinity, state, cache);
+      paintRange(layerCtx, list, prefix, list.length, times, state, cache, shared);
       out.drawImage(work, 0, 0);
     }
     for (const key of layers.keys()) if (!doc.layers.some((layer) => layer.id === key)) layers.delete(key);

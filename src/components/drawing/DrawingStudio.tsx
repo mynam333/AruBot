@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Tooltip } from '@/components/ui/tooltip';
 import { DrawingArchiveDialog } from './DrawingArchiveDialog';
+import { DrawingHoverControls } from './DrawingHoverControls';
 import { saveDrawingArchive } from '@/shared/drawing/archive-files';
 import { apiUrl } from '@/shared/api/http';
 import { readDraft, writeDraft } from '@/shared/drawing/draft-store';
@@ -16,7 +17,7 @@ import { MAX_DOCUMENT_BYTES, MAX_ORIGINAL_BYTES, RECORDING_HEADROOM_BYTES, drawi
 import { constrainLinePoint, constrainShapePoint, distortSelection, rotateSelection, selectionCorners, selectionRect, transformSelection } from '../../../shared/drawing/selection.js';
 
 export type DrawingStudioSettings = { pricingMode: string; costPoints: number; inkCostPerUnit: number; replayMaxSec: number; canvas: { widthRatio: number; heightRatio: number }; maxStrokes?: number; maxPoints?: number; blocked?: boolean };
-type Props = { channelUid: string; viewerUserId: string; points: number; settings: DrawingStudioSettings; background?: ReactNode; onSubmitted?: (cost: number) => void; localOnly?: boolean };
+type Props = { channelUid: string; viewerUserId: string; points: number; settings: DrawingStudioSettings; background?: ReactNode; backgroundControls?: ReactNode; onSubmitted?: (cost: number) => void; localOnly?: boolean };
 type Selection = { rect: SelectionRect; frame: SelectionFrame; layerId: string; operationId: string | null };
 const CLOSED_SHAPES = ['rectangle', 'ellipse', 'star', 'heart'];
 const HANDLES = [ ['nw', '왼쪽 위', 0, 0], ['n', '위', 50, 0], ['ne', '오른쪽 위', 100, 0], ['e', '오른쪽', 100, 50], ['se', '오른쪽 아래', 100, 100], ['s', '아래', 50, 100], ['sw', '왼쪽 아래', 0, 100], ['w', '왼쪽', 0, 50] ] as const;
@@ -49,7 +50,7 @@ function IconButton({ label, shortcut, active, children, ...props }: React.Butto
   return <Tooltip content={<ToolHint label={label} shortcut={shortcut} />}><button type="button" aria-label={label} aria-pressed={active === undefined ? undefined : active} {...props} className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors disabled:opacity-35 ${active ? 'border-primary bg-primary/10 text-primary' : 'border-transparent hover:bg-muted'} ${props.className || ''}`}>{children}</button></Tooltip>;
 }
 
-export function DrawingStudio({ channelUid, viewerUserId, points, settings, background, onSubmitted, localOnly = false }: Props) {
+export function DrawingStudio({ channelUid, viewerUserId, points, settings, background, backgroundControls, onSubmitted, localOnly = false }: Props) {
   const [doc, setDoc] = useState(() => createDrawing(settings.canvas.widthRatio, settings.canvas.heightRatio, 'new'));
   const docRef = useRef(doc), rendererRef = useRef<DrawingRenderer | null>(null);
   const [usage, setUsage] = useState(() => drawingUsage(doc)), usageRef = useRef(usage);
@@ -480,6 +481,7 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
             </div> : null}
           </div>
           <div ref={cursorRef} aria-hidden="true" className="pointer-events-none absolute left-0 top-0 z-30 rounded-full border border-black bg-transparent opacity-0 shadow-[0_0_0_1px_#fff,inset_0_0_0_1px_#fff]"><span className="absolute left-1/2 top-1/2 h-[3px] w-[3px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-[0_0_0_1px_#000]" /></div>
+          {backgroundMode === 'live' && backgroundControls ? <DrawingHoverControls>{backgroundControls}</DrawingHoverControls> : null}
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground"><span role="status">{draftStatus}</span><span className="tabular-nums">{usage.strokeCount}/{settings.maxStrokes || 120}획 · {count.toLocaleString()}/{(settings.maxPoints || 6000).toLocaleString()}점</span><span className={`tabular-nums ${usage.jsonSize >= (MAX_DOCUMENT_BYTES - RECORDING_HEADROOM_BYTES) * 0.9 ? 'font-semibold text-rose-500' : ''}`}>기록 용량 {(usage.jsonSize / 1024 / 1024).toFixed(2)} / {(MAX_DOCUMENT_BYTES / 1024 / 1024).toFixed(0)} MB</span></div>
         <div className="flex flex-wrap items-center gap-2 border-y py-2"><div className="inline-flex rounded-md border p-0.5">{([['live', '방송'], ['light', '밝게'], ['dark', '어둡게']] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={backgroundMode === value} onClick={() => setBackgroundMode(value)} className={`rounded px-3 py-1.5 text-xs ${backgroundMode === value ? 'bg-muted font-semibold' : ''}`}>{label}</button>)}</div><IconButton label={playing ? '미리보기 중지' : '방송 재생 미리보기'} onClick={() => playing ? stopPlayback() : play()} disabled={!visibleStrokes(doc).length}>{playing ? <Pause size={17} /> : <Play size={17} />}</IconButton><span className="text-xs tabular-nums">{(timeline.targetReplayMs / 1000).toFixed(1)}초 · {timeline.speed.toFixed(1)}배속 · 대기 제외</span><Button size="sm" variant="ghost" onClick={() => play(doc, false, true)} disabled={!doc.strokes.length}>원속도</Button></div>

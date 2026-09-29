@@ -113,6 +113,81 @@ test('all outlined brush and shape paths replay identically, including symmetry 
   }
 });
 
+function outlinedCross(alpha = 1) {
+  const doc = createDrawing(1, 1, 'cross'); doc.width = 160; doc.height = 160;
+  doc.strokes = [[[0.15, 0.5], [0.85, 0.5]], [[0.5, 0.15], [0.5, 0.85]]].map((ends, index) => ({
+    id: `cross-${index}`, layerId: 'layer-1', kind: 'line', seed: index, mirror: false,
+    transform: { x: 0, y: 0, scale: 1 }, brush: { ...createBrush('pen', '#ff0000', alpha), size: 0.1 },
+    outline: { size: 0.025, color: '#0000ff', alpha: 0.5 },
+    points: ends.map(([x, y], i) => ({ x, y, p: 0.65, t: index * 2000 + i * 1000 })),
+  }));
+  return doc;
+}
+const rgbaAt = (canvas, x, y) => Array.from(canvas.getContext('2d').getImageData(x, y, 1, 1).data);
+
+test('matching lines share outlines without tinting crossings or multiplying border opacity', () => {
+  for (const alpha of [1, 0.4]) {
+    const doc = outlinedCross(alpha), renderer = createDrawingRenderer(createCanvas);
+    const plain = structuredClone(doc); plain.strokes.forEach((stroke) => delete stroke.outline);
+    const expected = createDrawingRenderer(createCanvas).render(plain), joined = renderer.render(doc);
+    for (const [x, y] of [[80, 80], [91, 80], [80, 91]]) assert.deepEqual(rgbaAt(joined, x, y), rgbaAt(expected, x, y));
+    assert.deepEqual(rgbaAt(joined, 91, 91), [0, 0, 255, 128]);
+    const legacy = { ...doc, rendererVersion: '2.1.0' }; validateDrawing(legacy);
+    assert.notDeepEqual(rgbaAt(renderer.render(legacy), 91, 80), rgbaAt(expected, 91, 80));
+    assert.deepEqual(rgbaAt(renderer.render(doc), 91, 80), rgbaAt(expected, 91, 80));
+  }
+});
+
+test('outline sharing respects all four style values and layer boundaries', () => {
+  for (const change of [s => s.brush.color = '#00ff00', s => s.brush.alpha = 0.7, s => s.outline.color = '#000000', s => s.outline.alpha = 0.7, s => s.layerId = 'other']) {
+    const doc = outlinedCross(); doc.layers.push({ id: 'other', name: 'Other', visible: true, locked: false }); change(doc.strokes[1]);
+    assert.deepEqual(pixels(createDrawingRenderer(createCanvas).render(doc)), pixels(createDrawingRenderer(createCanvas).render({ ...doc, rendererVersion: '2.1.0' })));
+  }
+  const doc = outlinedCross(); doc.strokes[1].brush.color = '#FF0000'; doc.strokes[1].outline.color = '#0000FF';
+  doc.strokes[1].brush.size = 0.075; doc.strokes[1].outline.size = 0.05;
+  assert.deepEqual(rgbaAt(createDrawingRenderer(createCanvas).render(doc), 90, 80), [255, 0, 0, 255]);
+});
+
+test('nonconsecutive matching strokes join without reordering other colours', () => {
+  const doc = outlinedCross();
+  const green = structuredClone(doc.strokes[0]); green.id = 'green'; green.brush.color = '#00ff00'; delete green.outline;
+  green.points = [{ x: 0.3, y: 0.15, p: 1, t: 1100 }, { x: 0.3, y: 0.85, p: 1, t: 1900 }];
+  doc.strokes.splice(1, 0, green);
+  const image = createDrawingRenderer(createCanvas).render(doc);
+  assert.deepEqual(rgbaAt(image, 91, 80), [255, 0, 0, 255]);
+  assert.deepEqual(rgbaAt(image, 48, 80), [0, 255, 0, 255]);
+});
+
+test('erasers, fills and selection edits commit preceding outline groups', () => {
+  for (const kind of ['eraser', 'fill', 'selection']) {
+    const doc = outlinedCross(), operation = structuredClone(doc.strokes[0]); operation.id = 'edit'; delete operation.outline;
+    operation.points = [{ x: 0.08, y: 0.08, p: 1, t: 1100 }, { x: 0.12, y: 0.12, p: 1, t: 1900 }];
+    if (kind === 'eraser') operation.brush.type = 'eraser';
+    else if (kind === 'fill') { operation.kind = 'fill'; operation.runs = [1, 1, 3]; }
+    else {
+      operation.kind = 'selection'; operation.selection = { rect: { x: 0, y: 0, width: 8, height: 8 }, sourceId: null, copy: false };
+      operation.frames = [1100, 1900].map(t => ({ x: 0.025, y: 0.025, scaleX: 1, scaleY: 1, angle: 0, t }));
+    }
+    doc.strokes.splice(1, 0, operation);
+    assert.deepEqual(pixels(createDrawingRenderer(createCanvas).render(doc)), pixels(createDrawingRenderer(createCanvas).render({ ...doc, rendererVersion: '2.1.0' })), kind);
+  }
+});
+
+test('shared outlines stay identical through growing strokes, replay seeks, undo and saved verification', async () => {
+  const doc = outlinedCross(0.6), renderer = createDrawingRenderer(createCanvas);
+  doc.strokes.forEach((stroke) => { stroke.kind = 'freehand'; stroke.mirror = true; stroke.mirrorY = true; stroke.transform = { x: 0.1, y: 0.05, scale: 0.8 }; });
+  for (const time of [0, 300, 999, 1010, 1500, 1999, Infinity, 1200, Infinity]) {
+    assert.deepEqual(pixels(renderer.render(doc, time)), pixels(createDrawingRenderer(createCanvas).render(doc, time)), `replay ${time}`);
+  }
+  for (const strokes of [doc.strokes.slice(0, 1), doc.strokes, doc.strokes.map((stroke, index) => index ? { ...stroke, points: [stroke.points[0], { ...stroke.points[1], y: 0.6 }] } : stroke), doc.strokes]) {
+    const edited = { ...doc, strokes };
+    assert.deepEqual(pixels(renderer.render(edited)), pixels(createDrawingRenderer(createCanvas).render(edited)));
+  }
+  const saved = JSON.parse(canonicalDrawing(doc)); validateDrawing(saved);
+  const result = await verifyDrawingOriginal(saved, renderer.render(doc).toBuffer('image/png'));
+  assert.equal(result.ok, true); assert.equal(result.comparison.different, 0);
+});
+
 test('only used outline colours enter recent colours and visible outlines count towards ink pricing', () => {
   const doc = fixture(), stroke = doc.strokes[0], settings = { pricingMode: 'ink', inkCostPerUnit: 2 };
   const price = drawingCost(doc, settings);
