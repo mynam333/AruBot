@@ -182,6 +182,19 @@ function knownBulkResponse() {
 describe('production security exception and deployment gates', () => {
   const audit = require('../scripts/audit-production-dependencies.cjs');
 
+  test('Axios stays on the patched 1.x release line in every locked dependency path', () => {
+    const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+    const packageLock = JSON.parse(fs.readFileSync(path.join(root, 'package-lock.json'), 'utf8'));
+    const safeRange = '>=1.20.0 <2.0.0';
+    const axiosEntries = Object.entries(packageLock.packages)
+      .filter(([node]) => node.endsWith('/node_modules/axios') || node === 'node_modules/axios');
+
+    expect(semver.subset(packageJson.dependencies.axios, safeRange)).toBe(true);
+    expect(packageLock.packages[''].dependencies.axios).toBe(packageJson.dependencies.axios);
+    expect(axiosEntries.length).toBeGreaterThan(0);
+    for (const [, entry] of axiosEntries) expect(semver.satisfies(entry.version, safeRange)).toBe(true);
+  });
+
   test('Socket.IO stays exactly pinned to the reviewed CHZZK dependency chain', () => {
     const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
     const packageLock = JSON.parse(fs.readFileSync(path.join(root, 'package-lock.json'), 'utf8'));
