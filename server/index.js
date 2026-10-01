@@ -8191,6 +8191,7 @@ app.post('/api/drawing-donation/settings', rateLimiters.userWrite, async (req, r
     const settings = await getBotSettings(sid) || {};
     const drawingDonation = normalizeDrawingDonationSettings(req.body || {});
     await setBotSettings(sid, { ...settings, drawingDonation });
+    notifyDrawingSubscribers(sid, 'settings_updated').catch(() => null);
     notifyDrawingAdminSubscribers(sid, 'settings_updated').catch(() => null);
     return res.json({ ok: true, settings: drawingDonation });
   } catch (e) {
@@ -8499,11 +8500,14 @@ app.post('/api/drawing-donation/rotate-viewer-token', rateLimiters.userWrite, as
 
 app.get('/api/drawing-donation/current', async (req, res) => {
   try {
+    res.setHeader('Cache-Control', 'no-store');
     const token = String(req.query?.token || '').trim();
     const sid = await getDrawingSidByToken(token);
     if (!sid) return res.status(404).json({ error: 'token_not_found' });
-    const item = await getCurrentDrawingItemForSid(sid);
+    const knownItemId = typeof req.query?.knownItemId === 'string' ? req.query.knownItemId : undefined;
+    const item = await getCurrentDrawingItemForSid(sid, { knownItemId, allowMemoryFallback: false });
     if (item?.canvas?.document?.version === 2 && req.query.renderer !== RENDERER_VERSION) return res.status(426).json({ error: 'drawing_renderer_update_required', item: null });
+    if (knownItemId !== undefined && knownItemId === (item?.id || '')) return res.json({ unchanged: true, itemId: item?.id || null, serverNow: Date.now() });
     return res.json({ item, serverNow: Date.now() });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to load current drawing donation' });
@@ -10843,10 +10847,11 @@ async function getDrawingItemForSid(sid, id, options = {}) {
   }
 }
 
-async function getCurrentDrawingItemForSid(sid) {
+async function getCurrentDrawingItemForSid(sid, { knownItemId, allowMemoryFallback = true } = {}) {
   try {
-    return await getCurrentDrawingDonationItem(sid);
+    return await getCurrentDrawingDonationItem(sid, { knownItemId });
   } catch (error) {
+    if (!allowMemoryFallback) throw error;
     console.warn('[Drawing Donation] DB current lookup failed; using memory fallback:', error?.message || error);
     const item = getCurrentDrawingItem(sid);
     if (item && item.status === 'approved') {

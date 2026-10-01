@@ -177,6 +177,7 @@ export default function DrawingDonationOverlay({ viewerToken }: { viewerToken: s
   useEffect(() => {
     return connectDrawingOverlay<DrawingItem>({
       url: apiWsUrl(`/api/drawing-donation/ws?token=${encodeURIComponent(viewerToken)}&renderer=${encodeURIComponent(RENDERER_VERSION)}`, apiBase),
+      currentUrl: `${apiBase}/api/drawing-donation/current?token=${encodeURIComponent(viewerToken)}&renderer=${encodeURIComponent(RENDERER_VERSION)}`,
       onItem: applyIncomingItem,
       onUpdateRequired: setUpdateRequired,
       onConnectionChange: (connected) => setConnectionLost(!connected),

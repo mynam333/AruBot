@@ -3017,41 +3017,61 @@ export async function getDrawingDonationItem(sid, id, { includeStrokes = false }
   });
 }
 
-export async function getCurrentDrawingDonationItem(sid) {
+export async function getCurrentDrawingDonationItem(sid, { knownItemId } = {}) {
   await ensureDrawingDonationTables();
-  return withPgClient(async (pg) => {
-    const result = await pg.query(
-      `with existing as (
-         select *
-           from public.drawing_donation_items
-          where sid = $1 and status = 'playing'
-          order by position asc, created_at asc
-          limit 1
-       ),
-       promoted as (
-         update public.drawing_donation_items
-            set status = 'playing', playing_at = coalesce(playing_at, now()), updated_at = now()
-          where id = (
-            select id
-              from public.drawing_donation_items
-             where sid = $1
-               and status = 'approved'
-               and created_at >= $2::timestamptz
-               and not exists (select 1 from existing)
-             order by position asc, created_at asc
-             limit 1
-             for update skip locked
-          )
-          returning *
-       )
-       select * from existing
-       union all
-       select * from promoted
-       limit 1`,
-      [String(sid), cutoffIsoForDays(drawingRetentionDays(process.env.ARUBOT_DRAWING_DONATION_RETENTION_DAYS))]
-    );
-    return hydrateDrawingDonationStrokes(normalizeDrawingDonationRow(result.rows?.[0], { includeStrokes: true }));
+  const row = await withPgClient(async (pg) => {
+    await pg.query('begin');
+    try {
+      // Every API instance must select the same next drawing before releasing the lock.
+      await pg.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`drawing-playback:${sid}`]);
+      const result = await pg.query(
+        `with existing as (
+           select *
+             from public.drawing_donation_items
+            where sid = $1 and status = 'playing'
+            order by position asc, created_at asc
+            limit 1
+         ),
+         promoted as (
+           update public.drawing_donation_items
+              set status = 'playing', approved_at = coalesce(approved_at, now()),
+                  playing_at = coalesce(playing_at, now()), updated_at = now()
+            where id = (
+              select id
+                from public.drawing_donation_items
+               where sid = $1
+                 and (status = 'approved' or (status = 'queued' and exists (
+                   select 1 from public.bot_settings
+                    where sid = $1
+                      and settings->'drawingDonation'->>'enabled' = 'true'
+                      and settings->'drawingDonation'->>'approvalMode' = 'auto'
+                 )))
+                 and point_refunded is not true
+                 and created_at >= $2::timestamptz
+                 and not exists (select 1 from existing)
+               order by position asc, created_at asc
+               limit 1
+               for update skip locked
+            )
+            returning *
+         )
+         select * from existing
+         union all
+         select * from promoted
+         limit 1`,
+        [String(sid), cutoffIsoForDays(drawingRetentionDays(process.env.ARUBOT_DRAWING_DONATION_RETENTION_DAYS))]
+      );
+      await pg.query('commit');
+      return result.rows?.[0];
+    } catch (error) {
+      await pg.query('rollback').catch(() => {});
+      throw error;
+    }
   });
+  const unchanged = knownItemId !== undefined && knownItemId === (row?.id || '');
+  const item = normalizeDrawingDonationRow(row, { includeStrokes: !unchanged });
+  // Do not download recordings on every heartbeat or hold a DB lock during storage I/O.
+  return unchanged ? item : hydrateDrawingDonationStrokes(item);
 }
 
 export async function updateDrawingDonationItemStatus(sid, id, status, extra = {}) {

@@ -77,8 +77,8 @@ const defaultSettings: DrawingSettings = {
   canvas: { widthRatio: 16, heightRatio: 9 },
 };
 
-async function readJson<T>(path: string): Promise<T> {
-  const response = await fetch(apiUrl(path), { credentials: 'include', cache: 'no-store' });
+async function readJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const response = await fetch(apiUrl(path), { credentials: 'include', cache: 'no-store', signal });
   if (!response.ok) throw new Error(path);
   return response.json();
 }
@@ -145,6 +145,27 @@ export function DrawingDonationPage() {
     let disposed = false;
     let reconnectTimer: number | undefined;
     let ws: WebSocket | null = null;
+    let queueRevision = 0;
+    let queueController: AbortController | null = null;
+    let queueTimeout: ReturnType<typeof setTimeout> | null = null;
+
+    const syncQueue = async () => {
+      if (disposed || document.hidden || queueController) return;
+      const revision = queueRevision;
+      const controller = new AbortController();
+      queueController = controller;
+      queueTimeout = setTimeout(() => controller.abort(), 10000);
+      try {
+        const payload = await readJson<QueuePayload>('/api/drawing-donation/queue', controller.signal);
+        if (!disposed && !controller.signal.aborted && revision === queueRevision) applyQueuePayload(payload);
+      } catch {
+        // Keep the last queue during temporary API downtime.
+      } finally {
+        if (queueTimeout !== null) clearTimeout(queueTimeout);
+        queueTimeout = null;
+        queueController = null;
+      }
+    };
 
     const connect = () => {
       if (disposed) return;
@@ -153,9 +174,13 @@ export function DrawingDonationPage() {
         ws = new WebSocket(apiWsUrl('/api/drawing-donation/admin/ws'));
         ws.onopen = () => setRealtimeState('connected');
         ws.onmessage = (event) => {
+          if (disposed) return;
           try {
             const payload = JSON.parse(String(event.data || '{}')) as QueuePayload & { type?: string };
-            if (payload.type === 'drawing-donation.queue') applyQueuePayload(payload);
+            if (payload.type === 'drawing-donation.queue') {
+              queueRevision += 1;
+              applyQueuePayload(payload);
+            }
           } catch {
             // Ignore malformed realtime payloads.
           }
@@ -175,8 +200,13 @@ export function DrawingDonationPage() {
     };
 
     connect();
+    // Other API instances can update the queue without sending this socket an event.
+    const queueSync = setInterval(() => { void syncQueue(); }, 5000);
     return () => {
       disposed = true;
+      clearInterval(queueSync);
+      if (queueTimeout !== null) clearTimeout(queueTimeout);
+      queueController?.abort();
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
       try { ws?.close(); } catch {}
     };

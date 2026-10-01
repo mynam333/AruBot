@@ -41,9 +41,9 @@ afterEach(() => {
   jest.useRealTimers();
 });
 
-function connect() {
+function connect(options = {}) {
   const callbacks = { onItem: jest.fn(), onUpdateRequired: jest.fn(), onConnectionChange: jest.fn() };
-  cleanups.push(connectDrawingOverlay({ url: 'wss://example.test/drawing', ...callbacks }));
+  cleanups.push(connectDrawingOverlay({ url: 'wss://example.test/drawing', ...options, ...callbacks }));
   return callbacks;
 }
 
@@ -129,6 +129,81 @@ test('healthy heartbeats keep an idle overlay connected without interrupting pla
   }
   expect(sockets).toHaveLength(1);
   expect(callbacks.onItem).toHaveBeenCalledTimes(1);
+});
+
+test('starts and advances queued drawings when a healthy socket misses notifications from another instance', async () => {
+  const currentUrl = 'https://example.test/api/drawing-donation/current?token=draw_test&renderer=v2';
+  fetch.mockResolvedValueOnce({ ok: true, json: async () => ({ item: null }) });
+  const callbacks = connect({ currentUrl });
+  await flush();
+  sockets[0].push({ type: 'drawing-donation.current', item: null });
+  callbacks.onItem.mockClear();
+  fetch.mockResolvedValueOnce({ ok: true, json: async () => ({ item: { id: 'drawing-1' } }) });
+  jest.advanceTimersByTime(3000); await flush();
+  expect(callbacks.onItem).toHaveBeenLastCalledWith({ id: 'drawing-1' });
+  expect(new URL(fetch.mock.calls.at(-1)[0]).searchParams.get('knownItemId')).toBe('');
+
+  fetch.mockResolvedValue({ ok: true, json: async () => ({ unchanged: true, itemId: 'drawing-1' }) });
+  for (let i = 0; i < 5; i += 1) {
+    jest.advanceTimersByTime(3000); sockets[0].push({ type: 'pong' }); await flush();
+  }
+  expect(callbacks.onItem).toHaveBeenCalledTimes(1);
+  expect(new URL(fetch.mock.calls.at(-1)[0]).searchParams.get('knownItemId')).toBe('drawing-1');
+
+  fetch.mockResolvedValueOnce({ ok: true, json: async () => ({ item: { id: 'drawing-2' } }) });
+  jest.advanceTimersByTime(3000); await flush();
+  expect(callbacks.onItem).toHaveBeenLastCalledWith({ id: 'drawing-2' });
+  fetch.mockResolvedValueOnce({ ok: true, json: async () => ({ item: null }) });
+  jest.advanceTimersByTime(3000); await flush();
+  expect(callbacks.onItem).toHaveBeenLastCalledWith(null);
+  expect(sockets).toHaveLength(1);
+});
+
+test('ignores stale HTTP snapshots that arrive after a newer socket snapshot', async () => {
+  let resolveJson;
+  fetch.mockResolvedValueOnce({ ok: true, json: () => new Promise((resolve) => { resolveJson = resolve; }) });
+  const callbacks = connect({ currentUrl: 'https://example.test/current' });
+  await flush();
+  sockets[0].push({ type: 'drawing-donation.current', item: { id: 'new' } });
+  resolveJson({ item: { id: 'old' } }); await flush();
+  expect(callbacks.onItem.mock.calls).toEqual([[{ id: 'new' }]]);
+});
+
+test('keeps playing across API failures and resumes reconciliation after a timeout', async () => {
+  fetch.mockImplementationOnce((_url, { signal }) => new Promise((_resolve, reject) => {
+    signal.addEventListener('abort', () => reject(new Error('aborted')));
+  }));
+  const callbacks = connect({ currentUrl: 'https://example.test/current' });
+  sockets[0].push({ type: 'drawing-donation.current', item: { id: 'playing' } });
+  jest.advanceTimersByTime(9000); await flush();
+  expect(fetch).toHaveBeenCalledTimes(1);
+  jest.advanceTimersByTime(1000); await flush();
+  expect(fetch.mock.calls[0][1].signal.aborted).toBe(true);
+  fetch.mockResolvedValueOnce({ ok: false, status: 500 });
+  jest.advanceTimersByTime(2000); await flush();
+  fetch.mockResolvedValueOnce({ ok: true, json: async () => ({ error: 'invalid_snapshot' }) });
+  jest.advanceTimersByTime(3000); await flush();
+  expect(callbacks.onItem.mock.calls).toEqual([[{ id: 'playing' }]]);
+  fetch.mockResolvedValueOnce({ ok: true, json: async () => ({ item: { id: 'next' } }) });
+  jest.advanceTimersByTime(3000); await flush();
+  expect(callbacks.onItem).toHaveBeenLastCalledWith({ id: 'next' });
+});
+
+test('handles a renderer update discovered by polling and aborts pending polls on cleanup', async () => {
+  fetch.mockResolvedValueOnce({ ok: false, status: 426 });
+  const callbacks = connect({ currentUrl: 'https://example.test/current' });
+  await flush();
+  expect(callbacks.onUpdateRequired).toHaveBeenLastCalledWith(true);
+  let resolveResponse;
+  fetch.mockImplementationOnce(() => new Promise((resolve) => { resolveResponse = resolve; }));
+  jest.advanceTimersByTime(3000);
+  const signal = fetch.mock.calls.at(-1)[1].signal;
+  cleanups.pop()();
+  expect(signal.aborted).toBe(true);
+  resolveResponse({ ok: true, json: async () => ({ item: { id: 'late' } }) }); await flush();
+  jest.advanceTimersByTime(60000); await flush();
+  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(callbacks.onItem).not.toHaveBeenCalled();
 });
 
 test('handles renderer updates, network recovery, and disposes every reconnect listener', () => {
