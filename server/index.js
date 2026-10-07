@@ -1,4 +1,6 @@
 import express from 'express';
+import { createRequestProtection, rejectUnsafeTextInput } from './request-protection.js';
+import { assertSafeTextPayload, createSafeJsonReplacer, inspectTextPayload } from '../shared/text-safety.js';
 import { downloadDrawingDonationObject, getDurableRuntimeJob, findSidByDrawingViewerToken } from './supabase.js';
 import { DRAWING_ORIGINAL_LIMIT, inspectOriginal, originalOwnerKey, validateDrawingSubmission, verifyDrawingOriginal } from './drawing-original.js';
 import { optimizeDrawingOriginal } from './drawing-original-storage.js';
@@ -91,6 +93,13 @@ const { createYoutubeLiveChatReceiver, toYoutubeLiveChatItem } = youtubeLiveChat
 
 dotenv.config();
 
+axios.interceptors.request.use((config) => {
+  if (String(config.url || '').split('?')[0].endsWith('/open/v1/chats/send')) {
+    assertSafeTextPayload(config.data);
+  }
+  return config;
+});
+
 const VERBOSE_LOGS = process.env.ARUBOT_VERBOSE_LOGS === 'true' || process.env.NODE_ENV !== 'production';
 if (!VERBOSE_LOGS) {
   const originalConsoleLog = console.log.bind(console);
@@ -103,7 +112,9 @@ if (!VERBOSE_LOGS) {
 }
 
 const app = express();
-app.set('trust proxy', 1);
+app.set('trust proxy', String(process.env.ARUBOT_TRUSTED_PROXIES || 'loopback').split(',').map((value) => value.trim()).filter(Boolean));
+app.set('json replacer', createSafeJsonReplacer());
+const requestProtection = createRequestProtection({ trustProxy: app.get('trust proxy fn') });
 const PORT = process.env.PORT || process.env.SERVER_PORT || 3001;
 const SERVER_HOST = String(process.env.SERVER_HOST || process.env.ARUBOT_SERVER_HOST || (process.env.NODE_ENV === 'production' ? '127.0.0.1' : '')).trim();
 const OCI_METADATA_IPV4 = '169.254.169.254';
@@ -224,25 +235,8 @@ function requireOpsAuth(req, res, next) {
   return res.status(getOpsAdminToken() ? 403 : 404).json({ error: 'Not found' });
 }
 
-const rateLimitBuckets = new Map();
-
 function createIpRateLimiter({ windowMs, max, prefix }) {
-  return (req, res, next) => {
-    const now = Date.now();
-    const key = `${prefix}:${req.ip || req.socket?.remoteAddress || 'unknown'}`;
-    const current = rateLimitBuckets.get(key);
-    if (!current || current.resetAt <= now) {
-      rateLimitBuckets.set(key, { count: 1, resetAt: now + windowMs });
-      return next();
-    }
-    current.count += 1;
-    if (current.count > max) {
-      const retryAfterSec = Math.max(1, Math.ceil((current.resetAt - now) / 1000));
-      res.setHeader('Retry-After', String(retryAfterSec));
-      return res.status(429).json({ error: 'Too many requests' });
-    }
-    return next();
-  };
+  return requestProtection.rateLimiter({ windowMs, max, prefix });
 }
 
 const rateLimiters = {
@@ -904,13 +898,6 @@ function invalidateRealtimePointCaches(channelUid) {
 
 setInterval(() => {
   const now = Date.now();
-  for (const [key, bucket] of rateLimitBuckets.entries()) {
-    if (!bucket || bucket.resetAt <= now) rateLimitBuckets.delete(key);
-  }
-}, 5 * 60 * 1000).unref?.();
-
-setInterval(() => {
-  const now = Date.now();
   for (const [key, entry] of realtimeResponseCache.entries()) {
     if (!entry?.promise && (!entry?.updatedAt || now - entry.updatedAt > REALTIME_CACHE_MAX_AGE_MS)) {
       realtimeResponseCache.delete(key);
@@ -946,19 +933,22 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(cors(corsOptions));
+app.use(cors({ ...corsOptions, preflightContinue: true }));
+app.use(requestProtection.http);
+app.use(rejectUntrustedBrowserOrigin);
 // Explicit preflight support for all routes
 app.options('*', cors(corsOptions));
 app.use(process.env.YOUTUBE_WEBSUB_CALLBACK_PATH || '/api/youtube/websub/callback', express.text({
   type: ['application/atom+xml', 'application/xml', 'text/xml', '*/*'],
   limit: '1mb',
+  inflate: false,
   verify: (req, _res, buffer) => {
     req.youtubeWebsubRawBody = Buffer.from(buffer);
   }
 }));
-app.use(express.json({ limit: '5mb' }));
+app.use(express.json({ limit: '5mb', inflate: false }));
 app.use(cookieParser());
-app.use(rejectUntrustedBrowserOrigin);
+app.use(rejectUnsafeTextInput);
 
 // Serve static files (SFX, etc.) with CORS
 app.use('/files', cors(corsOptions), express.static(path.join(path.dirname(new URL(import.meta.url).pathname), 'files')));
@@ -3350,6 +3340,7 @@ async function isLikelyChzzkBotSelfEcho(entry, sid, msg, ev, resolvedUserId) {
 }
 
 async function sendChatByPost(sid, chatPost, message, opts = {}) {
+  assertSafeTextPayload(message);
   const text = String(message || '').trim();
   if (!text) return null;
   const provider = String(chatPost?.provider || 'chzzk').toLowerCase();
@@ -8571,7 +8562,7 @@ app.get('/api/viewer/drawing-donation/streamers/:channelUid', async (req, res) =
   }
 });
 
-app.post('/api/drawing-donation/originals', rateLimiters.userWrite, express.raw({ type: 'image/png', limit: DRAWING_ORIGINAL_LIMIT }), async (req, res) => {
+app.post('/api/drawing-donation/originals', rateLimiters.userWrite, express.raw({ type: 'image/png', limit: DRAWING_ORIGINAL_LIMIT, inflate: false }), async (req, res) => {
   try {
     const userId = await getCurrentSessionUserId(req);
     if (!userId) return res.status(401).json({ error: 'Login required' });
@@ -9594,6 +9585,8 @@ async function executeBlueprintCommandNode({
 async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}, internal = {}) {
   const blueprint = await getRuntimeActionBlueprint(ownerUserId, idOrSlug);
   if (!blueprint || blueprint.enabled === false) return { ok: false, error: 'blueprint_not_found' };
+  const textError = inspectTextPayload([blueprint, context]);
+  if (textError) return { ok: false, error: textError };
   const dryRun = context.dryRun === true || context.source === 'manual_test';
   const suppressPointMutations = context.replayNoCost === true || context.noPointCost === true;
   const version = blueprint.version || {};
@@ -11254,6 +11247,7 @@ async function resolvePvdMedia(input, settings = {}, { allowSearch = true, durat
 }
 
 async function executeActionVariableTokens(sid, text, context = {}) {
+  assertSafeTextPayload([text, context]);
   const source = String(text || '');
   const matches = Array.from(source.matchAll(/\$\{\s*(?:action|automation|blueprint)::([^}]+)\s*\}/ig));
   if (!matches.length) return [];
@@ -14349,6 +14343,7 @@ const desktopPidSockets = new Map(); // pid -> Set<WebSocket>
 
 // Broadcast a payload to all desktop clients of an owner pid
 function broadcastToDesktop(pid, payload) {
+  if (inspectTextPayload(payload)) return 0;
   try {
     const set = desktopPidSockets.get(pid);
     if (!set || set.size === 0) return 0;
@@ -14368,6 +14363,7 @@ function getQueue(pid) {
 }
 
 function enqueueWarudoEvent(pid, payload) {
+  if (inspectTextPayload(payload)) return false;
   const q = getQueue(pid);
   // If someone is waiting, deliver immediately
   const waiter = q.waiters.shift();
@@ -17581,6 +17577,7 @@ function notifyAutomationLocalAgents(ownerUserId, reason = 'job_queued') {
 }
 
 async function queueAutomationJob(ownerUserId, job) {
+  assertSafeTextPayload(job);
   const queued = await enqueueAutomationJob(ownerUserId, job);
   if (queued) {
     notifyAutomationLocalAgents(ownerUserId, 'job_queued');
@@ -20614,7 +20611,18 @@ app.post('/api/automations/local-agent/jobs/claim', requireAutomationLocalAgent,
   try {
     await touchAutomationLocalAgent(req.automationLocalAgent.id, req.body?.capabilities || {});
     const jobs = await claimAutomationJobsForAgent(req.automationLocalAgent, req.body?.limit || 5);
-    return res.json({ jobs });
+    const safeJobs = [];
+    for (const job of jobs) {
+      const textError = inspectTextPayload(job);
+      if (textError) {
+        await completeAutomationJobForAgent(req.automationLocalAgent, job.id, {
+          status: 'failed', errorMessage: textError,
+        });
+      } else {
+        safeJobs.push(job);
+      }
+    }
+    return res.json({ jobs: safeJobs });
   } catch (e) {
     console.error('[Automations] local agent claim error', e?.message || e);
     return res.status(500).json({ error: 'Failed to claim automation jobs' });
@@ -21423,7 +21431,7 @@ app.get('/api/automations/assets/sounds', async (req, res) => {
   }
 });
 
-app.post('/api/automations/assets/sounds', rateLimiters.userWrite, express.raw({ type: ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/ogg', 'audio/webm', 'application/octet-stream'], limit: '10mb' }), async (req, res) => {
+app.post('/api/automations/assets/sounds', rateLimiters.userWrite, express.raw({ type: ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/ogg', 'audio/webm', 'application/octet-stream'], limit: '10mb', inflate: false }), async (req, res) => {
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
@@ -21440,6 +21448,8 @@ app.post('/api/automations/assets/sounds', rateLimiters.userWrite, express.raw({
       });
     }
     const originalName = decodeURIComponent(String(req.get('x-file-name') || req.query.name || 'sound.bin'));
+    const nameError = inspectTextPayload(originalName);
+    if (nameError) return res.status(400).json({ error: nameError });
     const ext = path.extname(originalName).slice(0, 12) || '.bin';
     const base = sanitizeFileBase(path.basename(originalName, ext));
     const fileId = `${Date.now().toString(36)}_${base}${ext}`;
@@ -24152,6 +24162,7 @@ async function ensureSession(sid, channelId) {
 
     socket.on('CHAT', (raw) => {
       const msg = (typeof raw === 'string') ? (() => { try { return JSON.parse(raw); } catch { return {}; } })() : raw;
+      if (inspectTextPayload(msg)) return;
       // Per-channel dedup: avoid processing the same chat more than once
       try {
         const uid = String(msg?.profile?.userId || msg?.senderChannelId || '');
@@ -24849,6 +24860,7 @@ async function ensureSession(sid, channelId) {
 
     socket.on('DONATION', (raw) => {
       const msg = (typeof raw === 'string') ? (() => { try { return JSON.parse(raw); } catch { return {}; } })() : raw;
+      if (inspectTextPayload(msg)) return;
       const ev = {
         type: 'donation',
         id: `${Date.now()}_${Math.random()}`,
@@ -25031,6 +25043,7 @@ async function ensureSession(sid, channelId) {
 
     socket.on('SUBSCRIPTION', (raw) => {
       const msg = (typeof raw === 'string') ? (() => { try { return JSON.parse(raw); } catch { return {}; } })() : raw;
+      if (inspectTextPayload(msg)) return;
       const ev = {
         type: 'subscription',
         id: `${Date.now()}_${Math.random()}`,
@@ -25112,7 +25125,7 @@ async function ensureSubscribed(entry, sid, channelId) {
 }
 
 function pushEvent(entry, ev) {
-  if (!entry || !ev) return false;
+  if (!entry || !ev || inspectTextPayload(ev)) return false;
   try {
     if (!Array.isArray(entry.queue)) entry.queue = [];
     entry.queue.push(ev);
@@ -25747,6 +25760,7 @@ async function verifyYoutubeBotModeratorRegistration(ownerUserId) {
 }
 
 async function sendYoutubeChat(ownerUserId, liveChatId, message) {
+  assertSafeTextPayload(message);
   const text = String(message || '').trim();
   if (!text) return null;
   const previous = youtubeSendQueues.get(ownerUserId) || Promise.resolve();
@@ -26231,6 +26245,7 @@ async function processYoutubeChatAutomation(entry, ev) {
 
 function handleYoutubeParsedLiveChatEvent(entry, eventName, ev) {
   if (!entry || !eventName || !ev) return false;
+  if (inspectTextPayload(ev)) return false;
   if (ev.ts && ev.ts < Number(entry.acceptAfterTs || 0)) return false;
   const dedupeKey = `${eventName}:${ev.id || ev.ts || ''}`;
   if (entry.processedIds.has(dedupeKey)) return false;
@@ -26807,6 +26822,7 @@ async function isLikelyCimeBotSelfEcho(entry, ownerUserId, ev, resolvedUserId) {
 }
 
 async function sendCimeChat(ownerUserId, message) {
+  assertSafeTextPayload(message);
   const text = String(message || '').trim();
   if (!text) return null;
   const accessToken = await getValidCimeAccessToken(ownerUserId);
@@ -27632,6 +27648,7 @@ async function ensureCimeSession(ownerUserId) {
         const parsed = parseCimeEvent(buf.toString('utf8'));
         if (!parsed) return;
         const { eventName, ev } = parsed;
+        if (inspectTextPayload(ev)) return;
         const dedupeKey = `${eventName}:${ev.id || ev.ts || ''}`;
         if (entry.processedIds.has(dedupeKey)) return;
         entry.processedIds.add(dedupeKey);
@@ -28135,6 +28152,11 @@ const server = SERVER_HOST
   : app.listen(PORT, () => {
       console.log(`[server] listening on http://localhost:${PORT}`);
     });
+server.requestTimeout = 60000;
+server.headersTimeout = 15000;
+server.keepAliveTimeout = 5000;
+server.maxRequestsPerSocket = 1000;
+server.maxConnections = 4096;
 server.on('error', (error) => {
   console.error('[Server] HTTP listener error:', error?.message || error);
   if (error?.code === 'EADDRINUSE' || error?.code === 'EACCES') {
@@ -29210,7 +29232,8 @@ function enableWebSocketHeartbeat(webSocketServer, intervalMs = 30_000) {
   webSocketServer.on('error', (error) => {
     console.error('[WebSocketServer] Listener error:', error?.message || error);
   });
-  webSocketServer.on('connection', (socket) => {
+  webSocketServer.on('connection', (socket, req) => {
+    requestProtection.protectSocket(socket, req);
     socket.__arubotAlive = true;
     socket.on('pong', () => {
       socket.__arubotAlive = true;
@@ -29430,6 +29453,7 @@ function registerPvdAdminRoutes() {
     let sid = null;
     try {
       sid = await getPvdAdminSidFromRequest(req);
+      if (ws.readyState !== WebSocket.OPEN) return;
       if (!sid) {
         try { ws.close(1008, 'Login required'); } catch { }
         return;
@@ -29443,7 +29467,13 @@ function registerPvdAdminRoutes() {
         try { ws.ping(); } catch { }
       }, 30000);
 
+      ws.once('close', () => {
+        clearInterval(keepAlive);
+        set.delete(ws);
+        if (set.size === 0) pvdAdminSockets.delete(sid);
+      });
       const initial = await getPvdQueueSnapshot(sid, 'connected').catch(() => null);
+      if (ws.readyState !== WebSocket.OPEN) return;
       if (initial) {
         try { ws.send(JSON.stringify(initial), { compress: false }); } catch { }
       }
@@ -29457,14 +29487,6 @@ function registerPvdAdminRoutes() {
         } catch { }
       });
 
-      ws.on('close', () => {
-        try { clearInterval(keepAlive); } catch { }
-        const sockets = pvdAdminSockets.get(sid);
-        if (sockets) {
-          sockets.delete(ws);
-          if (sockets.size === 0) pvdAdminSockets.delete(sid);
-        }
-      });
       ws.on('error', () => {
         try { ws.close(); } catch { }
       });
@@ -29553,6 +29575,7 @@ function registerDrawingDonationWsRoutes() {
     let sid = null;
     try {
       sid = await getPvdAdminSidFromRequest(req);
+      if (ws.readyState !== WebSocket.OPEN) return;
       if (!sid) {
         try { ws.close(1008, 'Login required'); } catch {}
         return;
@@ -29566,7 +29589,13 @@ function registerDrawingDonationWsRoutes() {
         try { ws.ping(); } catch {}
       }, 30000);
 
+      ws.once('close', () => {
+        clearInterval(keepAlive);
+        set.delete(ws);
+        if (set.size === 0) drawingAdminSockets.delete(sid);
+      });
       const initial = await getDrawingQueueSnapshot(sid, 'connected').catch(() => null);
+      if (ws.readyState !== WebSocket.OPEN) return;
       if (initial) {
         try { ws.send(JSON.stringify(initial), { compress: false }); } catch {}
       }
@@ -29580,14 +29609,6 @@ function registerDrawingDonationWsRoutes() {
         } catch {}
       });
 
-      ws.on('close', () => {
-        try { clearInterval(keepAlive); } catch {}
-        const sockets = drawingAdminSockets.get(sid);
-        if (sockets) {
-          sockets.delete(ws);
-          if (sockets.size === 0) drawingAdminSockets.delete(sid);
-        }
-      });
       ws.on('error', () => {
         try { ws.close(); } catch {}
       });
@@ -29721,12 +29742,14 @@ function registerPredictionRoutes() {
       }
       sockets.add(ws);
 
-      const keepAlive = setInterval(() => {
-        try { ws.ping(); } catch { }
-      }, 30000);
+      ws.once('close', () => {
+        sockets.delete(ws);
+        if (sockets.size === 0) predictionChannelSockets.delete(channelUid);
+      });
 
       try {
         const prediction = await getActivePredictionForChannel(channelUid, { includeRecentlySettled: true, resultVisibleMs: 5000 });
+        if (ws.readyState !== WebSocket.OPEN) return;
         if (prediction) schedulePredictionAutoLock(prediction);
         sendPredictionWs(ws, { type: 'prediction:snapshot', channelUid, prediction: toPublicPrediction(prediction) });
       } catch (error) {
@@ -29742,14 +29765,6 @@ function registerPredictionRoutes() {
         } catch { }
       });
 
-      ws.on('close', () => {
-        try { clearInterval(keepAlive); } catch { }
-        const set = predictionChannelSockets.get(channelUid);
-        if (set) {
-          set.delete(ws);
-          if (set.size === 0) predictionChannelSockets.delete(channelUid);
-        }
-      });
       ws.on('error', () => {
         try { ws.close(); } catch { }
       });
@@ -29793,6 +29808,7 @@ function registerRouletteRoutes() {
       const userAgent = req.headers['user-agent'] || '';
 
       validationResult = await validateWebSocketTokenConnection(token, 'roulette', req);
+      if (ws.readyState !== WebSocket.OPEN) return;
 
       if (testAuthorization && testAuthorization.sid !== validationResult.sid) {
         try { ws.close(1008, 'Test connection owner mismatch'); } catch { }
@@ -29911,6 +29927,7 @@ function registerRouletteRoutes() {
         }
       }
 
+      if (ws.readyState !== WebSocket.OPEN) return;
       // Keepalive
       const ka = setInterval(() => { try { ws.ping(); } catch { } }, 30000);
 
@@ -30010,6 +30027,7 @@ function registerFxRoutes() {
         try { ws.close(1008, 'Invalid FX token'); } catch { }
         return;
       }
+      if (ws.readyState !== WebSocket.OPEN) return;
       let sockets = fxSidSockets.get(sid);
       if (!sockets) {
         sockets = new Set();
@@ -30061,12 +30079,14 @@ function registerAutomationLocalAgentRoutes() {
   wssAutomationLocalAgent.on('connection', async (ws, req) => {
     let agent = null;
     let unregister = () => {};
+    ws.once('close', () => unregister());
     try {
       const url = new URL(req.url, `http://localhost:${PORT}`);
       const auth = String(req.headers.authorization || '').trim();
       const bearer = auth.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : '';
       const token = bearer || String(req.headers['x-local-agent-token'] || '').trim();
       agent = await authenticateAutomationLocalAgent(token);
+      if (ws.readyState !== WebSocket.OPEN) return;
       if (!agent) {
         try { ws.close(1008, 'Invalid local program token'); } catch { }
         return;
@@ -30076,13 +30096,12 @@ function registerAutomationLocalAgentRoutes() {
         transport: 'websocket',
         version: String(req.headers['x-arubot-local-version'] || ''),
       }).catch(() => null);
+      if (ws.readyState !== WebSocket.OPEN) return;
       try { ws.send(JSON.stringify({ type: 'hello', at: new Date().toISOString() })); } catch { }
       try { ws.send(JSON.stringify({ type: 'jobs.available', reason: 'connected', at: new Date().toISOString() })); } catch { }
 
-      const keepAlive = setInterval(() => {
-        try { ws.ping(); } catch { }
-      }, 30000);
-
+      let heartbeatWrite = null;
+      let heartbeatTouchedAt = 0;
       ws.on('message', async (raw) => {
         let message = null;
         try {
@@ -30091,15 +30110,17 @@ function registerAutomationLocalAgentRoutes() {
           return;
         }
         if (message?.type === 'heartbeat') {
-          await touchAutomationLocalAgent(agent.id, getAutomationCapabilitiesFromMessage(message)).catch(() => null);
+          if (!heartbeatWrite && Date.now() - heartbeatTouchedAt >= 10000) {
+            heartbeatTouchedAt = Date.now();
+            heartbeatWrite = touchAutomationLocalAgent(agent.id, getAutomationCapabilitiesFromMessage(message))
+              .catch(() => null).finally(() => { heartbeatWrite = null; });
+          }
+          if (heartbeatWrite) await heartbeatWrite;
+          if (ws.readyState !== WebSocket.OPEN) return;
           try { ws.send(JSON.stringify({ type: 'heartbeat.ack', at: new Date().toISOString() })); } catch { }
         }
       });
 
-      ws.on('close', () => {
-        try { clearInterval(keepAlive); } catch { }
-        unregister();
-      });
       ws.on('error', () => {
         try { ws.close(); } catch { }
       });
@@ -30119,14 +30140,7 @@ try { registerAutomationLocalAgentRoutes(); } catch (e) { console.error('[automa
 const wss = new WebSocketServer({
   noServer: true,
   maxPayload: 1024 * 1024,
-  perMessageDeflate: {
-    serverNoContextTakeover: true,
-    clientNoContextTakeover: true,
-    clientMaxWindowBits: true,
-    serverMaxWindowBits: 15,
-    zlibDeflateOptions: { windowBits: 15, memLevel: 8, level: 6 },
-    zlibInflateOptions: { windowBits: 15 }
-  }
+  perMessageDeflate: false,
 });
 enableWebSocketHeartbeat(wss);
 
@@ -30175,6 +30189,7 @@ wssDesktop.on('connection', async (ws, req) => {
   try {
     const url = new URL(req.url, `http://localhost:${PORT}`);
     const authenticated = await authenticateApiWebSocket(req, url, 'desktop');
+    if (ws.readyState !== WebSocket.OPEN) return;
     const pid = authenticated?.ownerPid || null;
     if (!pid) {
       try { ws.close(1008, 'Invalid token'); } catch { }
@@ -30184,13 +30199,16 @@ wssDesktop.on('connection', async (ws, req) => {
     let set = desktopPidSockets.get(pid);
     if (!set) { set = new Set(); desktopPidSockets.set(pid, set); }
     set.add(ws);
+    ws.once('close', () => {
+      set.delete(ws);
+      if (set.size === 0) desktopPidSockets.delete(pid);
+    });
     // Touch API key last used
     if (authenticated?.apiKey) {
       try { await touchApiKeyLastUsed(authenticated.apiKey); } catch { }
     }
 
-    // Keepalive ping
-    const ka = setInterval(() => { try { ws.ping(); } catch { } }, 30000);
+    if (ws.readyState !== WebSocket.OPEN) return;
 
     ws.on('message', (data) => {
       try {
@@ -30213,11 +30231,6 @@ wssDesktop.on('connection', async (ws, req) => {
       }
     });
 
-    ws.on('close', () => {
-      try { clearInterval(ka); } catch { }
-      const s = desktopPidSockets.get(pid);
-      if (s) { s.delete(ws); if (s.size === 0) desktopPidSockets.delete(pid); }
-    });
     ws.on('error', () => { try { ws.close(); } catch { } });
 
     // Send initial hello
@@ -30231,6 +30244,7 @@ wssDesktop.on('connection', async (ws, req) => {
 try {
   server.on('upgrade', (req, socket, head) => {
     try {
+      if (!requestProtection.upgrade(req, socket)) return;
       const u = new URL(req.url, `http://localhost:${PORT}`);
       if (!isTrustedWebSocketUpgradeOrigin(u.pathname, req.headers.origin)) {
         rejectWebSocketUpgrade(socket);
@@ -30290,21 +30304,28 @@ wss.on('connection', async (ws, req) => {
   try {
     const url = new URL(req.url, `http://localhost:${PORT}`);
     const authenticated = await authenticateApiWebSocket(req, url, 'warudo');
+    if (ws.readyState !== WebSocket.OPEN) return;
     const pid = authenticated?.ownerPid || null;
     if (!pid) {
       try { ws.close(1008, 'Invalid token'); } catch { }
       return;
     }
+    ws.__arubotSetupComplete?.();
     // Register socket
     let set = pidSockets.get(pid);
     if (!set) { set = new Set(); pidSockets.set(pid, set); }
     set.add(ws);
+    ws.once('close', () => {
+      set.delete(ws);
+      if (set.size === 0) pidSockets.delete(pid);
+    });
     // Heartbeat (optional): mark used on connect
     if (authenticated?.apiKey) {
       try { await touchApiKeyLastUsed(authenticated.apiKey); } catch { }
     }
 
     // If Redis is enabled, subscribe to pid channel for cross-instance events
+    if (ws.readyState !== WebSocket.OPEN) return;
     if (redisEnabled && redisPkg && !redisSubscribers.has(pid)) {
       try {
         const sub = redisPkg.createClient({ url: REDIS_URL });
@@ -30320,6 +30341,10 @@ wss.on('connection', async (ws, req) => {
             enqueueWarudoEvent(pid, payload);
           } catch { }
         });
+        if (ws.readyState !== WebSocket.OPEN && !pidSockets.has(pid)) {
+          await sub.quit().catch(() => null);
+          return;
+        }
         redisSubscribers.set(pid, sub);
       } catch (e) {
         console.warn('[Redis] subscribe error', e?.message || e);

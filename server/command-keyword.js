@@ -1,3 +1,5 @@
+import { hasZalgoText, inspectTextPayload } from '../shared/text-safety.js';
+
 function normalizeKeyword(value) {
   return String(value || '').trim();
 }
@@ -8,13 +10,13 @@ function hasCommandBoundary(source, keywordLength) {
 
 export function findCommandKeywordMatch(text, keywords = []) {
   const source = String(text || '').trim();
-  if (!source) return null;
+  if (!source || hasZalgoText(source)) return null;
   const sourceLower = source.toLowerCase();
   const candidates = [];
 
   for (const [keywordIndex, rawKeyword] of (Array.isArray(keywords) ? keywords : [keywords]).entries()) {
     const configuredKeyword = normalizeKeyword(rawKeyword);
-    if (!configuredKeyword || configuredKeyword === '!') continue;
+    if (!configuredKeyword || configuredKeyword === '!' || hasZalgoText(configuredKeyword)) continue;
     const configuredLower = configuredKeyword.toLowerCase();
     if (!sourceLower.startsWith(configuredLower) || !hasCommandBoundary(source, configuredKeyword.length)) continue;
     candidates.push({
@@ -36,7 +38,7 @@ export function findCommandKeywordMatch(text, keywords = []) {
 
 export function getCommandRuleMatches(text, rules = []) {
   return (Array.isArray(rules) ? rules : [])
-    .map((rule, ruleIndex) => ({ rule, ruleIndex, match: findCommandKeywordMatch(text, rule?.keywords || []) }))
+    .map((rule, ruleIndex) => ({ rule, ruleIndex, match: inspectTextPayload(rule) ? null : findCommandKeywordMatch(text, rule?.keywords || []) }))
     .filter((candidate) => candidate.match)
     .sort((left, right) => (
       right.match.matchedText.length - left.match.matchedText.length ||
