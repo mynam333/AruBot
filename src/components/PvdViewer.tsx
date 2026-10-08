@@ -381,12 +381,13 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
       return;
     }
     try {
-      if (player.setVolume) player.setVolume(normalized);
       if (normalized <= 0) {
         player.mute && player.mute();
       } else {
         player.unMute && player.unMute();
       }
+      // YouTube unMute() can raise volumes below 5%; apply the requested value last.
+      if (player.setVolume) player.setVolume(normalized);
     } catch {}
     if (externalProviderRef.current === 'tiktok') {
       postToExternalPlayer({ type: normalized <= 0 ? 'mute' : 'unMute' });

@@ -103,9 +103,10 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
     host.dataset.mixError = error;
   };
   const applyOptions = () => {
-    player?.setVolume?.(volume);
     if (volume <= 0) player?.mute?.();
     else player?.unMute?.();
+    // YouTube unMute() can raise volumes below 5%; apply the requested value last.
+    player?.setVolume?.(volume);
     if (captions) player?.loadModule?.('captions');
     else player?.unloadModule?.('captions');
   };

@@ -66,8 +66,9 @@ function mount(initial, getRecommendations, playerRole = 'video') {
     pauseVideo() {}
     stopVideo() {}
     destroy() {}
-    setVolume() {}
-    unMute() {}
+    setVolume(volume) { this.volume = volume; }
+    mute() { this.muted = true; }
+    unMute() { this.muted = false; this.volume = Math.max(5, this.volume || 0); }
     seekTo() {}
     emit(data) { this.events.onStateChange({ data, target: this }); }
   }
@@ -103,6 +104,7 @@ function mount(initial, getRecommendations, playerRole = 'video') {
   cleanup = () => disposers.reverse().forEach((dispose) => { if (typeof dispose === 'function') dispose(); });
   return {
     loads, calls, mixLoads,
+    get player() { return player; },
     get socket() { return socket; },
     get socketCount() { return socketCount; },
     remountEffects() { cleanup(); disposers = effects.map((effect) => effect()); },
@@ -113,6 +115,20 @@ function mount(initial, getRecommendations, playerRole = 'video') {
     },
   };
 }
+
+test.each(['video', 'bgm'])('%s Mix keeps low volume on readiness, resync and unmute', async (playerRole) => {
+  const idlePlaylist = playlist([track(1)]);
+  const state = { item: null, volume: 1, idlePlaylist, bgm: { enabled: true, idlePlaylist } };
+  const h = mount(state, async () => ({}), playerRole);
+  await flush(); jest.advanceTimersByTime(3000); await flush();
+  expect(h.player.volume).toBe(1);
+  expect(h.player.muted).toBe(false);
+  for (const volume of [1, 0, 2, 4, 100, 1]) {
+    h.push({ ...state, volume }); await flush();
+    expect(h.player.volume).toBe(volume);
+    expect(h.player.muted).toBe(volume === 0);
+  }
+});
 
 test('the video overlay never plays BGM requests or the BGM idle playlist', async () => {
   const bgm = { enabled: true, idlePlaylist: playlist([track(1)]) };

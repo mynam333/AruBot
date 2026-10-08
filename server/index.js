@@ -5,7 +5,7 @@ import { downloadDrawingDonationObject, getDurableRuntimeJob, findSidByDrawingVi
 import { DRAWING_ORIGINAL_LIMIT, inspectOriginal, originalOwnerKey, validateDrawingSubmission, verifyDrawingOriginal } from './drawing-original.js';
 import { optimizeDrawingOriginal } from './drawing-original-storage.js';
 import { encodeDrawingRecording } from './drawing-recording-storage.js';
-import { refundDrawingDonationItem } from './supabase.js';
+import { refundDrawingDonationItem, completeDrawingDonationItem } from './supabase.js';
 import { drawingRetentionDays } from './drawing-retention.js';
 import { RENDERER_VERSION, canonicalDrawing, drawingCost } from '../shared/drawing/document.js';
 import path from 'path';
@@ -8510,27 +8510,18 @@ app.post('/api/drawing-donation/pop-by-token', async (req, res) => {
     const token = String(req.body?.token || '').trim();
     const sid = await getDrawingSidByToken(token);
     if (!sid) return res.status(404).json({ error: 'token_not_found' });
-    const current = await getCurrentDrawingItemForSid(sid);
-    if (!current) return res.json({ item: null });
-    if ((current.canvas?.document?.version === 2 || req.body.itemId) && req.body.itemId !== current.id) return res.status(409).json({ error: 'drawing_item_changed' });
-    const item = await updateDrawingItemStatusForSid(sid, current.id, 'done') || current;
-    await recordBotEventLogSafe(sid, {
-      category: 'drawing_donation',
-      eventType: 'drawing_donation_done',
-      provider: 'overlay',
-      channelUid: item.channelUid,
-      viewerUserId: item.viewerUserId,
-      viewerName: item.viewerName,
-      pointDelta: 0,
-      targetName: '그림 후원',
-      summary: '그림 후원 오버레이 재생 완료',
-      status: 'success',
-      metadata: { drawingId: item.id },
-    });
-    notifyDrawingSubscribers(sid, 'done').catch(() => null);
-    notifyDrawingAdminSubscribers(sid, 'done').catch(() => null);
-    return res.json({ item });
+    let itemId = String(req.body?.itemId || '').trim();
+    if (!itemId) {
+      const current = await getCurrentDrawingItemForSid(sid, { includeStrokes: false });
+      if (!current) return res.json({ item: null });
+      if (current.canvas?.document?.version === 2) return res.status(409).json({ error: 'drawing_item_changed' });
+      itemId = current.id;
+    }
+    const item = await completeDrawingItemForSid(sid, itemId, 'overlay');
+    return res.json({ item, completedItemId: item.id });
   } catch (e) {
+    if (e?.code === 'drawing_item_changed') return res.status(409).json({ error: e.code });
+    console.error('[Drawing Donation] completion failed:', e?.message || e);
     return res.status(500).json({ error: 'Failed to pop drawing donation' });
   }
 });
@@ -10764,16 +10755,11 @@ function isDrawingExpired(item) {
 }
 
 async function listDrawingQueueForSid(sid) {
-  try {
-    return await listDrawingDonationItems(sid, { limit: 100 });
-  } catch (error) {
-    console.warn('[Drawing Donation] DB queue list failed; using memory fallback:', error?.message || error);
-    return getDrawingQueue(sid);
-  }
+  return listDrawingDonationItems(sid, { limit: 100 });
 }
 
 async function getDrawingQueueSnapshot(sid, reason = 'queue_changed') {
-  const items = await listDrawingQueueForSid(sid).catch(() => getDrawingQueue(sid));
+  const items = await listDrawingQueueForSid(sid);
   const currentItem = (items || []).find((item) => item.status === 'playing' || item.status === 'approved') || null;
   return {
     type: 'drawing-donation.queue',
@@ -10806,7 +10792,7 @@ async function notifyDrawingAdminSubscribers(sid, reason = 'queue_changed') {
 async function notifyDrawingSubscribers(sid, reason = 'queue_changed') {
   const set = drawingOverlaySockets.get(sid);
   if (!set || !set.size) return;
-  const item = await getCurrentDrawingItemForSid(sid).catch(() => null);
+  const item = await getCurrentDrawingItemForSid(sid);
   const text = JSON.stringify({
     type: 'drawing-donation.current',
     reason,
@@ -10840,9 +10826,9 @@ async function getDrawingItemForSid(sid, id, options = {}) {
   }
 }
 
-async function getCurrentDrawingItemForSid(sid, { knownItemId, allowMemoryFallback = true } = {}) {
+async function getCurrentDrawingItemForSid(sid, { knownItemId, includeStrokes = true, allowMemoryFallback = false } = {}) {
   try {
-    return await getCurrentDrawingDonationItem(sid, { knownItemId });
+    return await getCurrentDrawingDonationItem(sid, { knownItemId, includeStrokes });
   } catch (error) {
     if (!allowMemoryFallback) throw error;
     console.warn('[Drawing Donation] DB current lookup failed; using memory fallback:', error?.message || error);
@@ -10856,22 +10842,33 @@ async function getCurrentDrawingItemForSid(sid, { knownItemId, allowMemoryFallba
 }
 
 async function updateDrawingItemStatusForSid(sid, id, status, extra = {}) {
-  try {
-    return await updateDrawingDonationItemStatus(sid, id, status, extra);
-  } catch (error) {
-    console.warn('[Drawing Donation] DB status update failed; using memory fallback:', error?.message || error);
-    const item = getDrawingQueue(sid).find((entry) => entry.id === id) || null;
-    if (!item) return null;
-    if (['queued', 'approved', 'playing'].includes(status) && (isDrawingExpired(item) || ['rejected', 'deleted'].includes(item.status))) return null;
-    item.status = status;
-    item.updatedAt = new Date().toISOString();
-    if (status === 'approved') item.approvedAt = item.approvedAt || item.updatedAt;
-    if (status === 'playing') item.playingAt = item.playingAt || item.updatedAt;
-    if (status === 'done') item.doneAt = item.doneAt || item.updatedAt;
-    if (status === 'rejected') item.rejectedAt = item.rejectedAt || item.updatedAt;
-    if (extra.pointRefunded != null) item.pointRefunded = extra.pointRefunded === true;
-    return item;
-  }
+  const item = await updateDrawingDonationItemStatus(sid, id, status, extra);
+  const cached = getDrawingQueue(sid).find((entry) => entry.id === id);
+  if (item && cached) Object.assign(cached, item);
+  return item;
+}
+
+async function completeDrawingItemForSid(sid, id, provider = 'overlay') {
+  const { item, completed } = await completeDrawingDonationItem(sid, id);
+  if (!item || item.status !== 'done') throw Object.assign(new Error('drawing_item_changed'), { code: 'drawing_item_changed' });
+  const cached = getDrawingQueue(sid).find((entry) => entry.id === id);
+  if (cached) Object.assign(cached, item);
+  if (completed) await recordBotEventLogSafe(sid, {
+    category: 'drawing_donation',
+    eventType: provider === 'overlay' ? 'drawing_donation_done' : 'drawing_donation_local_done',
+    provider,
+    channelUid: item.channelUid,
+    viewerUserId: item.viewerUserId,
+    viewerName: item.viewerName,
+    pointDelta: 0,
+    targetName: '그림 후원',
+    summary: provider === 'overlay' ? '그림 후원 오버레이 재생 완료' : '로컬 리모컨에서 다음 그림 후원으로 넘김',
+    status: 'success',
+    metadata: { drawingId: item.id },
+  });
+  notifyDrawingSubscribers(sid, 'done').catch(() => null);
+  notifyDrawingAdminSubscribers(sid, 'done').catch(() => null);
+  return item;
 }
 
 async function refundDrawingItemForSid(sid, id) {
@@ -10898,16 +10895,13 @@ async function reorderDrawingItemsForSid(sid, ids = []) {
 }
 
 async function deleteDrawingItemForSid(sid, id) {
-  try {
-    return await deleteDrawingDonationItem(sid, id);
-  } catch (error) {
-    console.warn('[Drawing Donation] DB delete failed; using memory fallback:', error?.message || error);
-    const q = getDrawingQueue(sid);
-    const index = q.findIndex((entry) => entry.id === id);
-    if (index < 0) return null;
-    const [item] = q.splice(index, 1);
-    return item;
+  const item = await deleteDrawingDonationItem(sid, id);
+  if (item) {
+    const queue = getDrawingQueue(sid);
+    const index = queue.findIndex((entry) => entry.id === id);
+    if (index >= 0) queue.splice(index, 1);
   }
+  return item;
 }
 
 async function resolveDrawingDonationSettingsForBalance(balance) {
@@ -20938,24 +20932,9 @@ app.post('/api/local-remote/drawing-donation/pop', requireAutomationLocalAgent, 
   try {
     const sid = getLocalRemoteSid(req);
     if (!sid) return res.status(401).json({ error: 'Invalid local program token' });
-    const current = await getCurrentDrawingItemForSid(sid);
+    const current = await getCurrentDrawingItemForSid(sid, { includeStrokes: false });
     if (!current) return res.json({ item: null, items: await listDrawingQueueForSid(sid).catch(() => []) });
-    const item = await updateDrawingItemStatusForSid(sid, current.id, 'done') || current;
-    await recordBotEventLogSafe(sid, {
-      category: 'drawing_donation',
-      eventType: 'drawing_donation_local_done',
-      provider: 'local_program',
-      channelUid: item.channelUid,
-      viewerUserId: item.viewerUserId,
-      viewerName: item.viewerName,
-      pointDelta: 0,
-      targetName: '그림 후원',
-      summary: '로컬 리모컨에서 다음 그림 후원으로 넘김',
-      status: 'success',
-      metadata: { drawingId: item.id },
-    });
-    notifyDrawingSubscribers(sid, 'done').catch(() => null);
-    notifyDrawingAdminSubscribers(sid, 'done').catch(() => null);
+    const item = await completeDrawingItemForSid(sid, current.id, 'local_program');
     return res.json({ ok: true, item, items: await listDrawingQueueForSid(sid).catch(() => []) });
   } catch (e) {
     console.error('[Local Remote] drawing pop error', e?.message || e);
@@ -29541,7 +29520,7 @@ function registerDrawingDonationWsRoutes() {
         try { ws.close(); } catch {}
       });
 
-      const item = await getCurrentDrawingItemForSid(sid).catch(() => null);
+      const item = await getCurrentDrawingItemForSid(sid);
       if (ws.readyState !== WebSocket.OPEN) return;
       try {
         const compatible = item?.canvas?.document?.version !== 2 || ws.drawingRendererVersion === RENDERER_VERSION;

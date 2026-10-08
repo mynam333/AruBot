@@ -38,7 +38,10 @@ function mount(initialPayload = {}) {
     getCurrentTime() { return this.time; }
     getDuration() { return 180; }
     loadVideoById({ videoId }) { this.id = videoId; }
-    setVolume() {} unMute() {} unloadModule() {} destroy() {} stopVideo() {}
+    setVolume(volume) { this.volume = volume; }
+    mute() { this.muted = true; }
+    unMute() { this.muted = false; this.volume = Math.max(5, this.volume || 0); }
+    unloadModule() {} destroy() {} stopVideo() {}
     ready() { this.events.onReady({ target: this }); }
     emit(data) { this.events.onStateChange({ data, target: this }); }
   }
@@ -100,11 +103,32 @@ function mount(initialPayload = {}) {
     get externalVideo() { return externalVideo; },
     get externalVideoProps() { return externalVideoProps; },
     control: (op, atSec = 83) => socket.onmessage({ data: JSON.stringify({ type: 'control', op, atSec, paused: op === 'pause' }) }),
+    volume: (volume) => socket.onmessage({ data: JSON.stringify({ type: 'control', op: 'volume', volume }) }),
     snapshot: (patch) => { payload = { ...payload, ...patch }; },
     deferSnapshot: (fn) => { getSnapshot = fn; },
     focus: () => listeners.get('focus')(),
   };
 }
+
+test.each([0, 1, 2, 4, 5, 100])('YouTube keeps the configured %i%% volume after readiness and synchronization', async (volume) => {
+  const h = mount({ volume }); await flush();
+  h.player.ready();
+  expect(h.player.volume).toBe(volume);
+  expect(h.player.muted).toBe(volume === 0);
+  jest.advanceTimersByTime(1000); await flush();
+  h.focus(); await flush();
+  expect(h.player.volume).toBe(volume);
+  expect(h.player.muted).toBe(volume === 0);
+});
+
+test('YouTube remote volume controls retain low volume when leaving mute', async () => {
+  const h = mount({ volume: 100 }); await flush(); h.player.ready();
+  for (const volume of [1, 0, 2, 4, 100, 1]) {
+    h.volume(volume);
+    expect(h.player.volume).toBe(volume);
+    expect(h.player.muted).toBe(volume === 0);
+  }
+});
 
 test('late readiness, initial sync timers and PLAYING events respect the latest web pause', async () => {
   const h = mount(); await flush();

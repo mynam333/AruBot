@@ -30,6 +30,7 @@ export default function DrawingDonationOverlay({ viewerToken }: { viewerToken: s
   const fadeTimerRef = useRef<number | null>(null);
   const completionTimerRef = useRef<number | null>(null);
   const playingIdRef = useRef<string | null>(null);
+  const completedIdsRef = useRef<string[]>([]);
   const lastRenderedMsRef = useRef(0);
   const [item, setItem] = useState<DrawingItem | null>(null);
 
@@ -99,12 +100,18 @@ export default function DrawingDonationOverlay({ viewerToken }: { viewerToken: s
   }, []);
 
   const renderAt = useCallback((atMs = Infinity) => {
-    const target = resizeCanvas();
-    if (!target) return;
-    if (!rendererRef.current) rendererRef.current = createItemRenderer();
-    if (item && atMs > 0) rendererRef.current.draw(target.ctx, item, target.width, target.height, atMs, originalRef.current);
-    else target.ctx.clearRect(0, 0, target.width, target.height);
-    lastRenderedMsRef.current = Number.isFinite(atMs) ? Math.max(0, atMs) : Number.POSITIVE_INFINITY;
+    try {
+      const target = resizeCanvas();
+      if (!target) throw new Error('drawing_canvas_unavailable');
+      if (!rendererRef.current) rendererRef.current = createItemRenderer();
+      if (item && atMs > 0) rendererRef.current.draw(target.ctx, item, target.width, target.height, atMs, originalRef.current);
+      else target.ctx.clearRect(0, 0, target.width, target.height);
+      lastRenderedMsRef.current = Number.isFinite(atMs) ? Math.max(0, atMs) : Number.POSITIVE_INFINITY;
+      return true;
+    } catch {
+      setRenderError('그림 재생을 복구하기 위해 자동으로 새로고침합니다.');
+      return false;
+    }
   }, [item, resizeCanvas]);
 
   const setCanvasOpacity = useCallback((opacity: number, transitionMs = 0) => {
@@ -133,17 +140,30 @@ export default function DrawingDonationOverlay({ viewerToken }: { viewerToken: s
       if (playingIdRef.current !== completedItemId) return;
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), 10000);
-      const response = await fetch(`${apiBase}/api/drawing-donation/pop-by-token`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: viewerToken, itemId: completedItemId }),
-        signal: controller.signal,
-      }).catch(() => null).finally(() => window.clearTimeout(timeout));
-      if (playingIdRef.current !== completedItemId) return;
-      if (!response || (!response.ok && response.status !== 409)) {
-        completionTimerRef.current = window.setTimeout(() => { void complete(); }, 3000);
+      let response: Response | null = null;
+      let payload: { item?: { id?: string; status?: string } } | null = null;
+      try {
+        response = await fetch(`${apiBase}/api/drawing-donation/pop-by-token`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: viewerToken, itemId: completedItemId }),
+          signal: controller.signal,
+        });
+        if (response.ok) payload = await response.json();
+      } catch {
+        // Retry until the database confirms completion, including response-body timeouts.
+      } finally {
+        window.clearTimeout(timeout);
+      }
+      const acknowledged = response?.status === 409
+        || (payload?.item?.id === completedItemId && payload.item.status === 'done');
+      if (!acknowledged) {
+        if (playingIdRef.current === completedItemId) completionTimerRef.current = window.setTimeout(() => { void complete(); }, 3000);
         return;
       }
+      // Late snapshots must not replay a drawing whose completion was already confirmed.
+      completedIdsRef.current = [...completedIdsRef.current.filter((id) => id !== completedItemId), completedItemId].slice(-32);
+      if (playingIdRef.current !== completedItemId) return;
       playingIdRef.current = null;
       setItem((current) => current?.id === completedItemId ? null : current);
     };
@@ -156,7 +176,10 @@ export default function DrawingDonationOverlay({ viewerToken }: { viewerToken: s
       setItem(null);
       return;
     }
+    if (completedIdsRef.current.includes(nextItem.id)) return;
     if (nextItem.id === playingIdRef.current) return;
+    if (completionTimerRef.current) window.clearTimeout(completionTimerRef.current);
+    completionTimerRef.current = null;
     playingIdRef.current = nextItem.id;
     originalRef.current = null;
     setOriginalReady(false);
@@ -214,11 +237,11 @@ export default function DrawingDonationOverlay({ viewerToken }: { viewerToken: s
     const tick = (now: number) => {
       const elapsed = now - startedAt;
       if (elapsed < replayMs) {
-        renderAt(elapsed);
+        if (!renderAt(elapsed)) return;
         animationRef.current = requestAnimationFrame(tick);
         return;
       }
-      renderAt(Infinity);
+      if (!renderAt(Infinity)) return;
       holdTimerRef.current = window.setTimeout(() => {
         setCanvasOpacity(0, FADE_OUT_MS);
         fadeTimerRef.current = window.setTimeout(() => {

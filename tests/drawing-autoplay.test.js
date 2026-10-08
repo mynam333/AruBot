@@ -51,6 +51,12 @@ test('repeated current-item polls skip recording hydration but a changed item in
   expect(h.hydrateDrawingDonationStrokes).toHaveBeenCalledTimes(1);
 });
 
+test('metadata-only current-item lookups do not download recordings', async () => {
+  const h = databaseHarness();
+  await expect(h.current('user:streamer', { includeStrokes: false })).resolves.not.toHaveProperty('strokes');
+  expect(h.hydrateDrawingDonationStrokes).not.toHaveBeenCalled();
+});
+
 test('rolls back failed selection and propagates the failure instead of reporting an empty queue', async () => {
   const h = databaseHarness();
   h.query.mockImplementation(async (sql) => {
@@ -101,6 +107,7 @@ test('persistent polling does not substitute a stale process-local queue during 
   const getCurrentDrawingItem = jest.fn();
   const { getCurrentDrawingItemForSid } = loadServerFunctions(['getCurrentDrawingItemForSid'], { getCurrentDrawingDonationItem, getCurrentDrawingItem });
   await expect(getCurrentDrawingItemForSid('user:streamer', { allowMemoryFallback: false })).rejects.toThrow('database restarting');
+  await expect(getCurrentDrawingItemForSid('user:streamer')).rejects.toThrow('database restarting');
   expect(getCurrentDrawingItem).not.toHaveBeenCalled();
 });
 

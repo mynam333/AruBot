@@ -3017,7 +3017,7 @@ export async function getDrawingDonationItem(sid, id, { includeStrokes = false }
   });
 }
 
-export async function getCurrentDrawingDonationItem(sid, { knownItemId } = {}) {
+export async function getCurrentDrawingDonationItem(sid, { knownItemId, includeStrokes = true } = {}) {
   await ensureDrawingDonationTables();
   const row = await withPgClient(async (pg) => {
     await pg.query('begin');
@@ -3069,9 +3069,29 @@ export async function getCurrentDrawingDonationItem(sid, { knownItemId } = {}) {
     }
   });
   const unchanged = knownItemId !== undefined && knownItemId === (row?.id || '');
-  const item = normalizeDrawingDonationRow(row, { includeStrokes: !unchanged });
+  const item = normalizeDrawingDonationRow(row, { includeStrokes: includeStrokes && !unchanged });
   // Do not download recordings on every heartbeat or hold a DB lock during storage I/O.
-  return unchanged ? item : hydrateDrawingDonationStrokes(item);
+  return unchanged || !includeStrokes ? item : hydrateDrawingDonationStrokes(item);
+}
+
+export async function completeDrawingDonationItem(sid, id) {
+  await ensureDrawingDonationTables();
+  return withPgClient(async (pg) => {
+    // A retry acknowledges only this drawing, never the next item in the queue.
+    const result = await pg.query(
+      `update public.drawing_donation_items
+          set status = 'done', done_at = coalesce(done_at, now()), updated_at = now()
+        where sid = $1 and id = $2 and status = 'playing'
+        returning *`,
+      [String(sid), String(id)]
+    );
+    if (result.rows?.[0]) return { item: normalizeDrawingDonationRow(result.rows[0]), completed: true };
+    const existing = await pg.query(
+      'select * from public.drawing_donation_items where sid = $1 and id = $2 limit 1',
+      [String(sid), String(id)]
+    );
+    return { item: normalizeDrawingDonationRow(existing.rows?.[0]), completed: false };
+  });
 }
 
 export async function updateDrawingDonationItemStatus(sid, id, status, extra = {}) {
@@ -3083,7 +3103,9 @@ export async function updateDrawingDonationItemStatus(sid, id, status, extra = {
         : nextStatus === 'rejected' ? 'rejected_at'
           : null;
   return withPgClient(async (pg) => {
-    const setParts = ['status = $3', 'updated_at = now()'];
+    const setParts = [nextStatus === 'approved'
+      ? "status = case when status in ('playing', 'done') then status else $3 end"
+      : 'status = $3', 'updated_at = now()'];
     const params = [String(sid), String(id), nextStatus];
     if (timestampColumn) setParts.push(`${timestampColumn} = coalesce(${timestampColumn}, now())`);
     if (extra.pointRefunded != null) {
@@ -3100,7 +3122,8 @@ export async function updateDrawingDonationItemStatus(sid, id, status, extra = {
         returning *`,
       params
     );
-    return hydrateDrawingDonationStrokes(normalizeDrawingDonationRow(result.rows?.[0], { includeStrokes: true }));
+    // Queue mutations must not depend on downloading the drawing recording.
+    return normalizeDrawingDonationRow(result.rows?.[0]);
   });
 }
 
@@ -3127,7 +3150,7 @@ export async function deleteDrawingDonationItem(sid, id) {
       `delete from public.drawing_donation_items where sid = $1 and id = $2 returning *`,
       [String(sid), String(id)]
     );
-    return hydrateDrawingDonationStrokes(normalizeDrawingDonationRow(result.rows?.[0], { includeStrokes: true }));
+    return normalizeDrawingDonationRow(result.rows?.[0]);
   });
   const objectKeys = collectDrawingDonationObjectKeys(item);
   if (objectKeys.length) {
