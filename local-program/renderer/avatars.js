@@ -16,6 +16,8 @@
   const states = {
     idle: '기본 / 대기',
     walk: '걷기',
+    run: '달리기',
+    float: '공중부양',
     jump: '점프',
     dance: '춤',
     wave: '인사',
@@ -29,6 +31,8 @@
     wave: '인사',
     sit: '앉기',
     walk: '좌우 이동',
+    run: '달리기',
+    float: '공중부양',
     gather: '가운데로 이동',
     follow: '따라가기',
     highfive: '하이파이브',
@@ -54,7 +58,16 @@
     tab = 'avatars',
     selectedAvatar = '',
     selectedRule = '',
-    busy = false;
+    busy = false,
+    previewMode = false,
+    requestEpoch = 0;
+  const testInput = {
+    name: '테스트',
+    text: '!점프',
+    kind: 'chat',
+    role: 'everyone',
+    amount: 1000,
+  };
   const q = (id) => root.querySelector(`#${id}`);
   const button = (label, action, extra = '') =>
     `<button type="button" class="button secondary" data-av="${action}" ${extra}>${label}</button>`;
@@ -90,6 +103,8 @@
   async function run(fn) {
     if (busy) return;
     busy = true;
+    requestEpoch++;
+    root.inert = true;
     root.setAttribute('aria-busy', 'true');
     try {
       await fn();
@@ -97,12 +112,14 @@
       notice(error.message || '작업에 실패했습니다.', true);
     } finally {
       busy = false;
+      root.inert = false;
       root.removeAttribute('aria-busy');
     }
   }
   function shell() {
     root.innerHTML = `<div class="av-toolbar"><h2>방송 아바타</h2><div class="av-actions">${button('실행', 'toggle', 'id="avToggle"')}${button('일시정지', 'pause', 'id="avPause"')}${button('화면 비우기', 'clear')}${button('설정 저장', 'save')}</div></div>
       <div class="av-status"><strong id="avRunning"></strong><span id="avConnection"></span><span id="avCount"></span><span id="avDirty"></span></div>
+      <div class="av-preview-controls"><div class="av-segment" role="group" aria-label="미리보기 모드">${button('방송 출력', 'view-live', 'id="avViewLive" aria-pressed="true"')}${button('편집 테스트', 'view-test', 'id="avViewTest" aria-pressed="false"')}</div><span id="avTestStatus"></span>${button('테스트 일시정지', 'preview-pause', 'id="avTestPause"')}${button('테스트 초기화', 'clear-tests')}</div>
       <div class="av-preview"><iframe id="avPreview" title="아바타 실시간 미리보기" sandbox="allow-scripts allow-same-origin"></iframe></div>
       <div class="av-url"><input id="avUrl" readonly aria-label="OBS 브라우저 주소">${button('OBS 주소 복사', 'copy')}</div>
       <div id="avNotice" class="av-notice" role="status" aria-live="polite"></div>
@@ -135,12 +152,75 @@
       ? '치지직 이벤트 연결됨'
       : '채팅 연결 대기';
     q('avCount').textContent =
-      `${state.snapshot.actors.length}명 · 출력 ${Math.max(0, state.clients - 1)}개`;
-    q('avToggle').textContent = state.config.enabled ? '중지' : '실행';
-    q('avPause').textContent = state.config.paused ? '재개' : '일시정지';
+      `${state.snapshot.actors.length}명 · OBS 출력 ${state.clients}개`;
+    q('avToggle').textContent = state.config.enabled
+      ? '방송 중지'
+      : '방송 시작';
+    q('avPause').textContent = state.config.paused
+      ? '방송 재개'
+      : '방송 일시정지';
     q('avUrl').value = state.url || '';
-    if (state.url && q('avPreview').getAttribute('src') !== state.url)
-      q('avPreview').src = state.url;
+    const previewUrl = previewMode
+      ? state.previewUrl
+      : state.url
+        ? `${state.url}&monitor=1`
+        : '';
+    q('avViewLive').setAttribute('aria-pressed', String(!previewMode));
+    q('avViewTest').setAttribute('aria-pressed', String(previewMode));
+    q('avTestStatus').textContent = previewMode
+      ? `테스트 ${state.preview.snapshot.actors.length}명${dirty ? ' · 미저장 설정' : ''}`
+      : '';
+    q('avTestPause').hidden = !previewMode;
+    q('avTestPause').textContent = state.preview.snapshot.paused
+      ? '테스트 재개'
+      : '테스트 일시정지';
+    if (previewUrl && q('avPreview').getAttribute('src') !== previewUrl)
+      q('avPreview').src = previewUrl;
+  }
+  function stepValue(step, index) {
+    const key = `step.${index}.value`;
+    if (step.action === 'walk')
+      return `<label>방향<select data-field="${key}">${options({ '-1': '왼쪽', 1: '오른쪽' }, String(step.value))}</select></label>`;
+    if (step.action === 'run')
+      return field(
+        '속도 배율',
+        key,
+        step.value || 3,
+        'number',
+        'min="1.5" max="6" step="0.5"',
+      );
+    if (step.action === 'float')
+      return field(
+        '부양 높이 (px)',
+        key,
+        step.value || 160,
+        'number',
+        'min="30" max="500" step="10"',
+      );
+    if (step.action === 'size')
+      return field(
+        '크기 배율',
+        key,
+        step.value || 1,
+        'number',
+        'min="0.5" max="1.6" step="0.1"',
+      );
+    if (step.action === 'say')
+      return field('문구 ({user}, {target})', key, step.value);
+    return '<span></span>';
+  }
+  async function test(payload) {
+    state = await api.avatarCommand('test', {
+      ...testInput,
+      ...payload,
+      config: structuredClone(draft),
+      avatarId: selectedAvatar || draft.defaultAvatar,
+    });
+    previewMode = true;
+    updateStatus();
+    renderRecent();
+    notice(state.preview.result);
+    q('avPreview').scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
   function renderBody() {
     root
@@ -180,7 +260,7 @@
           })
           .join(
             '',
-          )}<div class="av-actions" style="margin-top:16px">${button('캐릭터 삭제', 'delete-avatar')}</div></div></div>`;
+          )}<div class="av-actions" style="margin-top:16px">${button('선택 캐릭터 테스트', 'test-avatar')}${button('캐릭터 삭제', 'delete-avatar')}</div></div></div>`;
     } else if (tab === 'scene') {
       body.innerHTML = `<div class="av-editor"><div class="av-actions">${button('차분하게', 'preset', 'data-preset="quiet"')}${button('기본', 'preset', 'data-preset="normal"')}${button('활발하게', 'preset', 'data-preset="party"')}</div><div class="av-form" style="margin-top:16px">
         ${field('캐릭터 크기 (px)', 'size', draft.size, 'number', 'min="24" max="160"')}${field('걷기 속도', 'speed', draft.speed, 'number', 'min="0.2" max="4" step="0.1"')}
@@ -193,29 +273,27 @@
       selectedRule = r?.id;
       body.innerHTML = `<div class="av-grid"><div class="av-list">${draft.rules.map((v) => `<button data-rule="${esc(v.id)}" aria-pressed="${v.id === r?.id}">${esc(v.name)}${v.enabled ? '' : ' (꺼짐)'}</button>`).join('')}${button('반응 추가', 'add-rule')}${button('환영 반응 추가', 'welcome-rule')}${button('명령 목록 복사', 'copy-commands')}</div><div class="av-editor">${
         r
-          ? `<div class="av-form">${field('반응 이름', 'rule.name', r.name)}<label>발생 조건<select data-field="rule.trigger">${options(triggers, r.trigger)}</select></label>${field('명령어 / 별칭', 'rule.aliases', r.aliases.join(' '), 'text', 'placeholder="!점프 !jump"')}<label>사용 권한<select data-field="rule.role">${options(roles, r.role)}</select></label>${field('재사용 대기 (초)', 'rule.cooldown', r.cooldown, 'number', 'min="1" max="600"')}${field('최소 후원 금액', 'rule.minimum', r.minimum, 'number', 'min="0"')}${check('반응 사용', 'rule.enabled', r.enabled)}</div>
+          ? `<div class="av-form">${field('반응 이름', 'rule.name', r.name)}<label>발생 조건<select data-field="rule.trigger">${options(triggers, r.trigger)}</select></label>${field('명령어 / 별칭', 'rule.aliases', r.aliases.join(' '), 'text', 'placeholder="!점프 !jump"')}<label>사용 권한<select data-field="rule.role">${options(roles, r.role)}</select></label>${field('재사용 대기 (초)', 'rule.cooldown', r.cooldown, 'number', 'min="1" max="600"')}${field('최소 후원 금액', 'rule.minimum', r.minimum, 'number', 'min="0"')}${check('반응 사용', 'rule.enabled', r.enabled)}${check('채팅 숫자로 시간 지정 (최대 120초)', 'rule.durationFromChat', r.durationFromChat)}</div>
         <div class="av-section-head"><h3>순서대로 실행</h3>${button('동작 추가', 'add-step')}</div>
-        ${r.steps.map((s, i) => `<div class="av-step"><label>동작 ${i + 1}<select data-field="step.${i}.action">${options(actions, s.action)}</select></label>${field(s.action === 'say' ? '문구 ({user}, {target})' : s.action === 'size' ? '배율 (0.5~1.6)' : s.action === 'walk' ? '방향 (-1: 왼쪽 / 1: 오른쪽)' : '값', `step.${i}.value`, s.value)}${field('시간 (초)', `step.${i}.duration`, s.duration, 'number', 'min="0.1" max="10" step="0.1"')}<div class="av-actions"><button class="av-icon" data-av="step-up" data-step="${i}" title="위로 이동" aria-label="동작 ${i + 1} 위로 이동">↑</button><button class="av-icon" data-av="step-delete" data-step="${i}" title="동작 삭제" aria-label="동작 ${i + 1} 삭제">×</button></div></div>`).join('')}<div class="av-actions" style="margin-top:16px">${button('반응 삭제', 'delete-rule')}</div>`
+        ${r.steps.map((s, i) => `<div class="av-step"><label>동작 ${i + 1}<select data-field="step.${i}.action">${options(actions, s.action)}</select></label>${stepValue(s, i)}${field('전체 시간 (초)', `step.${i}.duration`, s.duration, 'number', 'min="0.1" max="120" step="0.1"')}<div class="av-actions"><button class="av-icon" data-av="step-up" data-step="${i}" title="위로 이동" aria-label="동작 ${i + 1} 위로 이동">↑</button><button class="av-icon" data-av="step-delete" data-step="${i}" title="동작 삭제" aria-label="동작 ${i + 1} 삭제">×</button></div></div>`).join('')}<div class="av-actions" style="margin-top:16px">${button('이 반응 테스트', 'test-rule')}${button('우선순위 올리기', 'rule-up')}${button('반응 삭제', 'delete-rule')}</div>`
           : '<div class="av-empty">등록된 반응이 없습니다.</div>'
       }</div></div>`;
     } else if (tab === 'viewers') {
       body.innerHTML = '<div id="avViewers"></div>';
       renderViewers();
     } else if (tab === 'games') {
-      body.innerHTML = `<div class="av-editor"><div class="av-actions">${button('달리기 시작', 'race')}${button('공동 응원 시작', 'cheer')}${button('게임 종료', 'stop-game')}${button('테스트 참여자 10명', 'test-crowd')}${button('테스트 참여자 지우기', 'clear-tests')}</div>
-        <form id="avTestForm" class="av-test"><label>테스트 닉네임<input id="avTestName" value="테스트" maxlength="32"></label><label>이벤트<select id="avTestKind">${options({ chat: '채팅', donation: '후원', subscription: '구독' }, 'chat')}</select></label><label>권한<select id="avTestRole">${options(roles, 'everyone')}</select></label><label class="av-chat">채팅 내용<input id="avTestText" value="!점프" maxlength="300"></label><label>후원 금액<input id="avTestAmount" type="number" min="0" value="1000"></label><button type="submit" class="button primary">테스트 전송</button></form><h3>최근 반응</h3><ul id="avRecent" class="av-log"></ul></div>`;
+      body.innerHTML = `<div class="av-editor"><h3>방송 게임</h3><div class="av-actions">${button('달리기 시작', 'race')}${button('공동 응원 시작', 'cheer')}${button('게임 종료', 'stop-game')}</div><h3 class="av-test-heading">편집 테스트</h3><div class="av-actions">${button('테스트 참여자 10명', 'test-crowd')}${button('달리기 게임 테스트', 'preview-race')}${button('공동 응원 테스트', 'preview-cheer')}${button('테스트 게임 종료', 'preview-stop-game')}</div>
+        <form id="avTestForm" class="av-test"><label>테스트 닉네임<input id="avTestName" data-test-field="name" value="${esc(testInput.name)}" maxlength="32"></label><label>이벤트<select id="avTestKind" data-test-field="kind">${options({ chat: '채팅', donation: '후원', subscription: '구독' }, testInput.kind)}</select></label><label>권한<select id="avTestRole" data-test-field="role">${options(roles, testInput.role)}</select></label><label class="av-chat">채팅 내용<input id="avTestText" data-test-field="text" value="${esc(testInput.text)}" maxlength="300"></label><label>후원 금액<input id="avTestAmount" data-test-field="amount" type="number" min="0" value="${esc(testInput.amount)}"></label><button type="submit" class="button primary">테스트 전송</button></form><h3>최근 반응</h3><ul id="avRecent" class="av-log"></ul></div>`;
       q('avTestForm').addEventListener('submit', (event) => {
         event.preventDefault();
         void run(async () => {
-          state = await api.avatarCommand('test', {
+          await test({
             name: q('avTestName').value,
             text: q('avTestText').value,
             kind: q('avTestKind').value,
             role: q('avTestRole').value,
             amount: q('avTestAmount').value,
           });
-          updateStatus();
-          renderRecent();
         });
       });
       renderRecent();
@@ -226,7 +304,7 @@
   function renderRecent() {
     if (q('avRecent'))
       q('avRecent').innerHTML =
-        state.recent
+        (previewMode ? state.preview.recent : state.recent)
           .map(
             (r) =>
               `<li>${esc(new Date(r.at).toLocaleTimeString())} · ${esc(r.message)}</li>`,
@@ -246,14 +324,20 @@
     updateStatus();
     notice('저장했습니다.');
   }
-  root.addEventListener('change', (event) => {
+  function updateField(event) {
+    if (event.target.dataset.testField) {
+      testInput[event.target.dataset.testField] = event.target.value;
+      return;
+    }
     const key = event.target.dataset.field;
-    if (!key) return;
+    if (!key || !draft || busy) return;
     const value =
       event.target.type === 'checkbox'
         ? event.target.checked
         : event.target.type === 'number'
-          ? Number(event.target.value)
+          ? event.target.value === ''
+            ? ''
+            : Number(event.target.value)
           : event.target.value;
     const parts = key.split('.'),
       a = draft.avatars.find((a) => a.id === selectedAvatar),
@@ -262,10 +346,23 @@
     else if (parts[0] === 'clip') a.states[parts[1]][parts[2]] = value;
     else if (parts[0] === 'rule')
       r[parts[1]] = parts[1] === 'aliases' ? value.trim().split(/\s+/) : value;
-    else if (parts[0] === 'step') r.steps[Number(parts[1])][parts[2]] = value;
-    else draft[key] = value;
+    else if (parts[0] === 'step') {
+      const step = r.steps[Number(parts[1])];
+      step[parts[2]] = value;
+      if (parts[2] === 'action')
+        step.value =
+          { run: '3', float: '160', walk: '1', size: '1' }[value] || '';
+    } else draft[key] = value;
     changed();
     if (key.endsWith('.action')) renderBody();
+  }
+  root.addEventListener('input', (event) => {
+    if (event.target.tagName !== 'SELECT' && event.target.type !== 'checkbox')
+      updateField(event);
+  });
+  root.addEventListener('change', (event) => {
+    if (event.target.tagName === 'SELECT' || event.target.type === 'checkbox')
+      updateField(event);
   });
   root.addEventListener('click', (event) => {
     const target = event.target.closest('button');
@@ -290,15 +387,43 @@
     void run(async () => {
       const a = draft.avatars.find((a) => a.id === selectedAvatar),
         r = draft.rules.find((r) => r.id === selectedRule);
+      if (command === 'view-live' || command === 'view-test') {
+        previewMode = command === 'view-test';
+        updateStatus();
+        renderRecent();
+        return;
+      }
+      if (command === 'test-rule' || command === 'test-avatar') {
+        await test(
+          command === 'test-rule' ? { ruleId: r.id } : { text: '!입장' },
+        );
+        return;
+      }
+      if (command === 'rule-up') {
+        const i = draft.rules.indexOf(r);
+        if (i > 0)
+          [draft.rules[i - 1], draft.rules[i]] = [r, draft.rules[i - 1]];
+        changed();
+        renderBody();
+        return;
+      }
       if (command === 'save') {
         await save();
         renderBody();
         return;
       }
       if (command === 'toggle' || command === 'pause') {
-        draft[command === 'toggle' ? 'enabled' : 'paused'] =
-          !state.config[command === 'toggle' ? 'enabled' : 'paused'];
-        await save();
+        const property = command === 'toggle' ? 'enabled' : 'paused';
+        state = await api.avatarSave({
+          ...state.config,
+          [property]: !state.config[property],
+          ...(command === 'toggle' && !state.config.enabled
+            ? { paused: false }
+            : {}),
+        });
+        draft.enabled = state.config.enabled;
+        draft.paused = state.config.paused;
+        updateStatus();
         return;
       }
       if (command === 'copy' || command === 'copy-commands') {
@@ -307,6 +432,8 @@
         return;
       }
       if (command === 'add-avatar' || command === 'state-image') {
+        if (command === 'add-avatar' && draft.avatars.length >= 64)
+          throw new Error('캐릭터는 최대 64개입니다.');
         const result = await api.avatarImport();
         if (!result) return;
         const clip = {
@@ -317,9 +444,12 @@
           fps: 12,
         };
         if (command === 'add-avatar') {
+          let nextName = 1;
+          while (draft.avatars.some((v) => v.name === `캐릭터 ${nextName}`))
+            nextName++;
           const item = {
             id: crypto.randomUUID(),
-            name: `캐릭터 ${draft.avatars.length + 1}`,
+            name: `캐릭터 ${nextName}`,
             states: { idle: clip },
           };
           draft.avatars.push(item);
@@ -342,6 +472,8 @@
           throw new Error('캐릭터는 최소 한 개가 필요합니다.');
         if (!confirm(`'${a.name}' 캐릭터를 삭제할까요?`)) return;
         draft.avatars = draft.avatars.filter((v) => v !== a);
+        if (draft.defaultAvatar === a.id)
+          draft.defaultAvatar = draft.avatars[0].id;
         changed();
         renderBody();
         return;
@@ -435,8 +567,22 @@
           state = await api.avatarCommand('test', {
             name: `테스트 ${i}`,
             text: '!입장',
+            config: structuredClone(draft),
+            avatarId: draft.avatars[(i - 1) % draft.avatars.length].id,
           });
+        previewMode = true;
         updateStatus();
+        return;
+      }
+      if (command === 'preview-race' || command === 'preview-cheer') {
+        state = await api.avatarCommand('preview-game', {
+          config: structuredClone(draft),
+          type: command.slice('preview-'.length),
+          duration: 30,
+        });
+        previewMode = true;
+        updateStatus();
+        renderRecent();
         return;
       }
       if (
@@ -473,7 +619,10 @@
   });
   async function init() {
     try {
-      state = await api.avatarState();
+      const epoch = requestEpoch;
+      const next = await api.avatarState();
+      if (busy || epoch !== requestEpoch) return;
+      state = next;
       draft = structuredClone(state.config);
       shell();
       if (state.error) notice(state.error, true);
@@ -490,7 +639,10 @@
     )
       return;
     try {
-      state = await api.avatarState();
+      const epoch = requestEpoch;
+      const next = await api.avatarState();
+      if (busy || epoch !== requestEpoch) return;
+      state = next;
       updateStatus();
       if (tab === 'viewers') renderViewers();
       if (tab === 'games') renderRecent();

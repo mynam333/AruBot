@@ -39,7 +39,13 @@ test('bundled CC0 characters have intact transparent idle and movement sheets', 
       assert.ok(stats.channels[3].min === 0 && stats.channels[3].max === 255);
     }
   }
-  assert.match(fs.readFileSync(path.join(__dirname, '../local-program/avatars/bundled/CC0-1.0.txt'), 'utf8'), /CC0 1.0 Universal/);
+  assert.match(
+    fs.readFileSync(
+      path.join(__dirname, '../local-program/avatars/bundled/CC0-1.0.txt'),
+      'utf8',
+    ),
+    /CC0 1.0 Universal/,
+  );
 });
 
 test('legacy robot defaults migrate without losing custom avatars, rules or output key', (t) => {
@@ -48,7 +54,12 @@ test('legacy robot defaults migrate without losing custom avatars, rules or outp
   const custom = { ...config.avatars[2], id: 'my-custom', name: '나의 캐릭터' };
   const key = config.key;
   config.defaultAvatar = 'rose';
-  config.avatars = ['mint', 'rose', 'gold'].map((builtin) => ({ id: builtin, name: builtin, builtin, states: {} }));
+  config.avatars = ['mint', 'rose', 'gold'].map((builtin) => ({
+    id: builtin,
+    name: builtin,
+    builtin,
+    states: {},
+  }));
   config.avatars.push(custom);
   fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify(config));
   const storage = new AvatarStorage(root);
@@ -57,12 +68,23 @@ test('legacy robot defaults migrate without losing custom avatars, rules or outp
   assert.equal(storage.config.defaultAvatar, 'pixel-mask-dude');
   assert.ok(storage.config.avatars.some((a) => a.id === custom.id));
   assert.ok(storage.config.avatars.every((a) => !a.builtin));
-  assert.deepEqual(storage.config.rules, validateConfig(defaultConfig()).rules.map((r, i) => ({ ...r, id: config.rules[i].id })));
+  assert.deepEqual(
+    storage.config.rules,
+    validateConfig(defaultConfig()).rules.map((r, i) => ({
+      ...r,
+      id: config.rules[i].id,
+    })),
+  );
 });
 
 test('asset cleanup keeps a usable recovery config and deleted defaults stay deleted', (t) => {
-  const root = temporary(t), storage = new AvatarStorage(root);
-  storage.saveConfig({ ...storage.config, avatars: [storage.config.avatars[1]], defaultAvatar: storage.config.avatars[1].id });
+  const root = temporary(t),
+    storage = new AvatarStorage(root);
+  storage.saveConfig({
+    ...storage.config,
+    avatars: [storage.config.avatars[1]],
+    defaultAvatar: storage.config.avatars[1].id,
+  });
   assert.ok(storage.pruneAssets() > 0);
   fs.writeFileSync(path.join(root, 'config.json'), '{bad');
   const recovered = new AvatarStorage(root);
@@ -126,7 +148,7 @@ const freePort = () =>
 
 test('default configuration validates and reserves built-in commands', () => {
   const config = defaultConfig();
-  assert.equal(validateConfig(config, config).rules.length, 10);
+  assert.equal(validateConfig(config, config).rules.length, 12);
   config.rules[0].aliases = ['!응원'];
   assert.throws(() => validateConfig(config, config), /중복/);
 });
@@ -443,6 +465,274 @@ test('loopback server authenticates read-only output, isolates websocket origin,
   await service.start();
   assert.equal(service.url, oldUrl);
 });
+test('motion commands use five seconds without an argument and preserve configured defaults', () => {
+  for (const [command, action] of [
+    ['!달리기', 'run'],
+    ['!부양', 'float'],
+  ]) {
+    const w = world();
+    const rule = w.config.rules.find((r) => r.steps[0].action === action);
+    w.engine.receive(w.event(command));
+    w.engine.tick();
+    const actor = w.engine.actors.values().next().value;
+    assert.equal(actor.state, action);
+    assert.equal(actor.until - actor.lastChat, 5000);
+    w.advance(6000);
+    rule.steps[0].duration = 7;
+    w.engine.receive(w.event(`${command} 2`));
+    w.engine.tick();
+    assert.equal(actor.until - actor.lastChat, 2000);
+    w.advance(4000);
+    w.engine.receive(w.event(command));
+    w.engine.tick();
+    assert.equal(actor.until - actor.lastChat, 7000);
+    for (const duration of [undefined, null, '']) {
+      rule.steps[0].duration = duration;
+      const normalized = validateConfig(w.config, w.config);
+      assert.equal(
+        normalized.rules.find((r) => r.id === rule.id).steps[0].duration,
+        5,
+      );
+    }
+  }
+});
+
+test('run accepts bounded chat duration, moves faster and returns to normal speed', () => {
+  const w = world();
+  w.engine.receive(w.event('!달리기 4초'));
+  w.engine.tick();
+  const actor = w.engine.actors.values().next().value;
+  assert.equal(actor.state, 'run');
+  assert.equal(actor.until, 104000);
+  assert.ok(actor.body.velocity.x > w.config.speed * 4);
+  w.advance(4100);
+  assert.equal(actor.state, 'walk');
+  assert.ok(Math.abs(actor.body.velocity.x) < w.config.speed * 2);
+  w.engine.receive(w.event('!run 99999'));
+  w.engine.tick();
+  assert.equal(actor.until - actor.lastChat, 120000);
+});
+
+test('run turns at the edge and resumes its animation after an airborne frame', () => {
+  const w = world();
+  w.engine.receive(w.event('!run 10'));
+  w.engine.tick();
+  const actor = w.engine.actors.values().next().value;
+  const { Body } = require('matter-js');
+  Body.setPosition(actor.body, { x: 1880, y: w.engine.ground - 16 });
+  w.advance(50);
+  assert.equal(actor.direction, -1);
+  Body.setPosition(actor.body, { x: 1500, y: w.engine.ground - 90 });
+  w.advance(50);
+  assert.equal(actor.state, 'jump');
+  Body.setPosition(actor.body, { x: 1500, y: w.engine.ground - 16 });
+  Body.setVelocity(actor.body, { x: 0, y: 0 });
+  w.advance(50);
+  assert.equal(actor.state, 'run');
+  assert.ok(Math.abs(actor.body.velocity.x) > w.config.speed * 4);
+});
+
+test('float rises gradually, hovers, lands and restores normal physics', () => {
+  const w = world();
+  w.engine.receive(w.event('!부양 5'));
+  w.engine.tick();
+  const actor = w.engine.actors.values().next().value,
+    start = actor.body.position.y;
+  assert.equal(actor.state, 'float');
+  assert.equal(actor.body.isStatic, true);
+  w.advance(300);
+  const rising = actor.body.position.y;
+  assert.ok(rising < start && rising > start - 160);
+  w.advance(1700);
+  assert.ok(Math.abs(actor.body.position.y - (w.engine.ground - 176)) < 6);
+  w.advance(2300);
+  assert.ok(actor.body.position.y > w.engine.ground - 176);
+  w.advance(701);
+  assert.equal(actor.body.isStatic, false);
+  assert.equal(actor.flight, null);
+  assert.ok(Math.abs(actor.body.position.y - (w.engine.ground - 16)) < 2);
+});
+
+test('floating deadlines and position survive a long pause', () => {
+  const w = world();
+  w.engine.receive(w.event('!float 8'));
+  w.engine.tick();
+  w.advance(600);
+  const actor = w.engine.actors.values().next().value,
+    y = actor.body.position.y;
+  w.engine.setConfig({ ...w.config, paused: true });
+  w.advance(15000);
+  assert.equal(actor.body.position.y, y);
+  w.engine.setConfig({ ...w.config, paused: false });
+  w.engine.tick();
+  assert.equal(actor.body.position.y, y);
+  assert.equal(actor.state, 'float');
+  w.advance(7401);
+  assert.equal(actor.flight, null);
+  assert.equal(actor.body.isStatic, false);
+});
+
+test('new reactions and games cancel flight, stale targeting and contact', () => {
+  const w = world();
+  w.engine.receive(w.event('!float 5'));
+  w.engine.tick();
+  const actor = w.engine.actors.values().next().value;
+  actor.follow = 'stale';
+  actor.contact = { type: 'push', target: 'stale' };
+  w.engine.receive(w.event('!dance'));
+  w.engine.tick();
+  assert.equal(actor.flight, null);
+  assert.equal(actor.body.isStatic, false);
+  assert.equal(actor.contact, null);
+  assert.equal(actor.follow, null);
+  w.advance(3100);
+  w.engine.receive(w.event('!float'));
+  w.engine.tick();
+  w.engine.startGame('race');
+  assert.equal(actor.flight, null);
+  assert.equal(actor.body.isStatic, false);
+});
+
+test('wait stops movement and speech respects its configured duration', () => {
+  const w = world();
+  w.config.rules[0].steps = [
+    { action: 'run', value: '3', duration: 1 },
+    { action: 'wait', value: '', duration: 2 },
+    { action: 'say', value: 'hello', duration: 1 },
+  ];
+  w.engine.receive(w.event('!jump'));
+  w.engine.tick();
+  const actor = w.engine.actors.values().next().value;
+  w.advance(1100);
+  assert.equal(actor.state, 'idle');
+  assert.equal(actor.body.velocity.x, 0);
+  w.advance(2000);
+  assert.equal(w.engine.snapshot().actors[0].bubble, 'hello');
+  w.advance(1001);
+  assert.equal(w.engine.snapshot().actors[0].bubble, '');
+});
+
+test('v1 settings gain motion commands once without overriding existing aliases', (t) => {
+  const root = temporary(t),
+    config = defaultConfig();
+  config.version = 1;
+  config.rules = config.rules.slice(0, 10);
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify(config));
+  const storage = new AvatarStorage(root);
+  assert.equal(storage.config.version, 2);
+  assert.equal(storage.config.rules.length, 12);
+  storage.saveConfig({
+    ...storage.config,
+    rules: storage.config.rules.slice(0, 10),
+  });
+  assert.equal(new AvatarStorage(root).config.rules.length, 10);
+  const { migrateConfig } = require('../local-program/avatars/schema.cjs');
+  config.rules[0].aliases = ['!run'];
+  const migrated = migrateConfig(config);
+  assert.equal(
+    migrated.rules.filter((r) => r.aliases.includes('!run')).length,
+    1,
+  );
+  assert.ok(migrated.rules.some((r) => r.aliases.includes('!float')));
+});
+
+test('unsaved preview edits affect repeated tests without saving or touching live actors', (t) => {
+  let now = 100000;
+  const root = temporary(t),
+    service = new AvatarService(root, { now: () => now });
+  const saved = fs.readFileSync(path.join(root, 'config.json'), 'utf8');
+  const draft = structuredClone(service.storage.config);
+  draft.size = 120;
+  draft.paused = true;
+  draft.rules[0].steps = [{ action: 'run', value: '4', duration: 8 }];
+  const payload = {
+    config: draft,
+    text: '!jump',
+    avatarId: draft.avatars[2].id,
+  };
+  service.command('test', payload);
+  service.preview.tick();
+  let actor = service.preview.snapshot().actors[0];
+  assert.equal(actor.state, 'run');
+  assert.equal(actor.size, 120);
+  assert.equal(actor.avatar, draft.avatars[2].id);
+  assert.equal(service.engine.actors.size, 0);
+  assert.equal(service.storage.config.enabled, false);
+  draft.size = 95;
+  draft.rules[0].steps = [{ action: 'float', value: '220', duration: 7 }];
+  now += 100;
+  service.command('test', payload);
+  service.preview.tick();
+  actor = service.preview.snapshot().actors[0];
+  assert.equal(actor.state, 'float');
+  assert.equal(actor.size, 95);
+  assert.equal(fs.readFileSync(path.join(root, 'config.json'), 'utf8'), saved);
+  assert.deepEqual(service.engine.profiles, {});
+  service.command('preview-pause');
+  assert.equal(service.preview.config.paused, true);
+  service.command('clear-tests');
+  assert.equal(service.preview.actors.size, 0);
+});
+
+test('direct join-rule preview executes once and can be repeated immediately', (t) => {
+  const service = new AvatarService(temporary(t));
+  const draft = structuredClone(service.storage.config);
+  const rule = draft.rules[0];
+  rule.trigger = 'join';
+  rule.cooldown = 60;
+  rule.steps = [{ action: 'float', value: '240', duration: 8 }];
+  const payload = { config: draft, ruleId: rule.id };
+  service.command('test', payload);
+  assert.equal(service.preview.tasks.length, 1);
+  service.preview.tick();
+  assert.equal(service.preview.snapshot().actors[0].state, 'float');
+  service.command('test', payload);
+  assert.equal(service.preview.tasks.length, 1);
+  assert.equal(service.engine.actors.size, 0);
+});
+
+test('invalid test drafts fail visibly without changing the previous preview', (t) => {
+  const service = new AvatarService(temporary(t));
+  service.command('test', { text: '!run' });
+  const before = service.preview.config;
+  assert.throws(
+    () => service.command('test', { config: { avatars: [] } }),
+    /캐릭터/,
+  );
+  assert.equal(service.preview.config, before);
+  const draft = structuredClone(service.storage.config);
+  draft.rules[0].enabled = false;
+  assert.throws(
+    () => service.command('test', { config: draft, ruleId: draft.rules[0].id }),
+    /꺼져/,
+  );
+});
+
+test('preview websocket never leaks test actors into OBS and does not count as an OBS source', async (t) => {
+  const service = new AvatarService(temporary(t));
+  service.storage.config.port = await freePort();
+  await service.start();
+  t.after(() => service.stop());
+  service.command('test', { text: '!float' });
+  const sockets = [];
+  t.after(() => sockets.forEach((ws) => ws.terminate()));
+  const read = (url) =>
+    new Promise((resolve, reject) => {
+      const ws = new WebSocket(
+        url.replace('http:', 'ws:').replace('/overlay?', '/ws?'),
+      );
+      sockets.push(ws);
+      ws.once('message', (data) => resolve(JSON.parse(data)));
+      ws.once('error', reject);
+    });
+  const preview = await read(service.state().previewUrl);
+  assert.equal(preview.actors.length, 1);
+  assert.equal(service.state().clients, 0);
+  const live = await read(service.url);
+  assert.equal(live.actors.length, 0);
+  assert.equal(service.state().clients, 1);
+});
+
 test('port conflicts produce actionable failure without changing the saved URL', async (t) => {
   const root = temporary(t),
     port = await freePort();

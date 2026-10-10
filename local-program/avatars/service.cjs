@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 const { AvatarStorage } = require('./storage.cjs');
 const { AvatarEngine } = require('./engine.cjs');
-const { assetId } = require('./schema.cjs');
+const { assetId, validateConfig, text } = require('./schema.cjs');
 
 const MIME = {
   png: 'image/png',
@@ -22,6 +22,12 @@ class AvatarService {
       this.storage.profiles,
       options,
     );
+    this.preview = new AvatarEngine(
+      { ...structuredClone(this.storage.config), enabled: true, paused: false },
+      {},
+      options,
+    );
+    this.previewResult = '';
     this.lastError = this.storage.warning;
     this.connected = false;
     this.lastEventAt = 0;
@@ -69,8 +75,14 @@ class AvatarService {
           return;
         }
         this.wss.handleUpgrade(req, socket, head, (ws) => {
+          ws.preview = url.searchParams.get('preview') === '1';
+          ws.monitor = url.searchParams.get('monitor') === '1';
           ws.on('error', () => ws.terminate());
-          ws.send(JSON.stringify(this.engine.snapshot()));
+          ws.send(
+            JSON.stringify(
+              (ws.preview ? this.preview : this.engine).snapshot(),
+            ),
+          );
         });
       } catch {
         socket.destroy();
@@ -98,11 +110,14 @@ class AvatarService {
     this.timer = setInterval(() => {
       try {
         this.engine.tick();
+        if (this.preview.actors.size || this.preview.game) this.preview.tick();
         if (++this.frames % 3 === 0 && this.wss.clients.size) {
           const frame = JSON.stringify(this.engine.snapshot());
+          const previewFrame = JSON.stringify(this.preview.snapshot());
           for (const ws of this.wss.clients) {
             if (ws.bufferedAmount > 256 * 1024) ws.terminate();
-            else if (ws.readyState === 1) ws.send(frame);
+            else if (ws.readyState === 1)
+              ws.send(ws.preview ? previewFrame : frame);
           }
         }
         if (this.frames % 150 === 0) this.flush();
@@ -172,13 +187,21 @@ class AvatarService {
     return {
       config: this.storage.config,
       url: this.url,
+      previewUrl: this.url ? `${this.url}&preview=1&monitor=1` : '',
       error: this.lastError,
       connected: this.connected,
       lastEventAt: this.lastEventAt,
-      clients: this.wss?.clients.size || 0,
+      clients: [...(this.wss?.clients || [])].filter(
+        (ws) => !ws.preview && !ws.monitor,
+      ).length,
       snapshot: this.engine.snapshot(),
       stats: this.engine.stats,
       recent: this.engine.recent,
+      preview: {
+        snapshot: this.preview.snapshot(),
+        recent: this.preview.recent,
+        result: this.previewResult,
+      },
       blocked: Object.entries(this.engine.profiles)
         .filter(([, p]) => p.blocked)
         .map(([id, p]) => ({ id, name: p.name })),
@@ -197,38 +220,100 @@ class AvatarService {
     return this.state();
   }
   command(command, payload = {}) {
+    if (!payload || typeof payload !== 'object')
+      throw new Error('작업 입력이 올바르지 않습니다.');
     if (command === 'clear') this.engine.clear();
-    else if (command === 'clear-tests') this.engine.clear(true);
+    else if (command === 'clear-tests') {
+      this.preview.clear();
+      this.preview.recent = [];
+      this.previewResult = '';
+    } else if (command === 'preview-pause')
+      this.preview.setConfig({
+        ...this.preview.config,
+        paused: !this.preview.config.paused,
+      });
+    else if (command === 'preview-game') {
+      this.applyPreview(payload.config);
+      this.preview.startGame(payload.type, payload.duration);
+    } else if (command === 'preview-stop-game')
+      this.preview.finishGame('테스트 게임을 종료했습니다.');
     else if (command === 'moderate')
       this.engine.moderate(payload.action, payload.id);
     else if (command === 'game')
       this.engine.startGame(payload.type, payload.duration);
     else if (command === 'stop-game')
       this.engine.finishGame('관리자가 종료했습니다.');
-    else if (command === 'prune') this.storage.pruneAssets();
-    else if (command === 'forget-all') {
+    else if (command === 'prune') {
+      this.preview.clear();
+      this.storage.pruneAssets();
+    } else if (command === 'forget-all') {
       this.engine.clear();
       this.engine.profiles = {};
       this.engine.dirty = true;
       this.flush();
     } else if (command === 'test') {
-      this.engine.receive({
+      this.applyPreview(payload.config);
+      const userId = text(payload.name, 32) || '테스트';
+      const avatarId = this.preview.config.avatars.some(
+        (a) => a.id === payload.avatarId,
+      )
+        ? payload.avatarId
+        : this.preview.config.defaultAvatar;
+      this.preview.resetTestActor(userId, avatarId);
+      const event = {
         id: crypto.randomUUID(),
         kind: ['chat', 'donation', 'subscription'].includes(payload.kind)
           ? payload.kind
           : 'chat',
-        userId: String(payload.name || '테스트'),
-        name: payload.name || '테스트',
-        text: payload.text || '!입장',
+        userId,
+        name: userId,
+        text: payload.text ?? '!입장',
         amount: Number(payload.amount) || 0,
         role: ['everyone', 'moderator', 'owner'].includes(payload.role)
           ? payload.role
           : 'everyone',
-        at: Date.now(),
+        at: this.preview.now(),
         test: true,
-      });
+      };
+      const before = this.preview.recent[0];
+      const actor = this.preview.join(event, true, !payload.ruleId);
+      if (!actor)
+        throw new Error(
+          '테스트 참여자 한도에 도달했습니다. 테스트 화면을 비워 주세요.',
+        );
+      actor.profile.avatar = avatarId;
+      actor.lastChat = this.preview.now();
+      if (payload.ruleId) {
+        const rule = this.preview.config.rules.find(
+          (r) => r.id === payload.ruleId,
+        );
+        if (!rule) throw new Error('테스트할 반응이 없습니다.');
+        if (
+          !this.preview.runRule(rule, actor, {
+            ...event,
+            role: 'owner',
+            amount: rule.minimum,
+            targetName: payload.targetName || '',
+          })
+        )
+          throw new Error('반응이 꺼져 있거나 테스트를 실행할 수 없습니다.');
+      } else this.preview.receive(event);
+      this.previewResult =
+        this.preview.recent[0] !== before
+          ? this.preview.recent[0].message
+          : '테스트 입력 처리됨 · 실행된 반응 없음';
     } else throw new Error('지원하지 않는 작업입니다.');
     return this.state();
+  }
+  applyPreview(config = this.storage.config) {
+    if (JSON.stringify(config).length > 256 * 1024)
+      throw new Error('아바타 설정이 너무 큽니다.');
+    const validated = validateConfig(
+      { ...config, enabled: true, paused: false },
+      this.storage.config,
+    );
+    this.storage.ensureAssets(validated);
+    this.preview.setConfig(validated);
   }
   flush() {
     if (this.engine.dirty) {

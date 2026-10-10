@@ -1,21 +1,32 @@
 (() => {
   const stage = document.getElementById('stage'),
     game = document.getElementById('game');
-  const key = new URLSearchParams(location.search).get('key') || '';
+  const parameters = new URLSearchParams(location.search);
+  const key = parameters.get('key') || '';
   const nodes = new Map();
   let snapshot = null,
     socket,
     retry = 0,
     timer,
     lastFrame = 0;
-  const url = (path) => `${path}?key=${encodeURIComponent(key)}`;
+  const url = (path) =>
+    `${path}?key=${encodeURIComponent(key)}${parameters.get('preview') === '1' ? '&preview=1' : ''}${parameters.get('monitor') === '1' ? '&monitor=1' : ''}`;
   function resize() {
-    stage.style.transform = `scale(${innerWidth / 1920})`;
+    const scale =
+      parameters.get('monitor') === '1'
+        ? Math.min(
+            innerWidth / 1920,
+            innerHeight / (snapshot?.previewHeight || 420),
+          )
+        : innerWidth / 1920;
+    stage.style.transform = `scale(${scale})`;
+    stage.style.left = `${(innerWidth - 1920 * scale) / 2}px`;
   }
   addEventListener('resize', resize);
   resize();
   function update(data) {
     snapshot = data;
+    resize();
     const live = new Set(data.actors.map((a) => a.id));
     stage.classList.toggle('paused', data.paused);
     for (const [id, node] of nodes)
@@ -69,15 +80,19 @@
       node.appearance.style.transform = `scaleX(${a.direction})`;
       const avatar =
         data.avatars.find((v) => v.id === a.avatar) || data.avatars[0];
-      const clip = avatar.states[a.state] || avatar.states.idle;
+      const clip =
+        avatar.states[a.state] ||
+        (a.state === 'run' ? avatar.states.walk : null) ||
+        avatar.states.idle;
       const src = url(`/assets/${clip.asset}`);
-      const signature = `${src}:${JSON.stringify(clip)}`;
+      const signature = `${a.state}:${src}:${JSON.stringify(clip)}`;
       node.clip = clip;
       node.root.className = `actor ${a.state}${avatar.states[a.state] ? ' native-clip' : ''}`;
       node.sprite.style.imageRendering = avatar.pixelated
         ? 'pixelated'
         : 'auto';
       if (signature !== node.signature) {
+        node.animationTime = 0;
         node.signature = signature;
         node.sprite.style.backgroundImage = `url("${src}")`;
         node.sprite.style.backgroundSize =
@@ -89,19 +104,20 @@
       }
     }
   }
-  let lastRender = performance.now(),
-    animationTime = 0;
+  let lastRender = performance.now();
   function render(now) {
-    if (!snapshot?.paused) animationTime += Math.min(100, now - lastRender);
+    const delta = snapshot?.paused ? 0 : Math.min(100, now - lastRender);
     lastRender = now;
     for (const node of nodes.values()) {
       const a = node.target;
-      node.x += (a.x - node.x) * 0.35;
-      node.y += (a.y - node.y) * 0.35;
+      const blend = snapshot?.paused ? 1 : 1 - Math.exp(-delta / 38);
+      node.x += (a.x - node.x) * blend;
+      node.y += (a.y - node.y) * blend;
+      node.animationTime += delta * (a.animationRate || 1);
       node.root.style.transform = `translate(${node.x}px,${node.y}px)`;
       if (node.clip?.frames > 1) {
         const c = node.clip,
-          frame = Math.floor((animationTime * c.fps) / 1000) % c.frames;
+          frame = Math.floor((node.animationTime * c.fps) / 1000) % c.frames;
         node.sprite.style.backgroundPosition = `${c.columns === 1 ? 0 : ((frame % c.columns) / (c.columns - 1)) * 100}% ${c.rows === 1 ? 0 : (Math.floor(frame / c.columns) / (c.rows - 1)) * 100}%`;
       }
     }

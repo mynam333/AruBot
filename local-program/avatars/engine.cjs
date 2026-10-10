@@ -51,7 +51,10 @@ class AvatarEngine {
     if (this.config.paused && !config.paused) {
       const elapsed = this.now() - this.pausedAt;
       for (const task of this.tasks) task.at += elapsed;
-      for (const a of this.actors.values())
+      for (const [key, until] of this.cooldowns)
+        this.cooldowns.set(key, until + elapsed);
+      for (const a of this.actors.values()) {
+        if (a.flight) a.flight.startedAt += elapsed;
         for (const key of [
           'until',
           'nextWalk',
@@ -61,19 +64,29 @@ class AvatarEngine {
           'lastChat',
         ])
           if (a[key]) a[key] += elapsed;
+      }
       if (this.game) {
+        this.game.startedAt += elapsed;
         this.game.endsAt += elapsed;
         if (this.game.hideAt) this.game.hideAt += elapsed;
+        for (const id of Object.keys(this.game.cooldowns))
+          this.game.cooldowns[id] += elapsed;
       }
       this.pausedAt = 0;
     }
-    if (JSON.stringify(this.config.rules) !== JSON.stringify(config.rules))
+    if (JSON.stringify(this.config.rules) !== JSON.stringify(config.rules)) {
       this.tasks = [];
+      this.cooldowns.clear();
+    }
+    const groundChanged = this.config.floor !== config.floor;
     this.config = config;
-    this.setWalls();
+    if (groundChanged) this.setWalls();
     for (const a of this.actors.values()) {
-      if (!config.avatars.some((v) => v.id === a.profile.avatar))
+      if (!config.avatars.some((v) => v.id === a.profile.avatar)) {
         a.profile.avatar = config.defaultAvatar;
+        if (!a.test) this.dirty = true;
+      }
+      if (groundChanged) this.resetMotion(a);
       Body.setPosition(a.body, {
         x: Math.max(30, Math.min(WIDTH - 30, a.body.position.x)),
         y: Math.min(a.body.position.y, this.ground - 16),
@@ -111,7 +124,41 @@ class AvatarEngine {
       if (!testOnly || a.test) this.remove(a.id);
     if (!testOnly) this.game = null;
   }
-  join(event, force = false) {
+  resetMotion(actor) {
+    if (
+      actor.flight &&
+      this.now() >= actor.flight.startedAt + actor.flight.duration
+    )
+      Body.setPosition(actor.body, {
+        x: actor.body.position.x,
+        y: actor.flight.landY,
+      });
+    if (actor.body.isStatic) Body.setStatic(actor.body, false);
+    actor.flight = null;
+    actor.follow = null;
+    actor.targetX = null;
+    actor.contact = null;
+    actor.pushedUntil = 0;
+    actor.dx = 0;
+    actor.state = 'idle';
+    actor.motion = 'idle';
+    actor.until = 0;
+    actor.nextWalk = this.now() + 1000;
+    Body.setVelocity(actor.body, { x: 0, y: actor.body.velocity.y });
+  }
+  resetTestActor(userId, avatarId) {
+    const id = this.key(userId, true),
+      actor = this.actors.get(id);
+    this.tasks = this.tasks.filter((t) => t.id !== id);
+    for (const key of this.cooldowns.keys())
+      if (key.startsWith(`${id}:`)) this.cooldowns.delete(key);
+    if (actor) {
+      this.resetMotion(actor);
+      if (this.config.avatars.some((a) => a.id === avatarId))
+        actor.profile.avatar = avatarId;
+    }
+  }
+  join(event, force = false, triggerRules = true) {
     const key = this.key(event.userId, event.test);
     const existing = this.actors.get(key);
     const profile = existing?.profile ||
@@ -173,8 +220,9 @@ class AvatarEngine {
       lastChat: this.now(),
     };
     this.actors.set(key, actor);
-    for (const rule of this.config.rules.filter((r) => r.trigger === 'join'))
-      if (this.runRule(rule, actor, event)) break;
+    if (triggerRules)
+      for (const rule of this.config.rules.filter((r) => r.trigger === 'join'))
+        if (this.runRule(rule, actor, event)) break;
     return actor;
   }
   receive(event) {
@@ -273,7 +321,10 @@ class AvatarEngine {
         actor.profile.scale = number(arg, 0.5, 1.6, 1);
       else if (['!응원', '!cheer'].includes(command)) this.cheer(actor);
       else if (['!도움말', '!help'].includes(command))
-        this.say(actor, '!입장 · !퇴장 · !점프 · !춤 · !캐릭터 이름 · !응원');
+        this.say(
+          actor,
+          '!입장 · !퇴장 · !점프 · !달리기 5 · !부양 5 · !캐릭터 이름 · !응원',
+        );
       return true;
     }
     const matching = this.config.rules.filter(
@@ -319,23 +370,35 @@ class AvatarEngine {
       return false;
     const now = this.now(),
       key = `${actor.id}:${rule.id}`;
+    const remaining = this.tasks.filter((t) => t.id !== actor.id);
     if (
       (this.cooldowns.get(key) || 0) > now ||
-      this.tasks.length + rule.steps.length > 512
+      remaining.length + rule.steps.length > 512
     )
       return false;
     this.cooldowns.set(key, now + rule.cooldown * 1000);
     // A new sequence replaces that viewer's old sequence rather than building an unbounded queue.
-    this.tasks = this.tasks.filter((t) => t.id !== actor.id);
+    this.tasks = remaining;
+    this.resetMotion(actor);
     let at = now;
     for (const step of rule.steps) {
+      const argument = text(event.targetName, 32);
+      const duration =
+        rule.durationFromChat && /^(?:\d+(?:\.\d+)?)(?:초|s)?$/i.test(argument)
+          ? number(
+              argument.replace(/(?:초|s)$/i, ''),
+              0.1,
+              LIMITS.duration,
+              step.duration,
+            )
+          : step.duration;
       this.tasks.push({
         id: actor.id,
-        step,
+        step: { ...step, duration },
         at,
         target: event.targetName || '',
       });
-      at += step.duration * 1000;
+      at += duration * 1000;
     }
     this.note(`${actor.profile.name}: ${rule.name}`);
     return true;
@@ -348,7 +411,6 @@ class AvatarEngine {
       this.game?.type === 'race' &&
       this.game.endsAt > now &&
       this.game.players.includes(actor.id);
-    if (step.action === 'wait') return;
     if (step.action === 'say') {
       this.say(
         actor,
@@ -356,6 +418,8 @@ class AvatarEngine {
           .replaceAll('{user}', actor.profile.name)
           .replaceAll('{target}', target?.profile.name || ''),
       );
+      actor.bubbleUntil =
+        now + number(step.duration, 0.1, LIMITS.duration, 5) * 1000;
       return;
     }
     if (step.action === 'size') {
@@ -363,18 +427,32 @@ class AvatarEngine {
       if (!actor.test) this.dirty = true;
       return;
     }
+    if (racing && step.action !== 'jump') return;
+    this.resetMotion(actor);
     if (step.action === 'jump') {
       if (actor.body.position.y >= this.ground - 24)
         Body.setVelocity(actor.body, { x: actor.body.velocity.x, y: -12 });
       actor.state = 'jump';
+      actor.motion = 'jump';
       actor.until = now + 900;
       return;
     }
-    if (racing) return;
-    actor.follow = null;
-    actor.targetX = null;
-    actor.dx = 0;
-    if (['follow', 'highfive', 'push'].includes(step.action)) {
+    if (step.action === 'float') {
+      const duration = number(step.duration, 0.1, LIMITS.duration, 5) * 1000;
+      const height = number(step.value, 30, 500, 160);
+      const landY = this.ground - 16;
+      actor.flight = {
+        startedAt: now,
+        duration,
+        edge: Math.min(1200, duration * 0.25),
+        fromY: actor.body.position.y,
+        topY: landY - height,
+        landY,
+      };
+      Body.setStatic(actor.body, true);
+      Body.setVelocity(actor.body, { x: 0, y: 0 });
+      actor.state = 'float';
+    } else if (['follow', 'highfive', 'push'].includes(step.action)) {
       if (!target) {
         this.say(
           actor,
@@ -395,11 +473,18 @@ class AvatarEngine {
     } else if (step.action === 'gather') {
       actor.targetX = WIDTH / 2;
       actor.state = 'walk';
-    } else if (step.action === 'walk') {
-      actor.dx = Number(step.value) < 0 ? -1 : 1;
-      actor.state = 'walk';
-    } else actor.state = step.action;
+    } else if (step.action === 'walk' || step.action === 'run') {
+      actor.dx =
+        step.action === 'run'
+          ? actor.direction
+          : Number(step.value) < 0
+            ? -1
+            : 1;
+      actor.runSpeed = number(step.value, 1.5, 6, 3);
+      actor.state = step.action;
+    } else actor.state = step.action === 'wait' ? 'idle' : step.action;
     actor.until = now + step.duration * 1000;
+    actor.motion = actor.state;
     actor.nextWalk = actor.until + 1000;
   }
   cheer(actor) {
@@ -440,9 +525,7 @@ class AvatarEngine {
       speeds: {},
     };
     for (const a of players) {
-      a.follow = null;
-      a.targetX = null;
-      a.contact = null;
+      this.resetMotion(a);
       this.game.speeds[a.id] = 1.7 + this.random() * 1.3;
       if (type === 'race')
         Body.setPosition(a.body, {
@@ -463,9 +546,10 @@ class AvatarEngine {
       this.say(winner, '1위!');
     }
     for (const a of this.actors.values()) {
-      a.dx = 0;
+      this.resetMotion(a);
       a.until = this.now() + 2000;
       a.state = 'wave';
+      a.motion = 'wave';
     }
     this.note(result);
   }
@@ -485,6 +569,35 @@ class AvatarEngine {
         this.remove(a.id);
         continue;
       }
+      if (a.flight) {
+        const f = a.flight,
+          elapsed = now - f.startedAt;
+        const ease = (v) => {
+          const t = Math.max(0, Math.min(1, v));
+          return t * t * (3 - 2 * t);
+        };
+        let y;
+        if (elapsed < f.edge)
+          y = f.fromY + (f.topY - f.fromY) * ease(elapsed / f.edge);
+        else if (elapsed < f.duration - f.edge) {
+          const progress = (elapsed - f.edge) / (f.duration - 2 * f.edge);
+          y =
+            f.topY +
+            Math.sin(progress * Math.PI) ** 2 *
+              Math.sin((elapsed - f.edge) / 400) *
+              5;
+        } else
+          y =
+            f.topY +
+            (f.landY - f.topY) * ease((elapsed - f.duration + f.edge) / f.edge);
+        Body.setPosition(a.body, { x: a.body.position.x, y });
+        if (elapsed < f.duration) {
+          a.state = 'float';
+          continue;
+        }
+        this.resetMotion(a);
+        Body.setVelocity(a.body, { x: 0, y: 0 });
+      }
       let vx = 0;
       const racing =
         this.game?.type === 'race' &&
@@ -492,8 +605,9 @@ class AvatarEngine {
         this.game.players.includes(a.id);
       if (racing) {
         vx = this.game.speeds[a.id] * 2;
-        a.state = 'walk';
+        a.state = 'run';
       } else if (a.until > now) {
+        a.state = a.motion || a.state;
         if (a.follow) a.targetX = this.actors.get(a.follow)?.body.position.x;
         if (a.targetX != null) {
           const distance = a.targetX - a.body.position.x;
@@ -513,6 +627,7 @@ class AvatarEngine {
               a.effect = target.effect;
               a.effectUntil = now + 1200;
               if (pushing) {
+                this.resetMotion(target);
                 target.pushedUntil = now + 500;
                 Body.setVelocity(target.body, {
                   x: a.body.position.x < target.body.position.x ? 9 : -9,
@@ -522,7 +637,14 @@ class AvatarEngine {
             }
             a.contact = null;
           }
-        } else if (a.state === 'walk') vx = a.dx * this.config.speed * 2;
+          if (!vx) a.state = 'idle';
+          else a.state = 'walk';
+        } else if (a.state === 'walk' || a.state === 'run') {
+          if (a.body.position.x < 50) a.dx = 1;
+          if (a.body.position.x > WIDTH - 50) a.dx = -1;
+          vx =
+            a.dx * this.config.speed * 2 * (a.state === 'run' ? a.runSpeed : 1);
+        }
       } else {
         a.follow = null;
         a.targetX = null;
@@ -590,6 +712,23 @@ class AvatarEngine {
       paused: this.config.paused,
       showNames: this.config.showNames,
       ground: this.ground,
+      previewHeight: Math.min(
+        HEIGHT,
+        Math.max(
+          360,
+          this.config.floor +
+            this.config.size * 1.6 +
+            70 +
+            Math.max(
+              200,
+              ...this.config.rules.flatMap((r) =>
+                r.steps
+                  .filter((s) => s.action === 'float')
+                  .map((s) => number(s.value, 30, 500, 160)),
+              ),
+            ),
+        ),
+      ),
       avatars: this.config.avatars,
       actors: [...this.actors.values()].map((a) => ({
         id: a.id,
@@ -601,6 +740,7 @@ class AvatarEngine {
         y: a.body.position.y + 16,
         direction: a.direction,
         state: a.state,
+        animationRate: a.state === 'run' ? 1.7 : 1,
         bubble: a.bubbleUntil > now ? a.bubble : '',
         effect: a.effectUntil > now ? a.effect : '',
         test: a.test,

@@ -1,7 +1,17 @@
 const crypto = require('crypto');
 const { avatars: bundledAvatars } = require('./bundled.cjs');
 
-const STATES = ['idle', 'walk', 'jump', 'dance', 'wave', 'sit', 'hit'];
+const STATES = [
+  'idle',
+  'walk',
+  'run',
+  'float',
+  'jump',
+  'dance',
+  'wave',
+  'sit',
+  'hit',
+];
 const ACTIONS = [
   'wait',
   'jump',
@@ -9,6 +19,8 @@ const ACTIONS = [
   'wave',
   'sit',
   'walk',
+  'run',
+  'float',
   'gather',
   'follow',
   'highfive',
@@ -26,9 +38,10 @@ const LIMITS = {
   actors: 150,
   rules: 64,
   steps: 8,
+  duration: 120,
 };
 const number = (value, min, max, fallback) =>
-  Number.isFinite(Number(value))
+  value !== '' && value != null && Number.isFinite(Number(value))
     ? Math.min(max, Math.max(min, Number(value)))
     : fallback;
 const text = (value, limit = 80) =>
@@ -42,6 +55,51 @@ const assetId = (value) =>
   /^[a-f0-9]{64}\.(png|gif|webp|jpg)$/.test(String(value)) ? value : '';
 const bool = (value, fallback) =>
   typeof value === 'boolean' ? value : fallback;
+
+function motionRules() {
+  return [
+    ['run', '달리기', ['!달리기', '!run'], '3'],
+    ['float', '공중부양', ['!부양', '!공중부양', '!float'], '160'],
+  ].map(([action, name, aliases, value]) => ({
+    id: `builtin-${action}-v2`,
+    name,
+    aliases,
+    enabled: true,
+    trigger: 'command',
+    role: 'everyone',
+    cooldown: 3,
+    minimum: 0,
+    durationFromChat: true,
+    steps: [{ action, value, duration: 5 }],
+  }));
+}
+
+function migrateConfig(config) {
+  if (!config || Number(config.version) >= 2 || !Array.isArray(config.rules))
+    return config;
+  const aliases = new Set(
+    config.rules.flatMap((r) =>
+      Array.isArray(r.aliases)
+        ? r.aliases.map((a) => String(a).toLowerCase())
+        : String(r.aliases || '')
+            .toLowerCase()
+            .split(/\s+/),
+    ),
+  );
+  const additions = motionRules().filter(
+    (r) =>
+      !config.rules.some((v) => v.id === r.id) &&
+      !r.aliases.some((a) => aliases.has(a)),
+  );
+  return {
+    ...config,
+    version: 2,
+    rules: [
+      ...config.rules,
+      ...additions.slice(0, Math.max(0, LIMITS.rules - config.rules.length)),
+    ],
+  };
+}
 
 function defaultConfig() {
   const commands = [
@@ -57,7 +115,7 @@ function defaultConfig() {
     ['밀기', '!밀기 !push', 'push'],
   ];
   return {
-    version: 1,
+    version: 2,
     enabled: false,
     paused: false,
     port: 17841,
@@ -73,17 +131,21 @@ function defaultConfig() {
     allowTargeting: false,
     defaultAvatar: bundledAvatars[0].id,
     avatars: structuredClone(bundledAvatars),
-    rules: commands.map(([name, aliases, action, value]) => ({
-      id: id(),
-      name,
-      aliases: aliases.split(' '),
-      enabled: true,
-      trigger: 'command',
-      role: 'everyone',
-      cooldown: 3,
-      minimum: 0,
-      steps: [{ action, value: value || '', duration: 2 }],
-    })),
+    rules: [
+      ...commands.map(([name, aliases, action, value]) => ({
+        id: id(),
+        name,
+        aliases: aliases.split(' '),
+        enabled: true,
+        trigger: 'command',
+        role: 'everyone',
+        cooldown: 3,
+        minimum: 0,
+        durationFromChat: false,
+        steps: [{ action, value: value || '', duration: 2 }],
+      })),
+      ...motionRules(),
+    ],
   };
 }
 
@@ -188,19 +250,25 @@ function validateConfig(input, previous = defaultConfig()) {
       role: r.role,
       cooldown: number(r.cooldown, 1, 600, 3),
       minimum: number(r.minimum, 0, 1e9, 0),
+      durationFromChat: r.trigger === 'command' && r.durationFromChat === true,
       steps: r.steps.map((step) => {
         if (!ACTIONS.includes(step.action))
           throw new Error('지원하지 않는 동작입니다.');
         return {
           action: step.action,
           value: text(step.value, 100),
-          duration: number(step.duration, 0.1, 10, 2),
+          duration: number(
+            step.duration,
+            0.1,
+            LIMITS.duration,
+            ['run', 'float'].includes(step.action) ? 5 : 2,
+          ),
         };
       }),
     };
   });
   return {
-    version: 1,
+    version: 2,
     key: previous.key,
     port: Math.round(number(input.port, 1024, 65535, previous.port)),
     enabled: bool(input.enabled, previous.enabled),
@@ -234,4 +302,5 @@ module.exports = {
   assetId,
   defaultConfig,
   validateConfig,
+  migrateConfig,
 };

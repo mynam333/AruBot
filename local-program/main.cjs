@@ -2156,7 +2156,7 @@ function connectAgentSocket() {
     if (message?.type === 'jobs.available') {
       claimAndProcessJobs();
     }
-    if (message?.type === 'avatars.status') avatarService?.setConnection(message.ready === true);
+    if (message?.type === 'avatars.status') avatarService?.setConnection(message.ready === true && message.subscribed !== false);
     if (message?.type === 'avatars.event') avatarService?.receive(message.event);
   });
 
@@ -2384,6 +2384,7 @@ ipcMain.handle('avatars:backup', async (event, restore) => {
     const confirmation = await dialog.showMessageBox(mainWindow, { type: 'warning', buttons: ['취소', '복원'], defaultId: 0, cancelId: 0, message: '현재 캐릭터와 반응 설정을 백업 내용으로 교체할까요?', detail: '시청자 기록은 유지되며 아바타 실행은 중지됩니다.' });
     if (confirmation.response !== 1) return null;
     const next = await service.storage.restoreBackup(selected.filePaths[0]); service.engine.setConfig(next);
+    service.preview.clear(); service.applyPreview(next);
     sendAgentSocketMessage({ type: 'avatars.subscribe', enabled: false });
   } else {
     const selected = await dialog.showSaveDialog(mainWindow, { title: '아바타 백업', defaultPath: 'arubot.aruavatars', filters: [{ name: 'AruBot 아바타', extensions: ['aruavatars'] }] });

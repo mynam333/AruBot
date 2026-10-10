@@ -8,6 +8,7 @@ const {
   assetId,
   defaultConfig,
   validateConfig,
+  migrateConfig,
 } = require('./schema.cjs');
 const { files: bundledFiles, migrateLegacyAvatars } = require('./bundled.cjs');
 
@@ -66,7 +67,7 @@ class AvatarStorage {
     this.warning = '';
     fs.mkdirSync(this.assetRoot, { recursive: true });
     this.config = this.read('config.json', defaultConfig(), (v) => {
-      const config = validateConfig(migrateLegacyAvatars(v), {
+      const config = validateConfig(migrateConfig(migrateLegacyAvatars(v)), {
         ...defaultConfig(),
         key: /^[a-f0-9]{48}$/.test(v.key) ? v.key : defaultConfig().key,
       });
@@ -236,7 +237,12 @@ class AvatarStorage {
     )
       throw new Error('지원하지 않는 백업입니다.');
     const config = validateConfig(
-      { ...data.config, enabled: false, paused: false, port: this.config.port },
+      {
+        ...migrateConfig(data.config),
+        enabled: false,
+        paused: false,
+        port: this.config.port,
+      },
       this.config,
     );
     const buffers = new Map();
