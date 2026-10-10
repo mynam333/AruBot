@@ -23,6 +23,7 @@ const fields = {
 };
 
 const pageMeta = {
+  avatars: { title: '아바타', description: '방송 하단 캐릭터' },
   connect: {
     title: '방송 도구를 안전하게 연결하세요.',
     description: '아루봇과 실시간으로 연결해 방송 PC의 OBS, T.I.T.S., VTube Studio, TTS, 사운드 효과를 바로 실행합니다.',
@@ -70,6 +71,7 @@ const localTaskLogs = [];
 
 function setActivePage(page) {
   const nextPage = pageMeta[page] ? page : 'connect';
+  document.body.classList.toggle('avatar-page', nextPage === 'avatars');
   document.querySelectorAll('.page').forEach((element) => {
     element.classList.toggle('active', element.dataset.page === nextPage);
   });

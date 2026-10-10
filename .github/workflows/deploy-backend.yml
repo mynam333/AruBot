@@ -73,6 +73,7 @@ jobs:
           npx tsc --noEmit --pretty false --incremental false
           npm test -- --runInBand
           npm run test:drawing
+          npm run test:avatars
           npm run build
 
       - name: Create backend artifact

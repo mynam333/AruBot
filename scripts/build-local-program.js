@@ -11,6 +11,7 @@ const publicDir = path.join(root, 'public', 'downloads', 'local-program');
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 const localProgramVersion = process.env.ARUBOT_LOCAL_VERSION || packageJson.version;
 const externalMode = process.argv.includes('--external') || process.env.ARUBOT_LOCAL_COPY_EXE_TO_PUBLIC === 'false';
+const stageOnly = process.argv.includes('--stage-only');
 
 function loadDotEnv() {
   const envPath = path.join(root, '.env');
@@ -92,6 +93,8 @@ function prepareAppStage() {
     dependencies: {
       'electron-updater': packageJson.dependencies['electron-updater'],
       ws: packageJson.dependencies.ws,
+      'matter-js': packageJson.dependencies['matter-js'],
+      sharp: packageJson.dependencies.sharp,
     },
   }, null, 2)}\n`, 'utf8');
   const runtimeEnv = {
@@ -105,6 +108,11 @@ function prepareAppStage() {
     'utf8',
   );
   run('npm', ['install', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: appStageDir });
+}
+
+if (stageOnly) {
+  prepareAppStage();
+  process.exit(0);
 }
 
 cleanDirectory(distDir);

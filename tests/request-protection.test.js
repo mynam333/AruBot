@@ -312,23 +312,28 @@ test('local-agent heartbeat bursts coalesce DB writes and unregister on close', 
   let finishWrite;
   const write = new Promise((resolve) => { finishWrite = resolve; });
   const unregister = jest.fn();
+  const localAvatarRelay = { start: jest.fn(), subscribe: jest.fn(), remove: jest.fn() };
   const touchAutomationLocalAgent = jest.fn().mockResolvedValueOnce(null).mockImplementation(() => write);
   const { registerAutomationLocalAgentRoutes } = loadServerFunctions(['registerAutomationLocalAgentRoutes'], {
     WebSocketServer: class { on(event, callback) { if (event === 'connection') connected = callback; } },
     WebSocket, wssAutomationLocalAgent: null, enableWebSocketHeartbeat() {}, PORT: 1, URL,
-    console: { log() {}, error() {} }, authenticateAutomationLocalAgent: async () => ({ id: 'agent' }),
+    console: { log() {}, error() {} }, authenticateAutomationLocalAgent: async () => ({ id: 'agent', ownerUserId: 'owner-a' }),
     registerAutomationLocalAgentSocket: () => unregister, touchAutomationLocalAgent,
     getAutomationCapabilitiesFromMessage: () => ({}),
+    localAvatarRelay, crypto: require('crypto'),
   });
   registerAutomationLocalAgentRoutes();
   const ws = socket();
   await connected(ws, { url: '/api/automations/local-agent/ws', headers: { authorization: 'Bearer test' } });
+  ws.emit('message', '{"type":"avatars.subscribe","enabled":true,"owner":"untrusted-owner"}');
+  expect(localAvatarRelay.subscribe).toHaveBeenCalledWith('owner-a', ws, true);
   for (let i = 0; i < 10; i += 1) ws.emit('message', '{"type":"heartbeat"}');
   expect(touchAutomationLocalAgent).toHaveBeenCalledTimes(2);
   finishWrite(null);
   await write;
   ws.close();
   expect(unregister).toHaveBeenCalledTimes(1);
+  expect(localAvatarRelay.remove).toHaveBeenCalledWith(ws);
 });
 
 test('locks patched security dependencies without widening the legacy CHZZK exception', () => {

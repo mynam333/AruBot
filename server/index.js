@@ -1,4 +1,6 @@
 import express from 'express';
+import { createLocalAvatarRelay, normalizeChzzkAvatarEvent } from './local-avatar-relay.js';
+import { createLocalAvatarNotificationClient, publishLocalAvatarNotification } from './supabase.js';
 import { createRequestProtection, rejectUnsafeTextInput } from './request-protection.js';
 import { assertSafeTextPayload, createSafeJsonReplacer, inspectTextPayload } from '../shared/text-safety.js';
 import { downloadDrawingDonationObject, getDurableRuntimeJob, findSidByDrawingViewerToken } from './supabase.js';
@@ -17526,6 +17528,18 @@ async function requireAutomationLocalAgent(req, res, next) {
 }
 
 const automationLocalAgentSocketsByOwner = new Map();
+const localAvatarRelay = createLocalAvatarRelay({
+  createClient: createLocalAvatarNotificationClient,
+  publish: publishLocalAvatarNotification,
+  onError: (error) => console.warn('[local avatars] relay unavailable:', error?.message || error),
+});
+
+function relayChzzkAvatarEvent(entry, event) {
+  const normalized = normalizeChzzkAvatarEvent(entry, event);
+  if (!normalized) return;
+  const owners = new Set([...(entry.sids || []), entry.primarySid].filter(Boolean).map(ownerUserIdFromSid));
+  for (const owner of owners) localAvatarRelay.emit(owner, normalized);
+}
 
 function getAutomationCapabilitiesFromMessage(message = {}) {
   const capabilities = message && typeof message.capabilities === 'object' ? message.capabilities : {};
@@ -24189,6 +24203,7 @@ async function ensureSession(sid, channelId) {
       pushEvent(entry, ev);
 
       // Server-side rule processing: if message starts with any enabled keyword, reply
+      relayChzzkAvatarEvent(entry, ev);
       (async () => {
         try {
           const text = String(ev.message || '').trim();
@@ -24852,6 +24867,7 @@ async function ensureSession(sid, channelId) {
       };
       pushEvent(entry, ev);
       // Process donation: award channel points and trigger donation rules
+      relayChzzkAvatarEvent(entry, ev);
       (async () => {
         try {
           const sid = [...sessionStore.entries()].find(([, e]) => e === entry)?.[0];
@@ -25034,6 +25050,7 @@ async function ensureSession(sid, channelId) {
         raw: msg,
       };
       pushEvent(entry, ev);
+      relayChzzkAvatarEvent(entry, ev);
     });
 
     socket.on('disconnect', (reason) => {
@@ -28643,6 +28660,7 @@ async function gracefulShutdown(signal, { exitCode = 0 } = {}) {
       try { await redisPublisher?.quit?.(); } catch { }
       await Promise.allSettled(leasesToRelease.map((state) => releaseRuntimeLease(state.resourceKey, INSTANCE_ID)));
       await closeHttpServer();
+      await localAvatarRelay.stop();
       await closeDatabaseConnections();
 
       clearTimeout(forceTimer);
@@ -30048,6 +30066,7 @@ async function getBotSettingsByFxTokenFallback(token) {
 try { registerFxRoutes(); } catch (e) { console.error('[fx ws] failed to register routes', e?.message || e); }
 
 function registerAutomationLocalAgentRoutes() {
+  localAvatarRelay.start();
   console.log('[automation local ws] initializing WebSocketServer on /api/automations/local-agent/ws');
   wssAutomationLocalAgent = new WebSocketServer({
     noServer: true,
@@ -30058,7 +30077,7 @@ function registerAutomationLocalAgentRoutes() {
   wssAutomationLocalAgent.on('connection', async (ws, req) => {
     let agent = null;
     let unregister = () => {};
-    ws.once('close', () => unregister());
+    ws.once('close', () => { unregister(); localAvatarRelay.remove(ws); });
     try {
       const url = new URL(req.url, `http://localhost:${PORT}`);
       const auth = String(req.headers.authorization || '').trim();
@@ -30076,11 +30095,13 @@ function registerAutomationLocalAgentRoutes() {
         version: String(req.headers['x-arubot-local-version'] || ''),
       }).catch(() => null);
       if (ws.readyState !== WebSocket.OPEN) return;
-      try { ws.send(JSON.stringify({ type: 'hello', at: new Date().toISOString() })); } catch { }
+      try { ws.send(JSON.stringify({ type: 'hello', at: new Date().toISOString(), avatars: true, avatarScope: crypto.createHash('sha256').update(String(agent.ownerUserId)).digest('hex') })); } catch { }
       try { ws.send(JSON.stringify({ type: 'jobs.available', reason: 'connected', at: new Date().toISOString() })); } catch { }
 
       let heartbeatWrite = null;
       let heartbeatTouchedAt = 0;
+      let avatarsSubscribed = false;
+      let avatarAuthAt = Date.now();
       ws.on('message', async (raw) => {
         let message = null;
         try {
@@ -30088,7 +30109,17 @@ function registerAutomationLocalAgentRoutes() {
         } catch {
           return;
         }
+        if (message?.type === 'avatars.subscribe') {
+          avatarsSubscribed = message.enabled === true;
+          localAvatarRelay.subscribe(agent.ownerUserId, ws, avatarsSubscribed);
+          return;
+        }
         if (message?.type === 'heartbeat') {
+          if (avatarsSubscribed && Date.now() - avatarAuthAt > 30000) {
+            avatarAuthAt = Date.now();
+            const authenticated = await authenticateAutomationLocalAgent(token).catch(() => null);
+            if (!authenticated || authenticated.ownerUserId !== agent.ownerUserId) { ws.close(1008, 'Local program token expired'); return; }
+          }
           if (!heartbeatWrite && Date.now() - heartbeatTouchedAt >= 10000) {
             heartbeatTouchedAt = Date.now();
             heartbeatWrite = touchAutomationLocalAgent(agent.id, getAutomationCapabilitiesFromMessage(message))

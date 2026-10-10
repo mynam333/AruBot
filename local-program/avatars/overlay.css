@@ -1,0 +1,139 @@
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  font-family: 'Segoe UI', sans-serif;
+  letter-spacing: 0;
+}
+#stage {
+  position: absolute;
+  width: 1920px;
+  height: 1080px;
+  transform-origin: bottom left;
+  bottom: 0;
+  left: 0;
+  pointer-events: none;
+}
+.actor {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+}
+.appearance {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  transform-origin: bottom center;
+}
+.sprite {
+  display: block;
+  object-fit: contain;
+  width: 100%;
+  height: 100%;
+  background-repeat: no-repeat;
+  image-rendering: auto;
+}
+.name {
+  position: absolute;
+  bottom: calc(var(--size) + 2px);
+  left: 0;
+  transform: translateX(-50%);
+  font-size: 20px;
+  font-weight: 700;
+  text-shadow:
+    0 1px 3px #000,
+    0 0 4px #000;
+  white-space: nowrap;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bubble {
+  position: absolute;
+  bottom: calc(var(--size) + 32px);
+  left: 0;
+  transform: translateX(-50%);
+  max-width: 230px;
+  min-width: 50px;
+  width: max-content;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #fff;
+  color: #222;
+  font-size: 18px;
+  overflow-wrap: anywhere;
+  box-shadow: 0 2px 8px #0002;
+  text-align: center;
+}
+.effect {
+  position: absolute;
+  bottom: calc(var(--size) + 2px);
+  left: 0;
+  color: #fff;
+  font-size: 27px;
+  text-shadow: 0 0 4px #151a23;
+  transform: translateX(-50%);
+}
+.dance:not(.native-clip) .sprite {
+  animation: dance 0.4s ease-in-out infinite alternate;
+}
+.wave:not(.native-clip) .sprite {
+  animation: wave 0.45s ease-in-out infinite alternate;
+}
+.walk:not(.native-clip) .sprite {
+  animation: walk 0.3s ease-in-out infinite alternate;
+}
+.sit:not(.native-clip) .sprite {
+  transform: scaleY(0.7);
+  transform-origin: bottom;
+}
+.paused .sprite {
+  animation-play-state: paused;
+}
+#game {
+  position: absolute;
+  bottom: 245px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 14px 26px;
+  background: #fff;
+  color: #1e2930;
+  border-radius: 8px;
+  box-shadow: 0 2px 12px #0002;
+  font-size: 25px;
+  max-width: 1300px;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+@keyframes dance {
+  from {
+    transform: rotate(-12deg) translateY(0);
+  }
+  to {
+    transform: rotate(12deg) translateY(-14px);
+  }
+}
+@keyframes wave {
+  from {
+    transform: rotate(-5deg);
+  }
+  to {
+    transform: rotate(8deg);
+  }
+}
+@keyframes walk {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-4px);
+  }
+}

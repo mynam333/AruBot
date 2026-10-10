@@ -45,6 +45,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Verify local avatar runtime
+        run: npm run test:avatars
+
       - name: Prepare release variables
         shell: bash
         run: |

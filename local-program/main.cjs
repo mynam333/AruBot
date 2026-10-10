@@ -1,4 +1,5 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, clipboard } = require('electron');
+const { AvatarService } = require('./avatars/service.cjs');
 const { autoUpdater } = require('electron-updater');
 const { spawn } = require('child_process');
 const path = require('path');
@@ -82,6 +83,13 @@ const DEFAULT_CONFIG = {
 };
 
 let mainWindow = null;
+let avatarService = null;
+let avatarStartupError = '';
+const singleInstance = app.requestSingleInstanceLock();
+if (!singleInstance) app.quit();
+app.on('second-instance', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.restore(); mainWindow.show(); mainWindow.focus(); }
+});
 let running = false;
 let agentSocket = null;
 let agentSocketReconnectTimer = null;
@@ -2136,6 +2144,11 @@ function connectAgentSocket() {
       return;
     }
     if (message?.type === 'hello' || message?.type === 'heartbeat.ack') {
+      if (message.type === 'hello') {
+        avatarService?.setConnection(false, message.avatarScope || '');
+        if (message.avatars) sendAgentSocketMessage({ type: 'avatars.subscribe', enabled: avatarService?.storage.config.enabled === true });
+        else if (avatarService) avatarService.lastError = '아바타 채팅 연동에는 백엔드 업데이트가 필요합니다.';
+      }
       stats.lastHeartbeatAt = message.at || new Date().toISOString();
       emitState();
       return;
@@ -2143,9 +2156,12 @@ function connectAgentSocket() {
     if (message?.type === 'jobs.available') {
       claimAndProcessJobs();
     }
+    if (message?.type === 'avatars.status') avatarService?.setConnection(message.ready === true);
+    if (message?.type === 'avatars.event') avatarService?.receive(message.event);
   });
 
   socket.once('close', () => {
+    avatarService?.setConnection(false);
     if (agentSocket === socket) agentSocket = null;
     if (agentSocketHeartbeatTimer) clearInterval(agentSocketHeartbeatTimer);
     agentSocketHeartbeatTimer = null;
@@ -2184,6 +2200,7 @@ async function startAgent() {
 }
 
 function stopAgent() {
+  avatarService?.setConnection(false, '');
   running = false;
   stopAgentSocket();
   stopAgentPolling();
@@ -2331,6 +2348,50 @@ function createWindow() {
 }
 
 ipcMain.handle('state:get', () => getPublicState());
+function requireAvatarService(event) {
+  if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) throw new Error('아바타 제어 권한이 없습니다.');
+  if (!avatarService) throw new Error(avatarStartupError || '아바타를 초기화하는 중입니다.');
+  return avatarService;
+}
+
+ipcMain.handle('avatars:state', (event) => requireAvatarService(event).state());
+ipcMain.handle('avatars:save', async (event, next) => {
+  const service = requireAvatarService(event);
+  if (JSON.stringify(next).length > 256 * 1024) throw new Error('아바타 설정이 너무 큽니다.');
+  const state = await service.save(next);
+  sendAgentSocketMessage({ type: 'avatars.subscribe', enabled: state.config.enabled });
+  return state;
+});
+ipcMain.handle('avatars:command', (event, command, payload) => requireAvatarService(event).command(command, payload));
+ipcMain.handle('avatars:copy', (event, text) => {
+  const service = requireAvatarService(event);
+  clipboard.writeText(text === 'commands'
+    ? ['!입장 !퇴장 !캐릭터 이름 !색 #RRGGBB !크기 0.5~1.6 !응원', ...service.storage.config.rules.filter((r) => r.enabled && r.trigger === 'command').map((r) => `${r.name}: ${r.aliases.join(' ')}`)].join('\n')
+    : service.url);
+  return true;
+});
+ipcMain.handle('avatars:import', async (event) => {
+  const service = requireAvatarService(event);
+  const selected = await dialog.showOpenDialog(mainWindow, { title: '캐릭터 이미지', properties: ['openFile'], filters: [{ name: '이미지', extensions: ['png', 'gif', 'webp', 'jpg', 'jpeg'] }] });
+  if (selected.canceled) return null;
+  return service.storage.importImage(selected.filePaths[0]);
+});
+ipcMain.handle('avatars:backup', async (event, restore) => {
+  const service = requireAvatarService(event);
+  if (restore) {
+    const selected = await dialog.showOpenDialog(mainWindow, { title: '아바타 백업 복원', properties: ['openFile'], filters: [{ name: 'AruBot 아바타', extensions: ['aruavatars'] }] });
+    if (selected.canceled) return null;
+    const confirmation = await dialog.showMessageBox(mainWindow, { type: 'warning', buttons: ['취소', '복원'], defaultId: 0, cancelId: 0, message: '현재 캐릭터와 반응 설정을 백업 내용으로 교체할까요?', detail: '시청자 기록은 유지되며 아바타 실행은 중지됩니다.' });
+    if (confirmation.response !== 1) return null;
+    const next = await service.storage.restoreBackup(selected.filePaths[0]); service.engine.setConfig(next);
+    sendAgentSocketMessage({ type: 'avatars.subscribe', enabled: false });
+  } else {
+    const selected = await dialog.showSaveDialog(mainWindow, { title: '아바타 백업', defaultPath: 'arubot.aruavatars', filters: [{ name: 'AruBot 아바타', extensions: ['aruavatars'] }] });
+    if (selected.canceled) return null;
+    service.storage.exportBackup(selected.filePath);
+  }
+  return service.state();
+});
 ipcMain.handle('config:save', (_event, next) => {
   const state = saveConfig(next || {});
   addLog('success', '설정을 저장했습니다.');
@@ -2535,7 +2596,12 @@ ipcMain.handle('update:install', async () => {
 });
 
 app.whenReady().then(() => {
+  if (!singleInstance) return;
   loadConfig();
+  try {
+    avatarService = new AvatarService(dataPath('avatars'), { onError: (error) => addLog('error', '아바타 오류', error.message) });
+    avatarService.start().catch((error) => addLog('error', '아바타 출력 서버 시작 실패', error.message));
+  } catch (error) { avatarStartupError = error.message; addLog('error', '아바타 초기화 실패', error.message); }
   const lastUpdateResult = inspectLastUpdateApplyResult();
   if (!lastUpdateResult) loadPendingUpdate();
   createWindow();
@@ -2550,6 +2616,7 @@ app.whenReady().then(() => {
 });
 
 app.on('before-quit', () => {
+  if (avatarService) { try { avatarService.flush(); } catch (error) { addLog('error', '아바타 저장 실패', error.message); } }
   scheduleSilentInstallerOnQuit();
   stopAgent();
 });

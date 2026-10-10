@@ -208,6 +208,15 @@ function createPgClient(dbUrl = getDbUrl()) {
   return new Client(pgClientOptions(dbUrl));
 }
 
+export function createLocalAvatarNotificationClient() {
+  return createPgClient();
+}
+
+export async function publishLocalAvatarNotification(channel, payload) {
+  if (channel !== 'arubot_local_avatars_v1' || Buffer.byteLength(payload) > 7900) throw new Error('Invalid avatar notification');
+  await getPgPool().query('select pg_notify($1, $2)', [channel, payload]);
+}
+
 function quoteIdent(value) {
   return String(value).split('.').map((part) => `"${part.replace(/"/g, '""')}"`).join('.');
 }

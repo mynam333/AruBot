@@ -49,6 +49,7 @@
     "preview": "next start",
     "test": "jest",
     "test:drawing": "node --test tests/drawing-v2.test.mjs tests/drawing-selection.test.mjs tests/drawing-local-storage.test.mjs tests/drawing-archive.test.mjs tests/drawing-retention.test.mjs",
+    "test:avatars": "node --test tests/local-avatars.test.cjs tests/local-avatar-relay.test.mjs",
     "test:watch": "jest --watch"
   },
   "dependencies": {
@@ -78,6 +79,7 @@
     "hls.js": "^1.6.16",
     "ipaddr.js": "1.9.1",
     "lucide-react": "^0.414.0",
+    "matter-js": "0.20.0",
     "motion": "^12.42.1",
     "next": "16.3.8",
     "next-themes": "^0.4.6",

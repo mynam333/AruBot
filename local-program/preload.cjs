@@ -1,6 +1,12 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('aruLocal', {
+  avatarState: () => ipcRenderer.invoke('avatars:state'),
+  avatarSave: (config) => ipcRenderer.invoke('avatars:save', config),
+  avatarCommand: (command, payload) => ipcRenderer.invoke('avatars:command', command, payload),
+  avatarImport: () => ipcRenderer.invoke('avatars:import'),
+  avatarBackup: (restore = false) => ipcRenderer.invoke('avatars:backup', restore),
+  avatarCopy: (kind) => ipcRenderer.invoke('avatars:copy', kind),
   getState: () => ipcRenderer.invoke('state:get'),
   saveConfig: (config) => ipcRenderer.invoke('config:save', config),
   start: () => ipcRenderer.invoke('agent:start'),
