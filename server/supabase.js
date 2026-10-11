@@ -10,6 +10,7 @@ import { decodeDrawingRecording } from './drawing-recording-storage.js';
 import { cleanupDrawingBatch, drawingRetentionDays, refundDrawingWithClient } from './drawing-retention.js';
 import { MAX_ORIGINAL_BYTES } from '../shared/drawing/limits.js';
 import { createParticipationWheelStore } from './participation-wheel.js';
+import { repairYoutubeAccountsWithClient, upsertYoutubeIdentityWithClient, updateYoutubeProfileWithClient } from './youtube-account-identity.js';
 const { Client, Pool } = pkg;
 
 export const {
@@ -5727,6 +5728,14 @@ export async function upsertPlatformIdentity(provider, profile, preferredUserId 
   if (!p || !platformUserId) throw new Error('provider and platformUserId are required');
   await ensurePlatformIdentityTables();
 
+  if (p === 'youtube') {
+    const result = await withPgClient((pg) => upsertYoutubeIdentityWithClient(
+      pg, profile, preferredUserId ? String(preferredUserId).replace(/^user:/, '') : null,
+    ));
+    invalidatePublicPointTableOwnerIndex();
+    return result;
+  }
+
   let userId = preferredUserId ? String(preferredUserId).replace(/^user:/, '') : null;
   let account = null;
   await withPgClient(async (pg) => {
@@ -5782,6 +5791,14 @@ export async function upsertPlatformIdentity(provider, profile, preferredUserId 
   });
   invalidatePublicPointTableOwnerIndex();
   return { userId, account };
+}
+
+export async function repairYoutubePlatformAccounts(userId) {
+  if (!userId) return 0;
+  await ensurePlatformIdentityTables();
+  const removed = await withPgClient((pg) => repairYoutubeAccountsWithClient(pg, String(userId).replace(/^user:/, '')));
+  if (removed) invalidatePublicPointTableOwnerIndex();
+  return removed;
 }
 
 export async function listPlatformAccounts(userId) {
@@ -6329,6 +6346,13 @@ export async function updatePlatformAccountProfile(provider, userId, platformUse
   const p = normalizeProvider(provider);
   if (!p || !userId || !platformUserId) throw new Error('provider, userId and platformUserId are required');
   await ensurePlatformIdentityTables();
+  if (p === 'youtube') {
+    const account = await withPgClient((pg) => updateYoutubeProfileWithClient(
+      pg, String(userId).replace(/^user:/, ''), String(platformUserId), profile,
+    ));
+    invalidatePublicPointTableOwnerIndex();
+    return account;
+  }
   let identityChanged = false;
   const account = await withPgClient(async (pg) => {
     const normalizedUserId = String(userId).replace(/^user:/, '');

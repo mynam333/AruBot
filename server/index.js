@@ -34,6 +34,8 @@ import { appendVideoDonationQueueCount, countNonDurableVideoDonationItems, count
 import { fetchYouTubeVideoMetadata } from './youtube-video-metadata.js';
 import { extractYoutubeChannelPageMetadata, isYoutubeChannelId } from './youtube-channel-page.js';
 import { isYoutubeGrantRevoked, validateYoutubeGrant } from './youtube-authorization.js';
+import { findYoutubeTokenAccount } from './youtube-account-identity.js';
+import { repairYoutubePlatformAccounts } from './supabase.js';
 import { createYoutubeIdleRecommendations } from './youtube-idle-recommendations.js';
 import { parseYouTubeMix } from '../shared/youtube-mix.js';
 import { createPvdDurationProbeCoordinator } from './pvd-duration-probe.js';
@@ -17945,8 +17947,15 @@ async function resolveYoutubeOAuthProfile(accessToken, { lookupChannel = true } 
   return { profile: identity, identity, channelResolved: false, dataApiFallback: true };
 }
 
-async function fetchYoutubeMyChannel(ownerUserId) {
-  const response = await youtubeApiGet('channels', ownerUserId, { part: 'snippet', mine: 'true' });
+async function fetchYoutubeMyChannel(ownerUserId, expectedPlatformUserId = null) {
+  const accessToken = await getValidYoutubeAccessToken(ownerUserId);
+  if (expectedPlatformUserId) {
+    const current = await getPlatformTokens('youtube', ownerUserId);
+    if (current?.platformUserId !== expectedPlatformUserId || current?.accessToken !== accessToken) {
+      throw new Error('YouTube connection changed during refresh. Please try again.');
+    }
+  }
+  const response = await youtubeApiGetWithAccessToken('channels', accessToken, { part: 'snippet', mine: 'true' });
   const item = Array.isArray(response?.data?.items) ? response.data.items[0] : null;
   return normalizeYoutubeProfile(item);
 }
@@ -20243,13 +20252,22 @@ app.post('/api/account/platforms/refresh', rateLimiters.userWrite, async (req, r
     if (providerFilter && !['chzzk', 'cime', 'youtube'].includes(providerFilter)) {
       return res.status(400).json({ error: 'Unsupported provider' });
     }
-    const platforms = await listPlatformAccounts(ownerUserId).catch(() => []);
+    const refreshYoutube = !providerFilter || providerFilter === 'youtube';
+    const repairedYoutubeAccounts = refreshYoutube ? await repairYoutubePlatformAccounts(ownerUserId) : 0;
+    if (repairedYoutubeAccounts) invalidatePublicChannelIdentityCaches(ownerUserId);
+    const platforms = await listPlatformAccounts(ownerUserId);
+    const youtubeTokens = refreshYoutube ? await getPlatformTokens('youtube', ownerUserId) : null;
+    const youtubeAccount = findYoutubeTokenAccount(platforms, youtubeTokens?.platformUserId);
     const refreshed = [];
     const errors = [];
+    if (refreshYoutube && !youtubeAccount && platforms.some((account) => account.provider === 'youtube')) {
+      errors.push({ provider: 'youtube', error: 'No matching YouTube authorization. Please reconnect YouTube.' });
+    }
 
     for (const account of platforms) {
       const provider = String(account.provider || '').toLowerCase();
       if (providerFilter && provider !== providerFilter) continue;
+      if (provider === 'youtube' && account !== youtubeAccount) continue;
       const profile = {
         platformUserId: account.platform_user_id,
         channelId: account.channel_id || account.platform_user_id,
@@ -20267,7 +20285,7 @@ app.post('/api/account/platforms/refresh', rateLimiters.userWrite, async (req, r
           try { accessToken = await getValidCimeAccessToken(ownerUserId); } catch { }
           enriched = await platformProfiles.enrichCimeProfile(profile, accessToken, { forceRefresh: true });
         } else if (provider === 'youtube') {
-          enriched = await fetchYoutubeMyChannel(ownerUserId);
+          enriched = await fetchYoutubeMyChannel(ownerUserId, youtubeTokens.platformUserId);
         } else {
           enriched = {
             ...profile,
@@ -20307,7 +20325,7 @@ app.post('/api/account/platforms/refresh', rateLimiters.userWrite, async (req, r
     }
 
     const nextPlatforms = await listPlatformAccounts(ownerUserId).catch(() => refreshed);
-    return res.json({ userId: ownerUserId, sid: `user:${ownerUserId}`, platforms: nextPlatforms, refreshed, errors });
+    return res.json({ userId: ownerUserId, sid: `user:${ownerUserId}`, platforms: nextPlatforms, refreshed, errors, repairedYoutubeAccounts });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to refresh platform profiles' });
   }
