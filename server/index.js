@@ -39,6 +39,8 @@ import { parseYouTubeMix } from '../shared/youtube-mix.js';
 import { createPvdDurationProbeCoordinator } from './pvd-duration-probe.js';
 import { resolvePvdYouTubeMetadata } from './pvd-youtube-metadata-fallback.js';
 import { createRouletteBroadcastDelivery } from './roulette-broadcast-delivery.js';
+import { createParticipationWheelRuntime, registerParticipationWheelRoutes } from './participation-wheel-runtime.js';
+import { getParticipationWheel, updateParticipationWheel, actParticipationWheel, enterParticipationWheel } from './supabase.js';
 import {
   parseChzzkLivePlaybackUrl,
   parseCimeLivePlaybackUrl,
@@ -114,6 +116,11 @@ if (!VERBOSE_LOGS) {
 }
 
 const app = express();
+const participationWheelRuntime = createParticipationWheelRuntime({
+  getWheel: getParticipationWheel,
+  enterWheel: enterParticipationWheel,
+  recordEvent: recordBotEventLogSafe,
+});
 app.set('trust proxy', String(process.env.ARUBOT_TRUSTED_PROXIES || 'loopback').split(',').map((value) => value.trim()).filter(Boolean));
 app.set('json replacer', createSafeJsonReplacer());
 const requestProtection = createRequestProtection({ trustProxy: app.get('trust proxy fn') });
@@ -22097,6 +22104,12 @@ function formatPredictionBetError(error) {
   return '예측 베팅 처리 중 오류가 발생했습니다.';
 }
 
+registerParticipationWheelRoutes(app, {
+  getPartitionId, getWheel: getParticipationWheel, updateWheel: updateParticipationWheel,
+  actWheel: actParticipationWheel, getBotRules, getBotSettings,
+  runtime: participationWheelRuntime, recordEvent: recordBotEventLogSafe, writeMiddleware: rateLimiters.userWrite,
+});
+
 async function handlePredictionBetCommand({ sid, channelUid, userId, username, text, provider }) {
   const parsed = parsePredictionBetCommand(text);
   if (!parsed) return null;
@@ -24372,6 +24385,21 @@ async function ensureSession(sid, channelId) {
           if (!botDisabled) {
             try {
               const channelUid = await resolveStreamerUidForSid(sid);
+              const wheelReply = !isBotSelf ? await participationWheelRuntime.chat({
+                sid, channelUid, userId: resolvedUserId, username: resolvedUsername,
+                provider: 'chzzk', text, event: msg,
+              }) : { handled: false };
+              if (wheelReply.handled) {
+                if (wheelReply.reply && entry.sessionKey) {
+                  const accessToken = await getValidAccessToken(sid);
+                  if (accessToken) await axios.post(`${OPENAPI_BASE}/open/v1/chats/send`, { message: wheelReply.reply }, {
+                    params: { sessionKey: entry.sessionKey },
+                    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+                  }).catch(() => {});
+                  rememberOutboundMessage(entry, wheelReply.reply);
+                }
+                return;
+              }
               const predictionReply = await handlePredictionBetCommand({
                 sid,
                 channelUid,
@@ -24878,6 +24906,10 @@ async function ensureSession(sid, channelId) {
           const donorName = String(ev.user || '?듬챸');
           const donorId = String(ev.id || '');
           const donorMessage = String(ev.message || '');
+          await participationWheelRuntime.donation({
+            sid, provider: 'chzzk', event: msg, userId: donorId, username: donorName,
+            text: donorMessage, amount, currency: 'KRW',
+          }).catch((error) => console.warn('[Wheel] CHZZK donation:', error?.message || error));
           // 1) Award channel points
           try {
             const settings = await getBotSettings(sid) || {};
@@ -25794,6 +25826,11 @@ async function processYoutubeDonationAutomation(entry, ev) {
     const donorId = String(ev.userId || `youtube-donor:${donorName}`);
     const donorMessage = String(ev.message || '');
 
+    await participationWheelRuntime.donation({
+      sid, provider: 'youtube', event: ev, userId: donorId, username: donorName,
+      text: donorMessage, amount, currency: ev.currency,
+    }).catch((error) => console.warn('[Wheel] YouTube donation:', error?.message || error));
+
     const pointsPerK = Math.max(0, Number(settings?.donation?.pointsPerK ?? 10));
     const award = calculateDonationPointAward(amount, pointsPerK);
     if (award > 0 && entry.channelId && !(await isChannelPointExcluded(settings, donorId))) {
@@ -25957,6 +25994,14 @@ async function processYoutubeChatAutomation(entry, ev) {
 
     if (isBotSelf || settings.botEnabled === false) return;
     try {
+      const wheelReply = await participationWheelRuntime.chat({
+        sid, channelUid: entry.channelId, userId: resolvedUserId, username: resolvedUsername,
+        provider: 'youtube', text, event: ev,
+      });
+      if (wheelReply.handled) {
+        if (wheelReply.reply) await sendYoutubeChat(ownerUserId, entry.liveChatId, wheelReply.reply).catch(() => {});
+        return;
+      }
       const predictionReply = await handlePredictionBetCommand({
         sid,
         channelUid: entry.channelId,
@@ -27111,6 +27156,14 @@ async function processCimeChatAutomation(entry, ev) {
 
     if (settings.botEnabled === false) return;
     try {
+      const wheelReply = await participationWheelRuntime.chat({
+        sid, channelUid: pointChannelUid || entry.channelId, userId: resolvedUserId, username: resolvedUsername,
+        provider: 'cime', text, event: ev,
+      });
+      if (wheelReply.handled) {
+        if (wheelReply.reply) await sendCimeChat(ownerUserId, wheelReply.reply).catch(() => {});
+        return;
+      }
       const predictionReply = await handlePredictionBetCommand({
         sid,
         channelUid: pointChannelUid || entry.channelId,
@@ -27421,6 +27474,11 @@ async function processCimeDonationAutomation(entry, ev) {
     const donorName = String(ev.user || 'Unknown');
     const donorId = String(ev.userId || `donor:${donorName}`);
     const donorMessage = String(ev.message || '');
+
+    await participationWheelRuntime.donation({
+      sid, provider: 'cime', event: ev, userId: donorId, username: donorName,
+      text: donorMessage, amount, currency: 'KRW',
+    }).catch((error) => console.warn('[Wheel] CIME donation:', error?.message || error));
 
     const pointsPerK = Math.max(0, Number(settings?.donation?.pointsPerK ?? 10));
     const award = calculateDonationPointAward(amount, pointsPerK);
@@ -30102,6 +30160,25 @@ function registerAutomationLocalAgentRoutes() {
       let heartbeatTouchedAt = 0;
       let avatarsSubscribed = false;
       let avatarAuthAt = Date.now();
+      let avatarCommandsAt = 0;
+      let avatarCommandsLoading = false;
+      const refreshAvatarCommands = async () => {
+        if (!avatarsSubscribed || avatarCommandsLoading || Date.now() - avatarCommandsAt < 30000) return;
+        avatarCommandsLoading = true;
+        avatarCommandsAt = Date.now();
+        try {
+          const rules = await getBotRules(`user:${agent.ownerUserId}`);
+          if (!avatarsSubscribed || ws.readyState !== WebSocket.OPEN) return;
+          const aliases = [...new Set(rules.filter((rule) => rule.enabled !== false)
+            .flatMap((rule) => Array.isArray(rule.keywords) ? rule.keywords : [])
+            .filter((keyword) => typeof keyword === 'string' && keyword.startsWith('!') && !/\s/u.test(keyword)))];
+          if (!localAvatarRelay.setCommands(agent.ownerUserId, aliases)) localAvatarRelay.setCommands(agent.ownerUserId, null);
+        } catch {
+          localAvatarRelay.setCommands(agent.ownerUserId, null);
+        } finally {
+          avatarCommandsLoading = false;
+        }
+      };
       ws.on('message', async (raw) => {
         let message = null;
         try {
@@ -30112,9 +30189,11 @@ function registerAutomationLocalAgentRoutes() {
         if (message?.type === 'avatars.subscribe') {
           avatarsSubscribed = message.enabled === true;
           localAvatarRelay.subscribe(agent.ownerUserId, ws, avatarsSubscribed);
+          if (avatarsSubscribed) void refreshAvatarCommands();
           return;
         }
         if (message?.type === 'heartbeat') {
+          if (avatarsSubscribed) void refreshAvatarCommands();
           if (avatarsSubscribed && Date.now() - avatarAuthAt > 30000) {
             avatarAuthAt = Date.now();
             const authenticated = await authenticateAutomationLocalAgent(token).catch(() => null);

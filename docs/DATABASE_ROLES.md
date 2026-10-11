@@ -14,6 +14,16 @@ grant those four table privileges through their normal role-provisioning policy.
 `npm run db:provider-smoke` with the runtime credential after migrations; it verifies
 both tables' effective write permissions inside rolled-back transactions.
 
+Migration `024_participation_wheel.sql` adds `public.participation_wheels` and
+`public.participation_wheel_requests`. Both contain private server state and have RLS
+enabled with no client policies. A separate runtime role needs CRUD grants **and**
+policies restricted to that trusted role, or must already be the table owner/an
+authorized BYPASSRLS service role. Do not grant BYPASSRLS globally just for this feature,
+and do not add policies for `public`, `anon`, or `authenticated`. Provision the two
+tables together. `db:provider-smoke` checks actual reads, writes, and deletes in a
+rolled-back transaction, so a missing grant or RLS policy blocks deployment before
+the active release changes.
+
 The deployment workflow runs migrations before switching the active release. A migration failure leaves the previous release active. Both runtime and migration clients require verified TLS for remote production databases; set `POSTGRES_SSL=verify-full` and provide `POSTGRES_SSL_CA` or `POSTGRES_SSL_CA_FILE` when the host certificate is not rooted in the system trust store.
 
 Rotate from the compatibility URL in two stages: create and validate the migration role, then create the runtime role and set both dedicated URLs. Keep the migration credential out of the long-running PM2 environment when deployment secret injection can provide it only to the migration command.

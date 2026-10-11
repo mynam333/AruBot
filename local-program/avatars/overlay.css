@@ -1,6 +1,9 @@
 * {
   box-sizing: border-box;
 }
+[hidden] {
+  display: none !important;
+}
 html,
 body {
   margin: 0;
@@ -19,6 +22,7 @@ body {
   bottom: 0;
   left: 0;
   pointer-events: none;
+  overflow: hidden;
 }
 .actor {
   position: absolute;
@@ -26,43 +30,43 @@ body {
   top: 0;
   width: 1px;
   height: 1px;
+  transform-origin: 0 0;
 }
 .appearance {
   position: absolute;
-  bottom: 0;
   left: 0;
-  transform-origin: bottom center;
+  top: 0;
+  transform-origin: center;
 }
 .sprite {
   display: block;
-  object-fit: contain;
   width: 100%;
   height: 100%;
   background-repeat: no-repeat;
   image-rendering: auto;
 }
-.name {
+.name,
+.bubble,
+.effect {
   position: absolute;
-  bottom: calc(var(--size) + 2px);
   left: 0;
   transform: translateX(-50%);
+  line-height: 1.25;
+}
+.name {
   font-size: 20px;
   font-weight: 700;
   text-shadow:
     0 1px 3px #000,
     0 0 4px #000;
   white-space: nowrap;
+  width: max-content;
   max-width: 240px;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .bubble {
-  position: absolute;
-  bottom: calc(var(--size) + 32px);
-  left: 0;
-  transform: translateX(-50%);
   max-width: 230px;
-  min-width: 50px;
   width: max-content;
   padding: 8px 12px;
   border-radius: 8px;
@@ -70,36 +74,20 @@ body {
   color: #222;
   font-size: 18px;
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  overflow: hidden;
   box-shadow: 0 2px 8px #0002;
   text-align: center;
 }
 .effect {
-  position: absolute;
-  bottom: calc(var(--size) + 2px);
-  left: 0;
   color: #fff;
   font-size: 27px;
+  white-space: nowrap;
   text-shadow: 0 0 4px #151a23;
-  transform: translateX(-50%);
-}
-.dance:not(.native-clip) .sprite {
-  animation: dance 0.4s ease-in-out infinite alternate;
-}
-.wave:not(.native-clip) .sprite {
-  animation: wave 0.45s ease-in-out infinite alternate;
-}
-.walk:not(.native-clip) .sprite {
-  animation: walk 0.3s ease-in-out infinite alternate;
-}
-.sit:not(.native-clip) .sprite {
-  transform: scaleY(0.7);
-  transform-origin: bottom;
-}
-.paused .sprite {
-  animation-play-state: paused;
 }
 #game {
   position: absolute;
+  z-index: 2;
   bottom: 245px;
   left: 50%;
   transform: translateX(-50%);
@@ -109,31 +97,37 @@ body {
   border-radius: 8px;
   box-shadow: 0 2px 12px #0002;
   font-size: 25px;
+  line-height: 1.3;
+  width: max-content;
   max-width: 1300px;
   text-align: center;
   overflow-wrap: anywhere;
+  overflow: hidden;
 }
-@keyframes dance {
-  from {
-    transform: rotate(-12deg) translateY(0);
-  }
-  to {
-    transform: rotate(12deg) translateY(-14px);
-  }
+#safe-guide {
+  display: none;
+  position: absolute;
+  z-index: 3;
+  border: 2px dashed #46cc99;
+  pointer-events: none;
 }
-@keyframes wave {
-  from {
-    transform: rotate(-5deg);
-  }
-  to {
-    transform: rotate(8deg);
-  }
+.monitor #safe-guide {
+  display: block;
 }
-@keyframes walk {
-  from {
-    transform: translateY(0);
-  }
-  to {
-    transform: translateY(-4px);
-  }
+#connection-status {
+  display: none;
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 4;
+  max-width: calc(100% - 16px);
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: #202020e6;
+  color: #fff;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.monitor #connection-status {
+  display: block;
 }

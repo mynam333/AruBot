@@ -312,7 +312,8 @@ test('local-agent heartbeat bursts coalesce DB writes and unregister on close', 
   let finishWrite;
   const write = new Promise((resolve) => { finishWrite = resolve; });
   const unregister = jest.fn();
-  const localAvatarRelay = { start: jest.fn(), subscribe: jest.fn(), remove: jest.fn() };
+  const localAvatarRelay = { start: jest.fn(), subscribe: jest.fn(), remove: jest.fn(), setCommands: jest.fn().mockReturnValue(true) };
+  const getBotRules = jest.fn().mockResolvedValue([{ enabled: true, keywords: ['!hello', '!hello'] }, { enabled: false, keywords: ['!hidden'] }]);
   const touchAutomationLocalAgent = jest.fn().mockResolvedValueOnce(null).mockImplementation(() => write);
   const { registerAutomationLocalAgentRoutes } = loadServerFunctions(['registerAutomationLocalAgentRoutes'], {
     WebSocketServer: class { on(event, callback) { if (event === 'connection') connected = callback; } },
@@ -320,7 +321,7 @@ test('local-agent heartbeat bursts coalesce DB writes and unregister on close', 
     console: { log() {}, error() {} }, authenticateAutomationLocalAgent: async () => ({ id: 'agent', ownerUserId: 'owner-a' }),
     registerAutomationLocalAgentSocket: () => unregister, touchAutomationLocalAgent,
     getAutomationCapabilitiesFromMessage: () => ({}),
-    localAvatarRelay, crypto: require('crypto'),
+    localAvatarRelay, getBotRules, crypto: require('crypto'),
   });
   registerAutomationLocalAgentRoutes();
   const ws = socket();
@@ -331,6 +332,9 @@ test('local-agent heartbeat bursts coalesce DB writes and unregister on close', 
   expect(touchAutomationLocalAgent).toHaveBeenCalledTimes(2);
   finishWrite(null);
   await write;
+  expect(getBotRules).toHaveBeenCalledTimes(1);
+  expect(getBotRules).toHaveBeenCalledWith('user:owner-a');
+  expect(localAvatarRelay.setCommands).toHaveBeenCalledWith('owner-a', ['!hello']);
   ws.close();
   expect(unregister).toHaveBeenCalledTimes(1);
   expect(localAvatarRelay.remove).toHaveBeenCalledWith(ws);

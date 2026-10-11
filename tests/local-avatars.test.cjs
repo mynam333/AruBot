@@ -619,7 +619,7 @@ test('v1 settings gain motion commands once without overriding existing aliases'
   config.rules = config.rules.slice(0, 10);
   fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify(config));
   const storage = new AvatarStorage(root);
-  assert.equal(storage.config.version, 2);
+  assert.equal(storage.config.version, 3);
   assert.equal(storage.config.rules.length, 12);
   storage.saveConfig({
     ...storage.config,

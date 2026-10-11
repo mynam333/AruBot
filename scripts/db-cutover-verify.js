@@ -17,6 +17,8 @@ const REQUIRED_TABLES = [
   'bot_counter_values',
   'public_short_links',
   'roulette_sessions',
+  'participation_wheels',
+  'participation_wheel_requests',
   'migration_log',
   'channel_tokens',
 ];

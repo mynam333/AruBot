@@ -147,6 +147,8 @@ export const DEFAULT_COUNT_TABLES = [
   'attendance_state',
   'live_sessions',
   'roulette_sessions',
+  'participation_wheels',
+  'participation_wheel_requests',
   'migration_log',
   'channel_tokens',
   'channel_viewer_tokens',

@@ -74,6 +74,7 @@ jobs:
           npm test -- --runInBand
           npm run test:drawing
           npm run test:avatars
+          npm run test:wheel
           npm run build
 
       - name: Create backend artifact

@@ -2156,7 +2156,7 @@ function connectAgentSocket() {
     if (message?.type === 'jobs.available') {
       claimAndProcessJobs();
     }
-    if (message?.type === 'avatars.status') avatarService?.setConnection(message.ready === true && message.subscribed !== false);
+    if (message?.type === 'avatars.status') avatarService?.setConnection(message.ready === true && message.subscribed !== false, message);
     if (message?.type === 'avatars.event') avatarService?.receive(message.event);
   });
 
@@ -2344,6 +2344,14 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
+  mainWindow.webContents.on('will-prevent-unload', (event) => {
+    const response = dialog.showMessageBoxSync(mainWindow, {
+      type: 'question', buttons: ['계속 편집', '나가기'], defaultId: 0, cancelId: 0,
+      message: '저장하지 않은 아바타 편집 내용이 있습니다.',
+      detail: '저장하려면 계속 편집을 선택하세요. 복구 초안은 마지막 자동 기록 상태로 유지됩니다.',
+    });
+    if (response === 1) event.preventDefault();
+  });
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 }
 
@@ -2357,41 +2365,54 @@ function requireAvatarService(event) {
 ipcMain.handle('avatars:state', (event) => requireAvatarService(event).state());
 ipcMain.handle('avatars:save', async (event, next) => {
   const service = requireAvatarService(event);
-  if (JSON.stringify(next).length > 256 * 1024) throw new Error('아바타 설정이 너무 큽니다.');
   const state = await service.save(next);
   sendAgentSocketMessage({ type: 'avatars.subscribe', enabled: state.config.enabled });
   return state;
 });
 ipcMain.handle('avatars:command', (event, command, payload) => requireAvatarService(event).command(command, payload));
-ipcMain.handle('avatars:copy', (event, text) => {
+ipcMain.handle('avatars:draft', (event, action, payload) => requireAvatarService(event).draft(action, payload));
+ipcMain.handle('avatars:diagnostics', (event) => requireAvatarService(event).diagnostics());
+ipcMain.handle('avatars:copy', (event, kind, draft) => {
   const service = requireAvatarService(event);
-  clipboard.writeText(text === 'commands'
-    ? ['!입장 !퇴장 !캐릭터 이름 !색 #RRGGBB !크기 0.5~1.6 !응원', ...service.storage.config.rules.filter((r) => r.enabled && r.trigger === 'command').map((r) => `${r.name}: ${r.aliases.join(' ')}`)].join('\n')
-    : service.url);
+  clipboard.writeText(service.copy(kind, draft));
   return true;
 });
 ipcMain.handle('avatars:import', async (event) => {
   const service = requireAvatarService(event);
   const selected = await dialog.showOpenDialog(mainWindow, { title: '캐릭터 이미지', properties: ['openFile'], filters: [{ name: '이미지', extensions: ['png', 'gif', 'webp', 'jpg', 'jpeg'] }] });
   if (selected.canceled) return null;
-  return service.storage.importImage(selected.filePaths[0]);
+  requireAvatarService(event);
+  return service.importImage(selected.filePaths[0]);
 });
-ipcMain.handle('avatars:backup', async (event, restore) => {
+ipcMain.handle('avatars:backup', async (event, restore, options = {}) => {
   const service = requireAvatarService(event);
-  if (restore) {
+  if (restore && typeof restore === 'object') { options = restore; restore = options.restore === true; }
+  const profiles = options?.kind === 'profiles';
+  let state;
+  if (restore === true) {
     const selected = await dialog.showOpenDialog(mainWindow, { title: '아바타 백업 복원', properties: ['openFile'], filters: [{ name: 'AruBot 아바타', extensions: ['aruavatars'] }] });
     if (selected.canceled) return null;
-    const confirmation = await dialog.showMessageBox(mainWindow, { type: 'warning', buttons: ['취소', '복원'], defaultId: 0, cancelId: 0, message: '현재 캐릭터와 반응 설정을 백업 내용으로 교체할까요?', detail: '시청자 기록은 유지되며 아바타 실행은 중지됩니다.' });
+    requireAvatarService(event);
+    const confirmation = await dialog.showMessageBox(mainWindow, { type: 'warning', buttons: ['취소', '복원'], defaultId: 0, cancelId: 0,
+      message: profiles ? '시청자 개인 기록과 차단 정보를 백업 내용으로 교체할까요?' : '현재 캐릭터와 반응 설정을 백업 내용으로 교체할까요?',
+      detail: profiles ? '현재 참여자는 비워집니다. 기존 개인 기록과 차단 정보가 교체되며 편집 초안은 유지됩니다.' : '시청자 기록과 편집 초안은 유지되며 아바타 실행은 중지됩니다.' });
     if (confirmation.response !== 1) return null;
-    const next = await service.storage.restoreBackup(selected.filePaths[0]); service.engine.setConfig(next);
-    service.preview.clear(); service.applyPreview(next);
-    sendAgentSocketMessage({ type: 'avatars.subscribe', enabled: false });
+    requireAvatarService(event);
+    state = await service.backup(selected.filePaths[0], { restore: true, kind: profiles ? 'profiles' : 'artwork', restoreProfiles: profiles });
+    sendAgentSocketMessage({ type: 'avatars.subscribe', enabled: state.config.enabled });
   } else {
-    const selected = await dialog.showSaveDialog(mainWindow, { title: '아바타 백업', defaultPath: 'arubot.aruavatars', filters: [{ name: 'AruBot 아바타', extensions: ['aruavatars'] }] });
+    if (profiles) {
+      const confirmation = await dialog.showMessageBox(mainWindow, { type: 'warning', buttons: ['취소', '내보내기'], defaultId: 0, cancelId: 0,
+        message: '시청자 개인 기록을 별도로 내보낼까요?', detail: '닉네임, 선택값, 차단 정보와 연결 가능한 사용자 식별 해시가 포함됩니다. 공개 공유하지 마세요.' });
+      if (confirmation.response !== 1) return null;
+      requireAvatarService(event);
+    }
+    const selected = await dialog.showSaveDialog(mainWindow, { title: profiles ? '아바타 개인 기록 백업' : '아바타 연출 팩 백업', defaultPath: profiles ? 'arubot-profiles.aruavatars' : 'arubot.aruavatars', filters: [{ name: 'AruBot 아바타', extensions: ['aruavatars'] }] });
     if (selected.canceled) return null;
-    service.storage.exportBackup(selected.filePath);
+    requireAvatarService(event);
+    state = await service.backup(selected.filePath, { kind: profiles ? 'profiles' : 'artwork' });
   }
-  return service.state();
+  return state;
 });
 ipcMain.handle('config:save', (_event, next) => {
   const state = saveConfig(next || {});
@@ -2616,7 +2637,7 @@ app.whenReady().then(() => {
   }, 1600);
 });
 
-app.on('before-quit', () => {
+app.on('will-quit', () => {
   if (avatarService) { try { avatarService.flush(); } catch (error) { addLog('error', '아바타 저장 실패', error.message); } }
   scheduleSilentInstallerOnQuit();
   stopAgent();

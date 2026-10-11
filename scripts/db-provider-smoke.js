@@ -1,4 +1,5 @@
 import { getDbProvider, resolveDatabaseUrl, tableExists, withPgClient } from './db-common.js';
+import { createParticipationWheelState } from '../server/participation-wheel.js';
 
 const REQUIRED_TABLES = [
   'tokens',
@@ -8,6 +9,8 @@ const REQUIRED_TABLES = [
   'bot_counter_values',
   'public_short_links',
   'roulette_sessions',
+  'participation_wheels',
+  'participation_wheel_requests',
   'migration_log',
 ];
 
@@ -83,6 +86,31 @@ async function main() {
         await client.query('rollback').catch(() => undefined);
       }
     }
+    let wheelCrudAccess = false;
+    if (tables.participation_wheels && tables.participation_wheel_requests) {
+      const smokeSid = `__arubot_wheel_smoke__:${process.pid}:${Date.now()}`;
+      await client.query('begin');
+      try {
+        await client.query('insert into public.participation_wheels (sid, state) values ($1, $2::jsonb)',
+          [smokeSid, JSON.stringify(createParticipationWheelState())]);
+        await client.query(`insert into public.participation_wheel_requests (sid, request_id, operation, fingerprint, outcome)
+          values ($1, 'permission-check', 'action', $2, '{}'::jsonb)`, [smokeSid, '0'.repeat(64)]);
+        for (const table of ['participation_wheels', 'participation_wheel_requests']) {
+          // Fixed internal table names only. The transaction is always rolled back.
+          const selected = await client.query(`select sid from public.${table} where sid = $1`, [smokeSid]);
+          if (selected.rowCount !== 1) throw new Error(`Runtime role cannot read ${table}`);
+          const updated = await client.query(`update public.${table} set created_at = now() where sid = $1`, [smokeSid]);
+          if (updated.rowCount !== 1) throw new Error(`Runtime role cannot update ${table}`);
+        }
+        for (const table of ['participation_wheel_requests', 'participation_wheels']) {
+          const deleted = await client.query(`delete from public.${table} where sid = $1`, [smokeSid]);
+          if (deleted.rowCount !== 1) throw new Error(`Runtime role cannot delete ${table}`);
+        }
+        wheelCrudAccess = true;
+      } finally {
+        await client.query('rollback').catch(() => undefined);
+      }
+    }
     return {
       provider,
       database: now.rows[0]?.database,
@@ -90,7 +118,8 @@ async function main() {
       tables,
       counterWriteAccess,
       shortLinkCrudAccess,
-      ok: Object.values(tables).every(Boolean) && counterWriteAccess && shortLinkCrudAccess,
+      wheelCrudAccess,
+      ok: Object.values(tables).every(Boolean) && counterWriteAccess && shortLinkCrudAccess && wheelCrudAccess,
     };
   });
 

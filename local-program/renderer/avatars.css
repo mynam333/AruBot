@@ -334,6 +334,181 @@
   padding: 7px 11px;
   font-size: 13px;
 }
+#avatarStudio,
+#avatarStudio *,
+.av-dialog * {
+  box-sizing: border-box;
+  letter-spacing: 0;
+}
+#avatarStudio [hidden] {
+  display: none !important;
+}
+#avatarStudio :is(input, select, button, label, section, output) {
+  min-width: 0;
+  max-width: 100%;
+}
+#avatarStudio :is(button, label, output, p, h3) {
+  overflow-wrap: anywhere;
+}
+#avatarStudio :is(input, select, button):focus-visible,
+.av-dialog button:focus-visible {
+  outline: 2px solid #12866f;
+  outline-offset: 2px;
+}
+#avatarStudio button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.av-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 32px;
+  padding: 5px;
+}
+.av-icon svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+.av-list label,
+.av-clip-preview label {
+  display: grid;
+  gap: 5px;
+  font-size: 12px;
+  color: #46505b;
+}
+.av-list :is(input, select),
+#avViewers :is(input, select),
+.av-clip-preview select {
+  width: 100%;
+  border: 1px solid #c7cfd7;
+  border-radius: 5px;
+  background: white;
+  padding: 7px;
+  color: #151a23;
+}
+.av-list .av-search {
+  margin-bottom: 8px;
+}
+.av-step {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+}
+.av-step .av-actions {
+  justify-content: flex-end;
+  align-self: end;
+  grid-column: 1 / -1;
+}
+.av-sheet {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.av-sheet .av-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.av-sheet .av-check input {
+  width: auto;
+}
+.av-summary,
+.av-meta {
+  display: block;
+  font-size: 12px;
+  color: #46505b;
+  line-height: 1.6;
+  margin: 12px 0;
+}
+.av-warnings {
+  color: #8a4511;
+  font-size: 12px;
+  padding-left: 18px;
+  line-height: 1.6;
+}
+.av-warnings:empty {
+  display: none;
+}
+.av-field-error {
+  color: #a12836;
+  font-size: 11px;
+  line-height: 1.4;
+}
+#avatarStudio [aria-invalid='true'] {
+  border-color: #a12836;
+}
+.av-clip-preview {
+  margin: 0 0 18px;
+  border-bottom: 1px solid #dce1e6;
+  padding-bottom: 12px;
+}
+.av-clip-preview canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: repeating-conic-gradient(#e0e5e8 0% 25%, #f7f9fa 0% 50%) 50% / 16px 16px;
+  margin-top: 8px;
+}
+.av-clip-preview .av-actions {
+  align-items: end;
+}
+.av-clip-preview input[type='range'] {
+  padding: 0;
+  width: 140px;
+}
+.av-clip-preview output {
+  font-size: 11px;
+}
+.av-table-scroll {
+  width: 100%;
+  overflow-x: auto;
+}
+.av-table {
+  table-layout: fixed;
+}
+.av-table th:nth-child(1) { width: 22%; }
+.av-table th:nth-child(2) { width: 18%; }
+.av-table th:nth-child(3) { width: 10%; }
+.av-table th:nth-child(4) { width: 50%; }
+.av-timeout {
+  display: grid;
+  gap: 4px;
+  width: 76px;
+  font-size: 11px;
+}
+.av-recovery {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 0;
+  color: #8a4511;
+  border-block: 1px solid #e1cfae;
+}
+.av-dialog {
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100vh - 64px);
+  overflow: auto;
+  border: 1px solid #c7cfd7;
+  border-radius: 6px;
+  padding: 22px;
+  color: #151a23;
+  background: white;
+}
+.av-dialog::backdrop { background: #0006; }
+.av-job { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 12px; border: 1px solid #c7cfd7; }
+.av-job[hidden] { display: none; }
+.av-job progress { max-width: 180px; }
+.av-dialog h3 { margin: 0 0 16px; font-size: 16px; }
+.av-dialog .av-actions { align-items: stretch; }
+.av-dialog button { white-space: normal; }
+.av-dialog button:has(.av-asset-choice) { display: flex; align-items: center; gap: 8px; width: calc(50% - 4px); font-size: 12px; }
+.av-asset-choice { width: 42px; height: 42px; object-fit: contain; flex: 0 0 42px; }
+.av-preview-fields { margin-top: 14px; }
+.av-monitor-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
+.av-monitor-controls label { display: grid; gap: 4px; font-size: 12px; }
+.av-monitor-controls select { border: 1px solid #c7cfd7; border-radius: 4px; padding: 6px; max-width: 200px; }
+.av-log dl { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 5px; }
+.av-log dd { margin: 0; overflow-wrap: anywhere; }
 .av-editor details {
   margin-top: 12px;
 }
@@ -351,7 +526,7 @@
     height: 195px;
   }
   .av-step {
-    grid-template-columns: 1fr 1fr 70px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .av-step .av-actions {
     grid-column: 1/-1;
@@ -365,7 +540,7 @@
     grid-template-columns: 1fr;
   }
   .av-list {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1fr);
   }
   .av-form {
     grid-template-columns: 1fr;

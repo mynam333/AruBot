@@ -9,7 +9,15 @@ import { createLocalDrawingStorage } from './drawing-local-storage.js';
 import { decodeDrawingRecording } from './drawing-recording-storage.js';
 import { cleanupDrawingBatch, drawingRetentionDays, refundDrawingWithClient } from './drawing-retention.js';
 import { MAX_ORIGINAL_BYTES } from '../shared/drawing/limits.js';
+import { createParticipationWheelStore } from './participation-wheel.js';
 const { Client, Pool } = pkg;
+
+export const {
+  getParticipationWheel, updateParticipationWheel, actParticipationWheel, enterParticipationWheel,
+} = createParticipationWheelStore({
+  withPgClient, deductChannelPointsIfEnoughWithClient, resolvePointChannelIdentity,
+  resolvePointUserIdentity, upsertCanonicalPointDelta,
+});
 
 let supabase;
 let storageClient;
@@ -3347,6 +3355,12 @@ export async function deleteAccountData(ownerUserId, options = {}) {
       await deleteRowsByColumnValues(pg, summary, 'public.prediction_events', [
         { column: 'sid', values: scope.channelAliases },
         { column: 'channel_uid', values: scope.channelAliases },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.participation_wheel_requests', [
+        { column: 'sid', values: scope.channelAliases },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.participation_wheels', [
+        { column: 'sid', values: scope.channelAliases },
       ]);
       if (await tableExistsPg(pg, 'public.drawing_donation_items')) {
         drawingObjectKeys.push(...await collectDrawingDonationKeysWhere(

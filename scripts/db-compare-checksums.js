@@ -12,6 +12,8 @@ const DEFAULT_CHECKSUM_TABLES = [
   'platform_accounts',
   'platform_tokens',
   'roulette_sessions',
+  'participation_wheels',
+  'participation_wheel_requests',
   'prediction_events',
   'prediction_bets',
   'automation_settings',

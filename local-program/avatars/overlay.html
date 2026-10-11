@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ko">
+<html lang="ko" data-overlay-version="3">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
@@ -7,7 +7,12 @@
     <link rel="stylesheet" href="/overlay.css?key=__KEY__" />
   </head>
   <body>
-    <div id="stage"><div id="game" hidden></div></div>
+    <div id="stage">
+      <div id="safe-guide" aria-hidden="true" hidden></div>
+      <div id="game" role="status" hidden></div>
+    </div>
+    <div id="connection-status" role="status" hidden></div>
+    <script id="overlay-diagnostics" type="application/json">[]</script>
     <script src="/overlay.js?key=__KEY__"></script>
   </body>
 </html>

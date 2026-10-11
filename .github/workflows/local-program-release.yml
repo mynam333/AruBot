@@ -48,6 +48,12 @@ jobs:
       - name: Verify local avatar runtime
         run: npm run test:avatars
 
+      - name: Install avatar editor test browser
+        run: npx playwright install chromium
+
+      - name: Verify local avatar editor
+        run: npm run test:avatars:ui
+
       - name: Prepare release variables
         shell: bash
         run: |

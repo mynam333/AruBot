@@ -1,6 +1,7 @@
 import {
   Cable,
   Clapperboard,
+  CircleDot,
   Coins,
   Gift,
   ImagePlus,
@@ -27,6 +28,7 @@ export const adminNav = [
   { href: '/points', label: '시청자 포인트', icon: Coins, group: 'participation' },
   { href: '/predictions', label: '예측 베팅', icon: Vote, group: 'participation' },
   { href: '/roulette', label: '룰렛', icon: Sparkles, group: 'production' },
+  { href: '/wheels', label: '돌림판', icon: CircleDot, group: 'production' },
   { href: '/video-donations/queue', label: '영상 후원', icon: Clapperboard, group: 'production' },
   { href: '/drawing-donations', label: '그림 후원', icon: ImagePlus, group: 'production' },
   { href: '/donations/rules', label: '후원 반응', icon: Gift, group: 'production' },

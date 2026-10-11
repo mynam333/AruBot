@@ -1,0 +1,208 @@
+.stage {
+  --wheel-rim: #fffefd;
+  --wheel-rim-edge: #d5dfda;
+  --wheel-inner-edge: #183f37;
+  --wheel-hub: #fffefd;
+  --wheel-ink: #1d4239;
+  --wheel-muted: #536b62;
+  --wheel-pointer: #244f42;
+  --wheel-shadow: rgb(35 66 51 / 16%);
+  container-type: inline-size;
+  position: relative;
+  isolation: isolate;
+  width: min(100%, 760px);
+  min-width: 0;
+  margin-inline: auto;
+  padding: 22px 0 10px;
+  letter-spacing: 0;
+}
+
+.stage[data-compact] {
+  max-width: 440px;
+  padding-block: 16px 6px;
+}
+
+.stage[data-theme='studio'] {
+  --wheel-rim: #f7f9f8;
+  --wheel-rim-edge: #cbd3ce;
+  --wheel-inner-edge: #677a70;
+  --wheel-hub: #fff;
+  --wheel-pointer: #3e564b;
+}
+
+:global(.dark) .stage,
+.stage[data-theme='midnight'] {
+  --wheel-rim: #303b36;
+  --wheel-rim-edge: #5b6d60;
+  --wheel-inner-edge: #111d16;
+  --wheel-hub: #21352b;
+  --wheel-ink: #f5f6ee;
+  --wheel-muted: #c2d3c6;
+  --wheel-pointer: #f1cb6a;
+  --wheel-shadow: rgb(0 0 0 / 25%);
+}
+
+.wheel {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+}
+
+.rim {
+  position: absolute;
+  inset: 1%;
+  border: 1px solid var(--wheel-rim-edge);
+  border-radius: 50%;
+  background: var(--wheel-rim);
+  box-shadow: 0 10px 22px -8px var(--wheel-shadow), inset 0 -3px 0 rgb(0 0 0 / 5%);
+}
+
+.rim::before {
+  content: '';
+  position: absolute;
+  inset: 2.2%;
+  border: 2px solid var(--wheel-inner-edge);
+  border-radius: 50%;
+  opacity: 0.85;
+}
+
+.rim::after {
+  content: '';
+  position: absolute;
+  inset: 0.8%;
+  border: 1px solid var(--wheel-rim-edge);
+  border-radius: 50%;
+}
+
+.rotor {
+  position: absolute;
+  inset: 4.5%;
+  border-radius: 50%;
+  transform: rotate(0deg);
+  transform-origin: 50% 50%;
+  backface-visibility: hidden;
+}
+
+.canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+}
+
+.hub {
+  position: absolute;
+  z-index: 2;
+  inset: 39%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 7px;
+  border: 5px solid var(--wheel-rim);
+  border-radius: 50%;
+  background: var(--wheel-hub);
+  color: var(--wheel-ink);
+  box-shadow: 0 3px 9px rgb(22 48 38 / 17%), inset 0 0 0 1px var(--wheel-rim-edge);
+  pointer-events: none;
+}
+
+.slotCount {
+  max-width: 100%;
+  font-size: 32px;
+  font-weight: 750;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.hubLabel {
+  max-width: 100%;
+  color: var(--wheel-muted);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.3;
+  text-align: center;
+  word-break: keep-all;
+}
+
+.hubIcon {
+  flex: none;
+  width: 30px;
+  height: 30px;
+}
+
+.pointerMount {
+  position: absolute;
+  z-index: 3;
+  top: -0.9%;
+  left: 50%;
+  width: 6.1%;
+  height: 8.8%;
+  transform: translateX(-50%);
+  pointer-events: none;
+  filter: drop-shadow(0 3px 2px rgb(23 43 29 / 18%));
+}
+
+.pointer {
+  position: absolute;
+  inset: 0;
+  border-radius: 38% 38% 0 0;
+  background: var(--wheel-pointer);
+  clip-path: polygon(0 0, 100% 0, 100% 48%, 50% 100%, 0 48%);
+  transform-origin: 50% 22%;
+}
+
+.pointerPin {
+  position: absolute;
+  top: 14%;
+  left: 35%;
+  width: 30%;
+  aspect-ratio: 1;
+  border: 1px solid rgb(255 255 255 / 70%);
+  border-radius: 50%;
+  background: #fff8db;
+}
+
+.stage[data-phase='settled'] .hub {
+  background: #f5d778;
+  color: #244839;
+}
+
+.stage[data-phase='settled'] .hubLabel {
+  color: #345343;
+}
+
+.stage[data-phase='empty'] .rotor {
+  opacity: 0.8;
+}
+
+.screenReader {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+@container (max-width: 440px) {
+  .hub { gap: 2px; border-width: 3px; padding: 5px; }
+  .slotCount { font-size: 22px; }
+  .hubLabel { font-size: 10px; }
+  .hubIcon { width: 23px; height: 23px; }
+}
+
+@container (max-width: 310px) {
+  .hub { inset: 37%; }
+  .slotCount { font-size: 18px; }
+  .hubLabel { font-size: 9px; }
+  .hubIcon { width: 18px; height: 18px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rotor, .pointer { will-change: auto !important; }
+}

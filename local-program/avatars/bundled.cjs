@@ -30,7 +30,13 @@ const avatars = characters.map(([id, name, directory]) => {
     files.set(asset, file);
     states[state] = { asset, columns, rows, frames: columns * rows, fps: 20 };
   }
-  return { id: `pixel-${id}`, name, pixelated: true, states };
+  return {
+    id: `pixel-${id}`, name, pixelated: true, states,
+    author: 'Pixel Frog',
+    source: 'https://pixelfrog-assets.itch.io/pixel-adventure-1',
+    license: 'CC0 1.0 Universal',
+    redistributable: true,
+  };
 });
 
 function migrateLegacyAvatars(config) {
