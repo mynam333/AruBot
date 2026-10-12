@@ -48,8 +48,8 @@ function getFxApiBase() {
   return (configured || (typeof window !== 'undefined' ? window.location.origin : '')).replace(/\/$/, '');
 }
 
-function getWsUrl(token: string) {
-  const base = new URL('/api/fx/ws', getFxApiBase());
+function getWsUrl(token: string, apiBase?: string) {
+  const base = new URL('/api/fx/ws', apiBase || getFxApiBase());
   base.protocol = base.protocol === 'https:' ? 'wss:' : 'ws:';
   base.searchParams.set('token', token);
   return base.toString();
@@ -104,9 +104,10 @@ function ChromaCanvas({ item, video }: { item: FxItem; video?: boolean }) {
 
     const draw = () => {
       if (stopped) return;
-      const width = video ? (media.videoWidth || 1280) : (media.naturalWidth || 800);
-      const height = video ? (media.videoHeight || 720) : (media.naturalHeight || 450);
-      if (width && height) {
+      const ready = video ? media.readyState >= 2 : media.complete;
+      const width = video ? media.videoWidth : media.naturalWidth;
+      const height = video ? media.videoHeight : media.naturalHeight;
+      if (ready && width && height) {
         canvas.width = width;
         canvas.height = height;
         const ctx = canvas.getContext('2d', { willReadFrequently: true });
@@ -146,9 +147,9 @@ function ChromaCanvas({ item, video }: { item: FxItem; video?: boolean }) {
   return (
     <>
       {video ? (
-        <video ref={mediaRef as React.RefObject<HTMLVideoElement>} src={item.assetUrl} playsInline className="hidden" />
+        <video ref={mediaRef as React.RefObject<HTMLVideoElement>} crossOrigin="anonymous" src={item.assetUrl} playsInline className="hidden" />
       ) : (
-        <img ref={mediaRef as React.RefObject<HTMLImageElement>} src={item.assetUrl} alt="" className="hidden" />
+        <img ref={mediaRef as React.RefObject<HTMLImageElement>} crossOrigin="anonymous" src={item.assetUrl} alt="" className="hidden" />
       )}
       <canvas ref={canvasRef} className="h-full w-full object-contain" />
     </>
@@ -173,7 +174,7 @@ function FxVisual({ item }: { item: FxItem }) {
   return item.chromaKey ? <ChromaCanvas item={item} /> : <img src={item.assetUrl} alt="" className="h-full w-full object-contain" />;
 }
 
-export function FxOverlay({ token }: { token: string }) {
+export function FxOverlay({ token, apiBase }: { token: string; apiBase?: string }) {
   const [items, setItems] = React.useState<FxItem[]>([]);
 
   const speak = React.useCallback((payload: FxPayload) => {
@@ -202,7 +203,7 @@ export function FxOverlay({ token }: { token: string }) {
   React.useEffect(() => {
     if (!token) return undefined;
     return connectOverlaySocket({
-      url: () => getWsUrl(token),
+      url: () => getWsUrl(token, apiBase),
       onMessage: (event) => {
         const message = JSON.parse(String(event.data || '{}'));
         const payload = message.payload as FxPayload;
@@ -246,7 +247,7 @@ export function FxOverlay({ token }: { token: string }) {
         }, duration);
       },
     });
-  }, [speak, token]);
+  }, [speak, token, apiBase]);
 
   return (
     <main className="fixed inset-0 overflow-hidden bg-transparent">

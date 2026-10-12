@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('aruLocal', {
   runObsAction: (payload) => ipcRenderer.invoke('obs:action', payload),
   chooseSoundFolder: () => ipcRenderer.invoke('folder:chooseSound'),
   openSoundFolder: () => ipcRenderer.invoke('folder:openSound'),
+  copyFxViewerUrl: () => ipcRenderer.invoke('fx:copyViewerUrl'),
   openDashboard: () => ipcRenderer.invoke('dashboard:open'),
   runDiagnostics: () => ipcRenderer.invoke('diagnostics:run'),
   checkUpdate: () => ipcRenderer.invoke('update:check'),

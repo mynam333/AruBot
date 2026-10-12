@@ -21516,20 +21516,34 @@ app.post('/api/automations/sounds/test', rateLimiters.userWrite, async (req, res
   }
 });
 
+async function getFxViewerToken(ownerUserId) {
+  const sid = `user:${ownerUserId}`;
+  const token = await getOrCreateViewerTokenSupabase(ownerUserId, 'fx', sid, 'fx').catch(() => null);
+  let finalToken = token;
+  if (!finalToken) {
+    const settings = await updateBotSettingsAtomically(sid, (current) => ({
+      ...current,
+      fxViewerToken: current.fxViewerToken || `fx_${crypto.randomBytes(18).toString('base64url')}`,
+    }));
+    finalToken = settings.fxViewerToken;
+  }
+  return finalToken;
+}
+
+app.get('/api/automations/local-agent/fx/viewer', requireAutomationLocalAgent, async (req, res) => {
+  try {
+    const ownerUserId = req.automationLocalAgent?.ownerUserId;
+    if (!ownerUserId) return res.status(401).json({ error: 'Invalid local program token' });
+    res.set('Cache-Control', 'no-store');
+    return res.json({ token: await getFxViewerToken(ownerUserId) });
+  } catch { return res.status(500).json({ error: 'Failed to get FX viewer token' }); }
+});
+
 app.get('/api/fx/viewer-url', async (req, res) => {
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
-    const sid = `user:${ownerUserId}`;
-    const token = await getOrCreateViewerTokenSupabase(ownerUserId, 'fx', sid, 'fx').catch(() => null);
-    let finalToken = token;
-    if (!finalToken) {
-      const settings = await updateBotSettingsAtomically(sid, (current) => ({
-        ...current,
-        fxViewerToken: current.fxViewerToken || `fx_${crypto.randomBytes(18).toString('base64url')}`,
-      }));
-      finalToken = settings.fxViewerToken;
-    }
+    const finalToken = await getFxViewerToken(ownerUserId);
     return res.json({ token: finalToken, path: `/fx/${encodeURIComponent(finalToken)}` });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to get FX viewer URL' });

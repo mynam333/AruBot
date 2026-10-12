@@ -1,15 +1,14 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, clipboard } = require('electron');
 const { AvatarService } = require('./avatars/service.cjs');
+const { createFxAssetServer, resolveFxAssetUrl } = require('./fx-assets.cjs');
 const { autoUpdater } = require('electron-updater');
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-const http = require('http');
 const dns = require('dns').promises;
 const net = require('net');
 const dgram = require('dgram');
-const { pathToFileURL } = require('url');
 const { WebSocket } = require('ws');
 
 const APP_NAME = 'AruBot Local Program';
@@ -98,10 +97,31 @@ let agentPollingTimer = null;
 let reconnectAttempt = 0;
 let processingJobs = false;
 let startupDiscoverySyncRunning = false;
-let fxAssetServer = null;
-let fxAssetServerPort = 0;
-let fxAssetServerKey = crypto.randomBytes(16).toString('hex');
 let config = { ...DEFAULT_CONFIG };
+let fxViewerState = null;
+function getFxViewerState() {
+  if (!fxViewerState) {
+    const saved = readJson('fx-viewer.json', {});
+    fxViewerState = {
+      key: /^[a-f0-9]{64}$/.test(saved.key || '') ? saved.key : crypto.randomBytes(32).toString('hex'),
+      port: Number.isInteger(saved.port) && saved.port >= 1024 && saved.port <= 65535 ? saved.port : 0,
+    };
+  }
+  return fxViewerState;
+}
+const fxAssetServer = createFxAssetServer({
+  getFolder: getFxFolder,
+  getAllowedOrigins: () => [config.dashboardUrl, DEFAULT_DASHBOARD_URL, LEGACY_DASHBOARD_URL],
+  onError: (error) => addLog('error', 'FX 로컬 파일 서버 오류', error.message || String(error)),
+  viewerDirectory: path.join(__dirname, 'fx-viewer-dist'),
+  getViewerKey: () => getFxViewerState().key,
+  getPort: () => getFxViewerState().port,
+  onListening: (port) => { getFxViewerState().port = port; writeJson('fx-viewer.json', fxViewerState); },
+  getViewerConfig: async () => {
+    const result = await apiFetch('/api/automations/local-agent/fx/viewer');
+    return { token: result.token, apiBase: config.backendUrl };
+  },
+});
 let logs = [];
 let updateState = {
   status: 'idle',
@@ -1600,13 +1620,7 @@ function getFxKindForFile(fileName) {
 }
 
 function getFxAssetPath(assetId) {
-  const folder = getFxFolder();
-  if (!folder) return '';
-  const root = path.resolve(folder);
-  const candidate = path.resolve(root, path.basename(String(assetId || '')));
-  if (!candidate.startsWith(root)) return '';
-  if (!fs.existsSync(candidate) || !fs.statSync(candidate).isFile()) return '';
-  return candidate;
+  return fxAssetServer.getAssetPath(assetId);
 }
 
 function makeFxPreviewDataUrl(fullPath, kind) {
@@ -1631,7 +1645,8 @@ function scanFxAssets() {
     .map((entry) => {
       const kind = getFxKindForFile(entry.name);
       if (!kind) return null;
-      const fullPath = path.join(root, entry.name);
+      const fullPath = getFxAssetPath(entry.name);
+      if (!fullPath) return null;
       const stat = fs.statSync(fullPath);
       return {
         id: entry.name,
@@ -1652,48 +1667,6 @@ async function syncLocalFxAssets(options = {}) {
   await syncLocalDiscovery('fx_assets', discovery, options);
   if (!options.silent) addLog('success', `FX 에셋 목록 동기화 완료: ${discovery.assets.length}개`);
   return discovery;
-}
-
-function startFxAssetServer() {
-  if (fxAssetServer) return fxAssetServerPort;
-  fxAssetServerKey = crypto.randomBytes(16).toString('hex');
-  fxAssetServer = http.createServer((req, res) => {
-    try {
-      const url = new URL(req.url, 'http://127.0.0.1');
-      if (url.pathname !== '/fx-asset' || url.searchParams.get('k') !== fxAssetServerKey) {
-        res.writeHead(404);
-        res.end('not found');
-        return;
-      }
-      const fullPath = getFxAssetPath(url.searchParams.get('id'));
-      if (!fullPath) {
-        res.writeHead(404);
-        res.end('not found');
-        return;
-      }
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Cache-Control', 'no-store');
-      fs.createReadStream(fullPath).pipe(res);
-    } catch {
-      res.writeHead(500);
-      res.end('error');
-    }
-  });
-  fxAssetServer.listen(0, '127.0.0.1');
-  fxAssetServerPort = fxAssetServer.address()?.port || 0;
-  fxAssetServer.on('error', (error) => addLog('error', 'FX 로컬 파일 서버 오류', error.message || String(error)));
-  return fxAssetServerPort;
-}
-
-function getFxAssetUrl(assetId) {
-  const fullPath = getFxAssetPath(assetId);
-  if (!fullPath) return '';
-  const port = startFxAssetServer();
-  if (!port) return pathToFileURL(fullPath).href;
-  const url = new URL(`http://127.0.0.1:${port}/fx-asset`);
-  url.searchParams.set('id', path.basename(fullPath));
-  url.searchParams.set('k', fxAssetServerKey);
-  return url.toString();
 }
 
 async function syncLocalDiscovery(type, discovery, options = {}) {
@@ -1837,7 +1810,7 @@ async function processJob(job) {
   if (type === 'fx.play' || type === 'blueprint.fx' || type === 'sound.play' || type === 'blueprint.sound') {
     const kind = String(payload.kind || payload.assetKind || (type.includes('sound') ? 'sound' : 'image')).toLowerCase();
     const assetId = path.basename(String(payload.assetId || payload.fileId || payload.name || ''));
-    const assetUrl = payload.youtubeUrl ? '' : String(payload.assetUrl || getFxAssetUrl(assetId) || '');
+    const assetUrl = await resolveFxAssetUrl({ ...payload, assetId }, fxAssetServer.getAssetUrl);
     if (kind !== 'video' || !payload.youtubeUrl) {
       if (!assetId && !assetUrl) throw new Error('실행할 FX 에셋이 없습니다.');
     }
@@ -1848,11 +1821,12 @@ async function processJob(job) {
       assetUrl,
       assetName: payload.assetName || payload.fileName || assetId,
     };
-    await apiFetch('/api/automations/local-agent/fx/push', {
+    const delivery = await apiFetch('/api/automations/local-agent/fx/push', {
       method: 'POST',
       body: JSON.stringify({ payload: fxPayload }),
     });
-    return { ok: true, type: 'fx.play', kind, assetId, pushed: true };
+    if (!delivery?.sent) throw new Error('연결된 FX 오버레이가 없습니다. 방송 PC에서 FX 브라우저 소스를 열어 주세요.');
+    return { ok: true, type: 'fx.play', kind, assetId, pushed: true, sent: delivery.sent };
   }
   if (type === 'blueprint.tits') {
     const triggerId = String(payload.triggerId || payload.triggerID || '').trim();
@@ -2539,6 +2513,13 @@ ipcMain.handle('folder:openSound', async () => {
   await shell.openPath(folder);
   return true;
 });
+ipcMain.handle('fx:copyViewerUrl', async () => {
+  if (!normalizeLocalProgramToken(config.token)) throw new Error('먼저 로컬 프로그램을 아루봇 계정에 연결해 주세요.');
+  await apiFetch('/api/automations/local-agent/fx/viewer');
+  const url = await fxAssetServer.getViewerUrl();
+  clipboard.writeText(url);
+  return { copied: true };
+});
 ipcMain.handle('dashboard:open', async () => {
   await shell.openExternal(getSafeExternalHttpUrl(config.dashboardUrl || DEFAULT_DASHBOARD_URL));
   return true;
@@ -2620,6 +2601,9 @@ ipcMain.handle('update:install', async () => {
 app.whenReady().then(() => {
   if (!singleInstance) return;
   loadConfig();
+  if (getFxViewerState().port) {
+    fxAssetServer.start().catch((error) => addLog('error', '로컬 FX 오버레이 시작 실패', error.message));
+  }
   try {
     avatarService = new AvatarService(dataPath('avatars'), { onError: (error) => addLog('error', '아바타 오류', error.message) });
     avatarService.start().catch((error) => addLog('error', '아바타 출력 서버 시작 실패', error.message));
@@ -2638,6 +2622,7 @@ app.whenReady().then(() => {
 });
 
 app.on('will-quit', () => {
+  void fxAssetServer.close();
   if (avatarService) { try { avatarService.flush(); } catch (error) { addLog('error', '아바타 저장 실패', error.message); } }
   scheduleSilentInstallerOnQuit();
   stopAgent();

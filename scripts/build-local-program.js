@@ -77,6 +77,7 @@ function syncPublicInstallers() {
 }
 
 function prepareAppStage() {
+  run('node', ['scripts/build-local-fx.js']);
   cleanDirectory(appStageDir);
   fs.cpSync(path.join(root, 'local-program'), appStageDir, {
     recursive: true,

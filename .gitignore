@@ -12,6 +12,7 @@ node_modules
 .next
 dist
 dist-ssr
+local-program/fx-viewer-dist/
 *.local
 
 # Editor directories and files

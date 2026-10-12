@@ -525,6 +525,16 @@ $('#openSoundFolderButton').addEventListener('click', () => run(async () => {
   await window.aruLocal.openSoundFolder();
 }));
 
+$('#copyFxViewerUrlButton').addEventListener('click', () => run(async () => {
+  const button = $('#copyFxViewerUrlButton');
+  button.disabled = true;
+  $('#fxViewerCopyStatus').textContent = '';
+  try {
+    await window.aruLocal.copyFxViewerUrl();
+    $('#fxViewerCopyStatus').textContent = '복사됨';
+  } finally { button.disabled = false; }
+}));
+
 $('#openDashboardButton').addEventListener('click', () => run(async () => {
   await window.aruLocal.openDashboard();
 }));
