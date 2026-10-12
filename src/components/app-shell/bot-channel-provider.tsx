@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, LogIn, RefreshCw, UserRound } from 'lucide-react';
 import { Button, LinkButton } from '@/components/ui/button';
-import { getBrowserApiBase } from '@/shared/api/http';
+import { ContextRequestError, contextRetryDelay, isRetryableContextError, readContext } from '@/shared/api/bot-management-context-request';
 import { adminNav, getBotPageModule } from '@/shared/config/navigation';
 import {
   clearBotManagementContext, getBotManagementActor, getBotManagementOwner,
@@ -21,42 +21,7 @@ type BotChannelContextValue = BotManagementContext & {
 };
 
 const BotChannelContext = createContext<BotChannelContextValue | null>(null);
-
-class ContextRequestError extends Error {
-  constructor(message: string, readonly status: number) { super(message); }
-}
-
-function isChannel(value: unknown): value is BotChannel {
-  if (!value || typeof value !== 'object') return false;
-  const channel = value as Partial<BotChannel>;
-  return typeof channel.ownerUserId === 'string' && Boolean(channel.ownerUserId)
-    && typeof channel.displayName === 'string'
-    && ['owner', 'manager', 'site_admin'].includes(String(channel.role))
-    && Array.isArray(channel.scopes) && channel.scopes.every((scope) => typeof scope === 'string');
-}
-
-async function readContext(ownerId: string | null, signal: AbortSignal): Promise<BotManagementContext> {
-  const query = ownerId ? `?botOwner=${encodeURIComponent(ownerId)}` : '';
-  // Bootstrap uses the actor's session directly, never the generic bot URL resolver.
-  const response = await fetch(`${getBrowserApiBase()}/api/bot-management/context${query}`, {
-    credentials: 'include', cache: 'no-store', signal,
-  });
-  if (!response.ok) {
-    throw new ContextRequestError(
-      response.status === 401 ? '로그인이 필요합니다.'
-        : response.status === 403 || response.status === 404 ? '이 채널을 관리할 권한이 없거나 권한이 만료되었습니다.'
-          : '채널 관리 정보를 불러오지 못했습니다.', response.status,
-    );
-  }
-  const result: unknown = await response.json();
-  const data = result as Partial<BotManagementContext> | null;
-  if (!data || typeof data.actorUserId !== 'string' || !data.actorUserId
-    || typeof data.isSiteAdmin !== 'boolean' || !isChannel(data.active)
-    || !Array.isArray(data.channels) || !data.channels.every(isChannel)
-    || !Array.isArray(data.scopeGroups)) throw new Error('채널 관리 응답을 확인할 수 없습니다.');
-  if (ownerId && data.active.ownerUserId !== ownerId) throw new Error('요청한 채널과 응답한 채널이 다릅니다. 다시 선택해 주세요.');
-  return data as BotManagementContext;
-}
+const REVALIDATE_INTERVAL_MS = 30_000;
 
 function firstChannelPage(channel: BotChannel) {
   return adminNav.find((item) => {
@@ -77,12 +42,21 @@ export function BotChannelProvider({ children }: { children: React.ReactNode }) 
   const [data, setData] = useState<BotManagementContext | null>(null);
   const [status, setStatus] = useState<'loading' | 'ready' | 'error' | 'session'>('loading');
   const [error, setError] = useState('');
+  const [connectionError, setConnectionError] = useState('');
   const [switching, setSwitching] = useState(false);
   const request = useRef<AbortController | null>(null);
   const switchRequest = useRef<AbortController | null>(null);
   const dataRef = useRef<BotManagementContext | null>(null);
   const targetRef = useRef<string | null | undefined>(undefined);
   const actorRef = useRef<string | null>(null);
+  const retryTimer = useRef<number | null>(null);
+  const retryAttempt = useRef(0);
+  const lastVerifiedAt = useRef(0);
+
+  const cancelRetry = useCallback(() => {
+    if (retryTimer.current !== null) window.clearTimeout(retryTimer.current);
+    retryTimer.current = null;
+  }, []);
 
   const preserveRequestOwner = useCallback(() => {
     const ownerId = dataRef.current?.active.ownerUserId || targetRef.current || actorRef.current;
@@ -91,7 +65,8 @@ export function BotChannelProvider({ children }: { children: React.ReactNode }) 
     if (ownerId) retainBotManagementOwner(ownerId);
   }, []);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (): Promise<void> => {
+    cancelRetry();
     request.current?.abort();
     const controller = new AbortController();
     request.current = controller;
@@ -121,34 +96,63 @@ export function BotChannelProvider({ children }: { children: React.ReactNode }) 
         url.searchParams.delete('botOwner');
         window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
       }
-      dataRef.current = next;
-      setData(next);
+      // Keep permission callbacks and dependent page effects stable on a no-op poll.
+      if (JSON.stringify(dataRef.current) !== JSON.stringify(next)) {
+        dataRef.current = next;
+        setData(next);
+      }
+      lastVerifiedAt.current = Date.now();
       setStatus('ready');
       setError('');
+      setConnectionError('');
+      retryAttempt.current = 0;
     } catch (cause) {
       if (controller.signal.aborted) return;
       preserveRequestOwner();
+      if (isRetryableContextError(cause)) {
+        // A failed background check must not unmount editors or erase drafts.
+        // Keep the owner pinned; the server still authorizes every API operation.
+        setConnectionError(cause.message);
+        setError(cause.message);
+        setStatus(dataRef.current ? 'ready' : 'error');
+        retryTimer.current = window.setTimeout(() => {
+          retryTimer.current = null;
+          void refresh();
+        }, contextRetryDelay(retryAttempt.current++, cause));
+        return;
+      }
+      setConnectionError('');
       setData(null);
       dataRef.current = null;
       setStatus(cause instanceof ContextRequestError && cause.status === 401 ? 'session' : 'error');
       setError(cause instanceof Error ? cause.message : '채널 관리 정보를 불러오지 못했습니다.');
+    } finally {
+      if (request.current === controller) request.current = null;
     }
-  }, [preserveRequestOwner]);
+  }, [preserveRequestOwner, cancelRetry]);
 
   useEffect(() => {
     void refresh();
     const expired = () => {
+      cancelRetry();
       request.current?.abort();
       switchRequest.current?.abort();
       preserveRequestOwner();
       dataRef.current = null;
       setData(null);
       setStatus('session');
+      setConnectionError('');
     };
-    const revalidate = () => { if (document.visibilityState === 'visible') void refresh(); };
+    const revalidate = () => {
+      if (document.visibilityState !== 'visible' || request.current || retryTimer.current !== null) return;
+      if (dataRef.current && Date.now() - lastVerifiedAt.current < REVALIDATE_INTERVAL_MS) return;
+      void refresh();
+    };
+    const online = () => { if (document.visibilityState === 'visible' && !request.current) void refresh(); };
+    const authChanged = () => { void refresh(); };
     const interval = window.setInterval(() => {
-      if (dataRef.current && document.visibilityState === 'visible') void refresh();
-    }, 30_000);
+      if (dataRef.current) revalidate();
+    }, REVALIDATE_INTERVAL_MS);
     const restored = (event: PageTransitionEvent) => {
       // A history-restored page can contain another channel's unsaved state.
       if (event.persisted) {
@@ -158,20 +162,23 @@ export function BotChannelProvider({ children }: { children: React.ReactNode }) 
     };
     window.addEventListener('arubot:session-expired', expired);
     window.addEventListener('arubot:logout', expired);
-    window.addEventListener('arubot:auth-changed', revalidate);
+    window.addEventListener('arubot:auth-changed', authChanged);
+    window.addEventListener('online', online);
     window.addEventListener('pageshow', restored);
     document.addEventListener('visibilitychange', revalidate);
     return () => {
       request.current?.abort();
       switchRequest.current?.abort();
+      cancelRetry();
       window.clearInterval(interval);
       window.removeEventListener('arubot:session-expired', expired);
       window.removeEventListener('arubot:logout', expired);
-      window.removeEventListener('arubot:auth-changed', revalidate);
+      window.removeEventListener('arubot:auth-changed', authChanged);
+      window.removeEventListener('online', online);
       window.removeEventListener('pageshow', restored);
       document.removeEventListener('visibilitychange', revalidate);
     };
-  }, [refresh, preserveRequestOwner]);
+  }, [refresh, preserveRequestOwner, cancelRetry]);
 
   const switchChannel = useCallback(async (ownerUserId: string | null) => {
     const current = dataRef.current;
@@ -235,5 +242,13 @@ export function BotChannelProvider({ children }: { children: React.ReactNode }) 
       </div>
     );
   }
-  return <BotChannelContext.Provider value={value}><div key={`${value.actorUserId}:${value.active.ownerUserId}`}>{children}</div></BotChannelContext.Provider>;
+  return <BotChannelContext.Provider value={value}>
+    <div key={`${value.actorUserId}:${value.active.ownerUserId}`}>
+      {connectionError ? <div role="status" className="flex flex-wrap items-center justify-center gap-3 border-b border-amber-400/40 bg-amber-50 px-4 py-2 text-sm text-amber-950 dark:bg-amber-950 dark:text-amber-100">
+        <span>{connectionError}</span>
+        <Button size="sm" variant="outline" onClick={() => void refresh()}><RefreshCw className="h-4 w-4" />다시 확인</Button>
+      </div> : null}
+      {children}
+    </div>
+  </BotChannelContext.Provider>;
 }
