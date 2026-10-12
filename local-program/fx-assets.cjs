@@ -3,6 +3,7 @@ const fs = require('fs');
 const http = require('http');
 const path = require('path');
 const { fileURLToPath } = require('url');
+const { WebSocketServer, WebSocket } = require('ws');
 
 const MEDIA_TYPES = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
@@ -27,6 +28,45 @@ function createFxAssetServer({ getFolder, getAllowedOrigins = () => [], onError 
   const secret = crypto.randomBytes(32);
   let server = null;
   let starting = null;
+  const viewers = new WebSocketServer({ noServer: true, maxPayload: 4096, perMessageDeflate: false });
+
+  function validViewerRequest(req, url) {
+    const key = url.searchParams.get('k') || '';
+    const expected = String(getViewerKey?.() || '');
+    return /^[a-f0-9]{64}$/.test(key) && key.length === expected.length
+      && crypto.timingSafeEqual(Buffer.from(key), Buffer.from(expected))
+      && (!req.headers.origin || req.headers.origin === `http://${req.headers.host}`);
+  }
+
+  function publish(type, payload) {
+    const event = JSON.stringify({ type, payload });
+    let sent = 0;
+    for (const socket of viewers.clients) {
+      if (socket.readyState !== WebSocket.OPEN) continue;
+      // Do not accumulate obsolete effects for a stalled renderer.
+      if (socket.bufferedAmount > 1024 * 1024) { socket.terminate(); continue; }
+      try { socket.send(event); sent += 1; } catch { socket.terminate(); }
+    }
+    return sent;
+  }
+
+  async function preloadAssets() {
+    const entries = await fs.promises.readdir(String(getFolder() || '')).catch(() => []);
+    const assets = [];
+    let bytes = 0;
+    for (const name of entries) {
+      const mime = MEDIA_TYPES[path.extname(name).toLowerCase()];
+      if (!mime || mime.startsWith('video/')) continue;
+      const fullPath = getAssetPath(name);
+      if (!fullPath) continue;
+      const stat = await fs.promises.stat(fullPath).catch(() => null);
+      if (!stat || stat.size > 8 * 1024 * 1024 || bytes + stat.size > 32 * 1024 * 1024) continue;
+      bytes += stat.size;
+      assets.push({ kind: mime.startsWith('audio/') ? 'sound' : 'image', assetUrl: await getAssetUrl(name) });
+      if (assets.length >= 32) break;
+    }
+    return assets;
+  }
 
   function getAssetPath(assetId) {
     const name = String(assetId || '');
@@ -56,9 +96,7 @@ function createFxAssetServer({ getFolder, getAllowedOrigins = () => [], onError 
       const url = new URL(req.url, 'http://127.0.0.1');
       if (viewerDirectory && url.pathname.startsWith('/fx-viewer')) {
         const key = url.searchParams.get('k') || '';
-        const expected = String(getViewerKey?.() || '');
-        if (!/^[a-f0-9]{64}$/.test(key) || key.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(key), Buffer.from(expected))
-          || (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`)) {
+        if (!validViewerRequest(req, url)) {
           res.writeHead(403).end();
           return;
         }
@@ -120,7 +158,8 @@ function createFxAssetServer({ getFolder, getAllowedOrigins = () => [], onError 
         res.writeHead(405).end();
         return;
       }
-      const { size } = fs.statSync(fullPath);
+      const { size, mtimeMs } = fs.statSync(fullPath);
+      if (url.searchParams.get('v') === `${size}-${mtimeMs}`) res.setHeader('Cache-Control', 'private, max-age=3600');
       const range = parseRange(req.headers.range, size);
       res.setHeader('Accept-Ranges', 'bytes');
       res.setHeader('Content-Type', MEDIA_TYPES[path.extname(fullPath).toLowerCase()]);
@@ -154,6 +193,24 @@ function createFxAssetServer({ getFolder, getAllowedOrigins = () => [], onError 
     starting = new Promise((resolve, reject) => {
       const listener = http.createServer(handleRequest);
       server = listener;
+      listener.on('upgrade', (req, socket, head) => {
+        let url;
+        try { url = new URL(req.url, 'http://127.0.0.1'); } catch { socket.destroy(); return; }
+        if (req.headers.host !== `127.0.0.1:${listener.address()?.port}`
+          || url.pathname !== '/fx-viewer/ws' || !validViewerRequest(req, url)) {
+          socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); return;
+        }
+        viewers.handleUpgrade(req, socket, head, (client) => {
+          client.on('error', () => client.terminate());
+          client.on('message', (raw) => {
+            try { if (JSON.parse(String(raw)).type === 'ping') client.send('{"type":"pong"}'); } catch { /* Ignore invalid heartbeats. */ }
+          });
+          client.send('{"type":"hello"}');
+          void preloadAssets().then((assets) => {
+            if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify({ type: 'fx:preload', assets }));
+          }).catch(onError);
+        });
+      });
       listener.on('error', onError);
       listener.once('error', reject);
       listener.listen(getPort(), '127.0.0.1', () => {
@@ -174,6 +231,8 @@ function createFxAssetServer({ getFolder, getAllowedOrigins = () => [], onError 
     const url = new URL(`http://127.0.0.1:${port}/fx-asset`);
     url.searchParams.set('id', String(assetId));
     url.searchParams.set('k', sign(fullPath));
+    const { size, mtimeMs } = fs.statSync(fullPath);
+    url.searchParams.set('v', `${size}-${mtimeMs}`);
     return url.href;
   }
 
@@ -181,6 +240,7 @@ function createFxAssetServer({ getFolder, getAllowedOrigins = () => [], onError 
     if (starting) await starting.catch(() => {});
     const listener = server;
     if (!listener) return;
+    for (const socket of viewers.clients) socket.terminate();
     await new Promise((resolve) => {
       listener.close(resolve);
       listener.closeAllConnections();
@@ -198,7 +258,7 @@ function createFxAssetServer({ getFolder, getAllowedOrigins = () => [], onError 
     return url.href;
   }
 
-  return { getAssetPath, getAssetUrl, getViewerUrl, start, close };
+  return { getAssetPath, getAssetUrl, getViewerUrl, publish, start, close };
 }
 
 async function resolveFxAssetUrl(payload, getAssetUrl) {

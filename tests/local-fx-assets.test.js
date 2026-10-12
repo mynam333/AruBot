@@ -3,6 +3,7 @@ const os = require('os');
 const path = require('path');
 const http = require('http');
 const ts = require('typescript');
+const { WebSocket } = require('ws');
 const { createFxAssetServer, resolveFxAssetUrl } = require('../local-program/fx-assets.cjs');
 
 const origin = 'https://arubot.yuaru.com';
@@ -158,8 +159,8 @@ function loadProcessJob(apiFetch) {
   const filename = path.join(__dirname, '../local-program/main.cjs');
   const source = ts.createSourceFile(filename, fs.readFileSync(filename, 'utf8'), ts.ScriptTarget.Latest, true);
   const declaration = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === 'processJob');
-  return new Function('path', 'resolveFxAssetUrl', 'fxAssetServer', 'apiFetch', 'addLog', `return (${declaration.getText(source)});`)(
-    path, resolveFxAssetUrl, service, apiFetch, () => {},
+  return new Function('path', 'resolveFxAssetUrl', 'fxAssetServer', 'apiFetch', 'addLog', 'crypto', `return (${declaration.getText(source)});`)(
+    path, resolveFxAssetUrl, service, apiFetch, () => {}, require('crypto'),
   );
 }
 
@@ -237,4 +238,59 @@ test('viewer token route only uses the authenticated local agent owner', async (
   expect(res.json).toHaveBeenLastCalledWith({ token: 'fx_owned' });
   const server = fs.readFileSync(path.join(__dirname, '../server/index.js'), 'utf8');
   expect(server).toContain("app.get('/api/automations/local-agent/fx/viewer', requireAutomationLocalAgent");
+});
+
+test('versioned media is cached and editing a local file changes its cache key', async () => {
+  const first = await service.getAssetUrl('clip.webm');
+  expect((await fetch(first)).headers.get('cache-control')).toBe('private, max-age=3600');
+  fs.writeFileSync(path.join(folder, 'clip.webm'), Buffer.from('replacement'));
+  const next = await service.getAssetUrl('clip.webm');
+  expect(next).not.toBe(first);
+  expect(await (await fetch(next)).text()).toBe('replacement');
+  expect((await fetch(first)).headers.get('cache-control')).toBe('no-store');
+});
+
+test('local viewer gets authenticated preloading, immediate FX and heartbeat replies', async () => {
+  service = createFxAssetServer({ getFolder: () => folder, getViewerKey: () => 'a'.repeat(64) });
+  const port = await service.start();
+  const socket = new WebSocket(`ws://127.0.0.1:${port}/fx-viewer/ws?k=${'a'.repeat(64)}`, { origin: `http://127.0.0.1:${port}` });
+  const messages = [];
+  const preload = new Promise((resolve) => socket.on('message', (raw) => {
+    const event = JSON.parse(String(raw)); messages.push(event);
+    if (event.type === 'fx:preload') resolve(event);
+  }));
+  try {
+    const manifest = await preload;
+    expect(manifest.assets.map((asset) => asset.kind).sort()).toEqual(['image', 'sound']);
+    expect(manifest.assets.every((asset) => asset.assetUrl.startsWith(`http://127.0.0.1:${port}/fx-asset`))).toBe(true);
+    const received = new Promise((resolve) => socket.once('message', (raw) => resolve(JSON.parse(String(raw)))));
+    expect(service.publish('fx:play', { deliveryId: 'one', positionMode: 'random' })).toBe(1);
+    expect(await received).toEqual({ type: 'fx:play', payload: { deliveryId: 'one', positionMode: 'random' } });
+    const pong = new Promise((resolve) => socket.once('message', (raw) => resolve(JSON.parse(String(raw)))));
+    socket.send('{"type":"ping"}');
+    expect(await pong).toEqual({ type: 'pong' });
+  } finally { socket.terminate(); }
+});
+
+test.each(['bad-key', 'foreign-origin'])('local WebSocket rejects %s', async (reason) => {
+  service = createFxAssetServer({ getFolder: () => folder, getViewerKey: () => 'a'.repeat(64) });
+  const port = await service.start();
+  const socket = new WebSocket(`ws://127.0.0.1:${port}/fx-viewer/ws?k=${reason === 'bad-key' ? 'b'.repeat(64) : 'a'.repeat(64)}`, {
+    origin: reason === 'foreign-origin' ? 'https://unrelated.example' : `http://127.0.0.1:${port}`,
+  });
+  await expect(new Promise((resolve, reject) => { socket.once('open', resolve); socket.once('error', reject); })).rejects.toThrow('403');
+  socket.terminate();
+});
+
+test('local FX delivery does not wait for the cloud push and preserves the shared delivery ID', async () => {
+  const publish = jest.spyOn(service, 'publish').mockReturnValue(1);
+  let resolve;
+  const remote = new Promise((done) => { resolve = done; });
+  const apiFetch = jest.fn(() => remote);
+  try {
+    const result = await loadProcessJob(apiFetch)({ id: '123', job_type: 'fx.play', payload: { assetId: 'clip.webm', positionMode: 'random' } });
+    expect(result).toMatchObject({ ok: true, delivery: 'local', sent: 1 });
+    expect(publish).toHaveBeenCalledWith('fx:play', expect.objectContaining({ deliveryId: 'fx_job_123', positionMode: 'random' }));
+    expect(JSON.parse(apiFetch.mock.calls[0][1].body).payload.deliveryId).toBe('fx_job_123');
+  } finally { resolve({ sent: 1 }); }
 });

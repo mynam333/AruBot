@@ -96,6 +96,7 @@ let agentSocketHeartbeatTimer = null;
 let agentPollingTimer = null;
 let reconnectAttempt = 0;
 let processingJobs = false;
+let jobsCheckPending = false;
 let startupDiscoverySyncRunning = false;
 let config = { ...DEFAULT_CONFIG };
 let fxViewerState = null;
@@ -1816,15 +1817,23 @@ async function processJob(job) {
     }
     const fxPayload = {
       ...payload,
+      deliveryId: `fx_job_${job.id || crypto.randomUUID()}`,
       kind,
       assetId,
       assetUrl,
       assetName: payload.assetName || payload.fileName || assetId,
     };
-    const delivery = await apiFetch('/api/automations/local-agent/fx/push', {
+    const localSent = fxAssetServer.publish('fx:play', fxPayload);
+    const remoteDelivery = apiFetch('/api/automations/local-agent/fx/push', {
       method: 'POST',
       body: JSON.stringify({ payload: fxPayload }),
     });
+    if (localSent) {
+      // The local viewer has already received it; cloud round trips must not stall the next effect.
+      void remoteDelivery.catch((error) => addLog('error', '웹 FX 전달 실패', error.message || String(error)));
+      return { ok: true, type: 'fx.play', kind, assetId, pushed: true, sent: localSent, delivery: 'local' };
+    }
+    const delivery = await remoteDelivery;
     if (!delivery?.sent) throw new Error('연결된 FX 오버레이가 없습니다. 방송 PC에서 FX 브라우저 소스를 열어 주세요.');
     return { ok: true, type: 'fx.play', kind, assetId, pushed: true, sent: delivery.sent };
   }
@@ -1941,8 +1950,9 @@ async function processJob(job) {
 
 async function claimAndProcessJobs() {
   if (!running) return;
-  if (processingJobs) return;
+  if (processingJobs) { jobsCheckPending = true; return; }
   processingJobs = true;
+  jobsCheckPending = false;
   try {
     const claim = await apiFetch('/api/automations/local-agent/jobs/claim', {
       method: 'POST',
@@ -1962,6 +1972,7 @@ async function claimAndProcessJobs() {
       }),
     });
     const jobs = Array.isArray(claim?.jobs) ? claim.jobs : [];
+    if (jobs.length >= 5) jobsCheckPending = true;
     if (jobs.length) {
       stats.claimed += jobs.length;
       stats.lastJobAt = new Date().toISOString();
@@ -1989,6 +2000,10 @@ async function claimAndProcessJobs() {
   } finally {
     processingJobs = false;
     emitState();
+    if (running && jobsCheckPending) {
+      jobsCheckPending = false;
+      queueMicrotask(() => { void claimAndProcessJobs(); });
+    }
   }
 }
 

@@ -58,5 +58,19 @@ test('FX editor exposes the mode and only hides fixed coordinates without cleari
   expect(page).toContain("cfg.positionMode !== 'random' ?");
   const overlay = fs.readFileSync(path.join(__dirname, '../src/components/FxOverlay.tsx'), 'utf8');
   expect(overlay).toContain('const positionAnchor = sampleFxPosition();');
-  expect(overlay).toContain('...fxPlacementStyle(item)');
+  expect(overlay).toContain('...fxPlacementStyle(item, viewport)');
+});
+
+test('random placement uses actual viewport pixels, preserves anchors on resize and contains mixed-unit media', () => {
+  const item = { positionMode: 'random', positionAnchor: { x: 0.1, y: 0.9 }, width: 200, widthUnit: 'px', height: 50 };
+  expect(fxPlacementStyle(item, { width: 1000, height: 600 })).toEqual({ left: '180px', top: '420px', width: '200px', height: '300px' });
+  expect(fxPlacementStyle(item, { width: 500, height: 400 })).toEqual({ left: '130px', top: '280px', width: '200px', height: '200px' });
+  expect(fxPlacementStyle({ ...item, width: 20000 }, { width: 500, height: 400 }).left).toBe('250px');
+  for (const anchor of [0, 0.25, 0.5, 0.75, 1]) {
+    const style = fxPlacementStyle({ ...item, positionAnchor: { x: anchor, y: anchor } }, { width: 1000, height: 600 });
+    expect(parseFloat(style.left) - 100).toBeGreaterThanOrEqual(0);
+    expect(parseFloat(style.left) + 100).toBeLessThanOrEqual(1000);
+    expect(parseFloat(style.top) - 150).toBeGreaterThanOrEqual(0);
+    expect(parseFloat(style.top) + 150).toBeLessThanOrEqual(600);
+  }
 });

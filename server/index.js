@@ -10081,6 +10081,7 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}, inter
           kind: 'text',
           text: renderBlueprintTemplate(config.text || '', scope),
         });
+        if (config.positionMode == null) delete payload.positionMode;
         const sent = dryRun ? 0 : broadcastFxEventToSid(sid, 'fx:update', payload);
         output = { updated: sent > 0, overlayId, sent, payload, dryRun };
       } else if (node.type === 'overlayHide') {
@@ -17276,6 +17277,7 @@ function normalizeFxPayload(input = {}) {
   const visualFallbackHeight = normalizedKind === 'sound' || normalizedKind === 'tts' ? 0 : normalizedKind === 'text' ? 16 : 30;
   return {
     id: String(input.id || `fx_${Date.now().toString(36)}_${crypto.randomBytes(3).toString('hex')}`),
+    deliveryId: typeof input.deliveryId === 'string' ? input.deliveryId.slice(0, 120) : '',
     kind: normalizedKind,
     assetId: path.basename(String(input.assetId || input.fileId || input.name || '')),
     assetName: String(input.assetName || input.fileName || input.name || '').slice(0, 120),

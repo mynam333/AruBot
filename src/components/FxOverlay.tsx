@@ -4,9 +4,11 @@ import React from 'react';
 import { getBrowserApiBase } from '@/shared/api/http';
 import { connectOverlaySocket } from '@/shared/api/overlay-socket';
 import { fxPlacementStyle, sampleFxPosition } from '@/shared/lib/fx-placement';
+import { createFxMediaCache } from '@/shared/lib/fx-media';
 
 type FxPayload = {
   id?: string;
+  deliveryId?: string;
   kind?: 'image' | 'sticker' | 'video' | 'sound' | 'text' | 'tts';
   assetUrl?: string;
   youtubeUrl?: string;
@@ -39,8 +41,10 @@ type FxPayload = {
 
 type FxItem = FxPayload & {
   id: string;
+  instanceId: number;
   positionAnchor: { x: number; y: number };
   exiting?: boolean;
+  ready?: boolean;
 };
 
 function getFxApiBase() {
@@ -89,7 +93,7 @@ function youtubeEmbedUrl(url?: string) {
   }
 }
 
-function ChromaCanvas({ item, video }: { item: FxItem; video?: boolean }) {
+function ChromaCanvas({ item, video, onReady, onError }: { item: FxItem; video?: boolean; onReady: () => void; onError: () => void }) {
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const mediaRef = React.useRef<HTMLImageElement & HTMLVideoElement | null>(null);
 
@@ -101,29 +105,49 @@ function ChromaCanvas({ item, video }: { item: FxItem; video?: boolean }) {
     if (!canvas || !media || !item.assetUrl) return undefined;
     const key = parseColor(item.chromaKeyColor);
     const tolerance = Math.max(0, Math.min(160, Number(item.chromaKeyTolerance ?? 42)));
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) { onError(); return undefined; }
+    let firstFrame = true;
+    let previousTime = -1;
+    let previousFrameAt = 0;
+    let videoFrame = 0;
+    const animatedImage = /\.(gif|webp|avif)(?:[?#]|$)/i.test(item.assetUrl);
 
     const draw = () => {
       if (stopped) return;
       const ready = video ? media.readyState >= 2 : media.complete;
       const width = video ? media.videoWidth : media.naturalWidth;
       const height = video ? media.videoHeight : media.naturalHeight;
-      if (ready && width && height) {
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d', { willReadFrequently: true });
-        if (ctx) {
-          ctx.drawImage(media, 0, 0, width, height);
-          const image = ctx.getImageData(0, 0, width, height);
+      if (ready && width && height && (!video || media.currentTime !== previousTime)) {
+        // Process displayed pixels, not a full-resolution source on every frame.
+        const scale = Math.min(1, Math.max(1, canvas.clientWidth) / width, Math.max(1, canvas.clientHeight) / height);
+        const w = Math.max(1, Math.round(width * scale));
+        const h = Math.max(1, Math.round(height * scale));
+        if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+        try {
+          ctx.drawImage(media, 0, 0, w, h);
+          const image = ctx.getImageData(0, 0, w, h);
           for (let i = 0; i < image.data.length; i += 4) {
             const dr = image.data[i] - key.r;
             const dg = image.data[i + 1] - key.g;
             const db = image.data[i + 2] - key.b;
-            if (Math.sqrt(dr * dr + dg * dg + db * db) <= tolerance) image.data[i + 3] = 0;
+            if (dr * dr + dg * dg + db * db <= tolerance * tolerance) image.data[i + 3] = 0;
           }
           ctx.putImageData(image, 0, 0);
-        }
+          previousTime = media.currentTime;
+          if (firstFrame) { firstFrame = false; onReady(); }
+        } catch { stopped = true; onError(); }
       }
-      if (video) raf = window.requestAnimationFrame(draw);
+    };
+    const nextFrame = (time: number) => {
+      if (stopped) return;
+      if (time - previousFrameAt >= 1000 / 30) { previousFrameAt = time; draw(); }
+      raf = window.requestAnimationFrame(nextFrame);
+    };
+    const nextVideoFrame = () => {
+      if (stopped) return;
+      draw();
+      videoFrame = media.requestVideoFrameCallback(nextVideoFrame);
     };
 
     if (video) {
@@ -131,32 +155,40 @@ function ChromaCanvas({ item, video }: { item: FxItem; video?: boolean }) {
       mediaElement.muted = true;
       mediaElement.loop = false;
       mediaElement.play().catch(() => undefined);
-      raf = window.requestAnimationFrame(draw);
+      if (mediaElement.requestVideoFrameCallback) videoFrame = mediaElement.requestVideoFrameCallback(nextVideoFrame);
+      else raf = window.requestAnimationFrame(nextFrame);
     } else {
       const mediaElement = media as HTMLImageElement;
       if (mediaElement.complete) draw();
       else mediaElement.onload = draw;
+      if (animatedImage) raf = window.requestAnimationFrame(nextFrame);
     }
 
     return () => {
       stopped = true;
       if (raf) window.cancelAnimationFrame(raf);
+      if (videoFrame) media.cancelVideoFrameCallback(videoFrame);
+      media.onload = null;
+      if (video) media.pause();
     };
-  }, [item.assetUrl, item.chromaKeyColor, item.chromaKeyTolerance, video]);
+  }, [item.assetUrl, item.chromaKeyColor, item.chromaKeyTolerance, video, onReady, onError]);
 
   return (
     <>
       {video ? (
-        <video ref={mediaRef as React.RefObject<HTMLVideoElement>} crossOrigin="anonymous" src={item.assetUrl} playsInline className="hidden" />
+        <video ref={mediaRef as React.RefObject<HTMLVideoElement>} crossOrigin="anonymous" src={item.assetUrl} onError={onError} playsInline className="hidden" />
       ) : (
-        <img ref={mediaRef as React.RefObject<HTMLImageElement>} crossOrigin="anonymous" src={item.assetUrl} alt="" className="hidden" />
+        <img ref={mediaRef as React.RefObject<HTMLImageElement>} crossOrigin="anonymous" src={item.assetUrl} onError={onError} alt="" className="hidden" />
       )}
       <canvas ref={canvasRef} className="h-full w-full object-contain" />
     </>
   );
 }
 
-function FxVisual({ item }: { item: FxItem }) {
+function FxVisual({ item, ready, failed }: { item: FxItem; ready: (id: string) => void; failed: (id: string) => void }) {
+  const onReady = React.useCallback(() => ready(item.id), [ready, item.id]);
+  const onError = React.useCallback(() => failed(item.id), [failed, item.id]);
+  React.useEffect(() => { if (item.kind === 'text') onReady(); }, [item.kind, onReady]);
   if (item.kind === 'text') {
     return (
       <div className="flex h-full w-full items-center justify-center whitespace-pre-wrap break-keep rounded-[min(2vw,1.4rem)] bg-black/46 px-[4%] py-[3%] text-center text-[clamp(1.4rem,4vw,4.5rem)] font-extrabold leading-tight text-white shadow-[0_1.2rem_3rem_rgba(0,0,0,0.28)] [text-shadow:0_0.08em_0.16em_rgba(0,0,0,0.45)]">
@@ -166,16 +198,25 @@ function FxVisual({ item }: { item: FxItem }) {
   }
   const embed = youtubeEmbedUrl(item.youtubeUrl);
   if (item.kind === 'video' && embed) {
-    return <iframe title={item.assetName || 'FX video'} src={embed} allow="autoplay; encrypted-media" className="h-full w-full border-0" />;
+    return <iframe title={item.assetName || 'FX video'} src={embed} onLoad={onReady} onError={onError} allow="autoplay; encrypted-media" className="h-full w-full border-0" />;
   }
   if (item.kind === 'video') {
-    return item.chromaKey ? <ChromaCanvas item={item} video /> : <video src={item.assetUrl} autoPlay playsInline className="h-full w-full object-contain" />;
+    return item.chromaKey ? <ChromaCanvas item={item} video onReady={onReady} onError={onError} /> : <video src={item.assetUrl} onLoadedData={onReady} onError={onError} autoPlay playsInline className="h-full w-full object-contain" />;
   }
-  return item.chromaKey ? <ChromaCanvas item={item} /> : <img src={item.assetUrl} alt="" className="h-full w-full object-contain" />;
+  return item.chromaKey ? <ChromaCanvas item={item} onReady={onReady} onError={onError} /> : <img src={item.assetUrl} onLoad={onReady} onError={onError} alt="" className="h-full w-full object-contain" />;
 }
 
-export function FxOverlay({ token, apiBase }: { token: string; apiBase?: string }) {
+export function FxOverlay({ token, apiBase, localSocketUrl }: { token: string; apiBase?: string; localSocketUrl?: string }) {
   const [items, setItems] = React.useState<FxItem[]>([]);
+  const [viewport, setViewport] = React.useState({ width: 1920, height: 1080 });
+  const lifecycles = React.useRef(new Map<string, { start: () => void; cancel: () => void }>());
+  const ready = React.useCallback((id: string) => lifecycles.current.get(id)?.start(), []);
+  const failed = React.useCallback((id: string) => {
+    lifecycles.current.get(id)?.cancel();
+    lifecycles.current.delete(id);
+    setItems((current) => current.filter((item) => item.id !== id));
+    console.warn('[FX] Media could not be loaded');
+  }, []);
 
   const speak = React.useCallback((payload: FxPayload) => {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
@@ -194,19 +235,49 @@ export function FxOverlay({ token, apiBase }: { token: string; apiBase?: string 
   React.useEffect(() => {
     document.documentElement.style.background = 'transparent';
     document.body.style.background = 'transparent';
+    const resize = () => setViewport({ width: window.innerWidth, height: window.innerHeight });
+    resize();
+    window.addEventListener('resize', resize);
     return () => {
       document.documentElement.style.background = '';
       document.body.style.background = '';
+      window.removeEventListener('resize', resize);
     };
   }, []);
 
   React.useEffect(() => {
-    if (!token) return undefined;
-    return connectOverlaySocket({
-      url: () => getWsUrl(token, apiBase),
-      onMessage: (event) => {
+    if (!token && !localSocketUrl) return undefined;
+    const media = createFxMediaCache();
+    const deliveries = new Set<string>();
+    const lifetimes = lifecycles.current;
+    const timers = new Set<number>();
+    let instanceId = 0;
+    const later = (callback: () => void, ms: number) => {
+      const timer = window.setTimeout(() => { timers.delete(timer); callback(); }, ms);
+      timers.add(timer); return timer;
+    };
+    const cancelTimer = (timer: number) => { window.clearTimeout(timer); timers.delete(timer); };
+    const remove = (id: string) => {
+      lifetimes.get(id)?.cancel(); lifetimes.delete(id);
+      setItems((current) => current.filter((item) => item.id !== id));
+    };
+    const exit = (id: string) => {
+      const lifetime = lifetimes.get(id);
+      if (!lifetime) return;
+      lifetime.cancel();
+      lifetime.start = () => {};
+      setItems((current) => current.map((item) => item.id === id ? { ...item, exiting: true } : item));
+      const timer = later(() => remove(id), 700);
+      lifetime.cancel = () => cancelTimer(timer);
+    };
+    const onMessage = (event: MessageEvent) => {
         const message = JSON.parse(String(event.data || '{}'));
+        if (message?.type === 'fx:preload') {
+          if (Array.isArray(message.assets)) message.assets.slice(0, 32).forEach(media.warm);
+          return;
+        }
         const payload = message.payload as FxPayload;
+        if (!payload || typeof payload !== 'object') return;
         if (message?.type === 'fx:update') {
           const targetId = payload.overlayId || payload.id;
           if (!targetId) return;
@@ -216,13 +287,16 @@ export function FxOverlay({ token, apiBase }: { token: string; apiBase?: string 
         if (message?.type === 'fx:hide') {
           const targetId = payload.overlayId || payload.id;
           if (!targetId) return;
-          setItems((current) => current.map((item) => item.id === targetId ? { ...item, exiting: true } : item));
-          window.setTimeout(() => {
-            setItems((current) => current.filter((item) => item.id !== targetId));
-          }, 700);
+          exit(targetId);
           return;
         }
         if (message?.type !== 'fx:play') return;
+        // Local delivery and the cloud fallback describe the same execution.
+        if (payload.deliveryId) {
+          if (deliveries.has(payload.deliveryId)) return;
+          deliveries.add(payload.deliveryId);
+          if (deliveries.size > 1024) deliveries.delete(deliveries.values().next().value!);
+        }
         const id = payload.id || `fx_${Date.now()}_${Math.random().toString(16).slice(2)}`;
         if (payload.kind === 'tts') {
           speak(payload);
@@ -230,24 +304,36 @@ export function FxOverlay({ token, apiBase }: { token: string; apiBase?: string 
         }
         if (payload.kind === 'sound') {
           if (payload.assetUrl) {
-            const audio = new Audio(payload.assetUrl);
-            audio.volume = Math.max(0, Math.min(1, Number(payload.volume ?? 1)));
-            audio.play().catch(() => undefined);
+            media.play(payload.assetUrl, Number(payload.volume ?? 1));
           }
           return;
         }
         const positionAnchor = sampleFxPosition();
-        setItems((current) => [...current, { ...payload, id, positionAnchor }]);
+        lifetimes.get(id)?.cancel();
+        let started = false;
+        let timer = later(() => remove(id), 15_000);
         const duration = Math.max(250, Math.min(60000, Number(payload.durationMs || 4000)));
-        window.setTimeout(() => {
-          setItems((current) => current.map((item) => item.id === id ? { ...item, exiting: true } : item));
-          window.setTimeout(() => {
-            setItems((current) => current.filter((item) => item.id !== id));
-          }, 700);
-        }, duration);
-      },
-    });
-  }, [speak, token, apiBase]);
+        lifetimes.set(id, {
+          start: () => {
+            if (started) return;
+            started = true; cancelTimer(timer);
+            setItems((current) => current.map((item) => item.id === id ? { ...item, ready: true } : item));
+            timer = later(() => exit(id), duration);
+          },
+          cancel: () => cancelTimer(timer),
+        });
+        setItems((current) => [...current.filter((item) => item.id !== id), { ...payload, id, instanceId: ++instanceId, positionAnchor }]);
+    };
+    const disconnect = token ? connectOverlaySocket({
+      url: () => getWsUrl(token, apiBase), onMessage,
+    }) : undefined;
+    const disconnectLocal = localSocketUrl ? connectOverlaySocket({ url: localSocketUrl, onMessage }) : undefined;
+    return () => {
+      disconnect?.(); disconnectLocal?.(); media.dispose();
+      for (const timer of timers) window.clearTimeout(timer);
+      lifetimes.clear(); setItems([]);
+    };
+  }, [speak, token, apiBase, localSocketUrl]);
 
   return (
     <main className="fixed inset-0 overflow-hidden bg-transparent">
@@ -259,16 +345,18 @@ export function FxOverlay({ token, apiBase }: { token: string; apiBase?: string 
       `}</style>
       {items.map((item) => (
         <div
-          key={item.id}
-          className={`absolute ${String(item.animationKey || '').replace(/[^\w:-]+/g, ' ').trim()}`}
+          key={item.instanceId}
+          className="absolute"
           style={{
-            ...fxPlacementStyle(item),
+            ...fxPlacementStyle(item, viewport),
             transform: 'translate(-50%, -50%)',
-            animation: item.exiting ? (item.exitCss || undefined) : (item.animation || item.enterCss || undefined),
+            visibility: item.ready ? 'visible' : 'hidden',
           }}
         >
-          {item.cssCode ? <style>{item.cssCode}</style> : null}
-          <FxVisual item={item} />
+          <div className={`absolute h-full w-full ${String(item.animationKey || '').replace(/[^\w:-]+/g, ' ').trim()}`} style={{ left: '50%', top: '50%', transform: 'translate(-50%, -50%)', animation: item.ready ? item.exiting ? (item.exitCss || undefined) : (item.animation || item.enterCss || undefined) : undefined }}>
+            {item.cssCode ? <style>{item.cssCode}</style> : null}
+            <FxVisual item={item} ready={ready} failed={failed} />
+          </div>
         </div>
       ))}
     </main>
