@@ -45,6 +45,7 @@ test('server preserves the mode on normalization and on unspecified position upd
   const sent = [];
   expect(normalizeFxPayload({ positionMode: 'random' }).positionMode).toBe('random');
   expect(normalizeFxPayload({}).positionMode).toBe('fixed');
+  expect(normalizeFxPayload({ deliveryId: 'fx_job_1' }).deliveryId).toBe('fx_job_1');
   broadcastFxEventToSid('user:a', 'fx:play', { positionMode: 'random' });
   broadcastFxEventToSid('user:a', 'fx:update', { text: 'updated' });
   expect(sent[0].payload.positionMode).toBe('random');

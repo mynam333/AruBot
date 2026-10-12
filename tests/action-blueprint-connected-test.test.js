@@ -71,6 +71,18 @@ const connected = {
 };
 
 describe('blueprint simulation and connected-device runtime', () => {
+  test.each([undefined, 'fixed', 'random'])('overlay updates only change placement when explicitly requested: %s', async (positionMode) => {
+    const config = { overlayId: 'existing', text: 'updated', ...(positionMode ? { positionMode } : {}) };
+    const { executeActionBlueprint, bindings } = runtime([graph('draft', [{ type: 'overlayUpdate', config }])], {
+      normalizeFxPayload: (payload) => ({ ...payload, positionMode: payload.positionMode || 'fixed' }),
+    });
+    const result = await executeActionBlueprint('owner', 'draft', connected);
+    expect(result.ok).toBe(true);
+    const payload = bindings.broadcastFxEventToSid.mock.calls[0][2];
+    if (positionMode) expect(payload.positionMode).toBe(positionMode);
+    else expect(payload).not.toHaveProperty('positionMode');
+  });
+
   test.each([{ source: 'manual_test' }, { ...connected, testMode: 'simulation' }, { ...connected, dryRun: true }])('keeps simulation free of device and viewer effects: %j', async (context) => {
     const blueprint = graph('draft', [
       { type: 'chat', config: { message: 'Never send this' } },
