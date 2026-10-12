@@ -7,6 +7,7 @@ const REQUIRED_TABLES = [
   'bot_settings',
   'bot_rules',
   'bot_counter_values',
+  'bot_memo_values',
   'public_short_links',
   'roulette_sessions',
   'participation_wheels',
@@ -56,6 +57,23 @@ async function main() {
         );
         await client.query('delete from public.bot_counter_values where sid = $1', [smokeSid]);
         counterWriteAccess = true;
+      } finally {
+        await client.query('rollback').catch(() => undefined);
+      }
+    }
+    let memoWriteAccess = false;
+    if (tables.bot_memo_values) {
+      const smokeSid = `__arubot_memo_smoke__:${process.pid}:${Date.now()}`;
+      await client.query('begin');
+      try {
+        await client.query(`insert into public.bot_memo_values (sid, memo_key, value)
+          values ($1, 'name:probe', 'initial') on conflict (sid, memo_key)
+          do update set value = excluded.value returning value`, [smokeSid]);
+        const updated = await client.query("update public.bot_memo_values set value = 'updated' where sid = $1 returning value", [smokeSid]);
+        const selected = await client.query('select value from public.bot_memo_values where sid = $1', [smokeSid]);
+        const deleted = await client.query('delete from public.bot_memo_values where sid = $1', [smokeSid]);
+        if (updated.rowCount !== 1 || selected.rows[0]?.value !== 'updated' || deleted.rowCount !== 1) throw new Error('Runtime role cannot read/write bot memos');
+        memoWriteAccess = true;
       } finally {
         await client.query('rollback').catch(() => undefined);
       }
@@ -117,9 +135,10 @@ async function main() {
       now: now.rows[0]?.now,
       tables,
       counterWriteAccess,
+      memoWriteAccess,
       shortLinkCrudAccess,
       wheelCrudAccess,
-      ok: Object.values(tables).every(Boolean) && counterWriteAccess && shortLinkCrudAccess && wheelCrudAccess,
+      ok: Object.values(tables).every(Boolean) && counterWriteAccess && shortLinkCrudAccess && wheelCrudAccess && memoWriteAccess,
     };
   });
 

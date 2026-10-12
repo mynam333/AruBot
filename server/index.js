@@ -74,7 +74,10 @@ import {
 import { getKstCalendarDate, resolveAttendanceDate } from './attendance-calendar.js';
 import { DEFAULT_ATTENDANCE_MESSAGE, renderAttendanceTemplate } from './attendance-message.js';
 import { executeAttendanceSpecialOperations, extractAttendanceSpecialVariables } from './attendance-special-variables.js';
+import { renderDonationResponse } from './donation-response.js';
 import { prepareCounterVariablePlan, resolveCounterVariablePlan, stripUnplannedCounterVariables } from './counter-variables.js';
+import { memoVariableStore } from './supabase.js';
+import { prepareMemoVariablePlan, resolveMemoVariablePlan, stripUnplannedMemoVariables, memoCommandArguments } from './memo-variables.js';
 import { substituteDdayVariables } from './dday-variables.js';
 import {
   buildBlueprintScope,
@@ -9339,7 +9342,7 @@ function createActionBlueprintVariableResolvers(ownerUserId, sid) {
   };
 }
 
-async function getRuntimeActionBlueprint(ownerUserId, idOrSlug) {
+async function getRuntimeActionBlueprint(ownerUserId, idOrSlug, { currentDraft = false } = {}) {
   const owner = String(ownerUserId || '').replace(/^user:/, '').trim();
   const keyPart = String(idOrSlug || '').trim();
   if (!owner || !keyPart) return null;
@@ -9355,7 +9358,7 @@ async function getRuntimeActionBlueprint(ownerUserId, idOrSlug) {
         || String(candidate?.name || '').trim().toLocaleLowerCase('ko-KR') === normalizedReference
       )) || null;
     }
-    if (!blueprint || blueprint.version?.published) return blueprint;
+    if (!blueprint || currentDraft || blueprint.version?.published) return blueprint;
     const versions = await listActionBlueprintVersions(owner, blueprint.id, 100).catch(() => []);
     const publishedVersion = versions.find((version) => version?.published === true) || null;
     if (!publishedVersion) return blueprint;
@@ -9375,8 +9378,8 @@ async function getRuntimeActionBlueprint(ownerUserId, idOrSlug) {
 
 async function executeBlueprintChatNode(ownerUserId, sid, node, text, context = {}) {
   const platform = String(context.platform || context.trigger?.platform || context.chatPost?.provider || context.chatPost?.platform || '').toLowerCase();
-  if (context.dryRun || context.source === 'manual_test') {
-    return { sent: false, dryRun: true, platform: platform || 'simulator', text };
+  if (context.dryRun || context.source === 'manual_test' || context.testMode) {
+    return { sent: false, dryRun: true, suppressed: true, reason: 'test_audience_chat_blocked', platform: platform || 'simulator', text };
   }
   const chatPost = context.chatPost || null;
   const chatPostPlatform = String(chatPost?.provider || chatPost?.platform || '').toLowerCase();
@@ -9433,6 +9436,11 @@ async function resolveBlueprintCommandChannelUid(ownerUserId, sid, platform, con
 }
 
 async function emitBlueprintCommandEvent(sid, platform, payload) {
+  if (payload.executionContext?.testMode === 'connected') {
+    // Test delivery uses the authenticated owner's desktop subscription, not a
+    // simulated channel identity, and must not leave a delayed Warudo event.
+    return { desktopSent: broadcastToDesktop(sid, { ...payload, metadata: payload.executionContext }) };
+  }
   let targetPid = sid;
   if (platform === 'chzzk') {
     const owner = await getOwnerInfoForSid(sid).catch(() => null);
@@ -9465,6 +9473,7 @@ async function executeBlueprintCommandNode({
   node = {},
   run = {},
 }) {
+  dryRun = dryRun || context.dryRun === true || (context.source === 'manual_test' && context.testMode !== 'connected');
   const selectedPlatform = String(platform || '').trim().toLowerCase();
   const command = String(commandText || '').trim().slice(0, 500);
   if (!BLUEPRINT_COMMAND_PLATFORMS.has(selectedPlatform)) throw new Error('blueprint_command_platform_invalid');
@@ -9479,7 +9488,7 @@ async function executeBlueprintCommandNode({
   const rule = candidate.rule;
   return commandExecution.run(sid, `command:${rule.id || candidate.match.matchedText}`, async () => {
   const commandMatch = candidate.match;
-  if (!dryRun && rule.liveOnly === true) {
+  if (!dryRun && context.source !== 'manual_test' && rule.liveOnly === true) {
     const liveInfo = await getLiveInfoForSid(sid, { provider: selectedPlatform }).catch(() => null);
     if (!liveInfo?.live) {
       return {
@@ -9497,14 +9506,17 @@ async function executeBlueprintCommandNode({
 
   const responses = Array.isArray(rule.responses) ? rule.responses.filter((value) => typeof value === 'string' && value.length > 0) : [];
   const selectedResponse = responses.length ? responses[Math.floor(Math.random() * responses.length)] : '';
-  const counterPlan = prepareCounterVariablePlan(selectedResponse);
+  const memoPlan = prepareMemoVariablePlan(selectedResponse, { ruleId: rule.id });
+  const counterPlan = prepareCounterVariablePlan(memoPlan.text);
   let response = counterPlan.text;
   const argsText = commandMatch.argsText;
   const args = argsText ? argsText.split(/\s+/).map(String).filter(Boolean) : [];
   const userId = String(context.user?.userId || context.user?.id || `blueprint:${ownerUserId}`);
   const username = String(context.user?.username || context.user?.name || context.user?.nickname || '블루프린트');
-  const channelUid = await resolveBlueprintCommandChannelUid(ownerUserId, sid, selectedPlatform, context);
-  const chatPost = makeBlueprintCommandChatPost(ownerUserId, sid, selectedPlatform, username, userId);
+  const connectedTest = context.testMode === 'connected' && context.source === 'manual_test';
+  const channelUid = dryRun || connectedTest
+    ? String(context.channelUid || context.channel?.channelUid || ownerUserId)
+    : await resolveBlueprintCommandChannelUid(ownerUserId, sid, selectedPlatform, context);
   const baseOutput = {
     platform: selectedPlatform,
     command,
@@ -9528,6 +9540,38 @@ async function executeBlueprintCommandNode({
     };
   }
 
+  if (connectedTest) {
+    // Only device delivery and blueprint action tokens are allowed in a test.
+    // Do not route synthetic users through live command effects or counters.
+    const delivery = await emitBlueprintCommandEvent(sid, selectedPlatform, {
+      type: 'command', cmd: commandMatch.matchedText, args,
+      from: { userId, username }, at: Date.now(), source: 'blueprint-command',
+      executionContext: {
+        source: 'blueprint-command', testMode: 'connected', platform: selectedPlatform,
+        pointsDeducted: false, shouldDeductPoints: false,
+        blueprintId: blueprint.id || null, nodeId: node.id || null, runId: run.id || null,
+      },
+    });
+    const actionResult = await executeAndStripActionVariableTokens(sid, memoPlan.text, {
+      ...context, source: 'manual_test', testMode: 'connected', dryRun: false,
+      noPointCost: true, requirePublishedBlueprint: true, platform: selectedPlatform,
+      trigger: { ...(context.trigger || {}), message: command, keyword: commandMatch.matchedText, platform: selectedPlatform },
+      command: { keyword: commandMatch.matchedText, text: command, ruleId: rule.id || null },
+      user: { ...(context.user || {}), userId, username },
+    });
+    const failedAction = actionResult.jobs?.find((job) => job.ok === false);
+    const error = failedAction?.error || (!delivery?.desktopSent && !actionResult.jobs?.length ? 'blueprint_desktop_unavailable' : null);
+    response = await resolveCommandMemoVariables(memoPlan, actionResult.text, { sid });
+    return {
+      ...baseOutput, executed: !error, ok: !error, error, response,
+      desktopSent: delivery?.desktopSent || 0,
+      delivery: { status: delivery?.desktopSent ? 'sent' : 'not_sent', confirmed: false },
+      actions: summarizeBlueprintCommandActionJobs(actionResult.jobs),
+      suppressedEffects: ['audience_chat', 'points', 'live_changes', 'donations', 'roulette', 'counters'],
+    };
+  }
+
+  const chatPost = makeBlueprintCommandChatPost(ownerUserId, sid, selectedPlatform, username, userId);
   const features = [];
   const liveChangeResult = await executeCommandLiveChangeTokens(sid, response, {
     provider: selectedPlatform,
@@ -9645,6 +9689,7 @@ async function executeBlueprintCommandNode({
     provider: selectedPlatform,
     userId,
   }) || '').trim();
+  response = String(await resolveCommandMemoVariables(memoPlan, response, { sid }) || '').trim();
 
   await recordCommandExecutionLog(sid, {
     executed: true,
@@ -9675,17 +9720,46 @@ async function executeBlueprintCommandNode({
   });
 }
 
+async function queueBlueprintAutomationJob(ownerUserId, job, context = {}) {
+  if (context.testMode === 'connected') {
+    const agents = await listAutomationLocalAgents(ownerUserId);
+    if (!agents.some((agent) => agent.status === 'online' && !agent.revokedAt)) {
+      const error = new Error('blueprint_local_agent_offline');
+      error.code = error.message;
+      throw error;
+    }
+    // The protocol has no expiry. Avoid replaying a claimed test job after a
+    // stalled agent recovers, and preserve test provenance in the job log.
+    job = { ...job, maxAttempts: 1, payload: { ...job.payload, testMode: 'connected' } };
+  }
+  const queued = await queueAutomationJob(ownerUserId, job);
+  if (!queued?.id) {
+    const error = new Error('blueprint_job_not_queued');
+    error.code = error.message;
+    throw error;
+  }
+  return queued;
+}
+
 async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}, internal = {}) {
-  const blueprint = await getRuntimeActionBlueprint(ownerUserId, idOrSlug);
+  const isTest = context.source === 'manual_test' || context.testMode === 'simulation' || context.testMode === 'connected';
+  // Only the root editor test uses the current draft. Nested actions retain
+  // their published runtime contract while inheriting all test safeguards.
+  const blueprint = await getRuntimeActionBlueprint(ownerUserId, idOrSlug, { currentDraft: isTest && context.requirePublishedBlueprint !== true });
   if (!blueprint || blueprint.enabled === false) return { ok: false, error: 'blueprint_not_found' };
+  if (internal.expectedVersionId && blueprint.version?.id !== internal.expectedVersionId) {
+    return { ok: false, error: 'blueprint_test_version_changed' };
+  }
   try {
     return await commandExecution.run(`user:${ownerUserId}`, `blueprint:${blueprint.id}`, async () => {
   const textError = inspectTextPayload([blueprint, context]);
   if (textError) return { ok: false, error: textError };
-  const dryRun = context.dryRun === true || context.source === 'manual_test';
-  const suppressPointMutations = context.replayNoCost === true || context.noPointCost === true;
+  const dryRun = context.dryRun === true || (isTest && context.testMode !== 'connected');
+  const simulateViewer = dryRun || isTest;
+  const suppressPointMutations = isTest || context.replayNoCost === true || context.noPointCost === true;
+  if (isTest) context = { ...context, source: 'manual_test', testMode: dryRun ? 'simulation' : 'connected', dryRun, noPointCost: true };
   const version = blueprint.version || {};
-  if (!version.published && context.source !== 'manual_test') return { ok: false, error: 'blueprint_not_published' };
+  if (!version.published && (context.source !== 'manual_test' || context.requirePublishedBlueprint === true)) return { ok: false, error: 'blueprint_not_published' };
   const nodes = Array.isArray(version.nodes) ? version.nodes : [];
   const edges = normalizeBlueprintEdges(version.edges);
   const validationErrors = validateBlueprintGraph(nodes, edges);
@@ -9738,7 +9812,7 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}, inter
       const hydratedContext = await hydrateBlueprintReadContext({
         context: runtimeContext,
         value: config,
-        dryRun,
+        dryRun: simulateViewer,
         resolvers: blueprintVariableResolvers,
         memo: blueprintVariableMemo,
         currentDate: getKstDateString(),
@@ -9809,7 +9883,7 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}, inter
           ? await executeActionBlueprint(
               ownerUserId,
               normalizedActionId,
-              { ...runtimeContext, source: dryRun ? 'manual_test' : 'blueprint_nested', dryRun, actionStack: [...actionStack, ...currentActionKeys] },
+              { ...runtimeContext, source: isTest || dryRun ? 'manual_test' : 'blueprint_nested', dryRun, requirePublishedBlueprint: true, actionStack: [...actionStack, ...currentActionKeys] },
               { blueprintVariableMemo }
             )
           : { ok: false, error: 'recursive_action_blocked' };
@@ -9851,7 +9925,7 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}, inter
         const userId = renderBlueprintTemplate(config.userId || '{user.userId}', scope) || runtimeContext.user?.userId;
         const username = renderBlueprintTemplate(config.username || '{user.username}', scope) || runtimeContext.user?.username;
         const simulatedUser = userId && String(userId) === String(runtimeContext.user?.userId || '');
-        const current = dryRun
+        const current = simulateViewer
           ? (simulatedUser ? Number(runtimeContext.user?.points ?? runtimeContext.user?.channelPoints ?? 0) : 0)
           : userId ? await getChannelPoints(channelUid, userId) : 0;
         if (node.type === 'pointsAdjust' && userId) {
@@ -9859,8 +9933,8 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}, inter
           if (!dryRun && !suppressPointMutations) await incrChannelPoints(channelUid, userId, username || userId, delta);
           const nextPoints = !dryRun && !suppressPointMutations
             ? await getChannelPoints(channelUid, userId)
-            : (suppressPointMutations ? current : current + delta);
-          output = { channelUid, userId, previous: current, delta, points: nextPoints, dryRun, noPointCost: suppressPointMutations };
+            : (simulateViewer ? current + delta : current);
+          output = { channelUid, userId, previous: current, delta, points: nextPoints, dryRun: simulateViewer, noPointCost: suppressPointMutations };
           if (simulatedUser) {
             runtimeContext = {
               ...runtimeContext,
@@ -9892,7 +9966,7 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}, inter
       } else if (node.type === 'pointsRanking') {
         const channelUid = await resolveBlueprintChannelUid(ownerUserId, runtimeContext);
         const limit = Math.max(1, Math.min(50, Number(evaluateBlueprintValue(config.limit || 10, scope) || 10)));
-        const page = dryRun
+        const page = simulateViewer
           ? { rows: [] }
           : await listChannelPointsPage(channelUid, { offset: 0, limit }).catch(() => ({ rows: [] }));
         output = { channelUid, ranking: page.rows || [] };
@@ -9900,7 +9974,7 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}, inter
         const channelUid = await resolveBlueprintChannelUid(ownerUserId, runtimeContext);
         const userId = renderBlueprintTemplate(config.userId || '{user.userId}', scope) || runtimeContext.user?.userId;
         const simulatedUser = userId && String(userId) === String(runtimeContext.user?.userId || '');
-        const excluded = dryRun
+        const excluded = simulateViewer
           ? !!(simulatedUser && (runtimeContext.user?.pointExcluded ?? runtimeContext.user?.pointsExcluded ?? false))
           : !!(userId && await isChannelPointExcluded(await getBotSettingsStrict(sid), userId, { strict: true }));
         output = { channelUid, userId, excluded };
@@ -9926,7 +10000,7 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}, inter
         const userId = renderBlueprintTemplate(config.userId || '{user.userId}', scope) || runtimeContext.user?.userId;
         const simulatedUser = userId && String(userId) === String(runtimeContext.user?.userId || '');
         const simulatedDays = Number(runtimeContext.user?.attendanceDays ?? runtimeContext.attendance?.totalDays ?? 0);
-        const totalDays = dryRun
+        const totalDays = simulateViewer
           ? (simulatedUser && Number.isFinite(simulatedDays) ? Math.max(0, Math.floor(simulatedDays)) : 0)
           : userId ? await getUserAttendanceTotalDays(sid, userId) : 0;
         output = { userId, totalDays };
@@ -9936,9 +10010,9 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}, inter
         const now = Date.now();
         globalThis.__arubotBlueprintCooldowns ||= new Map();
         const until = globalThis.__arubotBlueprintCooldowns.get(key) || 0;
-        const passed = dryRun ? true : now >= until;
-        if (passed && !dryRun) globalThis.__arubotBlueprintCooldowns.set(key, now + seconds * 1000);
-        output = { key, passed, remainingMs: passed ? 0 : until - now, dryRun };
+        const passed = simulateViewer ? true : now >= until;
+        if (passed && !simulateViewer) globalThis.__arubotBlueprintCooldowns.set(key, now + seconds * 1000);
+        output = { key, passed, remainingMs: passed ? 0 : until - now, dryRun: simulateViewer };
         nextPort = passed ? 'true' : 'false';
       } else if (node.type === 'highlight') {
         output = { marked: true, label: renderBlueprintTemplate(config.label || '하이라이트', scope), at: new Date().toISOString() };
@@ -9947,6 +10021,7 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}, inter
       } else if (node.type === 'join') {
         output = { joined: true, incoming };
       } else if (node.type === 'approval') {
+        if (isTest && !dryRun) throw new Error('blueprint_test_unsupported_node:approval');
         const message = renderBlueprintTemplate(config.message || '승인이 필요합니다.', scope);
         const job = dryRun ? null : await queueAutomationJob(ownerUserId, {
           connectionId: null,
@@ -9955,6 +10030,7 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}, inter
         });
         output = { queued: !dryRun, jobId: job?.id || null, approvalRequired: true, message, dryRun };
       } else if (node.type === 'timer') {
+        if (isTest && !dryRun) throw new Error('blueprint_test_unsupported_node:timer');
         const delayMs = Math.max(0, Number(evaluateBlueprintValue(config.delayMs || Number(config.seconds || 0) * 1000, scope) || 0));
         const edge = edgeFrom(node.id, 'out');
         if (edge && !dryRun) {
@@ -9975,12 +10051,12 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}, inter
           assetId: config.assetId || config.fileId,
           assetName: config.assetName || config.fileName
         });
-        const job = dryRun ? null : await queueAutomationJob(ownerUserId, {
+        const job = dryRun ? null : await queueBlueprintAutomationJob(ownerUserId, {
           connectionId: config.connectionId || null,
           jobType: 'fx.play',
           payload: { nodeId: node.id, blueprintId: blueprint.id, runId: run.id, ...payload }
-        });
-        output = { queued: !dryRun, jobId: job?.id || null, type: 'fx', payload, dryRun };
+        }, runtimeContext);
+        output = { queued: !!job, jobId: job?.id || null, delivery: { status: job ? 'queued' : 'simulated', confirmed: false }, type: 'fx', payload, dryRun };
       } else if (node.type === 'overlay' || node.type === 'rouletteDisplay') {
         const overlayId = renderBlueprintTemplate(config.overlayId || `overlay_${node.id}_${Date.now().toString(36)}`, scope);
         const payload = normalizeFxPayload({
@@ -10024,29 +10100,42 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}, inter
         payload.rate = Math.min(2, Math.max(0.5, Number(evaluateBlueprintValue(config.rate || 1, scope) || 1)));
         payload.pitch = Math.min(2, Math.max(0.5, Number(evaluateBlueprintValue(config.pitch || 1, scope) || 1)));
         const sent = dryRun ? 0 : broadcastFxToSid(sid, payload);
-        const job = dryRun || sent > 0 ? null : await queueAutomationJob(ownerUserId, {
+        const job = dryRun || sent > 0 ? null : await queueBlueprintAutomationJob(ownerUserId, {
           jobType: 'tts.speak',
           payload: { text: payload.text, voice: payload.voice, rate: payload.rate, pitch: payload.pitch, nodeId: node.id, blueprintId: blueprint.id, runId: run.id }
-        });
-        output = { spoken: sent > 0, queued: !!job, jobId: job?.id || null, sent, voice: payload.voice || '', payload, dryRun };
+        }, runtimeContext);
+        output = { spoken: sent > 0, queued: !!job, jobId: job?.id || null, delivery: { status: job ? 'queued' : sent > 0 ? 'sent' : 'simulated', confirmed: false }, sent, voice: payload.voice || '', payload, dryRun };
       } else if (['obs', 'http', 'websocket', 'udp', 'tits', 'vtube', 'chatVote'].includes(node.type)) {
+        if (isTest && !dryRun && node.type === 'chatVote') throw new Error('blueprint_test_unsupported_node:chatVote');
         const payload = renderBlueprintValueDeep(config || {}, scope);
-        if (payload.connectionId && !payload.endpoint) {
-          const connections = await listAutomationConnections(ownerUserId).catch(() => []);
+        if (payload.connectionId && (!payload.endpoint || (isTest && !dryRun))) {
+          const connections = isTest && !dryRun
+            ? await listAutomationConnections(ownerUserId)
+            : await listAutomationConnections(ownerUserId).catch(() => []);
           const connection = connections.find((item) => String(item.id || '') === String(payload.connectionId));
+          if (isTest && !dryRun && (!connection || connection.enabled === false)) throw new Error('blueprint_connection_unavailable');
           if (connection?.endpoint) payload.endpoint = connection.endpoint;
         }
-        const job = dryRun ? null : await queueAutomationJob(ownerUserId, {
-          connectionId: config.connectionId || null,
+        const job = dryRun ? null : await queueBlueprintAutomationJob(ownerUserId, {
+          connectionId: payload.connectionId || null,
           jobType: `blueprint.${node.type}`,
           payload: { nodeId: node.id, blueprintId: blueprint.id, runId: run.id, ...payload }
-        });
-        output = { queued: !dryRun, jobId: job?.id || null, type: node.type, payload, dryRun };
+        }, runtimeContext);
+        output = { queued: !!job, jobId: job?.id || null, delivery: { status: job ? 'queued' : 'simulated', confirmed: false }, type: node.type, payload, dryRun };
       } else {
         output = { skipped: true, type: node.type };
       }
       nodeOutputs[node.id] = output;
       nodeOutputs[node.type] = output;
+      if (isTest && !dryRun) {
+        if (['overlay', 'rouletteDisplay', 'overlayUpdate', 'overlayHide'].includes(node.type)) {
+          output.delivery = { status: output.sent > 0 ? 'sent' : 'not_sent', confirmed: false };
+          if (!output.sent) throw new Error('blueprint_overlay_unavailable');
+        }
+        if ((node.type === 'action' && output.ok === false) || (node.type === 'commandExecute' && !output.executed)) {
+          throw new Error(output.error || output.reason || 'blueprint_test_action_failed');
+        }
+      }
       if (node.type === 'action') {
         const actionKey = renderBlueprintTemplate(config.actionId || '', scope);
         if (actionKey) {
@@ -10074,6 +10163,7 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}, inter
       const edge = edgeFrom(node.id, nextPort);
       return edge ? runNode(edge.target, output, depth + 1) : output;
     } catch (error) {
+      nodeOutputs[node.id] = output;
       await recordStep(node, 'failed', incoming, output, startedAt, error?.message || String(error));
       throw error;
     }
@@ -10083,7 +10173,7 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}, inter
   try {
     const result = await runNode(startNode.id);
     const finalRun = await finishActionBlueprintRun(ownerUserId, run.id, { status: 'done' });
-    return { ok: true, run: finalRun, result, executed, flow, nodeOutputs };
+    return { ok: true, run: finalRun, result, executed, flow, nodeOutputs, ...(isTest ? { testMode: context.testMode, deliveryConfirmed: false } : {}) };
   } catch (error) {
     const finalRun = await finishActionBlueprintRun(ownerUserId, run.id, { status: 'failed', error: error?.message || String(error) });
     return {
@@ -12041,6 +12131,8 @@ async function executeRouletteResultCommand(sid, commandText, userId, username, 
       const vdRe = /\$\{\s*(?:video_donation|bgm_request)\s*\}/i;
       const rlRe = /\$\{\s*roulette::([^}]+)\s*\}/i;
 
+      const memoPlan = prepareMemoVariablePlan(response, { ruleId: r.id });
+      response = memoPlan.text;
       const counterPlan = prepareCounterVariablePlan(response);
       let responseToSend = counterPlan.text;
       let ruleUsed = false;
@@ -12201,6 +12293,7 @@ async function executeRouletteResultCommand(sid, commandText, userId, username, 
             provider: chatPostProvider || 'chzzk',
             userId: chatPost?.counterUserId ?? userId,
           });
+          responseToSend = await resolveCommandMemoVariables(memoPlan, responseToSend, { sid });
           if (!String(responseToSend || '').trim()) break;
           const finalMsg = '[룰렛 결과] ' + String(responseToSend);
           const post = (isCimeChatPost || isYoutubeChatPost) ? chatPost : makeChzzkChatPost(entry.sessionKey, await getValidAccessToken(sid), username);
@@ -12581,6 +12674,21 @@ async function resolveCommandCounterVariables(plan, renderedText, { sid, provide
     );
   }
   return result.text;
+}
+
+async function resolveCommandMemoVariables(plan, renderedText, { sid, argsText = '', canWrite = false } = {}) {
+  const active = plan?.entries?.some((entry) => String(renderedText || '').includes(entry.sentinel));
+  if (!active) return stripUnplannedMemoVariables(renderedText);
+  let permitted = false;
+  if (String(argsText).trim()) {
+    try { permitted = (typeof canWrite === 'function' ? await canWrite() : canWrite) === true; } catch { /* Read only when role lookup fails. */ }
+  }
+  return resolveMemoVariablePlan(plan, renderedText, {
+    argsText,
+    canWrite: permitted,
+    readMemos: (keys) => memoVariableStore.read(sid, keys),
+    writeMemos: (keys, value) => memoVariableStore.write(sid, keys, value),
+  });
 }
 
 // --- Channel followers and user relationship helpers (best-effort, cached) ---
@@ -17178,6 +17286,7 @@ function normalizeFxPayload(input = {}) {
     animation: typeof input.animation === 'string' ? input.animation.slice(0, 240) : '',
     animationKey: typeof input.animationKey === 'string' ? input.animationKey.slice(0, 120) : '',
     cssCode: normalizeFxCssCode(input.cssCode),
+    positionMode: input.positionMode === 'random' ? 'random' : 'fixed',
     voice: typeof input.voice === 'string' ? input.voice.slice(0, 120) : '',
     rate: Math.min(2, Math.max(0.5, Number(input.rate || 1))),
     pitch: Math.min(2, Math.max(0.5, Number(input.pitch || 1))),
@@ -17204,7 +17313,9 @@ function broadcastFxEventToSid(sid, type, payload) {
   const key = String(sid || '').trim();
   const sockets = fxSidSockets?.get(key);
   if (!sockets?.size) return 0;
-  const event = { type, sid: key, payload: normalizeFxPayload(payload), serverNow: Date.now() };
+  const normalized = normalizeFxPayload(payload);
+  if (type === 'fx:update' && payload.positionMode == null) delete normalized.positionMode;
+  const event = { type, sid: key, payload: normalized, serverNow: Date.now() };
   let sent = 0;
   for (const ws of Array.from(sockets)) {
     try {
@@ -20619,6 +20730,11 @@ app.post('/api/action-blueprints/:id/test', rateLimiters.userWrite, async (req, 
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    const mode = req.body?.mode ?? 'simulation';
+    if (!['simulation', 'connected'].includes(mode)) return res.status(400).json({ error: 'blueprint_test_mode_invalid' });
+    if (mode === 'connected' && req.body?.confirmConnected !== true) {
+      return res.status(400).json({ error: 'blueprint_connected_test_confirmation_required' });
+    }
     if (!await admitChatCommand(`user:${ownerUserId}`, 'management', ownerUserId)) {
       res.set('Retry-After', '5');
       return res.status(429).json({ error: 'command_rate_limited' });
@@ -20629,6 +20745,9 @@ app.post('/api/action-blueprints/:id/test', rateLimiters.userWrite, async (req, 
     const trigger = context.trigger && typeof context.trigger === 'object' ? context.trigger : {};
     const result = await executeActionBlueprint(ownerUserId, req.params.id, {
       source: 'manual_test',
+      testMode: mode,
+      dryRun: mode === 'simulation',
+      noPointCost: true,
       triggerRef: req.params.id,
       user: {
         ...(user || {}),
@@ -20645,8 +20764,8 @@ app.post('/api/action-blueprints/:id/test', rateLimiters.userWrite, async (req, 
       donation: context.donation || req.body?.donation || {},
       attendance: context.attendance || req.body?.attendance || {},
       live: { title: '테스트 방송', viewers: 128, live: true, ...(context.live || {}) },
-    });
-    return res.json(result);
+    }, { expectedVersionId: typeof req.body?.versionId === 'string' ? req.body.versionId : null });
+    return res.json({ ...result, testMode: mode, deliveryConfirmed: false });
   } catch (e) {
     console.error('[Blueprint] test error', e?.message || e);
     return res.status(500).json({ error: 'Failed to test blueprint' });
@@ -21807,6 +21926,8 @@ app.post('/api/bot/settings', rateLimiters.userWrite, async (req, res) => {
 
 const BOT_VARIABLE_PROVIDERS = ['chzzk', 'cime', 'youtube'];
 const BOT_VARIABLES = [
+  { key: '${memo}', label: '명령어 메모', description: '이 명령어에 저장된 메모를 표시합니다. 스트리머 또는 채팅 관리자가 인자를 입력하면 새 메모로 저장합니다.', group: '메모', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command'], caveat: '예: 응답을 오늘의 공지: ${memo}로 설정한 뒤 !공지 내일 8시에 만나요로 저장하고 !공지로 조회합니다. 일반 시청자는 인자가 있어도 조회만 합니다. 저장 내용은 최대 4,000자이며 특수 변수로 실행하지 않습니다.' },
+  { key: '${memo::메모이름}', label: '이름 있는 메모', description: '같은 채널에서 같은 이름의 메모를 여러 명령어가 공유합니다. 스트리머·채팅 관리자는 인자로 수정하고, 인자가 없으면 저장된 내용을 표시합니다.', group: '메모', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command'], caveat: '메모이름을 바꿔 사용하세요. 예: ${memo::공지}. 다른 스트리머의 메모와 분리되며 봇 재시작 후에도 유지됩니다. 같은 응답에 여러 메모가 있으면 입력한 인자를 모두 동일하게 저장합니다.' },
   { key: '${bgm_request}', label: 'BGM 신청 실행', group: '특수 실행', description: 'YouTube 곡을 BGM 대기열에 넣고 BGM 초당 요금으로 포인트를 차감합니다.', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command'], caveat: 'BGM과 BGM 신청을 모두 켜야 합니다. 사용법: <주소 또는 검색어> [<시작초>] [<종료초>]. 시간은 초 또는 분:초 형식이며 영상 후원과 최대 길이 설정을 공유합니다. 영상 후원이 들어오면 멈추고 종료 후 이어 재생합니다.' },
   { key: '{user.name}', label: '시청자 이름', description: '채팅을 보낸 시청자의 표시 이름입니다.', group: '시청자', providers: BOT_VARIABLE_PROVIDERS },
   { key: '{user.id}', label: '시청자 ID', description: '채팅을 보낸 시청자의 플랫폼/아루봇 식별자입니다.', group: '시청자', providers: BOT_VARIABLE_PROVIDERS },
@@ -21836,16 +21957,18 @@ const BOT_VARIABLES = [
   { key: '${live.title_change}', label: '방송 제목 변경', description: '명령어 뒤에 입력한 전체 문장으로 현재 플랫폼의 방송 제목을 변경합니다.', group: '특수 실행', providers: ['chzzk', 'cime'], contexts: ['command'], caveat: '스트리머 또는 매니저만 실행할 수 있으며 채팅에는 출력되지 않습니다. 명령어 인자가 없으면 실행하지 않고, 제거 후 응답이 비어 있으면 채팅도 보내지 않습니다.' },
   { key: '${live.game_change}', label: '방송 카테고리 변경', description: '명령어 뒤에 입력한 전체 문장으로 현재 플랫폼의 카테고리를 검색해 변경합니다.', group: '특수 실행', providers: ['chzzk', 'cime'], contexts: ['command'], caveat: '스트리머 또는 매니저만 실행할 수 있으며 채팅에는 출력되지 않습니다. 명령어 인자가 없으면 실행하지 않고, 제거 후 응답이 비어 있으면 채팅도 보내지 않습니다.' },
   { key: '${video_donation}', label: '영상 후원 신청 실행', description: '명령어 인자로 받은 주소를 영상 후원 대기열에 넣고 실제 재생 구간만큼 포인트를 차감합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command'], caveat: '사용법: <주소> [<시작초>] [<종료초>] · 시작초와 종료초는 초 또는 분:초(예: 1:23 = 83초) 형식으로 입력합니다. 시작초 기본값은 0초이며, 종료초를 생략하면 영상 마지막까지 재생합니다. 설정된 최대 재생 시간은 항상 적용되며, 이 변수는 채팅에 출력되지 않습니다.' },
-  { key: '${roulette::룰렛이름}', label: '룰렛 실행', description: '지정한 룰렛을 즉시 실행하고 결과를 채팅/오버레이 흐름에 반영합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command', 'attendance'], caveat: '룰렛 이름 또는 ID를 :: 뒤에 입력하세요. 출석 메시지에서는 신규 출석에만 무료로 1회 실행됩니다. 예: ${roulette::오늘의 벌칙}' },
-  { key: '${action::액션이름}', label: '블루프린트 실행', description: '게시된 실행 액션 블루프린트를 명령어 응답 또는 출석 메시지에서 실행합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command', 'attendance'], caveat: '채팅으로 출력되지 않고 액션이 실행됩니다. 출석 메시지에서는 신규 출석에만 한 번 실행되며, 액션 이름, slug 또는 ID를 사용할 수 있습니다.' },
-  { key: '${automation::액션이름}', label: '블루프린트 실행 별칭', description: '${action::...}과 같은 방식으로 게시된 실행 액션을 실행합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command', 'attendance'] },
-  { key: '${blueprint::액션이름}', label: '블루프린트 실행 별칭', description: '${action::...}과 같은 방식으로 게시된 실행 액션을 실행합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command', 'attendance'] },
+  { key: '${roulette::룰렛이름}', label: '룰렛 실행', description: '지정한 룰렛을 실행하고 결과를 채팅/오버레이 흐름에 반영합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command', 'attendance', 'donation'], caveat: '룰렛 이름 또는 ID를 :: 뒤에 입력하세요. 신규 출석과 후원 반응에서는 무료로 1회 실행됩니다. 예: ${roulette::오늘의 벌칙}' },
+  { key: '${action::액션이름}', label: '블루프린트 실행', description: '게시된 실행 액션 블루프린트를 명령어 응답, 출석 메시지 또는 후원 반응에서 실행합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command', 'attendance', 'donation'], caveat: '채팅으로 출력되지 않고 액션이 실행됩니다. 액션 이름, slug 또는 ID를 사용할 수 있습니다. 후원자의 메시지에 적힌 특수 변수는 실행되지 않습니다.' },
+  { key: '${automation::액션이름}', label: '블루프린트 실행 별칭', description: '${action::...}과 같은 방식으로 게시된 실행 액션을 실행합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command', 'attendance', 'donation'] },
+  { key: '${blueprint::액션이름}', label: '블루프린트 실행 별칭', description: '${action::...}과 같은 방식으로 게시된 실행 액션을 실행합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command', 'attendance', 'donation'] },
   { key: '{trigger.message}', label: '트리거 메시지', description: '블루프린트를 실행시킨 채팅 메시지나 입력 문구입니다.', group: '블루프린트 컨텍스트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint'] },
   { key: '{trigger.keyword}', label: '트리거 키워드', description: '명령어 실행에 매칭된 키워드입니다.', group: '블루프린트 컨텍스트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint'] },
   { key: '{trigger.platform}', label: '트리거 플랫폼', description: '블루프린트를 실행시킨 플랫폼입니다.', group: '블루프린트 컨텍스트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint'] },
   { key: '{user.userId}', label: '시청자 ID', description: '블루프린트와 자동화에서 사용하는 시청자 식별자입니다.', group: '블루프린트 컨텍스트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint'] },
   { key: '{channel.channelUid}', label: '채널 ID', description: '현재 방송인 채널 식별자입니다.', group: '블루프린트 컨텍스트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint'] },
-  { key: '{donation.amount}', label: '후원 금액', description: '후원 이벤트로 실행된 블루프린트에서 사용할 수 있는 후원 금액입니다.', group: '블루프린트 컨텍스트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint'], caveat: '후원 이벤트가 실행 컨텍스트에 금액을 제공한 경우에만 값이 있습니다.' },
+  { key: '{donation.amount}', label: '후원 금액', description: '후원 반응 또는 후원 이벤트로 실행된 블루프린트에서 사용할 수 있는 후원 금액입니다.', group: '후원', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint', 'donation'] },
+  { key: '{donation.message}', label: '후원 메시지', description: '후원자가 입력한 원문 메시지입니다.', group: '후원', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint', 'donation'] },
+  { key: '{donation.username}', label: '후원자 이름', description: '후원자의 표시 이름입니다.', group: '후원', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint', 'donation'] },
   { key: '{roulette.result.label}', label: '룰렛 결과 이름', description: '룰렛 결과로 실행된 블루프린트의 당첨 항목 이름입니다.', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint'], caveat: '룰렛 결과가 블루프린트를 실행한 경우에만 값이 있습니다.' },
   { key: '{roulette.result.value}', label: '룰렛 결과 값', description: '룰렛 결과로 실행된 블루프린트의 당첨 항목 값입니다.', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint'], caveat: '룰렛 결과가 블루프린트를 실행한 경우에만 값이 있습니다.' },
   { key: '{node.rouletteRun.result.label}', label: '룰렛 노드 결과 이름', description: '블루프린트의 룰렛 실행 노드가 만든 결과 항목 이름입니다.', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint'], caveat: '룰렛 실행 노드가 먼저 실행된 뒤 사용할 수 있습니다.' },
@@ -24763,6 +24886,8 @@ async function ensureSession(sid, channelId) {
             const restForVd = commandMatch.argsText;
             const argsVd = restForVd.length ? restForVd.split(/\s+/).map(String) : [];
 
+            const memoPlan = prepareMemoVariablePlan(response, { ruleId: r.id });
+            response = memoPlan.text;
             const counterPlan = prepareCounterVariablePlan(response);
             let responseToSend = counterPlan.text;
             let ruleUsed = false; // mark when this rule executed (even if no chat message output)
@@ -25040,6 +25165,13 @@ async function ensureSession(sid, channelId) {
                       userId: counterUserId,
                     }) || '').trim()
                   : stripUnplannedCounterVariables(finalMsg).trim();
+                finalMsg = allowExecute
+                  ? await resolveCommandMemoVariables(memoPlan, finalMsg, {
+                      sid,
+                      argsText: memoCommandArguments(ev.message, matchedKeyword),
+                      canWrite: canManageLive,
+                    })
+                  : stripUnplannedMemoVariables(finalMsg);
                 if (finalMsg) {
                   await axios.post(url, { message: finalMsg }, {
                     params: { sessionKey: entry.sessionKey },
@@ -25197,41 +25329,15 @@ async function ensureSession(sid, channelId) {
                 }
               } catch { }
 
-              // Build response with variables
-              const tmpl = String(r.response || '').trim();
-              const vars = {
-                username: donorName,
-                amount: amount,
-                message: donorMessage,
-              };
-              let built = tmpl.replace(/\$\{\s*(username|amount|message)\s*\}/g, (_, k) => String(vars[k]));
-              // Apply global placeholders like {live.*}, {channel.*}, {user.*}
-              try {
-                built = await substituteAllPlaceholders(built, sid, donorId ? String(donorId) : '', donorName || '', { provider: 'chzzk' });
-              } catch { }
-              const donationFeatures = [];
-              // Handle optional roulette trigger inside response
-              const rlRe = /\$\{\s*roulette::([^}]+)\s*\}/i;
-              const rlReAll = /\$\{\s*roulette::([^}]+)\s*\}/ig;
-              if (rlRe.test(built)) {
-                try {
-                  const m = String(built).match(rlRe);
-                  const name = m && m[1] ? String(m[1]).trim() : '';
-                  built = String(built).replace(rlReAll, '').trim();
-                  if (name) {
-                    // Enqueue a single spin (no cost in donation flow)
-                    const accessToken = await getValidAccessToken(sid);
-                    const base = {
-                      name,
-                      userId: donorId ? String(donorId) : '',
-                      username: donorName,
-                      chatPost: { sessionKey: entry.sessionKey, accessToken, resolvedUsername: donorName }
-                    };
-                    await enqueueRouletteSpin(sid, { ...base, instant: false, eventContext: { source: 'donation-rule', triggerName: r.name || null } });
-                    donationFeatures.push('roulette');
-                  }
-                } catch { }
-              }
+              const { text: built, features: donationFeatures } = await renderDonationRuleResponse(r, {
+                sid, provider: 'chzzk', userId: donorId, username: donorName,
+                amount, message: donorMessage, source: 'donation-rule',
+                channelUid: liveState.channelId || entry.channelId || null,
+                chatPost: makeChzzkChatPost(entry.sessionKey, null, donorName, {
+                  channelUid: liveState.channelId || entry.channelId || null,
+                  liveManageActorId: donorId,
+                }),
+              });
               await recordDonationRuleExecutionLog(sid, {
                 provider: 'chzzk',
                 channelUid: liveState.channelId || null,
@@ -25239,7 +25345,7 @@ async function ensureSession(sid, channelId) {
                 username: donorName,
                 ruleId: r.id || null,
                 ruleName: r.name || null,
-                targetName: donationFeatures.includes('roulette') ? '룰렛 실행' : '채팅 반응',
+                targetName: donationResponseTargetName(donationFeatures),
                 amount,
                 message: donorMessage,
                 features: donationFeatures,
@@ -26019,6 +26125,21 @@ async function sendYoutubeChat(ownerUserId, liveChatId, message) {
   return task;
 }
 
+async function renderDonationRuleResponse(rule, context) {
+  const result = await renderDonationResponse(rule.response, {
+    ...context, ruleId: rule.id || null, ruleName: rule.name || null,
+  }, { commandExecution, substituteAllPlaceholders, executeAndStripActionVariableTokens, enqueueRouletteSpin });
+  for (const failure of result.errors) {
+    console.warn(`[Donation Response] ${context.provider} ${failure.phase} failed:`, failure.error?.message || failure.error);
+  }
+  return result;
+}
+
+function donationResponseTargetName(features) {
+  if (features.includes('action')) return features.includes('roulette') ? '룰렛/액션 실행' : '액션 실행';
+  return features.includes('roulette') ? '룰렛 실행' : '채팅 반응';
+}
+
 async function processYoutubeDonationAutomation(entry, ev) {
   try {
     if (ev?.currency !== 'KRW') return;
@@ -26070,31 +26191,12 @@ async function processYoutubeDonationAutomation(entry, ev) {
         } catch { }
       }
 
-      const tmpl = String(r.response || '').trim();
-      const vars = { username: donorName, amount, message: donorMessage };
-      let built = tmpl.replace(/\$\{\s*(username|amount|message)\s*\}/g, (_, k) => String(vars[k]));
-      try { built = await substituteAllPlaceholders(built, sid, donorId, donorName, { provider: 'youtube' }); } catch { }
-      const donationFeatures = [];
-      const rlRe = /\$\{\s*roulette::([^}]+)\s*\}/i;
-      const rlReAll = /\$\{\s*roulette::([^}]+)\s*\}/ig;
-      if (rlRe.test(String(built || ''))) {
-        try {
-          const m = String(built).match(rlRe);
-          const rouletteName = m && m[1] ? String(m[1]).trim() : '';
-          built = String(built || '').replace(rlReAll, '').trim();
-          if (rouletteName) {
-            await enqueueRouletteSpin(sid, {
-              name: rouletteName,
-              userId: donorId,
-              username: donorName,
-              chatPost: makeYoutubeChatPost(ownerUserId, entry.liveChatId, donorName),
-              instant: false,
-              eventContext: { source: 'youtube-super-chat-rule', triggerName: r.name || null }
-            });
-            donationFeatures.push('roulette');
-          }
-        } catch { }
-      }
+      const { text: built, features: donationFeatures } = await renderDonationRuleResponse(r, {
+        sid, provider: 'youtube', userId: donorId, username: donorName,
+        amount, message: donorMessage, source: 'youtube-super-chat-rule',
+        channelUid: entry.channelId || null,
+        chatPost: makeYoutubeChatPost(ownerUserId, entry.liveChatId, donorName, { channelUid: entry.channelId || null }),
+      });
       await recordDonationRuleExecutionLog(sid, {
         provider: 'youtube',
         channelUid: entry.channelId || null,
@@ -26102,14 +26204,13 @@ async function processYoutubeDonationAutomation(entry, ev) {
         username: donorName,
         ruleId: r.id || null,
         ruleName: r.name || null,
-        targetName: donationFeatures.includes('roulette') ? '룰렛 실행' : '채팅 반응',
+        targetName: donationResponseTargetName(donationFeatures),
         amount,
         message: donorMessage,
         features: donationFeatures,
         source: 'youtube-super-chat-rule',
         summary: `후원 반응 실행: ${r.name || '이름 없음'} · ${amount.toLocaleString('ko-KR')}원`,
       });
-      built = String(built || '').trim();
       if (built) responsesToSend.push(built);
     }
 
@@ -26321,6 +26422,8 @@ async function processYoutubeChatAutomation(entry, ev) {
       const cmd = matchedKeyword || '';
       const argsText = commandMatch.argsText;
       const args = argsText.split(/\s+/).map(String).filter(Boolean);
+      const memoPlan = prepareMemoVariablePlan(response, { ruleId: r.id });
+      response = memoPlan.text;
       const counterPlan = prepareCounterVariablePlan(response);
       let cleaned = counterPlan.text;
       if (allowExecute) {
@@ -26456,6 +26559,13 @@ async function processYoutubeChatAutomation(entry, ev) {
               userId: counterUserId,
             }) || '').trim()
           : stripUnplannedCounterVariables(cleaned).trim();
+        cleaned = allowExecute
+          ? await resolveCommandMemoVariables(memoPlan, cleaned, {
+              sid,
+              argsText: memoCommandArguments(ev.message, matchedKeyword),
+              canWrite: roleLevel >= 3,
+            })
+          : stripUnplannedMemoVariables(cleaned);
         if (entry.sentReplies.size > 1000) {
           let i = 0; for (const key of entry.sentReplies) { entry.sentReplies.delete(key); if (++i >= 100) break; }
         }
@@ -27420,7 +27530,7 @@ async function processCimeChatAutomation(entry, ev) {
     const needsManagerLookup = !isOwner && commandMatches.some(({ rule }) => {
       if (!rule || rule.enabled === false) return false;
       const required = Number(rule.requiredRoleLevel || (rule.adminOnly ? 3 : 1));
-      return required > 1;
+      return required > 1 || (Array.isArray(rule.responses) && rule.responses.some((response) => /\$\{\s*memo\b/i.test(String(response))));
     });
     let roleLevel = isOwner ? 4 : 1;
     if (needsManagerLookup) {
@@ -27508,6 +27618,8 @@ async function processCimeChatAutomation(entry, ev) {
       const cmd = matchedKeyword || '';
       const argsText = commandMatch.argsText;
       const args = argsText.split(/\s+/).map(String).filter(Boolean);
+      const memoPlan = prepareMemoVariablePlan(response, { ruleId: r.id });
+      response = memoPlan.text;
       const counterPlan = prepareCounterVariablePlan(response);
       let cleaned = counterPlan.text;
       if (allowExecute) {
@@ -27643,6 +27755,13 @@ async function processCimeChatAutomation(entry, ev) {
               userId: counterUserId,
             }) || '').trim()
           : stripUnplannedCounterVariables(cleaned).trim();
+        cleaned = allowExecute
+          ? await resolveCommandMemoVariables(memoPlan, cleaned, {
+              sid,
+              argsText: memoCommandArguments(ev.message, matchedKeyword),
+              canWrite: roleLevel >= 3,
+            })
+          : stripUnplannedMemoVariables(cleaned);
         if (entry.sentReplies.size > 1000) {
           let i = 0; for (const key of entry.sentReplies) { entry.sentReplies.delete(key); if (++i >= 100) break; }
         }
@@ -27729,31 +27848,12 @@ async function processCimeDonationAutomation(entry, ev) {
         } catch { }
       }
 
-      const tmpl = String(r.response || '').trim();
-      const vars = { username: donorName, amount, message: donorMessage };
-      let built = tmpl.replace(/\$\{\s*(username|amount|message)\s*\}/g, (_, k) => String(vars[k]));
-      try { built = await substituteAllPlaceholders(built, sid, donorId, donorName, { provider: 'cime' }); } catch { }
-      const donationFeatures = [];
-      const rlRe = /\$\{\s*roulette::([^}]+)\s*\}/i;
-      const rlReAll = /\$\{\s*roulette::([^}]+)\s*\}/ig;
-      if (rlRe.test(String(built || ''))) {
-        try {
-          const m = String(built).match(rlRe);
-          const rouletteName = m && m[1] ? String(m[1]).trim() : '';
-          built = String(built || '').replace(rlReAll, '').trim();
-          if (rouletteName) {
-            await enqueueRouletteSpin(sid, {
-              name: rouletteName,
-              userId: donorId,
-              username: donorName,
-              chatPost: makeCimeChatPost(ownerUserId, donorName),
-              instant: false,
-              eventContext: { source: 'cime-donation-rule', triggerName: r.name || null }
-            });
-            donationFeatures.push('roulette');
-          }
-        } catch { }
-      }
+      const { text: built, features: donationFeatures } = await renderDonationRuleResponse(r, {
+        sid, provider: 'cime', userId: donorId, username: donorName,
+        amount, message: donorMessage, source: 'cime-donation-rule',
+        channelUid: entry.channelId || null,
+        chatPost: makeCimeChatPost(ownerUserId, donorName, { channelUid: entry.channelId || null, liveManageActorId: donorId }),
+      });
       await recordDonationRuleExecutionLog(sid, {
         provider: 'cime',
         channelUid: entry.channelId || null,
@@ -27761,14 +27861,13 @@ async function processCimeDonationAutomation(entry, ev) {
         username: donorName,
         ruleId: r.id || null,
         ruleName: r.name || null,
-        targetName: donationFeatures.includes('roulette') ? '룰렛 실행' : '채팅 반응',
+        targetName: donationResponseTargetName(donationFeatures),
         amount,
         message: donorMessage,
         features: donationFeatures,
         source: 'cime-donation-rule',
         summary: `후원 반응 실행: ${r.name || '이름 없음'} · ${amount.toLocaleString('ko-KR')}원`,
       });
-      built = String(built || '').trim();
       if (built) responsesToSend.push(built);
     }
 

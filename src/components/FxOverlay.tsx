@@ -3,6 +3,7 @@
 import React from 'react';
 import { getBrowserApiBase } from '@/shared/api/http';
 import { connectOverlaySocket } from '@/shared/api/overlay-socket';
+import { fxPlacementStyle, sampleFxPosition } from '@/shared/lib/fx-placement';
 
 type FxPayload = {
   id?: string;
@@ -15,6 +16,7 @@ type FxPayload = {
   animation?: string;
   animationKey?: string;
   cssCode?: string;
+  positionMode?: 'fixed' | 'random';
   x?: number;
   y?: number;
   width?: number;
@@ -37,6 +39,7 @@ type FxPayload = {
 
 type FxItem = FxPayload & {
   id: string;
+  positionAnchor: { x: number; y: number };
   exiting?: boolean;
 };
 
@@ -50,12 +53,6 @@ function getWsUrl(token: string) {
   base.protocol = base.protocol === 'https:' ? 'wss:' : 'ws:';
   base.searchParams.set('token', token);
   return base.toString();
-}
-
-function fxLength(value: unknown, unit: unknown, fallback: number) {
-  const number = Number(value);
-  const resolved = Number.isFinite(number) ? number : fallback;
-  return `${resolved}${unit === 'px' ? 'px' : '%'}`;
 }
 
 function parseColor(hex = '#00ff00') {
@@ -238,7 +235,8 @@ export function FxOverlay({ token }: { token: string }) {
           }
           return;
         }
-        setItems((current) => [...current, { ...payload, id }]);
+        const positionAnchor = sampleFxPosition();
+        setItems((current) => [...current, { ...payload, id, positionAnchor }]);
         const duration = Math.max(250, Math.min(60000, Number(payload.durationMs || 4000)));
         window.setTimeout(() => {
           setItems((current) => current.map((item) => item.id === id ? { ...item, exiting: true } : item));
@@ -263,10 +261,7 @@ export function FxOverlay({ token }: { token: string }) {
           key={item.id}
           className={`absolute ${String(item.animationKey || '').replace(/[^\w:-]+/g, ' ').trim()}`}
           style={{
-            left: fxLength(item.x, item.xUnit, 50),
-            top: fxLength(item.y, item.yUnit, 50),
-            width: fxLength(item.width, item.widthUnit, 30),
-            height: fxLength(item.height, item.heightUnit, 30),
+            ...fxPlacementStyle(item),
             transform: 'translate(-50%, -50%)',
             animation: item.exiting ? (item.exitCss || undefined) : (item.animation || item.enterCss || undefined),
           }}

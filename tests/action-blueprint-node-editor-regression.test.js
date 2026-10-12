@@ -6,6 +6,7 @@ const root = process.cwd();
 describe('action blueprint node editor regressions', () => {
   const blueprintPage = fs.readFileSync(path.join(root, 'src', 'features', 'admin', 'action-blueprint-page.tsx'), 'utf8');
   const fxOverlay = fs.readFileSync(path.join(root, 'src', 'components', 'FxOverlay.tsx'), 'utf8');
+  const fxPlacement = require('./helpers/load-source.cjs')('src/shared/lib/fx-placement.ts');
   const serverIndex = fs.readFileSync(path.join(root, 'server', 'index.js'), 'utf8');
   const localProgram = fs.readFileSync(path.join(root, 'local-program', 'main.cjs'), 'utf8');
 
@@ -56,9 +57,9 @@ describe('action blueprint node editor regressions', () => {
     expect(fxEditor).toContain("onChange('widthUnit', unit)");
     expect(fxEditor).toContain("onChange('heightUnit', unit)");
     expect(blueprintPage).toContain("xUnit: '%'");
-    expect(fxOverlay).toContain('left: fxLength(item.x, item.xUnit, 50)');
-    expect(fxOverlay).toContain('width: fxLength(item.width, item.widthUnit, 30)');
-    expect(fxOverlay).toContain("return `${resolved}${unit === 'px' ? 'px' : '%'}`");
+    expect(fxOverlay).toContain('...fxPlacementStyle(item)');
+    expect(fxPlacement.fxPlacementStyle({ x: 50, xUnit: 'px', width: 30, widthUnit: '%' }))
+      .toMatchObject({ left: '50px', width: '30%' });
     expect(serverIndex).toContain('const xUnit = normalizeFxLengthUnit(input.xUnit ?? input.leftUnit)');
     expect(serverIndex).toContain('widthUnit');
   });

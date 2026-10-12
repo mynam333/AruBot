@@ -233,6 +233,7 @@ type BlueprintRun = {
   id: string;
   status?: string;
   triggerSource?: string;
+  context?: { testMode?: 'simulation' | 'connected' };
   startedAt?: string;
   finishedAt?: string | null;
   error?: string | null;
@@ -458,7 +459,7 @@ const nodeCatalog: Array<{
   { type: 'overlayUpdate', title: '오버레이 수정', body: '표시 내용/진행률 수정', group: '연출', icon: Layers3, tone: 'sky', config: { overlayId: '{node.overlay.overlayId}', text: '', progress: '', animation: '', cssCode: '', animationKey: '' } },
   { type: 'overlayHide', title: '오버레이 숨김', body: '표시 중인 오버레이 닫기', group: '연출', icon: Layers3, tone: 'neutral', config: { overlayId: '{node.overlay.overlayId}' } },
   { type: 'tts', title: 'TTS', body: '말할 내용 입력', group: '연출', icon: Volume2, tone: 'coral', config: { text: '{user.name}님 축하합니다!', voice: '', rate: 1, pitch: 1 } },
-  { type: 'fx', title: 'FX 오버레이', body: '이미지/스티커/비디오/사운드', group: '연출', icon: Volume2, tone: 'coral', config: { kind: 'image', assetId: '', x: 50, y: 50, width: 28, height: 28, xUnit: '%', yUnit: '%', widthUnit: '%', heightUnit: '%', durationMs: 4000, enterCss: '', exitCss: '', chromaKey: false, chromaKeyColor: '#00ff00', volume: 1 } },
+  { type: 'fx', title: 'FX 오버레이', body: '이미지/스티커/비디오/사운드', group: '연출', icon: Volume2, tone: 'coral', config: { kind: 'image', assetId: '', positionMode: 'fixed', x: 50, y: 50, width: 28, height: 28, xUnit: '%', yUnit: '%', widthUnit: '%', heightUnit: '%', durationMs: 4000, enterCss: '', exitCss: '', chromaKey: false, chromaKeyColor: '#00ff00', volume: 1 } },
   { type: 'obs', title: 'OBS', body: '장면/소스/필터 제어', group: '연동', icon: Radio, tone: 'mint', config: { connectionId: '', action: 'scene.switch', sceneName: '', sourceName: '', filterTargetType: 'source', filterTargetName: '', filterName: '', enabled: true } },
   { type: 'http', title: 'HTTP 요청', body: '외부 도구 깨우기', group: '연동', icon: Network, tone: 'neutral', config: { method: 'POST', url: '', body: '{}' } },
   { type: 'websocket', title: 'WebSocket', body: '로컬 도구에 메시지', group: '연동', icon: Network, tone: 'neutral', config: { url: '', message: '{}', timeoutMs: 8000 } },
@@ -2067,12 +2068,13 @@ export function ActionBlueprintPage() {
     live: { title: '시뮬레이션 방송', category: 'Just Chatting', viewers: 128, live: true },
   });
 
-  const testRun = async () => {
-    if (!writable) return;
+  const testRun = async (mode: 'simulation' | 'connected' = 'simulation') => {
+    if (!writable || testing || saving) return;
     if (validationErrors.length) {
       toast.error('검증 항목을 먼저 해결한 뒤 테스트할 수 있습니다.');
       return;
     }
+    if (mode === 'connected' && !window.confirm('연결 기기 실제 테스트: 현재 초안을 저장한 뒤 OBS, 로컬 명령, 소리, 오버레이 및 외부 요청을 실제 실행합니다. 방송 화면에 반영될 수 있으며 대기 작업은 나중에 실행될 수 있습니다. 중첩 액션은 게시 버전을 사용합니다. 시청자 포인트와 채팅은 변경하지 않습니다. 계속할까요?')) return;
     setTesting(true);
     setActiveRunNodeId(null);
     try {
@@ -2080,12 +2082,19 @@ export function ActionBlueprintPage() {
       const targetBlueprint = blueprint.id && persistedSnapshotRef.current === currentSnapshot ? blueprint : await save();
       if (!targetBlueprint?.id) return;
       const data = await jsonRequest<{ ok?: boolean; error?: string; validationErrors?: string[]; run?: BlueprintRun; executed?: string[] }>(`/api/action-blueprints/${encodeURIComponent(targetBlueprint.id)}/test`, 'POST', {
+        mode,
+        confirmConnected: mode === 'connected',
+        versionId: targetBlueprint.version?.id,
         context: simulatorContext(),
       });
       const failureMessage = data.validationErrors?.length
         ? data.validationErrors[0]
         : data.error || '테스트 실패';
-      toast[data.ok ? 'success' : 'error'](data.ok ? `테스트 실행 완료: ${data.executed?.length || 0}개 노드` : failureMessage);
+      toast[data.ok ? 'success' : 'error'](data.ok
+        ? mode === 'connected'
+          ? `연결 테스트 요청 처리: ${data.executed?.length || 0}개 노드 · 기기 실행 완료 미확인`
+          : `시뮬레이션 완료: ${data.executed?.length || 0}개 노드 · 기기 전송 없음`
+        : failureMessage);
       const runData = await readJson<{ runs?: BlueprintRun[] }>(`/api/action-blueprints/${encodeURIComponent(targetBlueprint.id)}/runs`);
       setRuns(runData?.runs || []);
       if (data.run?.id) {
@@ -2664,9 +2673,13 @@ export function ActionBlueprintPage() {
                 { label: '블루프린트 삭제', icon: Trash2, onSelect: deleteBlueprint, disabled: !writable || !blueprint.id, danger: true, separatorBefore: true },
               ]}
             />
-            <Button type="button" variant="outline" size="sm" onClick={testRun} disabled={!writable || (testing || saving)}>
+            <Button type="button" variant="outline" size="sm" onClick={() => void testRun('simulation')} disabled={!writable || (testing || saving)}>
               {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-              테스트
+              시뮬레이션
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={() => void testRun('connected')} disabled={!writable || (testing || saving)}>
+              <Radio className="h-4 w-4" />
+              연결 기기 실제 테스트
             </Button>
             <Tooltip content="AruBot 블루프린트 초안만 저장합니다. YouTube OAuth 권한이나 YouTube API 데이터는 이 버튼으로 저장되지 않습니다.">
               <Button type="button" variant="secondary" size="sm" onClick={save} disabled={!writable || (saving)} aria-label="AruBot 초안 저장">
@@ -2931,9 +2944,13 @@ export function ActionBlueprintPage() {
               <Field label="채팅 메시지" value={simulator.message} onChange={(value) => setSimulator((current) => ({ ...current, message: value }))} />
               <Field label="룰렛 결과값" value={simulator.rouletteResult} onChange={(value) => setSimulator((current) => ({ ...current, rouletteResult: value }))} />
               <div className="flex flex-wrap gap-2">
-                <Button type="button" variant="outline" onClick={testRun} disabled={!writable || (testing || saving)}>
+                <Button type="button" variant="outline" onClick={() => void testRun('simulation')} disabled={!writable || (testing || saving)}>
                   {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
                   시뮬레이션 실행
+                </Button>
+                <Button type="button" variant="outline" onClick={() => void testRun('connected')} disabled={!writable || (testing || saving)}>
+                  <Radio className="h-4 w-4" />
+                  연결 기기 실제 테스트
                 </Button>
                 <Button type="button" variant="outline" onClick={() => replayRunSteps()} disabled={!runSteps.length}>
                   <RefreshCw className="h-4 w-4" />
@@ -3029,9 +3046,10 @@ export function ActionBlueprintPage() {
               {runs.map((run) => (
                 <button key={run.id} type="button" onClick={() => loadRunSteps(run.id)} className="rounded-[var(--radius-control)] border bg-background/70 p-3 text-left text-sm transition hover:border-primary/35">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="font-semibold">{run.triggerSource || 'manual'}</span>
-                    <Badge tone={run.status === 'done' ? 'mint' : run.status === 'failed' ? 'coral' : 'neutral'}>{run.status || 'running'}</Badge>
+                    <span className="font-semibold">{run.context?.testMode === 'connected' ? '연결 기기 실제 테스트' : run.triggerSource === 'manual_test' ? '시뮬레이션' : run.triggerSource || 'manual'}</span>
+                    <Badge tone={run.status === 'done' ? 'mint' : run.status === 'failed' ? 'coral' : 'neutral'}>{run.context?.testMode === 'connected' && run.status === 'done' ? '요청 처리' : run.status || 'running'}</Badge>
                   </div>
+                  {run.context?.testMode === 'connected' ? <div className="mt-1 text-xs text-muted-foreground">기기 실행 완료 미확인 · 로컬 프로그램 로그 확인</div> : null}
                   <div className="mt-1 text-xs text-muted-foreground">{compactDateTime(run.startedAt)}</div>
                   {run.error ? <div className="mt-2 text-xs text-destructive">{run.error}</div> : null}
                 </button>
@@ -3076,7 +3094,7 @@ export function ActionBlueprintPage() {
               <div className="px-3 py-2 text-xs font-bold text-muted-foreground">{contextNode.name}</div>
               <ContextMenuButton icon={<Pencil className="h-4 w-4" />} label={writable ? '수정' : '자세히'} onClick={() => editNode(contextNode.id)} />
               <ContextMenuButton icon={<Copy className="h-4 w-4" />} label="복사" onClick={() => void copyNodesByIds([contextNode.id]).then(() => setContextMenu(null))} />
-              <ContextMenuButton icon={<Play className="h-4 w-4" />} label="테스트 실행" onClick={() => void testRunFromNode(contextNode.id)} disabled={!writable || (testing || saving)} />
+              <ContextMenuButton icon={<Play className="h-4 w-4" />} label="전체 그래프 시뮬레이션" onClick={() => void testRunFromNode(contextNode.id)} disabled={!writable || (testing || saving)} />
               <ContextMenuButton icon={<Trash2 className="h-4 w-4" />} label="삭제" onClick={() => deleteNodeById(contextNode.id)} disabled={!writable || (contextNode.type === 'start')} danger />
               <div className="my-1 h-px bg-border" />
             </>
@@ -3427,7 +3445,14 @@ function ConfigFields({
                   </div>
                 </div>
               </div>
-              <div className="grid gap-3 md:grid-cols-2">
+              <SelectField
+                label="표시 위치"
+                value={cfg.positionMode === 'random' ? 'random' : 'fixed'}
+                onChange={(value) => onChange('positionMode', value)}
+                options={[{ value: 'fixed', label: '고정 위치' }, { value: 'random', label: '랜덤 위치' }]}
+              />
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                {cfg.positionMode !== 'random' ? <>
                 <LengthField
                   label="위치 X"
                   value={String(cfg.x ?? 50)}
@@ -3442,6 +3467,7 @@ function ConfigFields({
                   onValueChange={(value) => onChange('y', value)}
                   onUnitChange={(unit) => onChange('yUnit', unit)}
                 />
+                </> : null}
                 <LengthField
                   label="너비"
                   value={String(cfg.width ?? 28)}

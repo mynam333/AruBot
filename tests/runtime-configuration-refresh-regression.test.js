@@ -26,7 +26,8 @@ describe('running bot configuration refresh regression', () => {
     expect(serverIndex.slice(youtubeStart, youtubeEnd)).toContain('getRuntimeBotRulesWithDefaults(sid)');
     expect(serverIndex.slice(cimeStart, cimeEnd)).toContain('getRuntimeBotRulesWithDefaults(sid)');
     expect(serverIndex).toContain('if (getRuntimeConfigurationRevision(normalizedSid) !== revisionBeforeRead)');
-    expect(serverIndex).toContain('const blueprint = await getRuntimeActionBlueprint(ownerUserId, idOrSlug)');
+    expect(serverIndex).toContain('const blueprint = await getRuntimeActionBlueprint(ownerUserId, idOrSlug, { currentDraft: isTest && context.requirePublishedBlueprint !== true })');
+    expect(serverIndex).toContain('if (!blueprint || currentDraft || blueprint.version?.published) return blueprint;');
     expect(serverIndex).toContain('const publishedVersion = versions.find((version) => version?.published === true)');
     expect(serverIndex).toContain('version: publishedVersion');
   });

@@ -15,12 +15,14 @@ import { createBotManagementStore } from './bot-management-store.js';
 import { createSongbookStore } from './songbook-store.js';
 import { createEmoteOverlayStore } from './emote-overlay-store.js';
 import { createCommandAdmissionStore } from './command-admission-store.js';
+import { createMemoVariableStore } from './memo-variable-store.js';
 const { Client, Pool } = pkg;
 
 export const botManagementStore = createBotManagementStore({ withPgClient, ensureIdentityTables: ensurePlatformIdentityTables });
 export const songbookStore = createSongbookStore({ withPgClient, ensureIdentityTables: ensurePlatformIdentityTables });
 export const emoteOverlayStore = createEmoteOverlayStore({ withPgClient, ensureIdentityTables: ensurePlatformIdentityTables });
 export const commandAdmissionStore = createCommandAdmissionStore({ withPgClient });
+export const memoVariableStore = createMemoVariableStore({ withPgClient });
 
 export const {
   getParticipationWheel, updateParticipationWheel, actParticipationWheel, enterParticipationWheel,
@@ -3413,6 +3415,9 @@ export async function deleteAccountData(ownerUserId, options = {}) {
          or (counter_scope = 'user' and subject_key = any($2::text[]))`,
         [scope.channelAliases, scope.identityKeys]
       );
+      await deleteRowsByColumnValues(pg, summary, 'public.bot_memo_values', [
+        { column: 'sid', values: scope.channelAliases },
+      ]);
       if (await tableExistsPg(pg, 'public.public_short_links')) {
         const anonymizedLinks = await pg.query(
           `update public.public_short_links
@@ -9375,6 +9380,7 @@ export async function migrateSidToUserPid(oldSid, userId) {
   const oldPidCandidates = [String(oldSid), `sid:${oldSid}`];
   const newPid = `user:${userId}`;
   await mergeBotCountersToSid(oldPidCandidates, newPid);
+  await memoVariableStore.migrate(oldPidCandidates, newPid);
   const tables = ['tokens', 'bot_settings', 'bot_stats', 'bot_rules', 'live_days', 'attendance', 'attendance_state', 'attendance_integrity_archive'];
   for (const t of tables) {
     try {

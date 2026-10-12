@@ -2,11 +2,14 @@ const fs = require('fs');
 const path = require('path');
 const ts = require('typescript');
 const textSafety = require('./load-source.cjs')('shared/text-safety.js');
+const memoVariables = require('./load-source.cjs')('server/memo-variables.js', { '../shared/text-safety.js': textSafety });
 const { createCommandExecutionSafety, isCommandSafetyError } = require('./load-source.cjs')('server/command-execution-safety.js');
 const { createCommandAdmission } = require('./load-source.cjs')('server/command-admission.js');
 function safetyBindings() {
   const commandAdmission = createCommandAdmission();
   return {
+    ...memoVariables,
+    resolveCommandMemoVariables: (plan, text) => memoVariables.resolveMemoVariablePlan(plan, text, { readMemos: async () => new Map() }),
     commandExecution: createCommandExecutionSafety(), commandAdmission, isCommandSafetyError,
     admitChatCommand: async (sid, provider, userId) => (await commandAdmission.admit({ sid, provider, userId })).allowed,
   };

@@ -265,8 +265,10 @@ describe('action blueprint runtime integration', () => {
     expect(source).toContain('strict: true,');
     expect(source).toContain('if (options?.strict === true) throw error;');
     expect(runtime).toContain("? (simulatedUser ? Number(runtimeContext.user?.points ?? runtimeContext.user?.channelPoints ?? 0) : 0)");
-    expect(runtime).toContain("const page = dryRun\n          ? { rows: [] }");
-    expect(runtime).toContain('const excluded = dryRun');
-    expect(runtime).toContain('const totalDays = dryRun');
+    expect(runtime).toContain('const simulateViewer = dryRun || isTest;');
+    expect(runtime).toContain('dryRun: simulateViewer,');
+    expect(runtime).toMatch(/const page = simulateViewer\r?\n\s+\? \{ rows: \[\] \}/);
+    expect(runtime).toContain('const excluded = simulateViewer');
+    expect(runtime).toContain('const totalDays = simulateViewer');
   });
 });
