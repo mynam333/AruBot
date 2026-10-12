@@ -101,8 +101,9 @@ describe('AruBot service admin console regression', () => {
     expect(streamerPage).toContain('등록된 스트리머가 없습니다');
     expect(streamerPage).toContain('조건에 맞는 스트리머가 없습니다');
     expect(streamerPage).toContain('필터 초기화');
-    expect(adminShell).toContain('readJsonResult<AdminAccess>');
-    expect(adminShell).toContain('if (!result.ok) return false;');
+    expect(adminShell).toContain('BotChannelProvider');
+    expect(adminShell).toContain('if (item.adminOnly) return context.isSiteAdmin;');
+    expect(adminShell).toContain("isItemActive(pathname, '/arubot-admin') ? context.isSiteAdmin");
   });
 
   test('offers accessible tabs, server filters, CSV export and safe runtime refresh', () => {

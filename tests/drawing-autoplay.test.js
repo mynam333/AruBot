@@ -115,17 +115,16 @@ test('saving automatic approval wakes connected overlays after the settings are 
   const settings = { enabled: true, approvalMode: 'auto' };
   const bindings = {
     getPartitionId: jest.fn().mockResolvedValue('user:streamer'),
-    getBotSettings: jest.fn().mockResolvedValue({ otherSetting: 1 }),
     normalizeDrawingDonationSettings: jest.fn((value) => value),
-    setBotSettings: jest.fn().mockResolvedValue(undefined),
+    patchBotSettings: jest.fn().mockResolvedValue(undefined),
     notifyDrawingSubscribers: jest.fn().mockResolvedValue(undefined),
     notifyDrawingAdminSubscribers: jest.fn().mockResolvedValue(undefined),
   };
   const route = loadServerFunctions.route('/api/drawing-donation/settings', bindings, 'post');
   const response = { status: jest.fn().mockReturnThis(), json: jest.fn().mockReturnThis() };
   await route({ body: settings }, response);
-  expect(bindings.setBotSettings).toHaveBeenCalledWith('user:streamer', { otherSetting: 1, drawingDonation: settings });
+  expect(bindings.patchBotSettings).toHaveBeenCalledWith('user:streamer', { drawingDonation: settings });
   expect(bindings.notifyDrawingSubscribers).toHaveBeenCalledWith('user:streamer', 'settings_updated');
-  expect(bindings.notifyDrawingSubscribers.mock.invocationCallOrder[0]).toBeGreaterThan(bindings.setBotSettings.mock.invocationCallOrder[0]);
+  expect(bindings.notifyDrawingSubscribers.mock.invocationCallOrder[0]).toBeGreaterThan(bindings.patchBotSettings.mock.invocationCallOrder[0]);
   expect(response.json).toHaveBeenCalledWith({ ok: true, settings });
 });

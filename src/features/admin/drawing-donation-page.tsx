@@ -1,5 +1,7 @@
 'use client';
 
+import { useBotChannel } from '@/components/app-shell/bot-channel-provider';
+
 import * as Switch from '@radix-ui/react-switch';
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { Ban, Check, Copy, Download, Eraser, Eye, GripVertical, ImagePlus, Play, RefreshCw, RotateCw, Settings, ShieldAlert, Trash2, Undo2, Wifi, X } from 'lucide-react';
@@ -95,6 +97,11 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 }
 
 export function DrawingDonationPage() {
+  const { active, canWrite, canRead } = useBotChannel();
+  const writable = canWrite('drawing');
+  const ownerControls = active?.role !== 'manager';
+  const blocksReadable = canRead('drawing') || canRead('commands');
+  const blocksWritable = writable || canWrite('commands');
   const [settings, setSettings] = useState<DrawingSettings>(defaultSettings);
   const [items, setItems] = useState<DrawingItem[]>([]);
   const [blockedUsers, setBlockedUsers] = useState<BlockedUser[]>([]);
@@ -127,15 +134,15 @@ export function DrawingDonationPage() {
     const [settingsPayload, queuePayload, blockPayload, viewerPayload] = await Promise.all([
       readJson<{ settings: DrawingSettings }>('/api/drawing-donation/settings'),
       readJson<{ items: DrawingItem[] }>('/api/drawing-donation/queue'),
-      readJson<{ items: BlockedUser[] }>('/api/bot/blocked-users'),
+      blocksReadable ? readJson<{ items: BlockedUser[] }>('/api/bot/blocked-users') : Promise.resolve({ items: [] }),
       readJson<{ path: string; donationPath?: string | null; publicUid?: string | null }>('/api/drawing-donation/viewer-url'),
     ]);
     setSettings({ ...defaultSettings, ...settingsPayload.settings, canvas: { ...defaultSettings.canvas, ...settingsPayload.settings?.canvas } });
     setItems(queuePayload.items || []);
     setBlockedUsers(blockPayload.items || []);
-    setOverlayPath(viewerPayload.path || '');
+    setOverlayPath(ownerControls ? viewerPayload.path || '' : '');
     setViewerDonationPath(viewerPayload.donationPath || '');
-  }, []);
+  }, [blocksReadable, ownerControls]);
 
   useEffect(() => {
     refresh().catch(() => toast.error('그림 후원 정보를 불러오지 못했어요.'));
@@ -213,6 +220,7 @@ export function DrawingDonationPage() {
   }, [applyQueuePayload]);
 
   const saveSettings = () => {
+    if (!writable) return;
     startTransition(async () => {
       try {
         const payload = await postJson<{ settings: DrawingSettings }>('/api/drawing-donation/settings', settings);
@@ -235,6 +243,7 @@ export function DrawingDonationPage() {
   }, []);
 
   const runItemAction = (path: string, id: string, message: string) => {
+    if (!writable) return;
     startTransition(async () => {
       try {
         await postJson(path, { id });
@@ -247,6 +256,7 @@ export function DrawingDonationPage() {
   };
 
   const removeItem = (item: DrawingItem, refund: boolean) => {
+    if (!writable) return;
     const label = item.viewerName || item.viewerUserId || '시청자 그림';
     const action = refund ? '삭제하고 포인트를 반환할까요?' : '대기열에서 삭제할까요?';
     if (!window.confirm(`${label} 항목을 ${action}`)) return;
@@ -265,6 +275,7 @@ export function DrawingDonationPage() {
   };
 
   const moveItem = (targetId: string) => {
+    if (!writable) return;
     if (!draggingId || draggingId === targetId) return;
     const from = items.findIndex((item) => item.id === draggingId);
     const to = items.findIndex((item) => item.id === targetId);
@@ -286,6 +297,7 @@ export function DrawingDonationPage() {
   };
 
   const rotateOverlayToken = () => {
+    if (!ownerControls) return;
     if (!window.confirm('OBS 오버레이 주소를 새로 만들까요? 기존 주소는 더 이상 연결되지 않습니다.')) return;
     startTransition(async () => {
       try {
@@ -299,6 +311,7 @@ export function DrawingDonationPage() {
   };
 
   const moderateBlock = (item: DrawingItem) => {
+    if (!writable || !blocksWritable) return;
     if (!window.confirm('이 그림을 거절하고 시청자의 봇 기능 사용을 차단할까요? 포인트는 반환됩니다.')) return;
     startTransition(async () => {
       try {
@@ -380,6 +393,7 @@ export function DrawingDonationPage() {
   }, [renderReview, reviewItem]);
 
   const addBlock = () => {
+    if (!blocksWritable) return;
     if (!blockForm.userId.trim()) return;
     startTransition(async () => {
       try {
@@ -394,6 +408,7 @@ export function DrawingDonationPage() {
   };
 
   const removeBlock = (userId: string) => {
+    if (!blocksWritable) return;
     startTransition(async () => {
       try {
         const response = await fetch(apiUrl(`/api/bot/blocked-users/${encodeURIComponent(userId)}`), {
@@ -440,7 +455,7 @@ export function DrawingDonationPage() {
             <Button type="button" variant="secondary" onClick={() => refresh().catch(() => undefined)}>
               <RefreshCw className="h-[1em] w-[1em]" /> 새로고침
             </Button>
-            <Button type="button" onClick={saveSettings} disabled={isPending}>
+            <Button type="button" onClick={saveSettings} disabled={!writable || (isPending)}>
               <Settings className="h-[1em] w-[1em]" /> 설정 저장
             </Button>
           </div>
@@ -456,7 +471,7 @@ export function DrawingDonationPage() {
           <CardContent className="grid gap-4 md:grid-cols-2">
             <div className="flex min-h-[var(--control-height)] items-center justify-between gap-3 rounded-[var(--radius-control)] border bg-background/70 px-4">
               <span className="text-sm font-semibold">그림 후원 받기</span>
-              <Switch.Root
+              <Switch.Root disabled={!writable}
                 checked={settings.enabled}
                 onCheckedChange={(checked) => setSettings((current) => ({ ...current, enabled: checked }))}
                 className="relative h-[1.7rem] w-[3.25rem] rounded-full border bg-muted transition data-[state=checked]:border-primary/30 data-[state=checked]:bg-primary"
@@ -467,65 +482,65 @@ export function DrawingDonationPage() {
             </div>
             <label className="grid gap-2 text-sm font-semibold">
               비용 방식
-              <select value={settings.pricingMode} onChange={(event) => setSettings((current) => ({ ...current, pricingMode: event.target.value === 'ink' ? 'ink' : 'fixed' }))} className="min-h-[var(--control-height)] rounded-[var(--radius-control)] border bg-background/80 px-3">
+              <select disabled={!writable} value={settings.pricingMode} onChange={(event) => setSettings((current) => ({ ...current, pricingMode: event.target.value === 'ink' ? 'ink' : 'fixed' }))} className="min-h-[var(--control-height)] rounded-[var(--radius-control)] border bg-background/80 px-3">
                 <option value="fixed">고정 비용</option>
                 <option value="ink">잉크 사용량 비례</option>
               </select>
             </label>
             <label className="grid gap-2 text-sm font-semibold">
               고정 비용
-              <Input value={settings.costPoints} inputMode="numeric" onChange={(event) => setSettings((current) => ({ ...current, costPoints: Number(event.target.value || 0) }))} />
+              <Input disabled={!writable} value={settings.costPoints} inputMode="numeric" onChange={(event) => setSettings((current) => ({ ...current, costPoints: Number(event.target.value || 0) }))} />
             </label>
             <label className="grid gap-2 text-sm font-semibold">
               잉크 1단위당 포인트
-              <Input value={settings.inkCostPerUnit} inputMode="decimal" onChange={(event) => setSettings((current) => ({ ...current, inkCostPerUnit: Number(event.target.value || 0) }))} />
+              <Input disabled={!writable} value={settings.inkCostPerUnit} inputMode="decimal" onChange={(event) => setSettings((current) => ({ ...current, inkCostPerUnit: Number(event.target.value || 0) }))} />
             </label>
             <div className="rounded-[var(--radius-control)] border bg-background/70 p-3 text-sm leading-6 text-muted-foreground">
               고정 비용은 언제나 같은 포인트를 사용합니다. 잉크 비례 방식은 선의 길이, 붓 크기, 투명도, 압력을 기준으로 서버가 최종 비용을 다시 계산합니다.
             </div>
             <label className="grid gap-2 text-sm font-semibold">
               승인 방식
-              <select value={settings.approvalMode} onChange={(event) => setSettings((current) => ({ ...current, approvalMode: event.target.value === 'auto' ? 'auto' : 'manual' }))} className="min-h-[var(--control-height)] rounded-[var(--radius-control)] border bg-background/80 px-3">
+              <select disabled={!writable} value={settings.approvalMode} onChange={(event) => setSettings((current) => ({ ...current, approvalMode: event.target.value === 'auto' ? 'auto' : 'manual' }))} className="min-h-[var(--control-height)] rounded-[var(--radius-control)] border bg-background/80 px-3">
                 <option value="manual">직접 승인</option>
                 <option value="auto">자동 승인</option>
               </select>
             </label>
             <label className="grid gap-2 text-sm font-semibold">
               그리는 과정 최대 표시 시간
-              <Input value={settings.replayMaxSec} inputMode="numeric" onChange={(event) => setSettings((current) => ({ ...current, replayMaxSec: Number(event.target.value || 1) }))} />
+              <Input disabled={!writable} value={settings.replayMaxSec} inputMode="numeric" onChange={(event) => setSettings((current) => ({ ...current, replayMaxSec: Number(event.target.value || 1) }))} />
             </label>
             <label className="grid gap-2 text-sm font-semibold">
               완성본 유지 시간
-              <Input value={settings.resultHoldSec} inputMode="numeric" onChange={(event) => setSettings((current) => ({ ...current, resultHoldSec: Number(event.target.value || 1) }))} />
+              <Input disabled={!writable} value={settings.resultHoldSec} inputMode="numeric" onChange={(event) => setSettings((current) => ({ ...current, resultHoldSec: Number(event.target.value || 1) }))} />
             </label>
             <label className="grid gap-2 text-sm font-semibold">
               최대 포인트 수
-              <Input value={settings.maxPoints} inputMode="numeric" onChange={(event) => setSettings((current) => ({ ...current, maxPoints: Number(event.target.value || 10) }))} />
+              <Input disabled={!writable} value={settings.maxPoints} inputMode="numeric" onChange={(event) => setSettings((current) => ({ ...current, maxPoints: Number(event.target.value || 10) }))} />
             </label>
             <label className="grid gap-2 text-sm font-semibold">
               최대 선 개수
-              <Input value={settings.maxStrokes} inputMode="numeric" onChange={(event) => setSettings((current) => ({ ...current, maxStrokes: Number(event.target.value || 1) }))} />
+              <Input disabled={!writable} value={settings.maxStrokes} inputMode="numeric" onChange={(event) => setSettings((current) => ({ ...current, maxStrokes: Number(event.target.value || 1) }))} />
             </label>
             <label className="grid gap-2 text-sm font-semibold">
               제출 쿨다운(초)
-              <Input value={settings.submitCooldownSec} inputMode="numeric" onChange={(event) => setSettings((current) => ({ ...current, submitCooldownSec: Number(event.target.value || 0) }))} />
+              <Input disabled={!writable} value={settings.submitCooldownSec} inputMode="numeric" onChange={(event) => setSettings((current) => ({ ...current, submitCooldownSec: Number(event.target.value || 0) }))} />
             </label>
             <label className="grid gap-2 text-sm font-semibold">
               시청자별 대기 제한
-              <Input value={settings.perUserQueueLimit} inputMode="numeric" onChange={(event) => setSettings((current) => ({ ...current, perUserQueueLimit: Number(event.target.value || 0) }))} />
+              <Input disabled={!writable} value={settings.perUserQueueLimit} inputMode="numeric" onChange={(event) => setSettings((current) => ({ ...current, perUserQueueLimit: Number(event.target.value || 0) }))} />
             </label>
             <label className="grid gap-2 text-sm font-semibold">
               캔버스 가로 비율
-              <Input value={settings.canvas.widthRatio} inputMode="decimal" onChange={(event) => setSettings((current) => ({ ...current, canvas: { ...current.canvas, widthRatio: Number(event.target.value || 16) } }))} />
+              <Input disabled={!writable} value={settings.canvas.widthRatio} inputMode="decimal" onChange={(event) => setSettings((current) => ({ ...current, canvas: { ...current.canvas, widthRatio: Number(event.target.value || 16) } }))} />
             </label>
             <label className="grid gap-2 text-sm font-semibold">
               캔버스 세로 비율
-              <Input value={settings.canvas.heightRatio} inputMode="decimal" onChange={(event) => setSettings((current) => ({ ...current, canvas: { ...current.canvas, heightRatio: Number(event.target.value || 9) } }))} />
+              <Input disabled={!writable} value={settings.canvas.heightRatio} inputMode="decimal" onChange={(event) => setSettings((current) => ({ ...current, canvas: { ...current.canvas, heightRatio: Number(event.target.value || 9) } }))} />
             </label>
           </CardContent>
         </Card>
 
-        <Card className="bg-card/85">
+        {ownerControls ? <Card className="bg-card/85">
           <CardHeader>
             <CardTitle>OBS 오버레이</CardTitle>
             <CardDescription>브라우저 소스로 추가하면 승인된 그림이 자동으로 재생됩니다.</CardDescription>
@@ -545,7 +560,7 @@ export function DrawingDonationPage() {
               <RotateCw className="h-[1em] w-[1em]" /> 주소 새로 만들기
             </Button>
           </CardContent>
-        </Card>
+        </Card> : null}
       </section>
 
       <section className="grid gap-[clamp(1rem,2vw,1.5rem)] xl:grid-cols-[minmax(0,1fr)_minmax(20rem,0.7fr)]">
@@ -558,7 +573,7 @@ export function DrawingDonationPage() {
             {items.length ? items.map((item) => (
               <article
                 key={item.id}
-                draggable
+                draggable={writable}
                 onDragStart={() => setDraggingId(item.id)}
                 onDragEnd={() => setDraggingId(null)}
                 onDragOver={(event) => event.preventDefault()}
@@ -582,11 +597,11 @@ export function DrawingDonationPage() {
                     {item.metrics?.ink?.units ? ` · 잉크 ${formatNumber(item.metrics.ink.units)}단위` : ''} · {Math.round(Number(item.replay?.targetReplayMs || 0) / 1000)}초 재생
                   </p>
                   <div className="flex flex-wrap gap-2">
-                    {item.status === 'queued' ? <Button type="button" size="sm" onClick={() => runItemAction('/api/drawing-donation/approve', item.id, '그림을 승인했어요.')}><Check className="h-[1em] w-[1em]" /> 승인</Button> : null}
+                    {item.status === 'queued' ? <Button disabled={!writable} type="button" size="sm" onClick={() => runItemAction('/api/drawing-donation/approve', item.id, '그림을 승인했어요.')}><Check className="h-[1em] w-[1em]" /> 승인</Button> : null}
                     <Button type="button" size="sm" variant="secondary" onClick={() => openReview(item)}><Eye className="h-[1em] w-[1em]" /> 검수</Button>
-                    <Button type="button" size="sm" variant="secondary" onClick={() => runItemAction('/api/drawing-donation/reject', item.id, '거절하고 포인트를 반환했어요.')}><Undo2 className="h-[1em] w-[1em]" /> 거절/환불</Button>
-                    <Button type="button" size="sm" variant="ghost" onClick={() => removeItem(item, false)} disabled={busyId === item.id}><Trash2 className="h-[1em] w-[1em]" /> 삭제</Button>
-                    <Button type="button" size="sm" variant="outline" onClick={() => removeItem(item, true)} disabled={busyId === item.id}><Undo2 className="h-[1em] w-[1em]" /> 삭제/환불</Button>
+                    <Button disabled={!writable} type="button" size="sm" variant="secondary" onClick={() => runItemAction('/api/drawing-donation/reject', item.id, '거절하고 포인트를 반환했어요.')}><Undo2 className="h-[1em] w-[1em]" /> 거절/환불</Button>
+                    <Button type="button" size="sm" variant="ghost" onClick={() => removeItem(item, false)} disabled={!writable || (busyId === item.id)}><Trash2 className="h-[1em] w-[1em]" /> 삭제</Button>
+                    <Button type="button" size="sm" variant="outline" onClick={() => removeItem(item, true)} disabled={!writable || (busyId === item.id)}><Undo2 className="h-[1em] w-[1em]" /> 삭제/환불</Button>
                   </div>
                 </div>
               </article>
@@ -596,17 +611,17 @@ export function DrawingDonationPage() {
           </CardContent>
         </Card>
 
-        <Card className="bg-card/85">
+        {blocksReadable ? <Card className="bg-card/85">
           <CardHeader>
             <CardTitle>봇 기능 차단</CardTitle>
             <CardDescription>차단된 시청자는 그림 후원과 영상 후원 등 포인트 참여 기능을 사용할 수 없습니다.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="grid gap-2">
-              <Input placeholder="시청자 ID 또는 platform:userId" value={blockForm.userId} onChange={(event) => setBlockForm((current) => ({ ...current, userId: event.target.value }))} />
-              <Input placeholder="닉네임" value={blockForm.username} onChange={(event) => setBlockForm((current) => ({ ...current, username: event.target.value }))} />
-              <Input placeholder="사유" value={blockForm.reason} onChange={(event) => setBlockForm((current) => ({ ...current, reason: event.target.value }))} />
-              <Button type="button" onClick={addBlock} disabled={isPending}><Ban className="h-[1em] w-[1em]" /> 차단 추가</Button>
+              <Input disabled={!blocksWritable} placeholder="시청자 ID 또는 platform:userId" value={blockForm.userId} onChange={(event) => setBlockForm((current) => ({ ...current, userId: event.target.value }))} />
+              <Input disabled={!blocksWritable} placeholder="닉네임" value={blockForm.username} onChange={(event) => setBlockForm((current) => ({ ...current, username: event.target.value }))} />
+              <Input disabled={!blocksWritable} placeholder="사유" value={blockForm.reason} onChange={(event) => setBlockForm((current) => ({ ...current, reason: event.target.value }))} />
+              <Button type="button" onClick={addBlock} disabled={!blocksWritable || isPending}><Ban className="h-[1em] w-[1em]" /> 차단 추가</Button>
             </div>
             <div className="space-y-2">
               {blockedUsers.length ? blockedUsers.map((item) => (
@@ -615,14 +630,14 @@ export function DrawingDonationPage() {
                     <div className="truncate text-sm font-semibold">{item.username || item.userId}</div>
                     <div className="truncate text-xs text-muted-foreground">{item.userId}{item.reason ? ` · ${item.reason}` : ''}</div>
                   </div>
-                  <Button type="button" size="icon" variant="ghost" onClick={() => removeBlock(item.userId)} aria-label="차단 해제">
+                  <Button disabled={!blocksWritable} type="button" size="icon" variant="ghost" onClick={() => removeBlock(item.userId)} aria-label="차단 해제">
                     <Eraser className="h-[1em] w-[1em]" />
                   </Button>
                 </div>
               )) : <div className="rounded-[var(--radius-control)] border border-dashed p-4 text-center text-sm text-muted-foreground">차단된 시청자가 없습니다.</div>}
             </div>
           </CardContent>
-        </Card>
+        </Card> : null}
       </section>
       {reviewItem ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-foreground/24 p-[var(--page-gutter)] backdrop-blur-[clamp(0.5rem,1.4vw,1rem)]">
@@ -649,10 +664,10 @@ export function DrawingDonationPage() {
                   <Play className="h-[1em] w-[1em]" /> 리플레이 보기
                 </Button>
                 <Button type="button" variant="outline" className="w-full" disabled={reviewLoading || archiveSaving || !drawingFromItem(reviewItem)} onClick={async () => { setArchiveSaving(true); try { await saveDrawingItemArchive(reviewItem); } catch { toast.error('보관 파일을 저장하지 못했어요.'); } finally { setArchiveSaving(false); } }}><Download size={17} />{archiveSaving ? '저장 중' : '.aruart 저장'}</Button>
-                {reviewItem.status === 'queued' ? <Button type="button" className="w-full" onClick={() => { runItemAction('/api/drawing-donation/approve', reviewItem.id, '그림을 승인했어요.'); closeReview(); }}><Check className="h-[1em] w-[1em]" /> 승인</Button> : null}
-                <Button type="button" variant="secondary" className="w-full" onClick={() => { runItemAction('/api/drawing-donation/reject', reviewItem.id, '거절하고 포인트를 반환했어요.'); closeReview(); }}><Undo2 className="h-[1em] w-[1em]" /> 거절/환불</Button>
-                <Button type="button" variant="outline" className="w-full" onClick={() => { removeItem(reviewItem, true); closeReview(); }}><Trash2 className="h-[1em] w-[1em]" /> 삭제/환불</Button>
-                <Button type="button" variant="destructive" className="w-full" onClick={() => moderateBlock(reviewItem)}>
+                {reviewItem.status === 'queued' ? <Button disabled={!writable} type="button" className="w-full" onClick={() => { runItemAction('/api/drawing-donation/approve', reviewItem.id, '그림을 승인했어요.'); closeReview(); }}><Check className="h-[1em] w-[1em]" /> 승인</Button> : null}
+                <Button disabled={!writable} type="button" variant="secondary" className="w-full" onClick={() => { runItemAction('/api/drawing-donation/reject', reviewItem.id, '거절하고 포인트를 반환했어요.'); closeReview(); }}><Undo2 className="h-[1em] w-[1em]" /> 거절/환불</Button>
+                <Button disabled={!writable} type="button" variant="outline" className="w-full" onClick={() => { removeItem(reviewItem, true); closeReview(); }}><Trash2 className="h-[1em] w-[1em]" /> 삭제/환불</Button>
+                <Button disabled={!writable || !blocksWritable} type="button" variant="destructive" className="w-full" onClick={() => moderateBlock(reviewItem)}>
                   <ShieldAlert className="h-[1em] w-[1em]" /> 거절하고 차단
                 </Button>
               </aside>

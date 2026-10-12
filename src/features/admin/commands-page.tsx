@@ -1,5 +1,7 @@
 'use client';
 
+import { useBotChannel } from '@/components/app-shell/bot-channel-provider';
+
 import { CalendarCheck, Edit3, Loader2, MessageSquare, RefreshCw, Save, Search, Trash2, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState, useTransition } from 'react';
 import { toast } from 'sonner';
@@ -88,6 +90,10 @@ function toForm(rule: BotRule): CommandForm {
 }
 
 export function CommandsPage() {
+  const { canWrite, canRead } = useBotChannel();
+  const writable = canWrite('commands');
+  const pointsReadable = canRead('commands') || canRead('points');
+  const pointsWritable = writable || canWrite('points');
   const [rules, setRules] = useState<BotRule[]>([]);
   const [query, setQuery] = useState('');
   const [editingRule, setEditingRule] = useState<BotRule | null>(null);
@@ -161,6 +167,7 @@ export function CommandsPage() {
   }, [page, totalPages]);
 
   const openEdit = (rule: BotRule) => {
+    if (!writable) return;
     setEditingRule(rule);
     setForm(toForm(rule));
   };
@@ -171,6 +178,7 @@ export function CommandsPage() {
   };
 
   const saveEdit = async () => {
+    if (!writable) return;
     if (!editingRule || !form) return;
     const keywords = parseCommandTriggers(form.command);
     const primaryKeyword = keywords[0] || '';
@@ -205,6 +213,7 @@ export function CommandsPage() {
   };
 
   const removeRule = async (rule: BotRule) => {
+    if (!writable) return;
     if (!window.confirm(`"${rule.name || rule.keywords?.[0] || rule.id}" 명령어를 삭제할까요?`)) return;
     setBusyId(rule.id);
     try {
@@ -219,18 +228,17 @@ export function CommandsPage() {
   };
 
   const saveAttendanceSettings = async () => {
+    if (!writable) return;
     setBusyId('attendance');
     try {
-      const current = await readJson<BotSettingsResponse>('/api/bot/settings');
       await postJson('/api/bot/settings', {
         settings: {
-          ...(current?.settings || {}),
           attendanceEnabled,
           attendanceAnnounce,
           attendanceCommandOnly,
           attendanceCommandKeyword: normalizeCommand(attendanceCommandKeyword || '!출석'),
           attendanceMessage: attendanceMessage.trim() || DEFAULT_ATTENDANCE_MESSAGE,
-          channelPointsPerAttendance: Math.max(0, Number(attendancePoints || 0)),
+          ...(pointsWritable ? { channelPointsPerAttendance: Math.max(0, Number(attendancePoints || 0)) } : {}),
         },
       });
       toast.success('출석 설정을 저장했습니다.');
@@ -288,7 +296,7 @@ export function CommandsPage() {
                 <Badge tone={attendanceEnabled ? 'mint' : 'neutral'}>{attendanceEnabled ? '사용 중' : '꺼짐'}</Badge>
                 <Badge tone={attendanceCommandOnly ? 'sky' : 'lemon'}>{attendanceCommandOnly ? `${attendanceCommandKeyword || '!출석'} 전용` : '첫 채팅 자동'}</Badge>
                 <Badge tone={attendanceAnnounce ? 'mint' : 'neutral'}>{attendanceAnnounce ? '메시지 표시' : '메시지 숨김'}</Badge>
-                <Badge tone="lemon">{Number(attendancePoints || 0).toLocaleString('ko-KR')}P 지급</Badge>
+                {pointsReadable ? <Badge tone="lemon">{Number(attendancePoints || 0).toLocaleString('ko-KR')}P 지급</Badge> : null}
               </div>
               <p className="mt-2 max-w-3xl break-keep text-sm leading-6 text-muted-foreground">
                 첫 채팅 자동 기록 또는 지정 명령어 전용 기록 중 방송 운영 방식에 맞게 선택합니다.
@@ -320,11 +328,11 @@ export function CommandsPage() {
                 <p className="w-max max-w-[42rem] whitespace-pre-wrap break-words text-sm leading-6 text-muted-foreground">{rule.responses?.join('\n') || '응답 문구가 없습니다.'}</p>
               </div>
               <div className="flex flex-wrap justify-end gap-2">
-                <Button type="button" variant="outline" size="sm" onClick={() => openEdit(rule)}>
+                <Button disabled={!writable} type="button" variant="outline" size="sm" onClick={() => openEdit(rule)}>
                   <Edit3 className="h-4 w-4" />
                   수정
                 </Button>
-                <Button type="button" variant="destructive" size="sm" onClick={() => removeRule(rule)} disabled={busyId === rule.id}>
+                <Button type="button" variant="destructive" size="sm" onClick={() => removeRule(rule)} disabled={!writable || (busyId === rule.id)}>
                   {busyId === rule.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
                   삭제
                 </Button>
@@ -356,16 +364,16 @@ export function CommandsPage() {
             <div className="grid gap-4 md:grid-cols-2">
               <label className="grid gap-2 text-sm font-semibold">
                 표시 이름
-                <Input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
+                <Input disabled={!writable} value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
               </label>
               <label className="grid gap-2 text-sm font-semibold">
                 채팅 명령어
-                <Input value={form.command} onChange={(event) => setForm({ ...form, command: event.target.value })} placeholder="예: !투표 !예측 !vote" />
+                <Input disabled={!writable} value={form.command} onChange={(event) => setForm({ ...form, command: event.target.value })} placeholder="예: !투표 !예측 !vote" />
               </label>
             </div>
             <label className="grid gap-2 text-sm font-semibold">
               응답 문구
-              <textarea
+              <textarea disabled={!writable}
                 value={form.response}
                 onChange={(event) => setForm({ ...form, response: event.target.value })}
                 className="box-border min-h-[clamp(7rem,18svh,11rem)] w-full min-w-0 max-w-full resize-y rounded-[var(--radius-control)] border bg-background/80 px-[clamp(0.85rem,1.6vw,1.1rem)] py-[clamp(0.85rem,1.6vw,1.1rem)] text-sm leading-7 outline-none focus:border-primary/45 focus:ring-2 focus:ring-ring"
@@ -374,19 +382,19 @@ export function CommandsPage() {
             <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(var(--control-height),0.42fr)] md:items-end">
               <label className="grid gap-2 text-sm font-semibold">
                 사용 포인트
-                <Input value={form.pointsCost} onChange={(event) => setForm({ ...form, pointsCost: event.target.value })} inputMode="numeric" />
+                <Input disabled={!writable} value={form.pointsCost} onChange={(event) => setForm({ ...form, pointsCost: event.target.value })} inputMode="numeric" />
               </label>
               <label className="grid gap-2 text-sm font-semibold">
                 쿨다운(초)
-                <Input value={form.cooldownSec} onChange={(event) => setForm({ ...form, cooldownSec: event.target.value })} inputMode="numeric" />
+                <Input disabled={!writable} value={form.cooldownSec} onChange={(event) => setForm({ ...form, cooldownSec: event.target.value })} inputMode="numeric" />
               </label>
-              <Button type="button" variant={form.enabled ? 'soft' : 'outline'} onClick={() => setForm({ ...form, enabled: !form.enabled })}>
+              <Button disabled={!writable} type="button" variant={form.enabled ? 'soft' : 'outline'} onClick={() => setForm({ ...form, enabled: !form.enabled })}>
                 {form.enabled ? '사용 중' : '꺼짐'}
               </Button>
             </div>
             <div className="flex flex-wrap justify-end gap-2">
               <Button type="button" variant="ghost" onClick={closeEdit}>취소</Button>
-              <Button type="button" onClick={saveEdit} disabled={busyId === editingRule.id}>
+              <Button type="button" onClick={saveEdit} disabled={!writable || (busyId === editingRule.id)}>
                 {busyId === editingRule.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Edit3 className="h-4 w-4" />}
                 저장
               </Button>
@@ -416,10 +424,10 @@ export function CommandsPage() {
             <div className="grid min-h-0 gap-4 overflow-y-auto p-[clamp(1rem,2.4vw,1.5rem)]">
               <div className="grid gap-3 rounded-[var(--radius-control)] border bg-background/70 p-3">
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <Button type="button" variant={attendanceEnabled ? 'soft' : 'outline'} onClick={() => setAttendanceEnabled((value) => !value)}>
+                  <Button disabled={!writable} type="button" variant={attendanceEnabled ? 'soft' : 'outline'} onClick={() => setAttendanceEnabled((value) => !value)}>
                     {attendanceEnabled ? '출석 기능 사용' : '출석 기능 꺼짐'}
                   </Button>
-                  <Button type="button" variant={attendanceCommandOnly ? 'soft' : 'outline'} onClick={() => setAttendanceCommandOnly((value) => !value)} disabled={!attendanceEnabled}>
+                  <Button type="button" variant={attendanceCommandOnly ? 'soft' : 'outline'} onClick={() => setAttendanceCommandOnly((value) => !value)} disabled={!writable || !attendanceEnabled}>
                     {attendanceCommandOnly ? '명령어로만 출석' : '첫 채팅 자동 출석'}
                   </Button>
                 </div>
@@ -428,7 +436,7 @@ export function CommandsPage() {
                   <Input
                     value={attendanceCommandKeyword}
                     onChange={(event) => setAttendanceCommandKeyword(event.target.value)}
-                    disabled={!attendanceEnabled}
+                    disabled={!writable || (!attendanceEnabled)}
                     placeholder="!출석"
                   />
                 </label>
@@ -437,11 +445,11 @@ export function CommandsPage() {
                 </p>
               </div>
               <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(var(--control-height),0.42fr)] md:items-end">
-                <label className="grid gap-2 text-sm font-semibold">
+                {pointsReadable ? <label className="grid gap-2 text-sm font-semibold">
                   출석 포인트
-                  <Input value={attendancePoints} onChange={(event) => setAttendancePoints(event.target.value)} inputMode="numeric" disabled={!attendanceEnabled} />
-                </label>
-                <Button type="button" variant={attendanceAnnounce ? 'soft' : 'outline'} onClick={() => setAttendanceAnnounce((value) => !value)} disabled={!attendanceEnabled}>
+                  <Input value={attendancePoints} onChange={(event) => setAttendancePoints(event.target.value)} inputMode="numeric" disabled={!writable || !pointsWritable || !attendanceEnabled} />
+                </label> : null}
+                <Button type="button" variant={attendanceAnnounce ? 'soft' : 'outline'} onClick={() => setAttendanceAnnounce((value) => !value)} disabled={!writable || !attendanceEnabled}>
                   {attendanceAnnounce ? '출석 메시지 표시' : '출석 메시지 숨김'}
                 </Button>
               </div>
@@ -450,7 +458,7 @@ export function CommandsPage() {
                 <textarea
                   value={attendanceMessage}
                   onChange={(event) => setAttendanceMessage(event.target.value)}
-                  disabled={!attendanceEnabled}
+                  disabled={!writable || (!attendanceEnabled)}
                   className="box-border min-h-[clamp(8rem,20svh,12rem)] w-full min-w-0 max-w-full resize-y rounded-[var(--radius-control)] border bg-background/80 px-[clamp(0.85rem,1.6vw,1.1rem)] py-[clamp(0.85rem,1.6vw,1.1rem)] text-sm leading-7 outline-none focus:border-primary/45 focus:ring-2 focus:ring-ring"
                 />
               </label>
@@ -460,7 +468,7 @@ export function CommandsPage() {
             </div>
             <div className="flex flex-col-reverse gap-2 border-t bg-background/64 p-[clamp(1rem,2.4vw,1.5rem)] sm:flex-row sm:justify-end">
               <Button type="button" variant="ghost" onClick={() => setAttendanceOpen(false)}>취소</Button>
-              <Button type="button" onClick={saveAttendanceSettings} disabled={busyId === 'attendance'}>
+              <Button type="button" onClick={saveAttendanceSettings} disabled={!writable || (busyId === 'attendance')}>
                 {busyId === 'attendance' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                 저장
               </Button>

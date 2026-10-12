@@ -2,6 +2,9 @@ import express from 'express';
 import { createLocalAvatarRelay, normalizeChzzkAvatarEvent } from './local-avatar-relay.js';
 import { createLocalAvatarNotificationClient, publishLocalAvatarNotification } from './supabase.js';
 import { createRequestProtection, rejectUnsafeTextInput } from './request-protection.js';
+import { createCommandExecutionSafety, isCommandSafetyError } from './command-execution-safety.js';
+import { createCommandAdmission } from './command-admission.js';
+import { commandAdmissionStore } from './supabase.js';
 import { assertSafeTextPayload, createSafeJsonReplacer, inspectTextPayload } from '../shared/text-safety.js';
 import { downloadDrawingDonationObject, getDurableRuntimeJob, findSidByDrawingViewerToken } from './supabase.js';
 import { DRAWING_ORIGINAL_LIMIT, inspectOriginal, originalOwnerKey, validateDrawingSubmission, verifyDrawingOriginal } from './drawing-original.js';
@@ -31,11 +34,21 @@ import { canManageLiveSettings, createLiveManagerRoleResolver, getLiveRoleLevel 
 import { buildYoutubeLiveInfoFallback, buildYoutubeLiveLookupContext, buildYoutubeOfflineLiveInfo } from './youtube-live-info.js';
 import { resolveVideoDonationTiming } from './video-donation-timing.js';
 import { appendVideoDonationQueueCount, countNonDurableVideoDonationItems, countVideoDonationQueueIncludingItem } from './video-donation-queue.js';
+import { createPvdQueueDisplay } from './pvd-queue-display.js';
+import { songbookStore } from './supabase.js';
+import { registerSongbookRoutes } from './songbook-routes.js';
+import { emoteOverlayStore } from './supabase.js';
+import { createEmoteOverlayRuntime } from './emote-overlay-runtime.js';
+import { registerEmoteOverlayRoutes } from './emote-overlay-routes.js';
 import { fetchYouTubeVideoMetadata } from './youtube-video-metadata.js';
 import { extractYoutubeChannelPageMetadata, isYoutubeChannelId } from './youtube-channel-page.js';
 import { isYoutubeGrantRevoked, validateYoutubeGrant } from './youtube-authorization.js';
 import { findYoutubeTokenAccount } from './youtube-account-identity.js';
 import { repairYoutubePlatformAccounts } from './supabase.js';
+import { botManagementStore, updateBotSettingsAtomically } from './supabase.js';
+import { patchBotSettings } from './supabase.js';
+import { createBotManagement } from './bot-management.js';
+import { filterBotManagerSettings, mergeBotManagerSettings, hasBotManagerScope, assertBotManagerEffects } from '../shared/bot-management-policy.js';
 import { createYoutubeIdleRecommendations } from './youtube-idle-recommendations.js';
 import { parseYouTubeMix } from '../shared/youtube-mix.js';
 import { createPvdDurationProbeCoordinator } from './pvd-duration-probe.js';
@@ -122,6 +135,7 @@ const participationWheelRuntime = createParticipationWheelRuntime({
   getWheel: getParticipationWheel,
   enterWheel: enterParticipationWheel,
   recordEvent: recordBotEventLogSafe,
+  admitCommand: (input) => admitChatCommand(input.sid, input.provider, input.userId),
 });
 app.set('trust proxy', String(process.env.ARUBOT_TRUSTED_PROXIES || 'loopback').split(',').map((value) => value.trim()).filter(Boolean));
 app.set('json replacer', createSafeJsonReplacer());
@@ -960,6 +974,15 @@ app.use(process.env.YOUTUBE_WEBSUB_CALLBACK_PATH || '/api/youtube/websub/callbac
 app.use(express.json({ limit: '5mb', inflate: false }));
 app.use(cookieParser());
 app.use(rejectUnsafeTextInput);
+
+const botManagement = createBotManagement({
+  store: botManagementStore,
+  getActorUserId: getSessionActorUserId,
+  getAdminStatus: getAppUserAdminStatus,
+  getStoredSettings: getBotSettingsStrict,
+});
+app.use(botManagement.middleware);
+botManagement.registerRoutes(app, rateLimiters.userWrite);
 
 // Serve static files (SFX, etc.) with CORS
 app.use('/files', cors(corsOptions), express.static(path.join(path.dirname(new URL(import.meta.url).pathname), 'files')));
@@ -3217,6 +3240,17 @@ const rouletteTokenSockets = new Map(); // token -> Set<WebSocket>
 const rouletteTokenToSid = new Map(); // token -> sid
 // Per-sid roulette queues to serialize spins
 const rouletteQueues = new Map(); // sid -> Array<QueuedSpin>
+const commandExecution = createCommandExecutionSafety({
+  onBlocked: ({ sid, reason }) => console.warn('[Command Safety] Execution stopped', { sid, reason }),
+});
+const commandAdmission = createCommandAdmission({
+  claim: commandAdmissionStore.claim,
+  onBlocked: ({ sid, reason, suppressed }) => console.warn('[Command Safety] Commands throttled', { sid, reason, suppressed }),
+});
+
+async function admitChatCommand(sid, provider, userId) {
+  return (await commandAdmission.admit({ sid, provider, userId })).allowed;
+}
 const rouletteProcessing = new Set(); // sid currently processing
 const ROULETTE_SPIN_MS = 5200; // must match viewer spin duration
 const ROULETTE_EMPHASIS_MS = 1000; // final emphasis time in viewer
@@ -3281,11 +3315,15 @@ function enqueueRouletteSpinInMemory(sid, item) {
 }
 
 async function enqueueRouletteSpin(sid, item) {
+  commandExecution.consume('jobs');
+  item = { ...item, executionChain: commandExecution.capture(sid) };
   const reservation = reserveRouletteEnqueue(sid, item);
   if (!reservation.accepted) return reservation.position;
   const runtimeJobId = String(item?.runtimeJobId || crypto.randomUUID());
   const persistedItem = { ...sanitizeRouletteJobItem(item), runtimeJobId };
   try {
+    if (!await commandAdmissionStore.claimChainJob(item.executionChain)) commandExecution.reject('jobs_limit');
+    commandExecution.check();
     await enqueueDurableRuntimeJob({
       id: runtimeJobId,
       sid,
@@ -3363,6 +3401,7 @@ async function sendChatByPost(sid, chatPost, message, opts = {}) {
     const ownerUserId = chatPost?.ownerUserId || String(sid || '').replace(/^user:/, '');
     return sendYoutubeChat(ownerUserId, chatPost?.liveChatId || null, text);
   }
+  commandExecution.consume('messages');
 
   let sessionKey = chatPost?.sessionKey || null;
   let token = chatPost?.accessToken || null;
@@ -3397,6 +3436,7 @@ async function sendChatByPost(sid, chatPost, message, opts = {}) {
 }
 
 async function processRouletteQueue(sid) {
+  return commandExecution.detached(async () => {
   if (rouletteProcessing.has(sid)) return;
   rouletteProcessing.add(sid);
   try {
@@ -3418,6 +3458,7 @@ async function processRouletteQueue(sid) {
             batchCount: Math.max(1, Number(item?.chatPost?.batchCount ?? 1)),
             chatPost: item?.chatPost || null,
             eventContext: item?.eventContext || null,
+            executionChain: item?.executionChain || null,
           }
         );
         // Strict serialization: wait for viewer animation; for instant items, use a very short delay
@@ -3547,6 +3588,7 @@ async function processRouletteQueue(sid) {
   } finally {
     rouletteProcessing.delete(sid);
   }
+  });
 }
 function chooseRouletteItem(def) {
   if (!def || !Array.isArray(def.items) || def.items.length === 0) return { label: 'N/A', value: null };
@@ -4008,7 +4050,7 @@ app.post('/api/video-donation/control-by-token', async (req, res) => {
     }
     if (op === 'volume') {
       const volume = normalizePvdVolume(req.body?.volume ?? req.body?.value ?? 100);
-      await setBotSettings(sid, { ...settings, videoDonationVolume: volume });
+      await patchBotSettings(sid, { videoDonationVolume: volume });
       const message = await broadcastPvdControl(sid, { op, volume });
       return res.json({ ok: true, message });
     }
@@ -4066,31 +4108,31 @@ app.post('/api/macros/upsert', async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
-    const s = await getBotSettings(sid) || {};
     const incoming = req.body?.macro || {};
     if (!incoming.message || !Number.isFinite(Number(incoming.intervalSec))) {
       return res.status(400).json({ error: 'invalid payload' });
     }
-    const macros = Array.isArray(s.macros) ? s.macros.slice() : [];
-    let idx = macros.findIndex(m => String(m.id || '') === String(incoming.id || ''));
-    if (idx < 0) {
-      incoming.id = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      incoming.enabled = incoming.enabled !== false;
-      incoming.intervalSec = Math.max(1, Number(incoming.intervalSec));
-      incoming.message = String(incoming.message || '').slice(0, 1000);
-      macros.push(incoming);
-    } else {
-      macros[idx] = {
-        ...macros[idx],
-        enabled: incoming.enabled !== false,
-        intervalSec: Math.max(1, Number(incoming.intervalSec)),
-        message: String(incoming.message || '').slice(0, 1000),
-        id: macros[idx].id,
-      };
-      incoming.id = macros[idx].id;
-    }
-    const next = { ...s, macros };
-    await setBotSettings(sid, next);
+    await updateBotSettingsAtomically(sid, (s) => {
+      const macros = Array.isArray(s.macros) ? s.macros.slice() : [];
+      let idx = macros.findIndex(m => String(m.id || '') === String(incoming.id || ''));
+      if (idx < 0) {
+        incoming.id = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        incoming.enabled = incoming.enabled !== false;
+        incoming.intervalSec = Math.max(1, Number(incoming.intervalSec));
+        incoming.message = String(incoming.message || '').slice(0, 1000);
+        macros.push(incoming);
+      } else {
+        macros[idx] = {
+          ...macros[idx],
+          enabled: incoming.enabled !== false,
+          intervalSec: Math.max(1, Number(incoming.intervalSec)),
+          message: String(incoming.message || '').slice(0, 1000),
+          id: macros[idx].id,
+        };
+        incoming.id = macros[idx].id;
+      }
+      return { ...s, macros };
+    });
     // mark cache dirty
     try { macroCache.delete(sid); } catch { }
     return res.json({ ok: true, macro: incoming });
@@ -4103,10 +4145,10 @@ app.post('/api/macros/delete', async (req, res) => {
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
     const id = String(req.body?.id || '');
-    const s = await getBotSettings(sid) || {};
-    const macros = (Array.isArray(s.macros) ? s.macros : []).filter(m => String(m.id || '') !== id);
-    const next = { ...s, macros };
-    await setBotSettings(sid, next);
+    await updateBotSettingsAtomically(sid, (s) => ({
+      ...s,
+      macros: (Array.isArray(s.macros) ? s.macros : []).filter(m => String(m.id || '') !== id),
+    }));
     try { macroCache.delete(sid); } catch { }
     return res.json({ ok: true });
   } catch { return res.status(500).json({ error: 'failed' }); }
@@ -6094,10 +6136,10 @@ app.post('/api/donation/settings', rateLimiters.userWrite, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
-    const s = await getBotSettings(sid) || {};
     const pointsPerK = Math.max(0, Number(req.body?.settings?.pointsPerK ?? 10));
-    const next = { ...s, donation: { ...(s.donation || {}), pointsPerK } };
-    await setBotSettings(sid, next);
+    const next = await updateBotSettingsAtomically(sid, (s) => ({
+      ...s, donation: { ...(s.donation || {}), pointsPerK },
+    }));
     invalidatePublicPointPolicyCache(sid);
     return res.json({ ok: true, settings: next.donation });
   } catch { return res.status(500).json({ error: 'failed' }); }
@@ -6119,21 +6161,26 @@ app.post('/api/donation/rules/upsert', async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
-    const s = await getBotSettings(sid) || {};
     const incoming = req.body?.rule || {};
-    const rules = Array.isArray(s.donationRules) ? s.donationRules.slice() : [];
-    let idx = rules.findIndex(r => String(r.id || '') === String(incoming.id || ''));
-    const normalizedIncoming = normalizeDonationRuleForStorage(incoming);
-    if (idx < 0) {
-      normalizedIncoming.id = normalizedIncoming.id || `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      rules.push(normalizedIncoming);
-    } else {
-      rules[idx] = normalizeDonationRuleForStorage({ ...rules[idx], ...incoming });
-    }
-    const next = { ...s, donationRules: rules };
-    await setBotSettings(sid, next);
-    return res.json({ ok: true, rule: idx < 0 ? normalizedIncoming : rules[idx] });
-  } catch { return res.status(500).json({ error: 'failed' }); }
+    let rule;
+    await updateBotSettingsAtomically(sid, (s) => {
+      const rules = Array.isArray(s.donationRules) ? s.donationRules.slice() : [];
+      const idx = rules.findIndex(r => String(r.id || '') === String(incoming.id || ''));
+      rule = normalizeDonationRuleForStorage(idx < 0 ? incoming : { ...rules[idx], ...incoming });
+      assertBotManagerEffects(rule, req.botManagement);
+      if (idx < 0) {
+        rule.id = rule.id || `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        rules.push(rule);
+      } else {
+        rules[idx] = rule;
+      }
+      return { ...s, donationRules: rules };
+    });
+    return res.json({ ok: true, rule });
+  } catch (error) {
+    if (error?.status === 403) return res.status(403).json({ error: error.message, code: error.code });
+    return res.status(500).json({ error: 'failed' });
+  }
 });
 
 // DELETE rule
@@ -6142,10 +6189,10 @@ app.post('/api/donation/rules/delete', async (req, res) => {
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
     const id = String(req.body?.id || '');
-    const s = await getBotSettings(sid) || {};
-    const rules = (Array.isArray(s.donationRules) ? s.donationRules : []).filter(r => String(r.id || '') !== id);
-    const next = { ...s, donationRules: rules };
-    await setBotSettings(sid, next);
+    await updateBotSettingsAtomically(sid, (s) => ({
+      ...s,
+      donationRules: (Array.isArray(s.donationRules) ? s.donationRules : []).filter(r => String(r.id || '') !== id),
+    }));
     return res.json({ ok: true });
   } catch { return res.status(500).json({ error: 'failed' }); }
 });
@@ -6288,7 +6335,6 @@ app.post('/api/setup/templates/apply', rateLimiters.userWrite, async (req, res) 
     const template = String(req.body?.template || 'quick-start').trim();
     if (template !== 'quick-start') return res.status(400).json({ error: 'Unknown template' });
 
-    const settings = await getBotSettings(sid) || {};
     const currentRules = await getBotRules(sid).catch(() => []);
     const applied = [];
     const skipped = [];
@@ -6303,53 +6349,54 @@ app.post('/api/setup/templates/apply', rateLimiters.userWrite, async (req, res) 
       applied.push({ type: 'command', name: rule.name });
     }
 
-    const rouletteDefs = Array.isArray(settings.rouletteDefs) ? settings.rouletteDefs.slice() : [];
-    const starterRoulette = makeQuickStartRouletteDefinition();
-    if (hasNamedItem(rouletteDefs, starterRoulette.name)) {
-      skipped.push({ type: 'roulette', name: starterRoulette.name, reason: 'name_exists' });
-    } else {
-      rouletteDefs.push(starterRoulette);
-      applied.push({ type: 'roulette', name: starterRoulette.name });
-    }
+    await updateBotSettingsAtomically(sid, (settings) => {
+      const rouletteDefs = Array.isArray(settings.rouletteDefs) ? settings.rouletteDefs.slice() : [];
+      const starterRoulette = makeQuickStartRouletteDefinition();
+      if (hasNamedItem(rouletteDefs, starterRoulette.name)) {
+        skipped.push({ type: 'roulette', name: starterRoulette.name, reason: 'name_exists' });
+      } else {
+        rouletteDefs.push(starterRoulette);
+        applied.push({ type: 'roulette', name: starterRoulette.name });
+      }
 
-    const macros = Array.isArray(settings.macros) ? settings.macros.slice() : [];
-    const starterMacroMessage = '!포인트로 내 포인트를 확인하고, !룰렛으로 오늘의 룰렛에 참여해 보세요.';
-    if (macros.some((macro) => String(macro?.message || '').trim() === starterMacroMessage)) {
-      skipped.push({ type: 'macro', name: '참여 안내 알림', reason: 'message_exists' });
-    } else {
-      macros.push({
-        id: 'tpl_macro_participation',
-        message: starterMacroMessage,
-        intervalSec: 600,
-        enabled: true,
-      });
-      applied.push({ type: 'macro', name: '참여 안내 알림' });
-    }
+      const macros = Array.isArray(settings.macros) ? settings.macros.slice() : [];
+      const starterMacroMessage = '!포인트로 내 포인트를 확인하고, !룰렛으로 오늘의 룰렛에 참여해 보세요.';
+      if (macros.some((macro) => String(macro?.message || '').trim() === starterMacroMessage)) {
+        skipped.push({ type: 'macro', name: '참여 안내 알림', reason: 'message_exists' });
+      } else {
+        macros.push({
+          id: 'tpl_macro_participation',
+          message: starterMacroMessage,
+          intervalSec: 600,
+          enabled: true,
+        });
+        applied.push({ type: 'macro', name: '참여 안내 알림' });
+      }
 
-    const nextSettings = {
-      ...settings,
-      botEnabled: true,
-      attendanceEnabled: settings.attendanceEnabled ?? true,
-      attendanceCommandOnly: settings.attendanceCommandOnly === true,
-      attendanceCommandKeyword: normalizeAttendanceCommandKeyword(settings),
-      attendanceAnnounce: settings.attendanceAnnounce ?? true,
-      attendanceMessage: settings.attendanceMessage || '{user.name}님 출석체크 완료! (연속 {attendance.streak}일, 누적 {attendance.totalDays}일)',
-      channelPointsPerChat: normalizePointAward(settings.channelPointsPerChat, 1),
-      channelPointsPerAttendance: normalizePointAward(settings.channelPointsPerAttendance, 50),
-      videoDonationAcceptEnabled: settings.videoDonationAcceptEnabled === true,
-      videoDonationPointsPerSecond: Number.isFinite(Number(settings.videoDonationPointsPerSecond)) ? Number(settings.videoDonationPointsPerSecond) : 1,
-      videoDonationMaxDurationSec: Number.isFinite(Number(settings.videoDonationMaxDurationSec)) ? Number(settings.videoDonationMaxDurationSec) : 600,
-      rouletteDefs,
-      macros,
-      setupTemplates: {
-        ...(settings.setupTemplates && typeof settings.setupTemplates === 'object' ? settings.setupTemplates : {}),
-        quickStart: {
-          appliedAt: new Date().toISOString(),
-          version: 1,
+      return {
+        ...settings,
+        botEnabled: true,
+        attendanceEnabled: settings.attendanceEnabled ?? true,
+        attendanceCommandOnly: settings.attendanceCommandOnly === true,
+        attendanceCommandKeyword: normalizeAttendanceCommandKeyword(settings),
+        attendanceAnnounce: settings.attendanceAnnounce ?? true,
+        attendanceMessage: settings.attendanceMessage || '{user.name}님 출석체크 완료! (연속 {attendance.streak}일, 누적 {attendance.totalDays}일)',
+        channelPointsPerChat: normalizePointAward(settings.channelPointsPerChat, 1),
+        channelPointsPerAttendance: normalizePointAward(settings.channelPointsPerAttendance, 50),
+        videoDonationAcceptEnabled: settings.videoDonationAcceptEnabled === true,
+        videoDonationPointsPerSecond: Number.isFinite(Number(settings.videoDonationPointsPerSecond)) ? Number(settings.videoDonationPointsPerSecond) : 1,
+        videoDonationMaxDurationSec: Number.isFinite(Number(settings.videoDonationMaxDurationSec)) ? Number(settings.videoDonationMaxDurationSec) : 600,
+        rouletteDefs,
+        macros,
+        setupTemplates: {
+          ...(settings.setupTemplates && typeof settings.setupTemplates === 'object' ? settings.setupTemplates : {}),
+          quickStart: {
+            appliedAt: new Date().toISOString(),
+            version: 1,
+          },
         },
-      },
-    };
-    await setBotSettings(sid, nextSettings);
+      };
+    });
     invalidatePublicPointPolicyCache(sid);
     try { macroCache.delete(sid); } catch { }
 
@@ -6396,16 +6443,16 @@ app.post('/api/roulette/definitions/upsert', async (req, res) => {
       }
     }
 
-    const settings = await getBotSettings(sid) || {};
-    const definitions = Array.isArray(settings.rouletteDefs) ? settings.rouletteDefs.slice() : [];
-    const index = definitions.findIndex((item) => (
-      String(item?.id || '') === definition.id ||
-      String(item?.name || '').trim().toLowerCase() === definition.name.toLowerCase()
-    ));
-    if (index >= 0) definitions[index] = { ...definitions[index], ...definition, id: definitions[index].id || definition.id };
-    else definitions.push(definition);
-
-    await setBotSettings(sid, { ...settings, rouletteDefs: definitions });
+    await updateBotSettingsAtomically(sid, (settings) => {
+      const definitions = Array.isArray(settings.rouletteDefs) ? settings.rouletteDefs.slice() : [];
+      const index = definitions.findIndex((item) => (
+        String(item?.id || '') === definition.id ||
+        String(item?.name || '').trim().toLowerCase() === definition.name.toLowerCase()
+      ));
+      if (index >= 0) definitions[index] = { ...definitions[index], ...definition, id: definitions[index].id || definition.id };
+      else definitions.push(definition);
+      return { ...settings, rouletteDefs: definitions };
+    });
     const runtimeRevision = markRuntimeConfigurationChanged(sid, 'roulette_definition_saved');
     return res.json({ ok: true, definition, runtimeRevision });
   } catch (e) {
@@ -6421,10 +6468,11 @@ app.post('/api/roulette/definitions/delete', async (req, res) => {
     const id = String(req.body?.id || '').trim();
     const name = String(req.body?.name || '').trim().toLowerCase();
     if (!id && !name) return res.status(400).json({ error: 'id or name is required' });
-    const settings = await getBotSettings(sid) || {};
-    const definitions = (Array.isArray(settings.rouletteDefs) ? settings.rouletteDefs : [])
-      .filter((item) => String(item?.id || '') !== id && String(item?.name || '').trim().toLowerCase() !== name);
-    await setBotSettings(sid, { ...settings, rouletteDefs: definitions });
+    await updateBotSettingsAtomically(sid, (settings) => ({
+      ...settings,
+      rouletteDefs: (Array.isArray(settings.rouletteDefs) ? settings.rouletteDefs : [])
+        .filter((item) => String(item?.id || '') !== id && String(item?.name || '').trim().toLowerCase() !== name),
+    }));
     const runtimeRevision = markRuntimeConfigurationChanged(sid, 'roulette_definition_deleted');
     return res.json({ ok: true, runtimeRevision });
   } catch (e) {
@@ -6437,6 +6485,17 @@ app.post('/api/roulette/test', rateLimiters.userWrite, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
+    if (req.botManagement?.role === 'manager') {
+      const settings = await getBotSettingsStrict(sid);
+      const id = String(req.body?.id || '').trim();
+      const name = String(req.body?.name || '').trim().toLowerCase();
+      const definition = getRouletteDefsFromSettings(settings).find((item) =>
+        (id && String(item?.id || '') === id) || (name && String(item?.name || '').trim().toLowerCase() === name));
+      if (!definition) return res.status(404).json({ error: '룰렛을 찾을 수 없습니다.' });
+      // A delegated test samples the same weights without issuing a permanent
+      // overlay credential, charging points, or executing the winning action.
+      return res.json({ ok: true, roulette: definition.name, previewOnly: true, result: { result: chooseRouletteItem(definition) } });
+    }
     const testConnectionId = normalizeRouletteTestConnectionId(req.body?.testConnectionId);
     if (!testConnectionId) return res.status(400).json({ error: '유효한 룰렛 테스트 연결 ID가 필요합니다.' });
     const testAuthorization = getRouletteTestAuthorization(testConnectionId);
@@ -6565,13 +6624,13 @@ app.get('/api/roulette/viewer-url', async (req, res) => {
         ? String(settings.rouletteViewerToken).trim()
         : '';
     }
-    if (!token) {
-      token = rouletteRandomToken();
-      const next = { ...settings, rouletteViewerToken: token };
-      await setBotSettings(sid, next);
-    } else if (settings.rouletteViewerToken !== token) {
-      try { await setBotSettings(sid, { ...settings, rouletteViewerToken: token }); } catch { }
-    }
+    const next = await updateBotSettingsAtomically(sid, (current) => ({
+      ...current,
+      rouletteViewerToken: current.rouletteViewerToken !== settings.rouletteViewerToken
+        ? String(current.rouletteViewerToken || '').trim() || token || rouletteRandomToken()
+        : token || rouletteRandomToken(),
+    }));
+    token = next.rouletteViewerToken;
     try { rouletteTokenToSid.set(token, sid); } catch { }
     if (testConnectionId && !authorizeRouletteTestConnection(testConnectionId, { token, sid })) {
       return res.status(429).json({ error: '동시에 실행할 수 있는 룰렛 테스트 수를 초과했습니다. 잠시 후 다시 시도해 주세요.' });
@@ -6919,6 +6978,7 @@ async function notifyPvdAdminSubscribers(sid, reason = 'queue_changed') {
 }
 
 async function getPvdAdminSidFromRequest(req) {
+  if (req.botManagement) return `user:${req.botManagement.ownerUserId}`;
   const byKey = await getPartitionIdByApiKey(req).catch(() => null);
   if (byKey) return byKey;
   const sidToken = getCookieSid(req);
@@ -7549,6 +7609,11 @@ app.post('/api/desktop/command', rateLimiters.apiKeyCommand, async (req, res) =>
     const args = Array.isArray(req.body?.args) ? req.body.args : (req.body?.args ? [req.body.args] : []);
     if (!command) return res.status(400).json({ error: 'command required' });
 
+    if (!await admitChatCommand(pid, 'desktop-api', pid)) {
+      res.set('Retry-After', '5');
+      return res.status(429).json({ error: 'command_rate_limited' });
+    }
+
     const payload = { type: 'command', command, args, serverNow: Date.now() };
     const delivered = broadcastToDesktop(pid, payload);
     try { await touchApiKeyLastUsed(token); } catch { }
@@ -7749,50 +7814,52 @@ app.post('/api/video-donation/settings', async (req, res) => {
     const maxDur = Math.max(1, Number(body.maxDurationSec ?? 600));
     const perUserLimit = Math.max(0, Number(body.perUserLimit ?? 0));
     const volume = normalizePvdVolume(body.volume ?? 100);
-    const settings = await getBotSettings(sid) || {};
-    const providers = normalizePvdProviders(body.providers || body.videoDonationProviders || settings.videoDonationProviders);
-    const hasIdlePlaylistInput = Object.prototype.hasOwnProperty.call(body, 'idlePlaylist');
-    const idleSource = hasIdlePlaylistInput ? body.idlePlaylist : settings.videoDonationIdlePlaylist;
-    const idlePlaylist = normalizePvdIdlePlaylist(idleSource);
-    if (idlePlaylist.mixUrl) {
-      const mix = parseYouTubeMix(idlePlaylist.mixUrl);
-      if (!mix) return res.status(400).json({ error: '올바른 YouTube Mix 주소를 입력해 주세요.' });
-      idlePlaylist.mixUrl = mix.url;
-    }
-    if (idlePlaylist.enabled && idlePlaylist.mode === 'custom' && idlePlaylist.customTracks.length === 0) {
-      return res.status(400).json({ error: '직접 구성 플레이리스트에 곡을 하나 이상 추가해 주세요.' });
-    }
-    const bgm = {
-      enabled: body.bgm?.enabled ?? settings.bgmEnabled ?? false,
-      acceptEnabled: body.bgm?.acceptEnabled ?? settings.bgmAcceptEnabled ?? false,
-      pointsPerSecond: Number(body.bgm?.pointsPerSecond ?? settings.bgmPointsPerSecond ?? 1),
-      idlePlaylist: normalizePvdIdlePlaylist(body.bgm?.idlePlaylist ?? settings.bgmIdlePlaylist),
-    };
-    if (bgm.enabled && idlePlaylist.enabled) return res.status(400).json({ error: '대기 음악을 끈 후 BGM을 켜 주세요.' });
-    if (!Number.isFinite(bgm.pointsPerSecond) || bgm.pointsPerSecond < 0) return res.status(400).json({ error: 'BGM 초당 포인트는 0 이상의 숫자여야 합니다.' });
-    if (bgm.idlePlaylist.mixUrl) {
-      const mix = parseYouTubeMix(bgm.idlePlaylist.mixUrl);
-      if (!mix) return res.status(400).json({ error: '올바른 BGM YouTube Mix 주소를 입력해 주세요.' });
-      bgm.idlePlaylist.mixUrl = mix.url;
-    }
-    if (bgm.idlePlaylist.enabled && bgm.idlePlaylist.mode === 'custom' && !bgm.idlePlaylist.customTracks.length) {
-      return res.status(400).json({ error: '대기 BGM에 곡을 하나 이상 추가해 주세요.' });
-    }
-    const next = {
-      ...settings,
-      videoDonationPointsPerSecond: pps,
-      videoDonationAcceptEnabled: enabled,
-      videoDonationMaxDurationSec: maxDur,
-      videoDonationPerUserQueueLimit: perUserLimit,
-      videoDonationVolume: volume,
-      videoDonationProviders: providers,
-      videoDonationIdlePlaylist: idlePlaylist,
-      bgmEnabled: bgm.enabled === true,
-      bgmAcceptEnabled: bgm.acceptEnabled === true,
-      bgmPointsPerSecond: bgm.pointsPerSecond,
-      bgmIdlePlaylist: bgm.idlePlaylist,
-    };
-    await setBotSettings(sid, next);
+    let idlePlaylist;
+    let bgm;
+    await updateBotSettingsAtomically(sid, (settings) => {
+      const providers = normalizePvdProviders(body.providers || body.videoDonationProviders || settings.videoDonationProviders);
+      const hasIdlePlaylistInput = Object.prototype.hasOwnProperty.call(body, 'idlePlaylist');
+      const idleSource = hasIdlePlaylistInput ? body.idlePlaylist : settings.videoDonationIdlePlaylist;
+      idlePlaylist = normalizePvdIdlePlaylist(idleSource);
+      if (idlePlaylist.mixUrl) {
+        const mix = parseYouTubeMix(idlePlaylist.mixUrl);
+        if (!mix) throw Object.assign(new Error('올바른 YouTube Mix 주소를 입력해 주세요.'), { statusCode: 400 });
+        idlePlaylist.mixUrl = mix.url;
+      }
+      if (idlePlaylist.enabled && idlePlaylist.mode === 'custom' && idlePlaylist.customTracks.length === 0) {
+        throw Object.assign(new Error('직접 구성 플레이리스트에 곡을 하나 이상 추가해 주세요.'), { statusCode: 400 });
+      }
+      bgm = {
+        enabled: body.bgm?.enabled ?? settings.bgmEnabled ?? false,
+        acceptEnabled: body.bgm?.acceptEnabled ?? settings.bgmAcceptEnabled ?? false,
+        pointsPerSecond: Number(body.bgm?.pointsPerSecond ?? settings.bgmPointsPerSecond ?? 1),
+        idlePlaylist: normalizePvdIdlePlaylist(body.bgm?.idlePlaylist ?? settings.bgmIdlePlaylist),
+      };
+      if (bgm.enabled && idlePlaylist.enabled) throw Object.assign(new Error('대기 음악을 끈 후 BGM을 켜 주세요.'), { statusCode: 400 });
+      if (!Number.isFinite(bgm.pointsPerSecond) || bgm.pointsPerSecond < 0) throw Object.assign(new Error('BGM 초당 포인트는 0 이상의 숫자여야 합니다.'), { statusCode: 400 });
+      if (bgm.idlePlaylist.mixUrl) {
+        const mix = parseYouTubeMix(bgm.idlePlaylist.mixUrl);
+        if (!mix) throw Object.assign(new Error('올바른 BGM YouTube Mix 주소를 입력해 주세요.'), { statusCode: 400 });
+        bgm.idlePlaylist.mixUrl = mix.url;
+      }
+      if (bgm.idlePlaylist.enabled && bgm.idlePlaylist.mode === 'custom' && !bgm.idlePlaylist.customTracks.length) {
+        throw Object.assign(new Error('대기 BGM에 곡을 하나 이상 추가해 주세요.'), { statusCode: 400 });
+      }
+      return {
+        ...settings,
+        videoDonationPointsPerSecond: pps,
+        videoDonationAcceptEnabled: enabled,
+        videoDonationMaxDurationSec: maxDur,
+        videoDonationPerUserQueueLimit: perUserLimit,
+        videoDonationVolume: volume,
+        videoDonationProviders: providers,
+        videoDonationIdlePlaylist: idlePlaylist,
+        bgmEnabled: bgm.enabled === true,
+        bgmAcceptEnabled: bgm.acceptEnabled === true,
+        bgmPointsPerSecond: bgm.pointsPerSecond,
+        bgmIdlePlaylist: bgm.idlePlaylist,
+      };
+    });
     const viewerIdlePlaylist = getPvdIdlePlaylistForViewer(idlePlaylist);
     await Promise.all([
       broadcastPvdControl(sid, { op: 'volume', volume }).catch(() => null),
@@ -7804,6 +7871,7 @@ app.post('/api/video-donation/settings', async (req, res) => {
     await broadcastPvdStart(sid);
     return res.json({ ok: true, idlePlaylist, bgm });
   } catch (e) {
+    if (e?.statusCode === 400) return res.status(400).json({ error: e.message });
     console.error('[pvd:settings:post] error', e?.message || e);
     return res.status(500).json({ error: 'Failed to save settings' });
   }
@@ -8004,6 +8072,23 @@ app.get('/api/video-donation/queue', async (req, res) => {
   }
 });
 
+// Read-only OBS list: never registers player presence or advances playback.
+app.get('/api/video-donation/queue-display', async (req, res) => {
+  res.set('Cache-Control', 'private, no-store, max-age=0');
+  try {
+    const token = typeof req.query?.token === 'string' ? req.query.token.trim() : '';
+    if (!token || token.length > 256) return res.status(400).json({ error: 'token required' });
+    const sid = pvdTokenToSid.get(token) || await findSidByViewerToken(token);
+    if (!sid) return res.status(404).json({ error: 'token not found' });
+    const settings = await getBotSettings(sid);
+    if (settings?.videoDonationViewerToken !== token) return res.status(404).json({ error: 'token not found' });
+    const snapshot = await getPvdQueueSnapshot(sid, 'display_sync');
+    return res.json(createPvdQueueDisplay(snapshot, pvdPlaybackState.get(sid)));
+  } catch {
+    return res.status(503).json({ error: 'Queue temporarily unavailable' });
+  }
+});
+
 // Public: current PVD item for OBS/browser viewers.
 // The legacy React viewer already calls this endpoint as an HTTP fallback.
 app.get('/api/video-donation/now-playing', async (req, res) => {
@@ -8089,16 +8174,19 @@ app.get('/api/video-donation/viewer-url', async (req, res) => {
       let stable = null;
       try { if (uid) stable = pvdDeterministicTokenFromUid(uid); } catch { }
       token = stable || pvdRandomToken();
-      const next = { ...settings, videoDonationViewerToken: token };
-      await setBotSettings(sid, next);
-    } else if (settings.videoDonationViewerToken !== token) {
-      try { await setBotSettings(sid, { ...settings, videoDonationViewerToken: token }); } catch { }
     }
+    const next = await updateBotSettingsAtomically(sid, (current) => ({
+      ...current,
+      videoDonationViewerToken: current.videoDonationViewerToken !== settings.videoDonationViewerToken
+        ? current.videoDonationViewerToken || token
+        : token,
+    }));
+    token = next.videoDonationViewerToken;
     // update reverse index
     if (token) pvdTokenToSid.set(token, sid);
     // Public viewer path uses frontend route
     const path = `/pvd/${encodeURIComponent(token)}`;
-    return res.json({ sid, token, path, bgmPath: `/viewer/bgm/${encodeURIComponent(token)}` });
+    return res.json({ sid, token, path, bgmPath: `/viewer/bgm/${encodeURIComponent(token)}`, queuePath: `/viewer/requests/${encodeURIComponent(token)}` });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to get viewer url' });
   }
@@ -8109,16 +8197,14 @@ app.post('/api/video-donation/rotate-viewer-token', async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
-    const settings = await getBotSettings(sid) || {};
     let uid = null;
     try { uid = await resolveStreamerUidForSid(sid); } catch { }
     let token = uid ? await rotateViewerTokenSupabase(uid, 'pvd', sid, 'pvd').catch(() => null) : null;
     if (!token) token = pvdRandomToken();
-    const next = { ...settings, videoDonationViewerToken: token };
-    await setBotSettings(sid, next);
+    await patchBotSettings(sid, { videoDonationViewerToken: token });
     // refresh reverse index
     try { pvdTokenToSid.set(token, sid); } catch { }
-    return res.json({ ok: true, token, path: `/pvd/${encodeURIComponent(token)}`, bgmPath: `/viewer/bgm/${encodeURIComponent(token)}` });
+    return res.json({ ok: true, token, path: `/pvd/${encodeURIComponent(token)}`, bgmPath: `/viewer/bgm/${encodeURIComponent(token)}`, queuePath: `/viewer/requests/${encodeURIComponent(token)}` });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to rotate token' });
   }
@@ -8139,18 +8225,19 @@ app.post('/api/bot/blocked-users', rateLimiters.userWrite, async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
-    const settings = await getBotSettings(sid) || {};
     const userId = String(req.body?.userId || '').trim();
     if (!userId) return res.status(400).json({ error: 'userId required' });
-    const items = normalizeBlockedBotUsers(settings.blockedBotUsers).filter((item) => item.userId.toLowerCase() !== userId.toLowerCase());
-    items.unshift({
-      userId,
-      username: String(req.body?.username || '').trim() || null,
-      reason: String(req.body?.reason || '').trim() || null,
-      createdAt: new Date().toISOString(),
+    const next = await updateBotSettingsAtomically(sid, (settings) => {
+      const items = normalizeBlockedBotUsers(settings.blockedBotUsers).filter((item) => item.userId.toLowerCase() !== userId.toLowerCase());
+      items.unshift({
+        userId,
+        username: String(req.body?.username || '').trim() || null,
+        reason: String(req.body?.reason || '').trim() || null,
+        createdAt: new Date().toISOString(),
+      });
+      return { ...settings, blockedBotUsers: items.slice(0, 500) };
     });
-    await setBotSettings(sid, { ...settings, blockedBotUsers: items.slice(0, 500) });
-    return res.json({ ok: true, items: items.slice(0, 500) });
+    return res.json({ ok: true, items: next.blockedBotUsers });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to block user' });
   }
@@ -8160,16 +8247,17 @@ app.delete('/api/bot/blocked-users/:userId', rateLimiters.userWrite, async (req,
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
-    const settings = await getBotSettings(sid) || {};
     const userId = decodeURIComponent(String(req.params.userId || '')).trim();
     const keys = buildBotUserBlockKeys(userId);
-    const items = normalizeBlockedBotUsers(settings.blockedBotUsers).filter((item) => {
-      const itemKeys = buildBotUserBlockKeys(item.userId);
-      for (const key of itemKeys) if (keys.has(key)) return false;
-      return true;
-    });
-    await setBotSettings(sid, { ...settings, blockedBotUsers: items });
-    return res.json({ ok: true, items });
+    const next = await updateBotSettingsAtomically(sid, (settings) => ({
+      ...settings,
+      blockedBotUsers: normalizeBlockedBotUsers(settings.blockedBotUsers).filter((item) => {
+        const itemKeys = buildBotUserBlockKeys(item.userId);
+        for (const key of itemKeys) if (keys.has(key)) return false;
+        return true;
+      }),
+    }));
+    return res.json({ ok: true, items: next.blockedBotUsers });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to unblock user' });
   }
@@ -8190,9 +8278,8 @@ app.post('/api/drawing-donation/settings', rateLimiters.userWrite, async (req, r
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
-    const settings = await getBotSettings(sid) || {};
     const drawingDonation = normalizeDrawingDonationSettings(req.body || {});
-    await setBotSettings(sid, { ...settings, drawingDonation });
+    await patchBotSettings(sid, { drawingDonation });
     notifyDrawingSubscribers(sid, 'settings_updated').catch(() => null);
     notifyDrawingAdminSubscribers(sid, 'settings_updated').catch(() => null);
     return res.json({ ok: true, settings: drawingDonation });
@@ -8354,17 +8441,18 @@ app.post('/api/drawing-donation/moderate-block', rateLimiters.userWrite, async (
     if (!refund) return res.status(404).json({ error: 'not_found' });
     const { item, refundedAmount } = refund;
 
-    const settings = await getBotSettings(sid) || {};
     const userId = String(item.viewerUserId || '').trim();
     if (userId) {
-      const items = normalizeBlockedBotUsers(settings.blockedBotUsers).filter((entry) => entry.userId.toLowerCase() !== userId.toLowerCase());
-      items.unshift({
-        userId,
-        username: item.viewerName || null,
-        reason,
-        createdAt: new Date().toISOString(),
+      await updateBotSettingsAtomically(sid, (settings) => {
+        const items = normalizeBlockedBotUsers(settings.blockedBotUsers).filter((entry) => entry.userId.toLowerCase() !== userId.toLowerCase());
+        items.unshift({
+          userId,
+          username: item.viewerName || null,
+          reason,
+          createdAt: new Date().toISOString(),
+        });
+        return { ...settings, blockedBotUsers: items.slice(0, 500) };
       });
-      await setBotSettings(sid, { ...settings, blockedBotUsers: items.slice(0, 500) });
     }
 
     await recordBotEventLogSafe(sid, {
@@ -8407,12 +8495,11 @@ app.get('/api/drawing-donation/viewer-url', async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
-    const settings = await getBotSettings(sid) || {};
-    let token = String(settings.drawingDonationViewerToken || '').trim();
-    if (!token) {
-      token = drawingTokenFromSid(sid);
-      await setBotSettings(sid, { ...settings, drawingDonationViewerToken: token });
-    }
+    const settings = await updateBotSettingsAtomically(sid, (current) => ({
+      ...current,
+      drawingDonationViewerToken: String(current.drawingDonationViewerToken || '').trim() || drawingTokenFromSid(sid),
+    }));
+    const token = settings.drawingDonationViewerToken;
     drawingTokenToSid.set(token, sid);
     const ownerUserId = ownerUserIdFromSid(sid);
     const publicAccount = ownerUserId
@@ -8480,10 +8567,12 @@ app.post('/api/drawing-donation/rotate-viewer-token', rateLimiters.userWrite, as
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
-    const settings = await getBotSettings(sid) || {};
-    const oldToken = String(settings.drawingDonationViewerToken || '').trim();
+    let oldToken;
     const token = `draw_${pvdRandomToken(24)}`;
-    await setBotSettings(sid, { ...settings, drawingDonationViewerToken: token });
+    await updateBotSettingsAtomically(sid, (settings) => {
+      oldToken = String(settings.drawingDonationViewerToken || '').trim();
+      return { ...settings, drawingDonationViewerToken: token };
+    });
     if (oldToken) drawingTokenToSid.delete(oldToken);
     drawingTokenToSid.set(token, sid);
     const sockets = drawingOverlaySockets.get(sid);
@@ -9388,6 +9477,7 @@ async function executeBlueprintCommandNode({
   }
 
   const rule = candidate.rule;
+  return commandExecution.run(sid, `command:${rule.id || candidate.match.matchedText}`, async () => {
   const commandMatch = candidate.match;
   if (!dryRun && rule.liveOnly === true) {
     const liveInfo = await getLiveInfoForSid(sid, { provider: selectedPlatform }).catch(() => null);
@@ -9582,11 +9672,14 @@ async function executeBlueprintCommandNode({
     features,
     actions: summarizeBlueprintCommandActionJobs(actionResult.jobs),
   };
+  });
 }
 
 async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}, internal = {}) {
   const blueprint = await getRuntimeActionBlueprint(ownerUserId, idOrSlug);
   if (!blueprint || blueprint.enabled === false) return { ok: false, error: 'blueprint_not_found' };
+  try {
+    return await commandExecution.run(`user:${ownerUserId}`, `blueprint:${blueprint.id}`, async () => {
   const textError = inspectTextPayload([blueprint, context]);
   if (textError) return { ok: false, error: textError };
   const dryRun = context.dryRun === true || context.source === 'manual_test';
@@ -9633,6 +9726,7 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}, inter
   }
 
   async function runNode(nodeId, incoming = {}, depth = 0) {
+    commandExecution.consume('nodes');
     const node = nodeMap.get(String(nodeId));
     if (!node || node.enabled === false) return null;
     const startedAt = Date.now();
@@ -9649,6 +9743,7 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}, inter
         memo: blueprintVariableMemo,
         currentDate: getKstDateString(),
       });
+      commandExecution.check();
       runtimeContext = mergeBlueprintReadContexts(runtimeContext, hydratedContext);
       const scope = buildBlueprintScope(runtimeContext, flow, nodeOutputs);
       if (node.type === 'start') {
@@ -9680,7 +9775,7 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}, inter
         });
       } else if (node.type === 'wait') {
         const delayMs = Math.max(0, Number(evaluateBlueprintValue(config.ms || Number(config.seconds || 0) * 1000, scope) || 0));
-        if (!dryRun && delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+        await commandExecution.wait(delayMs, dryRun);
         output = { waitedMs: delayMs, dryRun };
       } else if (node.type === 'condition') {
         const left = evaluateBlueprintValue(config.left, scope);
@@ -9723,19 +9818,23 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}, inter
         output = { count: outgoing.length, results: [], completed: false };
         nodeOutputs[node.id] = output;
         nodeOutputs[node.type] = output;
-        const results = await Promise.all(outgoing.map((edge) => runNode(edge.target, output, depth + 1)));
+        const settled = await Promise.allSettled(outgoing.map((edge) => runNode(edge.target, output, depth + 1)));
+        const failed = settled.find((result) => result.status === 'rejected');
+        if (failed) throw failed.reason;
+        const results = settled.map((result) => result.value);
         output.results = results;
         output.completed = true;
         await recordStep(node, 'done', incoming, output, startedAt);
         return output;
       } else if (node.type === 'loop') {
-        const count = Math.max(0, Math.floor(Number(evaluateBlueprintValue(config.count || 1, scope) || 0)));
-        const gapMs = Math.max(0, Math.floor(Number(evaluateBlueprintValue(config.gapMs || 0, scope) || 0)));
+        const count = commandExecution.count(evaluateBlueprintValue(config.count ?? 1, scope));
+        const gapMs = commandExecution.count(evaluateBlueprintValue(config.gapMs ?? 0, scope), 'waitMs');
         const trueEdge = edgeFrom(node.id, 'true');
         for (let index = 0; index < count; index += 1) {
+          commandExecution.check();
           flow.loop = { index: index + 1, total: count };
           if (trueEdge) await runNode(trueEdge.target, { loop: flow.loop }, depth + 1);
-          if (gapMs && !dryRun) await new Promise((resolve) => setTimeout(resolve, gapMs));
+          if (gapMs) await commandExecution.wait(gapMs, dryRun);
         }
         output = { count };
         nextPort = 'false';
@@ -9997,6 +10096,11 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}, inter
       flow,
       nodeOutputs,
     };
+  }
+    });
+  } catch (error) {
+    if (!isCommandSafetyError(error)) throw error;
+    return { ok: false, error: error.message, errorCode: error.code };
   }
 }
 
@@ -11252,6 +11356,7 @@ async function resolvePvdMedia(input, settings = {}, { allowSearch = true, durat
 }
 
 async function executeActionVariableTokens(sid, text, context = {}) {
+  return commandExecution.scope(sid, async () => {
   assertSafeTextPayload([text, context]);
   const source = String(text || '');
   const matches = Array.from(source.matchAll(/\$\{\s*(?:action|automation|blueprint)::([^}]+)\s*\}/ig));
@@ -11261,6 +11366,7 @@ async function executeActionVariableTokens(sid, text, context = {}) {
   const jobs = [];
   const actionStack = new Set((Array.isArray(context.actionStack) ? context.actionStack : []).map((value) => String(value).trim().toLocaleLowerCase('ko-KR')).filter(Boolean));
   for (const match of matches) {
+    commandExecution.consume('actions');
     const actionId = String(match?.[1] || '').trim();
     if (!actionId) continue;
     try {
@@ -11339,6 +11445,7 @@ async function executeActionVariableTokens(sid, text, context = {}) {
         jobs.push({ kind: 'automation_job', actionId, jobId: job?.id || null, job });
       }
     } catch (error) {
+      if (isCommandSafetyError(error)) throw error;
       console.error('[Action Variable] failed to enqueue action job', actionId, error?.message || error);
       if (context.requirePublishedBlueprint === true) {
         jobs.push({
@@ -11354,6 +11461,7 @@ async function executeActionVariableTokens(sid, text, context = {}) {
     }
   }
   return jobs;
+  });
 }
 
 function stripActionVariableTokens(text) {
@@ -11543,6 +11651,7 @@ async function startRouletteSpin(sid, rouletteName, userId, username, opts = {})
     console.error(`[Roulette] Roulette not found: ${rouletteName} for channel: ${channelContext.channelId}`);
     throw new Error('roulette_not_found');
   }
+  return commandExecution.run(sid, `roulette:${String(def.id || def.name).trim().toLowerCase()}`, async () => {
   const picked = chooseRouletteItem(def);
   const spinId = String(opts?.spinId || crypto.randomUUID());
 
@@ -11564,13 +11673,13 @@ async function startRouletteSpin(sid, rouletteName, userId, username, opts = {})
   if (!token) {
     token = rouletteRandomToken();
   }
-  if (settings.rouletteViewerToken !== token) {
-    try {
-      await setBotSettings(sid, { ...settings, rouletteViewerToken: token });
-    } catch (error) {
-      console.warn('[Roulette] Failed to persist stable roulette viewer token:', error?.message || error);
-    }
-  }
+  const tokenSettings = await updateBotSettingsAtomically(sid, (current) => ({
+    ...current,
+    rouletteViewerToken: current.rouletteViewerToken !== settings.rouletteViewerToken
+      ? String(current.rouletteViewerToken || '').trim() || token
+      : token,
+  }));
+  token = tokenSettings.rouletteViewerToken;
   try {
     registerTokenChannelMapping(token, channelContext.channelId);
     rouletteTokenToSid.set(token, sid);
@@ -11650,7 +11759,7 @@ async function startRouletteSpin(sid, rouletteName, userId, username, opts = {})
       label: picked.label,
       notBefore: spinStartedAt + spinDurationMs,
       fallbackDelayMs: spinDurationMs + ROULETTE_ACTION_SETTLE_FALLBACK_GRACE_MS,
-      execute: () => executeRouletteResultActions(
+      execute: commandExecution.bind(() => executeRouletteResultActions(
         sid,
         def,
         picked,
@@ -11658,7 +11767,7 @@ async function startRouletteSpin(sid, rouletteName, userId, username, opts = {})
         username,
         channelContext.channelId,
         opts?.chatPost || null,
-      ),
+      )),
     });
   }
   const deliverRouletteBroadcast = createRouletteBroadcastDelivery({
@@ -11828,11 +11937,11 @@ async function startRouletteSpin(sid, rouletteName, userId, username, opts = {})
     if (resultActionsRegistered) {
       await rouletteResultActionCoordinator.release({ token, spinId }, 'overlay-unavailable');
     } else {
-      const executeUncoordinatedFallback = () => executeRouletteResultActions(
+      const executeUncoordinatedFallback = commandExecution.bind(() => executeRouletteResultActions(
         sid, def, picked, userId, username, channelContext.channelId, opts?.chatPost || null,
       ).catch((error) => {
         console.error(`[Roulette] Result action fallback failed for spin ${spinId}:`, error?.message || error);
-      });
+      }));
       if (overlayDeliverySuccess) {
         const remainingMs = Math.max(
           0,
@@ -11856,11 +11965,13 @@ async function startRouletteSpin(sid, rouletteName, userId, username, opts = {})
     spinDurationMs,
     spinStartedAt,
   };
+  }, opts.executionChain || { version: 1, sid, path: [] });
 }
 
 /**
  */
 async function executeRouletteResultCommand(sid, commandText, userId, username, chatPost = null) {
+  return commandExecution.scope(sid, async () => {
   try {
     console.log(`[Roulette Command] Executing: "${commandText}" for user: ${username} (${userId})`);
 
@@ -12116,6 +12227,7 @@ async function executeRouletteResultCommand(sid, commandText, userId, username, 
     console.error('[Roulette Command] Execution failed:', e);
     throw e;
   }
+  });
 }
 
 // (no change) keeping existing /api/video-donation/now-playing above
@@ -12129,8 +12241,7 @@ app.post('/api/video-donation/control', async (req, res) => {
     const op = String(req.body?.op || '').toLowerCase();
     if (op === 'volume') {
       const volume = normalizePvdVolume(req.body?.volume ?? req.body?.value ?? 100);
-      const settings = await getBotSettings(sid) || {};
-      await setBotSettings(sid, { ...settings, videoDonationVolume: volume });
+      await patchBotSettings(sid, { videoDonationVolume: volume });
       const message = await broadcastPvdControl(sid, { op, volume });
       return res.json({ ok: true, message });
     }
@@ -13650,6 +13761,8 @@ async function recordAttendanceFromCommand({
   const excluded = Array.isArray(settings.attendanceExcludeUserIds) ? settings.attendanceExcludeUserIds.map(String) : [];
   const excludedSet = new Set([...excluded, ...excludedFromText].map(String));
   if (excludedSet.has(resolvedUserId)) return null;
+
+  if (!await admitChatCommand(sid, provider, resolvedUserId)) return null;
 
   const attendDate = await getAttendanceDate(sid);
   const attKey = `${sid}:${resolvedUserId}:${attendDate}`;
@@ -16680,6 +16793,7 @@ app.get('/apikey', async (req, res) => {
 
 // Resolve partition id (pid) used for DB: prefer user:<userId> when logged-in, else sid:<cookieSid>
 async function getPartitionId(req, res) {
+  if (req.botManagement) return `user:${req.botManagement.ownerUserId}`;
   // 1) API Key takes precedence if provided
   const byKey = await getPartitionIdByApiKey(req);
   if (byKey) {
@@ -16823,13 +16937,19 @@ function normalizeCimeProfile(content) {
   };
 }
 
-async function getCurrentSessionUserId(req) {
+async function getSessionActorUserId(req) {
   const sidToken = getCookieSid(req);
   if (!sidToken) return null;
   try { return await getSessionUserId(sidToken); } catch { return null; }
 }
 
+async function getCurrentSessionUserId(req) {
+  if (req.botManagement) return req.botManagement.ownerUserId;
+  return getSessionActorUserId(req);
+}
+
 async function getBotRulesOwnerSid(req, res) {
+  if (req.botManagement) return `user:${req.botManagement.ownerUserId}`;
   const byKey = await getPartitionIdByApiKey(req);
   if (byKey) return byKey;
   const ownerUserId = await getCurrentSessionUserId(req);
@@ -16838,7 +16958,7 @@ async function getBotRulesOwnerSid(req, res) {
 }
 
 async function requireCurrentAdminUser(req, res) {
-  const ownerUserId = await getCurrentSessionUserId(req);
+  const ownerUserId = await getSessionActorUserId(req);
   if (!ownerUserId) {
     res.status(401).json({ error: 'Login required' });
     return null;
@@ -16852,7 +16972,7 @@ async function requireCurrentAdminUser(req, res) {
 }
 
 async function getCurrentAdminUserForCallback(req) {
-  const ownerUserId = await getCurrentSessionUserId(req);
+  const ownerUserId = await getSessionActorUserId(req);
   if (!ownerUserId) return null;
   const admin = await getAppUserAdminStatus(ownerUserId).catch(() => null);
   return admin?.isAdmin === true ? { ...admin, userId: ownerUserId } : null;
@@ -17594,6 +17714,12 @@ function notifyAutomationLocalAgents(ownerUserId, reason = 'job_queued') {
 }
 
 async function queueAutomationJob(ownerUserId, job) {
+  commandExecution.consume('jobs');
+  const sid = `user:${ownerUserId}`;
+  if (commandExecution.current(sid) && !await commandAdmissionStore.claimChainJob(commandExecution.capture(sid))) {
+    commandExecution.reject('jobs_limit');
+  }
+  commandExecution.check();
   assertSafeTextPayload(job);
   const queued = await enqueueAutomationJob(ownerUserId, job);
   if (queued) {
@@ -20493,6 +20619,10 @@ app.post('/api/action-blueprints/:id/test', rateLimiters.userWrite, async (req, 
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    if (!await admitChatCommand(`user:${ownerUserId}`, 'management', ownerUserId)) {
+      res.set('Retry-After', '5');
+      return res.status(429).json({ error: 'command_rate_limited' });
+    }
     const context = req.body?.context && typeof req.body.context === 'object' ? req.body.context : {};
     const user = context.user && typeof context.user === 'object' ? context.user : {};
     const channel = context.channel && typeof context.channel === 'object' ? context.channel : {};
@@ -20850,8 +20980,7 @@ app.post('/api/local-remote/video-donation/control', requireAutomationLocalAgent
     const op = String(req.body?.op || '').toLowerCase();
     if (op === 'volume') {
       const volume = normalizePvdVolume(req.body?.volume ?? req.body?.value ?? 100);
-      const settings = await getBotSettings(sid) || {};
-      await setBotSettings(sid, { ...settings, videoDonationVolume: volume });
+      await patchBotSettings(sid, { videoDonationVolume: volume });
       const message = await broadcastPvdControl(sid, { op, volume });
       return res.json({ ok: true, message });
     }
@@ -21276,11 +21405,11 @@ app.get('/api/fx/viewer-url', async (req, res) => {
     const token = await getOrCreateViewerTokenSupabase(ownerUserId, 'fx', sid, 'fx').catch(() => null);
     let finalToken = token;
     if (!finalToken) {
-      const settings = await getBotSettings(sid).catch(() => null) || {};
-      finalToken = settings.fxViewerToken || `fx_${crypto.randomBytes(18).toString('base64url')}`;
-      if (settings.fxViewerToken !== finalToken) {
-        await setBotSettings(sid, { ...settings, fxViewerToken: finalToken }).catch(() => null);
-      }
+      const settings = await updateBotSettingsAtomically(sid, (current) => ({
+        ...current,
+        fxViewerToken: current.fxViewerToken || `fx_${crypto.randomBytes(18).toString('base64url')}`,
+      }));
+      finalToken = settings.fxViewerToken;
     }
     return res.json({ token: finalToken, path: `/fx/${encodeURIComponent(finalToken)}` });
   } catch (e) {
@@ -21307,6 +21436,10 @@ app.post('/api/automations/run', rateLimiters.userWrite, async (req, res) => {
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
+    if (!await admitChatCommand(`user:${ownerUserId}`, 'management', ownerUserId)) {
+      res.set('Retry-After', '5');
+      return res.status(429).json({ error: 'command_rate_limited' });
+    }
     const type = String(req.body?.type || '').toLowerCase();
     const payload = req.body?.payload && typeof req.body.payload === 'object' ? req.body.payload : {};
     const jobTypes = {
@@ -21506,6 +21639,19 @@ app.delete('/api/automations/assets/sounds/:fileId', rateLimiters.userWrite, asy
   }
 });
 
+const emoteOverlayRuntime = createEmoteOverlayRuntime({ store: emoteOverlayStore });
+registerEmoteOverlayRoutes(app, { runtime: emoteOverlayRuntime, getOwner: getCurrentSessionUserId, writeLimiter: rateLimiters.userWrite, promoteStream: requestProtection.promoteStream });
+
+registerSongbookRoutes(app, {
+  store: songbookStore, getAdminOwner: getCurrentSessionUserId, getViewerUser: getSessionActorUserId,
+  resolveChannel: resolveVerifiedPublicChannelIdentity, normalizeUid: normalizePublicChannelUid,
+  writeLimiter: rateLimiters.userWrite,
+  getPublicPath: async owner => {
+    const uid = await resolveStreamerUidForSid(`user:${owner}`);
+    return uid ? `/c/${encodeURIComponent(uid)}/songbook` : null;
+  },
+});
+
 // Public identity does not depend on a live broadcast or upstream platform availability.
 app.get('/api/public/:uid/profile', async (req, res) => {
   const uid = normalizePublicChannelUid(req.params.uid);
@@ -21517,6 +21663,27 @@ app.get('/api/public/:uid/profile', async (req, res) => {
     return res.json({ uid, provider: identity.provider, displayName: identity.displayName || null });
   } catch {
     return res.status(503).json({ error: 'Channel profile temporarily unavailable' });
+  }
+});
+
+// Public queue resolves channel ownership, never the viewer's session or a player token.
+app.get('/api/public/:uid/requests', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const uid = normalizePublicChannelUid(req.params.uid);
+  if (!uid) return res.status(400).json({ error: 'invalid uid' });
+  const offset = Number(req.query?.offset ?? 0);
+  if (!Number.isSafeInteger(offset) || offset < 0 || offset > 100000) return res.status(400).json({ error: 'invalid offset' });
+  try {
+    const identity = await resolveVerifiedPublicChannelIdentity(uid);
+    if (!identity?.ownerUserId) return res.status(404).json({ error: 'not_found' });
+    const sid = `user:${identity.ownerUserId}`;
+    const cached = await readRealtimeCached(`public:requests:${sid}`, { ttlMs: 1000, staleMs: 1000 }, async () => ({
+      snapshot: await getPvdQueueSnapshot(sid, 'public_sync'),
+      bgmBlocked: pvdPlaybackState.get(sid)?.bgmBlocked === true,
+    }));
+    return res.json(createPvdQueueDisplay(cached.snapshot, { bgmBlocked: cached.bgmBlocked, includeDetails: true, offset, limit: 20 }));
+  } catch {
+    return res.status(503).json({ error: 'Queue temporarily unavailable' });
   }
 });
 
@@ -21607,13 +21774,16 @@ app.get('/api/bot/settings', async (req, res) => {
   const sid = await getPartitionId(req, res);
   if (!sid) return res.json({ settings: {} });
   const settings = await getBotSettings(sid);
-  return res.json({ settings });
+  return res.json({ settings: filterBotManagerSettings(settings, req.botManagement) });
 });
 
 app.post('/api/bot/settings', rateLimiters.userWrite, async (req, res) => {
   const sid = await getPartitionId(req, res);
   if (!sid) return res.status(401).json({ error: 'Login required' });
   const body = req.body || {};
+  if (!body.settings || typeof body.settings !== 'object' || Array.isArray(body.settings)) {
+    return res.status(400).json({ error: '설정 형식이 올바르지 않습니다.' });
+  }
   const settings = { ...(body.settings || {}) };
   if (Object.hasOwn(settings, 'channelPointsPerChat')) {
     settings.channelPointsPerChat = normalizePointAward(settings.channelPointsPerChat, 1);
@@ -21621,7 +21791,15 @@ app.post('/api/bot/settings', rateLimiters.userWrite, async (req, res) => {
   if (Object.hasOwn(settings, 'channelPointsPerAttendance')) {
     settings.channelPointsPerAttendance = normalizePointAward(settings.channelPointsPerAttendance, 0);
   }
-  await setBotSettings(sid, settings);
+  try {
+    if (req.botManagement?.role === 'manager') {
+      await updateBotSettingsAtomically(sid, (current) => mergeBotManagerSettings(current, settings, req.botManagement));
+    } else {
+      await setBotSettings(sid, settings);
+    }
+  } catch (error) {
+    return res.status(error.status || 500).json({ error: error.status ? error.message : 'Failed to save bot settings', code: error.code });
+  }
   invalidatePublicPointPolicyCache(sid);
   const runtimeRevision = markRuntimeConfigurationChanged(sid, 'bot_settings_saved');
   return res.json({ ok: true, runtimeRevision });
@@ -21801,7 +21979,7 @@ async function markDefaultBotRulesInitialized(sid, settings = null) {
   if (!sid) return;
   const current = settings || await getBotSettings(sid).catch(() => ({})) || {};
   if (current.defaultBotRulesInitialized === true) return;
-  await setBotSettings(sid, { ...current, defaultBotRulesInitialized: true }).catch((error) => {
+  await patchBotSettings(sid, { defaultBotRulesInitialized: true }).catch((error) => {
     console.warn('[Bot Rules] failed to mark default initialization:', error?.message || error);
   });
 }
@@ -21841,7 +22019,8 @@ app.get('/api/bot/rules', async (req, res) => {
   try {
     const sid = await getBotRulesOwnerSid(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required', rules: [] });
-    const rules = await getBotRulesWithDefaults(sid);
+    const rules = req.botManagement?.role === 'manager' && !hasBotManagerScope(req.botManagement, 'commands', 'write')
+      ? await getBotRules(sid) : await getBotRulesWithDefaults(sid);
     return res.json({ rules });
   } catch (e) {
     console.error('Rule load failed:', e?.message || e, e?.hint || '', e?.details || '');
@@ -22131,6 +22310,7 @@ registerParticipationWheelRoutes(app, {
 async function handlePredictionBetCommand({ sid, channelUid, userId, username, text, provider }) {
   const parsed = parsePredictionBetCommand(text);
   if (!parsed) return null;
+  if (!await admitChatCommand(sid, provider, userId)) return '';
   if (!channelUid) return '채널 정보를 확인할 수 없어 예측 베팅을 처리할 수 없습니다.';
   if (!parsed.option || !parsed.amount) {
     const active = await getActivePredictionForChannel(channelUid).catch(() => null);
@@ -22484,11 +22664,19 @@ async function replayBotEventLog(sid, ownerUserId, log) {
 app.post('/api/bot/event-logs/:id/replay', rateLimiters.userWrite, async (req, res) => {
   const sid = await getPartitionId(req, res);
   if (!sid) return res.status(401).json({ error: 'Login required' });
+  if (!await admitChatCommand(sid, 'management', ownerUserIdFromSid(sid))) {
+    res.set('Retry-After', '5');
+    return res.status(429).json({ error: 'command_rate_limited' });
+  }
   try {
     const ownerUserId = ownerUserIdFromSid(sid);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
     const log = await getBotEventLog(ownerUserId, req.params.id);
     if (!log) return res.status(404).json({ error: 'not_found' });
+    const replayFeature = log.category === 'video_donation' ? 'video' : log.category === 'drawing_donation' ? 'drawing' : 'actions';
+    if (req.botManagement && !hasBotManagerScope(req.botManagement, replayFeature, 'write')) {
+      return res.status(403).json({ error: '이 효과를 재생할 관리 권한이 없습니다.', code: 'bot_scope_required' });
+    }
     const result = await replayBotEventLog(sid, ownerUserId, log);
     if (result.ok === false) return res.status(400).json(result);
     return res.json(result);
@@ -24426,9 +24614,9 @@ async function ensureSession(sid, channelId) {
                 provider: 'chzzk',
                 text,
               });
-              if (predictionReply) {
+              if (predictionReply !== null) {
                 const accessToken = await getValidAccessToken(sid);
-                if (entry.sessionKey && accessToken) {
+                if (predictionReply && entry.sessionKey && accessToken) {
                   await axios.post(`${OPENAPI_BASE}/open/v1/chats/send`, { message: predictionReply }, {
                     params: { sessionKey: entry.sessionKey },
                     headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }
@@ -24481,11 +24669,16 @@ async function ensureSession(sid, channelId) {
           const code = (msg && (msg.userRoleCode ?? msg?.profile?.userRoleCode)) ?? 0;
           const roleLevel = getLiveRoleLevel(code, { isOwner });
           const canManageLive = canManageLiveSettings({ roleLevel, isOwner });
+          let commandAdmitted = false;
           for (const { rule: r, match: commandMatch } of getCommandRuleMatches(text, rules)) {
             if (!r.enabled) continue;
             // Role permission check
             const required = Number(r.requiredRoleLevel || (r.adminOnly ? 3 : 1));
             if (roleLevel < required) continue;
+            if (!commandAdmitted) {
+              if (!await admitChatCommand(sid, 'chzzk', resolvedUserId)) return;
+              commandAdmitted = true;
+            }
             const cooldown = Math.max(1000, Number(r.cooldown || 0));
             if (now - (r.lastUsed || 0) < cooldown) continue;
             // Optional: live-only enforcement for rules (r.liveOnly === true)
@@ -24692,21 +24885,11 @@ async function ensureSession(sid, channelId) {
                     try {
                       const accessToken = await getValidAccessToken(sid);
 
-                      const settings = await getBotSettings(sid) || {};
-                      let token = typeof settings.rouletteViewerToken === 'string' && settings.rouletteViewerToken.trim()
-                        ? String(settings.rouletteViewerToken).trim()
-                        : '';
-
-                      if (!token) {
-                        token = rouletteRandomToken();
-                        try {
-                          const next = { ...settings, rouletteViewerToken: token };
-                          await setBotSettings(sid, next);
-                          console.log(`[Roulette] Created new token for sid: ${sid}, token: ${token}`);
-                        } catch (e) {
-                          console.error('[Roulette] Failed to save new token:', e);
-                        }
-                      }
+                      const settings = await updateBotSettingsAtomically(sid, (current) => ({
+                        ...current,
+                        rouletteViewerToken: String(current.rouletteViewerToken || '').trim() || rouletteRandomToken(),
+                      }));
+                      const token = settings.rouletteViewerToken;
 
                       rouletteTokenToSid.set(token, sid);
                       console.log(`[Roulette] Token mapping set: ${token} -> ${sid}`);
@@ -24972,10 +25155,10 @@ async function ensureSession(sid, channelId) {
                 if (name) {
                   const repeatEnabled = !!r.repeatEnabled;
                   const repeatPerAmount = repeatEnabled && r.repeatPerAmount ? Math.max(1, Number(r.repeatPerAmount)) : null;
-                  const repeatCooldown = repeatEnabled ? Math.max(0, Number(r.repeatCooldown || 0)) : 0;
+                  const repeatCooldown = repeatEnabled ? Math.max(50, Math.min(30000, Number(r.repeatCooldown || 0))) : 0;
 
                   if (repeatEnabled && repeatPerAmount && amount >= repeatPerAmount) {
-                    const repeatCount = Math.floor(amount / repeatPerAmount);
+                    const repeatCount = Math.min(100, Math.floor(amount / repeatPerAmount));
                     
                     (async () => {
                       for (let i = 0; i < repeatCount; i++) {
@@ -25176,6 +25359,8 @@ function pushEvent(entry, ev) {
     if (!Array.isArray(entry.queue)) entry.queue = [];
     entry.queue.push(ev);
     if (entry.queue.length > MAX_QUEUE) entry.queue.splice(0, entry.queue.length - MAX_QUEUE);
+    // Cosmetic delivery must never interrupt chat commands or the provider queue.
+    try { if (typeof emoteOverlayRuntime !== 'undefined') emoteOverlayRuntime.ingestEvent(entry, ev); } catch { }
     return true;
   } catch (error) {
     entry.lastError = error?.message || String(error || 'provider_event_queue_failed');
@@ -25806,6 +25991,7 @@ async function verifyYoutubeBotModeratorRegistration(ownerUserId) {
 }
 
 async function sendYoutubeChat(ownerUserId, liveChatId, message) {
+  commandExecution.consume('messages');
   assertSafeTextPayload(message);
   const text = String(message || '').trim();
   if (!text) return null;
@@ -26028,8 +26214,8 @@ async function processYoutubeChatAutomation(entry, ev) {
         provider: 'youtube',
         text,
       });
-      if (predictionReply) {
-        await sendYoutubeChat(ownerUserId, entry.liveChatId, predictionReply).catch(() => { });
+      if (predictionReply !== null) {
+        if (predictionReply) await sendYoutubeChat(ownerUserId, entry.liveChatId, predictionReply).catch(() => { });
         return;
       }
     } catch (e) {
@@ -26062,10 +26248,15 @@ async function processYoutubeChatAutomation(entry, ev) {
     if (!Array.isArray(rules)) return;
     const now = Date.now();
     const roleLevel = isOwner ? 4 : (ev.role?.moderator ? 3 : (ev.role?.sponsor ? 2 : 1));
+    let commandAdmitted = false;
     for (const { rule: r, match: commandMatch } of getCommandRuleMatches(text, rules)) {
       if (!r || r.enabled === false) continue;
       const required = Number(r.requiredRoleLevel || (r.adminOnly ? 3 : 1));
       if (roleLevel < required) continue;
+      if (!commandAdmitted) {
+        if (!await admitChatCommand(sid, 'youtube', resolvedUserId)) return;
+        commandAdmitted = true;
+      }
       const cooldown = Math.max(1000, Number(r.cooldown || 0));
       if (now - Number(r.lastUsed || 0) < cooldown) continue;
       if (r.liveOnly === true) {
@@ -26881,6 +27072,7 @@ async function isLikelyCimeBotSelfEcho(entry, ownerUserId, ev, resolvedUserId) {
 }
 
 async function sendCimeChat(ownerUserId, message) {
+  commandExecution.consume('messages');
   assertSafeTextPayload(message);
   const text = String(message || '').trim();
   if (!text) return null;
@@ -27190,8 +27382,8 @@ async function processCimeChatAutomation(entry, ev) {
         provider: 'cime',
         text,
       });
-      if (predictionReply) {
-        await sendCimeChat(ownerUserId, predictionReply).catch(() => { });
+      if (predictionReply !== null) {
+        if (predictionReply) await sendCimeChat(ownerUserId, predictionReply).catch(() => { });
         return;
       }
     } catch (e) {
@@ -27243,10 +27435,15 @@ async function processCimeChatAutomation(entry, ev) {
       const currentRoleLevel = await getCimeLiveActorRoleLevel(ownerUserId, entry.channelId, resolvedUserId, { force: true });
       return canManageLiveSettings({ roleLevel: currentRoleLevel });
     };
+    let commandAdmitted = false;
     for (const { rule: r, match: commandMatch } of commandMatches) {
       if (!r || r.enabled === false) continue;
       const required = Number(r.requiredRoleLevel || (r.adminOnly ? 3 : 1));
       if (roleLevel < required) continue;
+      if (!commandAdmitted) {
+        if (!await admitChatCommand(sid, 'cime', resolvedUserId)) return;
+        commandAdmitted = true;
+      }
       const cooldown = Math.max(1000, Number(r.cooldown || 0));
       if (now - Number(r.lastUsed || 0) < cooldown) continue;
       if (r.liveOnly === true) {
@@ -28737,6 +28934,7 @@ async function gracefulShutdown(signal, { exitCode = 0 } = {}) {
       await Promise.allSettled(leasesToRelease.map((state) => releaseRuntimeLease(state.resourceKey, INSTANCE_ID)));
       await closeHttpServer();
       await localAvatarRelay.stop();
+      await emoteOverlayRuntime.stop();
       await closeDatabaseConnections();
 
       clearTimeout(forceTimer);
@@ -30349,13 +30547,21 @@ wssDesktop.on('connection', async (ws, req) => {
 
 // Single upgrade dispatcher for both WS servers
 try {
-  server.on('upgrade', (req, socket, head) => {
+  server.on('upgrade', async (req, socket, head) => {
     try {
       if (!requestProtection.upgrade(req, socket)) return;
       const u = new URL(req.url, `http://localhost:${PORT}`);
       if (!isTrustedWebSocketUpgradeOrigin(u.pathname, req.headers.origin)) {
         rejectWebSocketUpgrade(socket);
         return;
+      }
+      if (u.searchParams.has('botOwner')) {
+        if (!['/api/video-donation/admin/ws', '/api/drawing-donation/admin/ws'].includes(u.pathname)) {
+          rejectWebSocketUpgrade(socket);
+          return;
+        }
+        await botManagement.authorize(req);
+        if (socket.destroyed) return;
       }
       const ext = req.headers['sec-websocket-extensions'] || '';
       const proto = req.headers['sec-websocket-protocol'] || '';
@@ -30365,7 +30571,10 @@ try {
         return;
       }
       if (u.pathname === '/api/video-donation/admin/ws') {
-        wssPvdAdmin.handleUpgrade(req, socket, head, (ws) => wssPvdAdmin.emit('connection', ws, req));
+        wssPvdAdmin.handleUpgrade(req, socket, head, (ws) => {
+          botManagement.watchSocket(ws, req);
+          wssPvdAdmin.emit('connection', ws, req);
+        });
         return;
       }
       if (u.pathname === '/api/drawing-donation/ws') {
@@ -30373,7 +30582,10 @@ try {
         return;
       }
       if (u.pathname === '/api/drawing-donation/admin/ws') {
-        wssDrawingAdmin.handleUpgrade(req, socket, head, (ws) => wssDrawingAdmin.emit('connection', ws, req));
+        wssDrawingAdmin.handleUpgrade(req, socket, head, (ws) => {
+          botManagement.watchSocket(ws, req);
+          wssDrawingAdmin.emit('connection', ws, req);
+        });
         return;
       }
       if (u.pathname === '/api/roulette/ws') {

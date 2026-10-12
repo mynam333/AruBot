@@ -1,0 +1,113 @@
+.page {
+  width: 100%;
+  max-width: 1360px;
+  min-width: 0;
+  margin-inline: auto;
+  letter-spacing: 0;
+}
+
+.workspace {
+  display: grid;
+  grid-template-areas: 'preview' 'settings';
+  gap: 28px;
+  min-width: 0;
+}
+
+.settings { grid-area: settings; min-width: 0; }
+.preview { grid-area: preview; min-width: 0; align-self: start; }
+
+.fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px 24px;
+}
+
+.surface {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  width: 100%;
+  overflow: hidden;
+  isolation: isolate;
+  background-color: #16191c;
+  border-radius: 6px;
+}
+
+.checkerboard {
+  background-image: conic-gradient(#25282c 25%, transparent 0 50%, #25282c 0 75%, transparent 0);
+  background-size: 24px 24px;
+}
+
+.modeButton {
+  display: flex;
+  min-width: 0;
+  min-height: 66px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 2px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.numberRow {
+  display: grid;
+  grid-template-columns: minmax(40px, 1fr) 94px;
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
+}
+
+.range {
+  width: 100%;
+  min-width: 0;
+  height: 24px;
+  cursor: pointer;
+  accent-color: hsl(var(--primary));
+}
+
+.range:disabled { cursor: not-allowed; opacity: .5; }
+
+.summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-block: 20px;
+  list-style: none;
+  cursor: pointer;
+}
+
+.summary::-webkit-details-marker { display: none; }
+.summary > svg { flex: 0 0 auto; transition: transform 150ms; }
+details[open] > .summary > svg { transform: rotate(180deg); }
+
+.address {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.addressText { display: block; min-height: 48px; font-size: 12px; line-height: 24px; }
+
+@media (min-width: 540px) {
+  .fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (min-width: 1280px) {
+  .workspace {
+    grid-template-areas: 'settings preview';
+    grid-template-columns: minmax(0, 1.06fr) minmax(0, 1fr);
+    gap: 36px;
+  }
+  .preview { position: sticky; top: 24px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .summary > svg { transition: none; }
+}

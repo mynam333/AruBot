@@ -1,5 +1,7 @@
 'use client';
 
+import { useBotChannel } from '@/components/app-shell/bot-channel-provider';
+
 import * as Dialog from '@radix-ui/react-dialog';
 import * as Switch from '@radix-ui/react-switch';
 import * as Tabs from '@radix-ui/react-tabs';
@@ -83,6 +85,8 @@ function SourceToggle({ id, checked, onChange, children }: {
 }
 
 export function ParticipationWheelPage() {
+  const { canWrite } = useBotChannel();
+  const writable = canWrite('wheel');
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const snapshotRef = useRef<Snapshot | null>(null);
   const [draft, setDraft] = useState<WheelSettings | null>(null);
@@ -198,6 +202,7 @@ export function ParticipationWheelPage() {
   }, [refresh]);
 
   const perform = async (intent: Intent) => {
+    if (!writable) return;
     if (pendingRef.current) return;
     pendingRef.current = true;
     setPending(intent.kind);
@@ -248,7 +253,7 @@ export function ParticipationWheelPage() {
   const conflict = dirty && Boolean(wheel) && !sameSettings(baseSettings, wheel!.settings);
   const spinning = Boolean(wheel?.latestSpin && spinEndsAt(wheel.latestSpin) > now);
   const remaining = Math.max(0, Math.ceil((spinEndsAt(wheel?.latestSpin) - now) / 1000));
-  const locked = Boolean(pending || retryIntent || offline || readProblem || !wheel);
+  const locked = !writable || Boolean(pending || retryIntent || offline || readProblem || !wheel);
   // Removal is committed when a spin starts. Its live counts would reveal the winner.
   const spinEntryIds = useMemo(() => new Set(spinning ? wheel?.latestSpin?.entries.map((entry) => entry.id) : []), [spinning, wheel?.latestSpin]);
   const displayEntries = useMemo(() => spinning && wheel?.latestSpin
@@ -277,6 +282,7 @@ export function ParticipationWheelPage() {
   };
 
   const changeDraft = (next: WheelSettings) => {
+    if (!writable) return;
     dirtyRef.current = !sameSettings(next, baseSettings);
     setDraft(next);
     setNotice('');
@@ -337,7 +343,7 @@ export function ParticipationWheelPage() {
       {offline ? <div role="alert" className={styles.error}><WifiOff size={17} /><span>오프라인입니다. 연결이 복구될 때까지 마지막 상태를 유지합니다.</span></div>
         : readProblem ? <div role="alert" className={styles.error}>{errorBanner(readProblem)}</div> : null}
       {actionProblem ? <div role="alert" className={styles.error}>{errorBanner(actionProblem)}
-        {retryIntent ? <Button size="sm" variant="outline" disabled={Boolean(pending) || offline} onClick={() => void perform(retryIntent)}>
+        {retryIntent ? <Button size="sm" variant="outline" disabled={!writable || (Boolean(pending) || offline)} onClick={() => void perform(retryIntent)}>
           <RefreshCw size={14} />{pending ? '확인 중' : '같은 요청 다시 확인'}
         </Button> : null}
       </div> : null}
@@ -370,11 +376,11 @@ export function ParticipationWheelPage() {
                 : <><span className={styles.resultLabel}>{wheel.totalSlots ? '추첨 준비 완료' : '참여 대기 중'}</span><strong>{wheel.totalSlots ? `${number(wheel.totalSlots)}칸의 선택지` : '아직 등록된 항목이 없습니다'}</strong></>}
           </div>
           <div className={styles.spinControls}>
-            <Button variant="outline" disabled={locked} onClick={() => act(wheel.collecting ? 'close' : 'open')}>
+            <Button variant="outline" disabled={!writable || (locked)} onClick={() => act(wheel.collecting ? 'close' : 'open')}>
               {pending === 'open' || pending === 'close' ? <Loader2 size={17} className={styles.loadingIcon} /> : wheel.collecting ? <Pause size={17} /> : <Plus size={17} />}
               {wheel.collecting ? '모집 마감' : '모집 시작'}
             </Button>
-            <Button className={styles.spinButton} disabled={locked || spinning || !wheel.totalSlots} onClick={() => act('spin')}>
+            <Button className={styles.spinButton} disabled={!writable || (locked || spinning || !wheel.totalSlots)} onClick={() => act('spin')}>
               {spinning || pending === 'spin' ? <Loader2 size={19} className={styles.loadingIcon} /> : <Play size={19} fill="currentColor" />}
               {spinning ? `추첨 중 · ${remaining}초` : pending === 'spin' ? '시작 중' : '돌리기'}
             </Button>
@@ -402,7 +408,7 @@ export function ParticipationWheelPage() {
             </form>
             <div className={styles.entryToolbar}>
               <label className={styles.search}><Search size={16} aria-hidden="true" /><input aria-label="항목 또는 참여자 검색" placeholder="항목 또는 참여자 검색" value={search} onChange={(event) => setSearch(event.target.value)} /></label>
-              <IconButton label="돌림판 초기화" disabled={locked || spinning} onClick={(event) => confirm({ kind: 'clear' }, event.currentTarget)}><RotateCcw size={17} /></IconButton>
+              <IconButton label="돌림판 초기화" disabled={!writable || (locked || spinning)} onClick={(event) => confirm({ kind: 'clear' }, event.currentTarget)}><RotateCcw size={17} /></IconButton>
             </div>
             <div className={styles.listHeader}><span>{search ? `${visibleEntries.length}개 검색 결과` : `${spinning ? '추첨 중' : '등록 항목'} ${displayEntries.length}개`}</span><span>칸 수 / 당첨 확률</span></div>
             <ul className={styles.entries} aria-label="참여 항목">
@@ -410,7 +416,7 @@ export function ParticipationWheelPage() {
                 <span className={styles.entryColor} style={{ backgroundColor: colors[Math.abs(entry.colorIndex) % colors.length] }} />
                 <div className={styles.entryName}><strong>{entry.label}</strong><span>{entry.username || '관리자'}<span className={styles.source} data-source={entry.source}>{sourceLabels[entry.source]}</span></span></div>
                 <div className={styles.entryNumbers}><strong>{number(entry.slots)}<small>칸</small></strong><span>{spinning && !spinEntryIds.has(entry.id) ? '다음 추첨' : `${((entry.slots / (spinning ? wheel.latestSpin!.totalSlots : wheel.totalSlots) || 0) * 100).toLocaleString('ko-KR', { maximumFractionDigits: 2 })}%`}</span></div>
-                <IconButton label={`${entry.label} 삭제`} disabled={locked || spinning} onClick={(event) => confirm({ kind: 'remove', entry }, event.currentTarget)}><Trash2 size={15} /></IconButton>
+                <IconButton label={`${entry.label} 삭제`} disabled={!writable || (locked || spinning)} onClick={(event) => confirm({ kind: 'remove', entry }, event.currentTarget)}><Trash2 size={15} /></IconButton>
               </li>)}
             </ul>
             {!visibleEntries.length ? <div className={styles.empty}><UsersRound size={28} /><strong>{search ? '일치하는 항목이 없습니다' : '등록된 항목이 없습니다'}</strong>{search ? <button type="button" onClick={() => setSearch('')}>검색 지우기</button> : null}</div> : null}
@@ -426,7 +432,7 @@ export function ParticipationWheelPage() {
                   setBaseSettings(structuredClone(wheel.settings));
                 }}>내 변경 유지</Button>
               </div></div> : null}
-              <fieldset disabled={Boolean(pending || retryIntent)} className={styles.settingsFields}>
+              <fieldset disabled={!writable || Boolean(pending || retryIntent)} className={styles.settingsFields}>
                 <label className={styles.field}>돌림판 제목<Input required maxLength={60} value={draft.title} onChange={(event) => changeDraft({ ...draft, title: event.target.value })} /></label>
                 <section className={styles.sourceSettings}>
                   <SourceToggle id="wheel-chat-enabled" checked={draft.chat.enabled} onChange={(enabled) => changeDraft({ ...draft, chat: { ...draft.chat, enabled } })}><MessageSquare size={17} />무료 채팅 참여</SourceToggle>
@@ -499,17 +505,17 @@ export function ParticipationWheelPage() {
             else addInputRef.current?.focus();
           }}>
             <div className={styles.dialogHeading}><Dialog.Title>{confirmation?.kind === 'clear' ? '돌림판을 초기화할까요?' : '이 항목을 삭제할까요?'}</Dialog.Title>
-              <IconButton label="닫기" onClick={() => setConfirmation(null)} disabled={Boolean(pending || retryIntent)}><X size={18} /></IconButton>
+              <IconButton label="닫기" onClick={() => setConfirmation(null)} disabled={!writable || (Boolean(pending || retryIntent))}><X size={18} /></IconButton>
             </div>
             <Dialog.Description className={styles.dialogDescription}>
               {confirmation?.kind === 'clear' ? '모든 항목을 지우고 새 라운드를 시작합니다. 무료 참여 누적 한도도 초기화되며, 최근 추첨 기록 50개는 유지됩니다.' : `“${confirmation?.entry.label || ''}”의 남은 칸을 삭제합니다. 진행 중인 추첨의 항목에는 영향을 주지 않습니다.`}
             </Dialog.Description>
             <p className={styles.refundWarning}><Coins size={18} /><span>남아 있는 미사용 유료 포인트만 환불됩니다. 후원금은 환불되지 않습니다.</span></p>
-            {actionProblem ? <div role="alert" className={styles.dialogError}><p>{actionProblem.message}</p>{retryIntent ? <Button size="sm" variant="outline" disabled={Boolean(pending) || offline} onClick={() => void perform(retryIntent)}><RefreshCw size={14} />같은 요청 다시 확인</Button> : null}</div> : null}
+            {actionProblem ? <div role="alert" className={styles.dialogError}><p>{actionProblem.message}</p>{retryIntent ? <Button size="sm" variant="outline" disabled={!writable || (Boolean(pending) || offline)} onClick={() => void perform(retryIntent)}><RefreshCw size={14} />같은 요청 다시 확인</Button> : null}</div> : null}
             {spinning ? <p className={styles.dialogError}>진행 중인 추첨이 끝난 뒤 {confirmation?.kind === 'clear' ? '초기화' : '삭제'}할 수 있습니다.</p> : null}
             <div className={styles.dialogActions}>
-              <Button type="button" variant="outline" autoFocus disabled={Boolean(pending || retryIntent)} onClick={() => setConfirmation(null)}>취소</Button>
-              <Button type="button" variant="destructive" disabled={locked || spinning} onClick={() => {
+              <Button type="button" variant="outline" autoFocus disabled={!writable || (Boolean(pending || retryIntent))} onClick={() => setConfirmation(null)}>취소</Button>
+              <Button type="button" variant="destructive" disabled={!writable || (locked || spinning)} onClick={() => {
                 if (confirmation?.kind === 'clear') act('clear');
                 else if (confirmation) act('remove', { entryId: confirmation.entry.id });
               }}>{pending ? <Loader2 size={16} className={styles.loadingIcon} /> : <Trash2 size={16} />}{confirmation?.kind === 'clear' ? '초기화' : '항목 삭제'}</Button>

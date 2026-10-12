@@ -1,5 +1,7 @@
 'use client';
 
+import { useBotChannel } from '@/components/app-shell/bot-channel-provider';
+
 import { Edit3, Gift, Loader2, Plus, RefreshCw, Search, Settings2, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState, useTransition } from 'react';
 import { toast } from 'sonner';
@@ -71,6 +73,8 @@ function amountRange(rule: DonationRule) {
 }
 
 export function DonationRulesPage() {
+  const { canWrite } = useBotChannel();
+  const writable = canWrite('donations');
   const [rules, setRules] = useState<DonationRule[]>([]);
   const [query, setQuery] = useState('');
   const [editingRule, setEditingRule] = useState<DonationRule | null>(null);
@@ -105,6 +109,7 @@ export function DonationRulesPage() {
   }, [query, rules]);
 
   const openEdit = (rule: DonationRule) => {
+    if (!writable) return;
     setEditingRule(rule);
     setForm(toForm(rule));
   };
@@ -115,6 +120,7 @@ export function DonationRulesPage() {
   };
 
   const saveEdit = async () => {
+    if (!writable) return;
     if (!editingRule || !form) return;
     if (!form.response.trim()) return toast.warning('후원 반응 문구를 입력해 주세요.');
     const amountConditions = serializeDonationAmountConditions(form.amountConditions);
@@ -145,6 +151,7 @@ export function DonationRulesPage() {
   };
 
   const removeRule = async (rule: DonationRule) => {
+    if (!writable) return;
     if (!window.confirm(`"${rule.name || rule.id}" 후원 반응을 삭제할까요?`)) return;
     setBusyId(rule.id);
     try {
@@ -236,11 +243,11 @@ export function DonationRulesPage() {
               </div>
               <p className="min-w-0 whitespace-pre-wrap break-keep text-sm leading-6 text-muted-foreground">{rule.response || '반응 문구가 없습니다.'}</p>
               <div className="flex flex-wrap justify-end gap-2">
-                <Button type="button" variant="outline" size="sm" onClick={() => openEdit(rule)}>
+                <Button disabled={!writable} type="button" variant="outline" size="sm" onClick={() => openEdit(rule)}>
                   <Edit3 className="h-4 w-4" />
                   수정
                 </Button>
-                <Button type="button" variant="destructive" size="sm" onClick={() => removeRule(rule)} disabled={busyId === rule.id}>
+                <Button type="button" variant="destructive" size="sm" onClick={() => removeRule(rule)} disabled={!writable || (busyId === rule.id)}>
                   {busyId === rule.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
                   삭제
                 </Button>
@@ -268,17 +275,17 @@ export function DonationRulesPage() {
             <div className="grid gap-4 md:grid-cols-2">
               <label className="grid gap-2 text-sm font-semibold">
                 반응 이름
-                <Input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
+                <Input disabled={!writable} value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
               </label>
               <label className="grid gap-2 text-sm font-semibold">
                 메시지 포함 조건
-                <Input value={form.message} onChange={(event) => setForm({ ...form, message: event.target.value })} placeholder="특정 문구가 없으면 금액만 볼게요." />
+                <Input disabled={!writable} value={form.message} onChange={(event) => setForm({ ...form, message: event.target.value })} placeholder="특정 문구가 없으면 금액만 볼게요." />
               </label>
             </div>
             <div className="grid gap-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="text-sm font-semibold">트리거 금액 조건</div>
-                <Button type="button" variant="outline" size="sm" onClick={addAmountCondition}>
+                <Button disabled={!writable} type="button" variant="outline" size="sm" onClick={addAmountCondition}>
                   <Plus className="h-4 w-4" />
                   조건 추가
                 </Button>
@@ -286,7 +293,7 @@ export function DonationRulesPage() {
               <div className="grid gap-2">
                 {form.amountConditions.map((condition) => (
                   <div key={condition.id} className="grid gap-2 rounded-[var(--radius-control)] border bg-background/55 p-3 md:grid-cols-[minmax(8rem,0.36fr)_minmax(0,1fr)_minmax(0,1fr)_var(--control-height)] md:items-center">
-                    <select
+                    <select disabled={!writable}
                       value={condition.operator}
                       onChange={(event) => updateAmountCondition(condition.id, { operator: event.target.value as DonationAmountOperator })}
                       className="min-h-[var(--control-height)] rounded-[var(--radius-control)] border bg-background px-3 text-sm"
@@ -295,14 +302,14 @@ export function DonationRulesPage() {
                         <option key={option.value} value={option.value}>{option.label}</option>
                       ))}
                     </select>
-                    <Input
+                    <Input disabled={!writable}
                       value={condition.amount}
                       onChange={(event) => updateAmountCondition(condition.id, { amount: event.target.value })}
                       inputMode="numeric"
                       placeholder={condition.operator === 'range' ? '시작 금액' : '금액'}
                     />
                     {condition.operator === 'range' ? (
-                      <Input
+                      <Input disabled={!writable}
                         value={condition.amountTo}
                         onChange={(event) => updateAmountCondition(condition.id, { amountTo: event.target.value })}
                         inputMode="numeric"
@@ -311,19 +318,19 @@ export function DonationRulesPage() {
                     ) : (
                       <div className="hidden md:block" />
                     )}
-                    <Button type="button" variant="ghost" size="icon" aria-label="금액 조건 삭제" onClick={() => removeAmountCondition(condition.id)}>
+                    <Button disabled={!writable} type="button" variant="ghost" size="icon" aria-label="금액 조건 삭제" onClick={() => removeAmountCondition(condition.id)}>
                       <Trash2 className="h-4 w-4" />
                     </Button>
                   </div>
                 ))}
               </div>
-              <Button type="button" variant={form.enabled ? 'soft' : 'outline'} onClick={() => setForm({ ...form, enabled: !form.enabled })}>
+              <Button disabled={!writable} type="button" variant={form.enabled ? 'soft' : 'outline'} onClick={() => setForm({ ...form, enabled: !form.enabled })}>
                 {form.enabled ? '사용 중' : '꺼짐'}
               </Button>
             </div>
             <label className="grid gap-2 text-sm font-semibold">
               반응 문구
-              <textarea
+              <textarea disabled={!writable}
                 value={form.response}
                 onChange={(event) => setForm({ ...form, response: event.target.value })}
                 className="box-border min-h-[clamp(7rem,18svh,11rem)] w-full min-w-0 max-w-full resize-y rounded-[var(--radius-control)] border bg-background/80 px-[clamp(0.85rem,1.6vw,1.1rem)] py-[clamp(0.85rem,1.6vw,1.1rem)] text-sm leading-7 outline-none focus:border-primary/45 focus:ring-2 focus:ring-ring"
@@ -331,7 +338,7 @@ export function DonationRulesPage() {
             </label>
             <div className="flex flex-wrap justify-end gap-2">
               <Button type="button" variant="ghost" onClick={closeEdit}>취소</Button>
-              <Button type="button" onClick={saveEdit} disabled={busyId === editingRule.id}>
+              <Button type="button" onClick={saveEdit} disabled={!writable || (busyId === editingRule.id)}>
                 {busyId === editingRule.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Settings2 className="h-4 w-4" />}
                 저장
               </Button>

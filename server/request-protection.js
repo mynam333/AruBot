@@ -9,6 +9,8 @@ const DEFAULT_LIMITS = Object.freeze({
   httpPerSecondGlobal: 1000,
   httpConcurrent: 96,
   httpConcurrentPerIp: 24,
+  streamConcurrent: 512,
+  streamConcurrentPerIp: 12,
   bodyBytesPerTenSecondsGlobal: 128 * 1024 * 1024,
   bodyBytesPerMinutePerIp: 64 * 1024 * 1024,
   upgradesPerMinute: 120,
@@ -76,6 +78,10 @@ export function createRequestProtection({ trustProxy = proxyaddr.compile('loopba
   const config = { ...DEFAULT_LIMITS, ...limits };
   const rates = createBoundedRateStore({ maxEntries: config.buckets, now });
   const requests = new Map();
+  const requestReleases = new WeakMap();
+  const promotedStreams = new WeakSet();
+  const streams = new Map();
+  let activeStreams = 0;
   const sockets = new Map();
   let activeRequests = 0;
   let activeSockets = 0;
@@ -115,15 +121,41 @@ export function createRequestProtection({ trustProxy = proxyaddr.compile('loopba
     const release = () => {
       if (released) return;
       released = true;
+      requestReleases.delete(res);
       activeRequests -= weight;
       const remaining = (requests.get(key) || weight) - weight;
       if (remaining > 0) requests.set(key, remaining);
       else requests.delete(key);
     };
+    requestReleases.set(res, release);
     res.once('finish', release);
     res.once('close', release);
     res.setTimeout?.(60000, () => res.destroy());
     return next();
+  };
+
+  // Call only after the stream's capability token has been authenticated.
+  // Long-lived overlays must not occupy the short-request API budget.
+  const promoteStream = (req, res) => {
+    if (promotedStreams.has(res)) return true;
+    const releaseRequest = requestReleases.get(res);
+    if (!releaseRequest || res.destroyed || res.writableEnded) return false;
+    const key = clientKey(req);
+    const count = streams.get(key) || 0;
+    if (activeStreams >= config.streamConcurrent) { rejectHttp(res, 503, 'stream_capacity_exceeded'); return false; }
+    if (count >= config.streamConcurrentPerIp) { rejectHttp(res, 429, 'too_many_streams'); return false; }
+    promotedStreams.add(res);
+    activeStreams++; streams.set(key, count + 1);
+    releaseRequest();
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true; activeStreams--;
+      const remaining = (streams.get(key) || 1) - 1;
+      if (remaining) streams.set(key, remaining); else streams.delete(key);
+    };
+    res.once('finish', release); res.once('close', release);
+    return true;
   };
 
   const upgrade = (req, socket) => {
@@ -207,5 +239,5 @@ export function createRequestProtection({ trustProxy = proxyaddr.compile('loopba
     };
   };
 
-  return { http, rateLimiter, upgrade, protectSocket, clientKey };
+  return { http, rateLimiter, upgrade, protectSocket, clientKey, promoteStream };
 }

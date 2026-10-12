@@ -10,17 +10,31 @@ import {
   ListChecks,
   LifeBuoy,
   MessageSquare,
+  NotebookTabs,
   Orbit,
   Settings,
   ShieldCheck,
   Sparkles,
+  Smile,
   Timer,
   UserRound,
+  UsersRound,
   Vote,
   Workflow,
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+import type { BotManagementModule } from '@/shared/lib/bot-management-context';
 
-export const adminNav = [
+export type AdminNavItem = {
+  href: string;
+  label: string;
+  icon: LucideIcon;
+  group: string;
+  adminOnly?: boolean;
+  membersOnly?: boolean;
+};
+
+export const adminNav: AdminNavItem[] = [
   { href: '/dashboard', label: '홈', icon: Home, group: 'overview' },
   { href: '/connection', label: '플랫폼 연결', icon: Cable, group: 'overview' },
   { href: '/commands', label: '채팅 명령어', icon: MessageSquare, group: 'participation' },
@@ -30,14 +44,33 @@ export const adminNav = [
   { href: '/roulette', label: '룰렛', icon: Sparkles, group: 'production' },
   { href: '/wheels', label: '돌림판', icon: CircleDot, group: 'production' },
   { href: '/video-donations/queue', label: '영상 후원', icon: Clapperboard, group: 'production' },
+  { href: '/songbook', label: '노래책', icon: NotebookTabs, group: 'participation' },
   { href: '/drawing-donations', label: '그림 후원', icon: ImagePlus, group: 'production' },
+  { href: '/emote-overlay', label: '이모티콘 오버레이', icon: Smile, group: 'production' },
   { href: '/donations/rules', label: '후원 반응', icon: Gift, group: 'production' },
   { href: '/automations', label: '방송 자동화', icon: Orbit, group: 'automation' },
   { href: '/actions', label: '실행 액션', icon: Workflow, group: 'automation' },
   { href: '/logs', label: '이벤트 로그', icon: ListChecks, group: 'system' },
+  { href: '/settings', label: '기본 설정', icon: Settings, group: 'system' },
+  { href: '/bot-managers', label: '봇 관리자', icon: UsersRound, membersOnly: true, group: 'system' },
   { href: '/viewer/me', label: '시청자 페이지', icon: UserRound, group: 'system' },
   { href: '/arubot-admin', label: 'AruBot 관리자', icon: ShieldCheck, adminOnly: true, group: 'system' },
 ];
+
+const botPageModules: Record<string, BotManagementModule> = {
+  dashboard: 'dashboard', streamer: 'dashboard', connection: 'connection',
+  diagnostics: 'connection', commands: 'commands', variables: 'commands',
+  macros: 'macros', points: 'points', predictions: 'predictions', roulette: 'roulette',
+  wheels: 'wheel', 'video-donations': 'video', 'drawing-donations': 'drawing',
+  donations: 'donations', automations: 'automations', actions: 'actions',
+  logs: 'logs', settings: 'settings', songbook: 'songbook', 'emote-overlay': 'emotes',
+};
+
+// Explicit route ownership: new pages stay closed until assigned a permission.
+export function getBotPageModule(pathname: string): BotManagementModule | null {
+  const segment = pathname.split('/')[1];
+  return Object.prototype.hasOwnProperty.call(botPageModules, segment) ? botPageModules[segment] : null;
+}
 
 export const adminNavGroups = [
   { id: 'overview', label: '개요' },

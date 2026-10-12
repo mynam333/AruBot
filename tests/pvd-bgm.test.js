@@ -137,7 +137,7 @@ test('video requests keep their own rate and idempotency key', async () => {
 test('backend settings reject simultaneous BGM and video idle music', async () => {
   const save = jest.fn();
   const route = loadServerFunctions.route('/api/video-donation/settings', {
-    getPartitionId: async () => 'sid', getBotSettings: async () => ({}), setBotSettings: save,
+    getPartitionId: async () => 'sid', updateBotSettingsAtomically: async (_sid, updater) => save(await updater({})),
     normalizePvdVolume: Number, normalizePvdProviders: () => ({}), normalizePvdIdlePlaylist: (value) => value || {},
   }, 'post');
   const res = { status(code) { this.code = code; return this; }, json(body) { this.body = body; return this; } };

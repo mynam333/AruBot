@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { ChevronRight, Coins, ImagePlus, ListChecks, Radio, Sparkles } from 'lucide-react';
+import { ChevronRight, Coins, ImagePlus, ListChecks, ListMusic, NotebookTabs, Radio, Sparkles } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { LegalFooter } from '@/components/app-shell/legal-footer';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -11,6 +11,8 @@ import { decodeChannelRouteParam } from '@/shared/lib/channel-route-param';
 import { readPublicChannelData, readPublicChannelHub, readPublicChannelProfile, type PublicChannelKind } from '@/shared/api/public';
 import { PublicPointEarningSummary, type PublicPointEarningPolicy } from './public-point-earning-summary';
 import { PublicRealtimeDataView } from './public-realtime-data-view';
+import { PublicRequestQueue } from './public-request-queue';
+import { PublicSongbook } from './public-songbook';
 
 const meta = {
   commands: { title: '명령어', description: '채팅에 바로 입력해 참여할 수 있는 말들을 모았어요.', icon: ListChecks, tone: 'sky' },
@@ -18,12 +20,16 @@ const meta = {
   roulette: { title: '룰렛', description: '지금 참여할 수 있는 룰렛과 당첨 항목을 살펴봐요.', icon: Sparkles, tone: 'lemon' },
   rouletteLogs: { title: '룰렛 결과', description: '방금 나온 당첨 순간을 다시 확인해요.', icon: Sparkles, tone: 'coral' },
   live: { title: '라이브', description: '지금 방송 중인지 바로 확인해요.', icon: Radio, tone: 'coral' },
+  requests: { title: '신청곡', description: '영상 후원 · BGM 재생 현황', icon: ListMusic, tone: 'mint' },
+  songbook: { title: '노래책', description: '스트리머가 부르는 노래', icon: NotebookTabs, tone: 'sky' },
 } as const;
 
 const tabs = [
   { href: 'commands', label: '명령어', icon: ListChecks },
   { href: 'points', label: '포인트', icon: Coins },
   { href: 'roulette', label: '룰렛', icon: Sparkles },
+  { href: 'requests', label: '신청곡', icon: ListMusic },
+  { href: 'songbook', label: '노래책', icon: NotebookTabs },
   { href: 'live', label: '라이브', icon: Radio },
 ] as const;
 
@@ -159,7 +165,7 @@ function PublicShell({
               </Link>
               <h1 className="break-words text-2xl font-bold leading-tight tracking-normal [overflow-wrap:anywhere] md:text-3xl">{channelName}</h1>
               <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                명령어, 포인트, 룰렛, 라이브 정보를 모바일에서도 빠르게 열어볼 수 있어요.
+                명령어 · 포인트 · 룰렛 · 신청곡 · 노래책 · 라이브
               </p>
             </div>
             <div className="grid gap-3 sm:justify-items-end">
@@ -217,7 +223,12 @@ export async function PublicChannelPage({ channelUid: routeChannelUid, kind }: {
 
   return (
     <PublicShell channelUid={channelUid} channelName={channelLabel(channelUid, profile, data)} active={kind} sharePath={pagePath}>
-      <Card>
+      {kind === 'requests' || kind === 'songbook' ? (
+        <section className="flex flex-wrap items-center justify-between gap-3 border-b pb-4">
+          <div><h2 className="flex items-center gap-2 text-xl font-semibold"><Icon className="h-5 w-5 text-primary" />{config.title}</h2><p className="mt-1 text-sm text-muted-foreground">{config.description}</p></div>
+          <Link href={`/c/${encodedChannelUid}`} prefetch={false} className="inline-flex items-center gap-1 text-sm font-semibold text-primary">채널 홈<ChevronRight className="h-4 w-4" /></Link>
+        </section>
+      ) : <Card>
         <CardHeader>
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
@@ -234,8 +245,12 @@ export async function PublicChannelPage({ channelUid: routeChannelUid, kind }: {
             </Link>
           </div>
         </CardHeader>
-      </Card>
-      {data == null ? (
+      </Card>}
+      {kind === 'requests' ? (
+        <PublicRequestQueue key={channelUid} channelUid={channelUid} initialData={data} />
+      ) : kind === 'songbook' ? (
+        <PublicSongbook key={channelUid} channelUid={channelUid} initialData={data} />
+      ) : data == null ? (
         <ErrorState description="채널 정보를 불러오지 못했습니다. 잠시 후 다시 열어 주세요." />
       ) : kind === 'commands' ? (
         <PublicCommands data={data} />
@@ -258,6 +273,8 @@ export async function PublicChannelHub({ channelUid: routeChannelUid }: { channe
     { href: 'commands', title: '명령어', body: '채팅에 입력할 수 있는 말을 바로 찾아요.', count: pickRows(data.commands).length, icon: ListChecks, tone: 'sky', direct: false },
     { href: 'points', title: '포인트', body: '내 참여가 얼마나 쌓였는지 살펴봐요.', count: publicItemCount(data.points), icon: Coins, tone: 'mint', direct: false },
     { href: 'roulette', title: '룰렛', body: '참여 가능한 룰렛과 당첨 항목을 봐요.', count: pickRows(data.roulette).length, icon: Sparkles, tone: 'lemon', direct: false },
+    { href: 'requests', title: '신청곡', body: '현재 곡과 영상 후원 · BGM 대기열', count: 0, icon: ListMusic, tone: 'mint', direct: false },
+    { href: 'songbook', title: '노래책', body: '스트리머가 부르는 노래와 노래 신청', count: 0, icon: NotebookTabs, tone: 'sky', direct: false },
     { href: 'live', title: '라이브', body: isLive(data.live) ? '지금 방송 중이에요.' : '방송 정보가 준비되면 표시돼요.', count: isLive(data.live) ? 1 : 0, icon: Radio, tone: 'coral', direct: false },
   ] as const;
 
@@ -274,7 +291,7 @@ export async function PublicChannelHub({ channelUid: routeChannelUid }: { channe
                 <span className="grid aspect-square w-[var(--icon-box)] place-items-center rounded-[var(--radius-control)] bg-muted text-primary">
                   <Icon className="h-5 w-5" />
                 </span>
-                <Badge tone={card.tone}>{card.direct ? '로그인 필요' : card.count ? `${card.count}개` : '준비 중'}</Badge>
+                <Badge tone={card.tone}>{card.direct ? '로그인 필요' : card.href === 'requests' ? '재생 현황' : card.href === 'songbook' ? '곡 목록' : card.count ? `${card.count}개` : '준비 중'}</Badge>
               </div>
               <h2 className="mt-4 text-lg font-semibold">{card.title}</h2>
               <p className="mt-2 text-sm leading-6 text-muted-foreground">{card.body}</p>

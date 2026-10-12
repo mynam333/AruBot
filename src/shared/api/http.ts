@@ -1,3 +1,20 @@
+import { getBotManagementOwner } from '@/shared/lib/bot-management-context';
+
+function scopedManagementUrl(url: string, websocket = false) {
+  if (typeof window === 'undefined') return url;
+  if (!/^\/(?:dashboard|streamer|connection|commands|macros|points|predictions|roulette|wheels|video-donations|drawing-donations|donations|automations|actions|logs|settings|variables|diagnostics|bot-managers|songbook|emote-overlay)(?:\/|$)/.test(window.location.pathname)) return url;
+  const owner = getBotManagementOwner();
+  if (!owner) return url;
+  const parsed = new URL(url, window.location.origin);
+  if (websocket && !/^\/api\/(?:video-donation|drawing-donation)\/admin\/ws$/.test(parsed.pathname)) return url;
+  if (!parsed.pathname.startsWith('/api/')
+    || /^\/api\/(?:auth|arubot-admin|public|viewer)(?:\/|$)/.test(parsed.pathname)
+    || /^\/api\/youtube\/bot(?:\/|$)/.test(parsed.pathname)
+    || ['/api/health', '/api/readiness', '/api/version'].includes(parsed.pathname)) return url;
+  if (!parsed.searchParams.has('botOwner')) parsed.searchParams.set('botOwner', owner);
+  return /^https?:\/\//.test(url) ? parsed.toString() : `${parsed.pathname}${parsed.search}${parsed.hash}`;
+}
+
 export function getServerApiBase() {
   const serverOnlyBase = typeof window === 'undefined' ? process.env.API_BASE : '';
   return (serverOnlyBase || process.env.NEXT_PUBLIC_API_BASE || '').replace(/\/$/, '');
@@ -16,16 +33,16 @@ export function getBrowserApiBase() {
 
 export function apiUrl(path: string, base = getBrowserApiBase()) {
   if (path.startsWith('http')) return path;
-  return `${base}${path.startsWith('/') ? '' : '/'}${path}`;
+  return scopedManagementUrl(`${base}${path.startsWith('/') ? '' : '/'}${path}`);
 }
 
 export function apiWsUrl(path: string, base = getBrowserApiBase()) {
-  const url = apiUrl(path, base);
+  const url = scopedManagementUrl(path.startsWith('http') ? path : `${base}${path.startsWith('/') ? '' : '/'}${path}`, true);
   if (url.startsWith('https://')) return `wss://${url.slice('https://'.length)}`;
   if (url.startsWith('http://')) return `ws://${url.slice('http://'.length)}`;
   if (typeof window !== 'undefined') {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    return `${protocol}//${window.location.host}${path.startsWith('/') ? '' : '/'}${path}`;
+    return `${protocol}//${window.location.host}${url.startsWith('/') ? '' : '/'}${url}`;
   }
   return url;
 }

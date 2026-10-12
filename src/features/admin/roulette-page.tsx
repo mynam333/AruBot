@@ -1,5 +1,7 @@
 'use client';
 
+import { useBotChannel } from '@/components/app-shell/bot-channel-provider';
+
 import * as Dialog from '@radix-ui/react-dialog';
 import { Check, ChevronRight, Loader2, PencilLine, Play, RefreshCw, Sparkles, Trash2, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
@@ -190,6 +192,8 @@ function RouletteEditDialog({
   definition: RouletteDefinition;
   onSaved: () => void;
 }) {
+  const { canWrite } = useBotChannel();
+  const writable = canWrite('roulette');
   const [open, setOpen] = useState(false);
   const [name, setName] = useState(definition.name);
   const [layout, setLayout] = useState<RouletteLayout>(() => parseRouletteTheme(definition.theme).layout);
@@ -210,6 +214,7 @@ function RouletteEditDialog({
   }, [open, reset]);
 
   const save = () => {
+    if (!writable) return;
     const rouletteName = name.trim();
     const normalizedItems = normalizeEditableRouletteItems(items);
     if (!rouletteName) return toast.warning('룰렛 이름을 입력해 주세요.');
@@ -237,6 +242,7 @@ function RouletteEditDialog({
   };
 
   const deleteRoulette = () => {
+    if (!writable) return;
     const ok = window.confirm(`${definition.name} 룰렛을 삭제할까요? 삭제한 룰렛은 되돌릴 수 없습니다.`);
     if (!ok) return;
 
@@ -298,11 +304,11 @@ function RouletteEditDialog({
             <div className="grid gap-[clamp(1rem,2vw,1.35rem)] md:grid-cols-[minmax(0,1fr)_minmax(10rem,0.25fr)_minmax(10rem,0.28fr)]">
               <label className="grid gap-[clamp(0.5rem,1vw,0.75rem)] text-sm font-semibold">
                 룰렛 이름
-                <Input value={name} onChange={(event) => setName(event.target.value)} />
+                <Input disabled={!writable} value={name} onChange={(event) => setName(event.target.value)} />
               </label>
               <label className="grid gap-[clamp(0.5rem,1vw,0.75rem)] text-sm font-semibold">
                 표현 형태
-                <select value={layout} onChange={(event) => setLayout(event.target.value === 'wheel' ? 'wheel' : 'reel')} className="min-h-[var(--control-height)] rounded-[var(--radius-control)] border bg-background px-3 text-sm">
+                <select disabled={!writable} value={layout} onChange={(event) => setLayout(event.target.value === 'wheel' ? 'wheel' : 'reel')} className="min-h-[var(--control-height)] rounded-[var(--radius-control)] border bg-background px-3 text-sm">
                   {ROULETTE_LAYOUT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                 </select>
               </label>
@@ -310,7 +316,7 @@ function RouletteEditDialog({
                 스킨
                 <span className="flex min-w-0 items-center gap-2">
                   <RouletteThemeSwatch themeId={theme} />
-                  <select value={theme} onChange={(event) => setTheme((ROULETTE_SKIN_NAMES.includes(event.target.value as RouletteSkin) ? event.target.value : 'studio') as RouletteSkin)} className="min-h-[var(--control-height)] min-w-0 flex-1 rounded-[var(--radius-control)] border bg-background px-3 text-sm">
+                  <select disabled={!writable} value={theme} onChange={(event) => setTheme((ROULETTE_SKIN_NAMES.includes(event.target.value as RouletteSkin) ? event.target.value : 'studio') as RouletteSkin)} className="min-h-[var(--control-height)] min-w-0 flex-1 rounded-[var(--radius-control)] border bg-background px-3 text-sm">
                     {ROULETTE_SKIN_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                   </select>
                 </span>
@@ -327,12 +333,12 @@ function RouletteEditDialog({
 
             <div className="grid gap-[clamp(0.5rem,1vw,0.75rem)]">
               <div className="text-sm font-semibold">룰렛 항목</div>
-              <RouletteItemsEditor items={items} onChange={setItems} />
+              <fieldset disabled={!writable} className="contents"><RouletteItemsEditor items={items} onChange={setItems} /></fieldset>
             </div>
           </div>
 
           <div className="flex flex-col gap-[clamp(0.65rem,1.2vw,0.875rem)] border-t bg-background/64 p-[clamp(1rem,2.4vw,1.5rem)] sm:flex-row sm:items-center sm:justify-between">
-            <Button type="button" variant="destructive" disabled={isPending} onClick={deleteRoulette}>
+            <Button type="button" variant="destructive" disabled={!writable || (isPending)} onClick={deleteRoulette}>
               <Trash2 className="h-[1em] w-[1em]" />
               룰렛 삭제
             </Button>
@@ -342,7 +348,7 @@ function RouletteEditDialog({
                   취소
                 </Button>
               </Dialog.Close>
-              <Button type="button" disabled={isPending} onClick={save}>
+              <Button type="button" disabled={!writable || (isPending)} onClick={save}>
                 {isPending ? <Loader2 className="h-[1em] w-[1em] animate-spin" /> : <Check className="h-[1em] w-[1em]" />}
                 저장
               </Button>
@@ -575,6 +581,9 @@ function RouletteTestPopupController({
 }
 
 export function RoulettePage() {
+  const { active, canWrite } = useBotChannel();
+  const writable = canWrite('roulette');
+  const ownerControls = active?.role !== 'manager';
   const [definitions, setDefinitions] = useState<RouletteDefinition[]>([]);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [activeTest, setActiveTest] = useState<ActiveRouletteTest | null>(null);
@@ -614,9 +623,24 @@ export function RoulettePage() {
     if (page > totalPages) setPage(totalPages);
   }, [page, totalPages]);
 
-  const testRoulette = (definition: RouletteDefinition) => {
+  const testRoulette = async (definition: RouletteDefinition) => {
+    if (!writable) return;
     if (activeTest) return;
     const key = definition.id || definition.name;
+    if (!ownerControls) {
+      if (testingId) return;
+      setTestingId(key);
+      try {
+        const data = await postJson<RouletteTestResponse>('/api/roulette/test', { id: definition.id, name: definition.name });
+        const label = data.result?.result?.label;
+        if (!label) throw new Error('룰렛 테스트 결과를 확인하지 못했습니다.');
+        setTestResults((current) => ({ ...current, [key]: label }));
+        toast.success(`테스트 결과: ${label}`);
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : '룰렛 테스트를 실행하지 못했어요.');
+      } finally { setTestingId(null); }
+      return;
+    }
     const testConnectionId = createRouletteTestConnectionId();
     const popupWindow = openRouletteTestPopup(definition, testConnectionId);
     if (!popupWindow) {
@@ -733,7 +757,7 @@ export function RoulettePage() {
                   </div>
                 ) : null}
                 <div className="flex flex-wrap justify-end gap-2">
-                  <Button type="button" variant="soft" onClick={() => testRoulette(definition)} disabled={activeTest !== null}>
+                  <Button type="button" variant="soft" onClick={() => void testRoulette(definition)} disabled={!writable || testingId !== null || activeTest !== null}>
                     {testActive ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
                     {testingId === key ? '오버레이 회전 중' : testActive ? '오버레이 종료 중' : '테스트 실행'}
                   </Button>

@@ -59,7 +59,7 @@ export function normalizePublicShortLinkTarget(rawValue) {
     && validChannelUid
     && (
       segments.length === 2
-      || (segments.length === 3 && ['commands', 'points', 'roulette', 'live'].includes(segments[2]))
+      || (segments.length === 3 && ['commands', 'points', 'roulette', 'live', 'requests', 'songbook'].includes(segments[2]))
       || (segments.length === 4 && segments[2] === 'roulette' && segments[3] === 'logs')
     );
   const publicDrawingPath = segments.length === 3

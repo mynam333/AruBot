@@ -72,7 +72,9 @@ type RouletteHistoryPayload = {
   updatedAt?: string;
 };
 
-const refreshMsByKind: Record<PublicChannelKind, number> = {
+type RealtimeKind = Exclude<PublicChannelKind, 'requests' | 'songbook'>;
+
+const refreshMsByKind: Record<RealtimeKind, number> = {
   commands: 30000,
   points: 7000,
   roulette: 20000,
@@ -134,7 +136,7 @@ function pointName(row: PointRow) {
   return String(row.username || '익명 시청자');
 }
 
-function buildEndpoint(channelUid: string, kind: PublicChannelKind) {
+function buildEndpoint(channelUid: string, kind: RealtimeKind) {
   const uid = decodeChannelRouteParam(channelUid);
   if (!uid) throw new Error('Invalid channel UID');
   const encodedUid = encodeURIComponent(uid);
@@ -573,7 +575,7 @@ export function PublicRealtimeDataView({
   initialData,
 }: {
   channelUid: string;
-  kind: PublicChannelKind;
+  kind: RealtimeKind;
   initialData: unknown;
 }) {
   const [data, setData] = useState(initialData);

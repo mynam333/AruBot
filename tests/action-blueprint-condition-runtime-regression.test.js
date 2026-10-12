@@ -10,10 +10,12 @@ describe('action blueprint point condition runtime', () => {
     const root = path.join(__dirname, '..');
     const valuesUrl = pathToFileURL(path.join(root, 'server', 'action-blueprint-values.js')).href;
     const textSafetyUrl = pathToFileURL(path.join(root, 'shared', 'text-safety.js')).href;
+    const executionSafetyUrl = pathToFileURL(path.join(root, 'server', 'command-execution-safety.js')).href;
     const script = `
       import fs from 'node:fs';
       const values = await import(${JSON.stringify(valuesUrl)});
       const { inspectTextPayload } = await import(${JSON.stringify(textSafetyUrl)});
+      const { createCommandExecutionSafety, isCommandSafetyError } = await import(${JSON.stringify(executionSafetyUrl)});
 
       const source = fs.readFileSync('./server/index.js', 'utf8');
       const runtimeStart = source.indexOf('async function executeActionBlueprint');
@@ -52,6 +54,8 @@ describe('action blueprint point condition runtime', () => {
       let recordedSteps = [];
       const dependencies = {
         inspectTextPayload,
+        commandExecution: createCommandExecutionSafety(),
+        isCommandSafetyError,
         getRuntimeActionBlueprint: async () => blueprint,
         normalizeBlueprintEdges: (edges) => Array.isArray(edges) ? edges : [],
         blueprintOutputPorts: (node) => node.type === 'end' ? [] : (

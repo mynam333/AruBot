@@ -1,5 +1,7 @@
 'use client';
 
+import { useBotChannel } from '@/components/app-shell/bot-channel-provider';
+
 import * as Dialog from '@radix-ui/react-dialog';
 import * as Switch from '@radix-ui/react-switch';
 import {
@@ -86,6 +88,8 @@ type RouletteSkin = (typeof ROULETTE_SKIN_OPTIONS)[number]['value'];
 const ROULETTE_SKIN_NAMES = ROULETTE_SKIN_OPTIONS.map((option) => option.value);
 
 type ActionDialogFrameProps = ActionDialogButtonProps & {
+  module: 'commands' | 'roulette' | 'video' | 'donations';
+  readOnlyView?: boolean;
   icon: React.ReactNode;
   badge: string;
   title: string;
@@ -136,6 +140,8 @@ function normalizeCommand(value: string) {
 }
 
 function ActionDialogFrame({
+  module,
+  readOnlyView = false,
   icon,
   badge,
   title,
@@ -152,6 +158,8 @@ function ActionDialogFrame({
   className,
   trailingChevron = false,
 }: ActionDialogFrameProps) {
+  const { canWrite } = useBotChannel();
+  const writable = canWrite(module);
   const [open, setOpen] = useState(false);
 
   return (
@@ -163,6 +171,7 @@ function ActionDialogFrame({
       }}
     >
       <Dialog.Trigger
+        disabled={!writable && !readOnlyView}
         type="button"
         className={cn(
           'inline-flex min-h-[var(--control-height)] max-w-full min-w-0 items-center justify-center gap-2 whitespace-nowrap rounded-[var(--radius-control)] px-[clamp(0.875rem,1.6vw,1.125rem)] text-sm font-semibold tracking-normal transition duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50',
@@ -212,7 +221,7 @@ function ActionDialogFrame({
           </div>
 
           <div className="arubot-modal-scroll grid min-h-0 gap-[clamp(1rem,2vw,1.35rem)] overflow-y-auto p-[clamp(1.25rem,3vw,2rem)]">
-            {children}
+            <fieldset disabled={!writable} className="contents">{children}</fieldset>
           </div>
 
           <div className="flex flex-col-reverse gap-[clamp(0.65rem,1.2vw,0.875rem)] border-t bg-background/64 p-[clamp(1rem,2.4vw,1.5rem)] sm:flex-row sm:items-center sm:justify-end">
@@ -221,7 +230,7 @@ function ActionDialogFrame({
                 취소
               </Button>
             </Dialog.Close>
-            <Button type="button" disabled={pending} onClick={() => onSubmit(() => setOpen(false))}>
+            <Button type="button" disabled={!writable || pending} onClick={() => { if (writable) onSubmit(() => setOpen(false)); }}>
               {pending ? <Loader2 className="h-[1em] w-[1em] animate-spin" /> : <Check className="h-[1em] w-[1em]" />}
               {submitLabel}
             </Button>
@@ -306,6 +315,7 @@ export function CommandCreateDialog({ variant = 'secondary', label = '명령어 
 
   return (
     <ActionDialogFrame
+      module="commands"
       icon={<MessageSquare className="h-[1em] w-[1em]" />}
       badge="채팅 명령어"
       title="방송에서 바로 쓰는 명령어를 만들어요."
@@ -422,6 +432,7 @@ export function RouletteCreateDialog({ variant = 'secondary', label = '룰렛 �
 
   return (
     <ActionDialogFrame
+      module="roulette"
       icon={<Sparkles className="h-[1em] w-[1em]" />}
       badge="룰렛"
       title="시청자가 바로 돌릴 수 있는 룰렛을 만들어요."
@@ -536,6 +547,8 @@ export function VideoDonationSettingsDialog({ variant = 'secondary', label = '�
 
   return (
     <ActionDialogFrame
+      module="video"
+      readOnlyView
       icon={<Clapperboard className="h-[1em] w-[1em]" />}
       badge="영상 후원"
       title="영상 후원 · BGM 설정"
@@ -648,6 +661,8 @@ export function DonationSettingsDialog({ variant = 'secondary', label = '후원 
 
   return (
     <ActionDialogFrame
+      module="donations"
+      readOnlyView
       icon={<Settings className="h-[1em] w-[1em]" />}
       badge="후원 설정"
       title="후원 포인트 적립 기준을 정해요."
@@ -730,6 +745,7 @@ export function DonationRuleCreateDialog({ variant = 'secondary', label = '반�
 
   return (
     <ActionDialogFrame
+      module="donations"
       icon={<Gift className="h-[1em] w-[1em]" />}
       badge="후원 반응"
       title="후원 조건에 맞는 반응을 만들어요."

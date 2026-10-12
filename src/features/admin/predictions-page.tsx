@@ -1,5 +1,7 @@
 'use client';
 
+import { useBotChannel } from '@/components/app-shell/bot-channel-provider';
+
 import { ArrowDownLeft, ArrowDownRight, ArrowUpLeft, ArrowUpRight, CheckCircle2, Copy, Lock, RotateCcw, Send, Trophy, XCircle } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { Badge } from '@/components/ui/badge';
@@ -148,6 +150,8 @@ function OptionMeter({ option, index, selected }: { option: PredictionOption; in
 }
 
 export function PredictionsPage() {
+  const { canWrite } = useBotChannel();
+  const writable = canWrite('predictions');
   const [predictions, setPredictions] = useState<Prediction[]>([]);
   const [active, setActive] = useState<Prediction | null>(null);
   const [channelUid, setChannelUid] = useState('');
@@ -251,6 +255,7 @@ export function PredictionsPage() {
   }, [channelUid]);
 
   const create = () => {
+    if (!writable) return;
     if (!question.trim()) {
       setNotice('질문을 입력해 주세요.');
       return;
@@ -280,6 +285,7 @@ export function PredictionsPage() {
   };
 
   const action = (path: string, body?: unknown, message = '반영했습니다.') => {
+    if (!writable) return;
     startTransition(async () => {
       const data = await postJson<PredictionResponse>(path, body);
       if (!data?.prediction) {
@@ -338,11 +344,11 @@ export function PredictionsPage() {
           <CardContent className="grid gap-[clamp(0.95rem,1.8vw,1.35rem)]">
             <label className="grid min-w-0 gap-[clamp(0.45rem,1vw,0.65rem)] text-[clamp(0.95rem,1.25vw,1.05rem)] font-semibold">
               질문
-              <Input value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="예: 다음 판 결과는?" />
+              <Input disabled={!writable} value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="예: 다음 판 결과는?" />
             </label>
             <label className="grid min-w-0 gap-[clamp(0.45rem,1vw,0.65rem)] text-[clamp(0.95rem,1.25vw,1.05rem)] font-semibold">
               선택지
-              <textarea
+              <textarea disabled={!writable}
                 value={optionsText}
                 onChange={(event) => setOptionsText(event.target.value)}
                 placeholder="선택지를 한 줄에 하나씩 입력"
@@ -352,18 +358,18 @@ export function PredictionsPage() {
             <div className="grid min-w-0 gap-[clamp(0.75rem,1.4vw,1rem)] rounded-[var(--radius-card)] border bg-background/62 p-[clamp(0.75rem,1.5vw,1rem)] sm:grid-cols-[repeat(3,minmax(0,1fr))]">
               <label className="grid min-w-0 gap-[clamp(0.45rem,1vw,0.65rem)] text-[clamp(0.9rem,1.2vw,1rem)] font-semibold">
                 최소 포인트
-                <Input value={minBet} onChange={(event) => setMinBet(event.target.value)} inputMode="numeric" className="min-h-[var(--control-height-sm)] text-center text-[clamp(0.95rem,1.25vw,1.08rem)] font-semibold tabular-nums" />
+                <Input disabled={!writable} value={minBet} onChange={(event) => setMinBet(event.target.value)} inputMode="numeric" className="min-h-[var(--control-height-sm)] text-center text-[clamp(0.95rem,1.25vw,1.08rem)] font-semibold tabular-nums" />
               </label>
               <label className="grid min-w-0 gap-[clamp(0.45rem,1vw,0.65rem)] text-[clamp(0.9rem,1.2vw,1rem)] font-semibold">
                 최대 포인트
-                <Input value={maxBet} onChange={(event) => setMaxBet(event.target.value)} inputMode="numeric" className="min-h-[var(--control-height-sm)] text-center text-[clamp(0.95rem,1.25vw,1.08rem)] font-semibold tabular-nums" />
+                <Input disabled={!writable} value={maxBet} onChange={(event) => setMaxBet(event.target.value)} inputMode="numeric" className="min-h-[var(--control-height-sm)] text-center text-[clamp(0.95rem,1.25vw,1.08rem)] font-semibold tabular-nums" />
               </label>
               <label className="grid min-w-0 gap-[clamp(0.45rem,1vw,0.65rem)] text-[clamp(0.9rem,1.2vw,1rem)] font-semibold">
                 자동 마감(분)
-                <Input value={durationMinutes} onChange={(event) => setDurationMinutes(event.target.value)} inputMode="numeric" placeholder="비움" className="min-h-[var(--control-height-sm)] text-center text-[clamp(0.95rem,1.25vw,1.08rem)] font-semibold tabular-nums" />
+                <Input disabled={!writable} value={durationMinutes} onChange={(event) => setDurationMinutes(event.target.value)} inputMode="numeric" placeholder="비움" className="min-h-[var(--control-height-sm)] text-center text-[clamp(0.95rem,1.25vw,1.08rem)] font-semibold tabular-nums" />
               </label>
             </div>
-            <Button type="button" onClick={create} disabled={isPending}>
+            <Button type="button" onClick={create} disabled={!writable || (isPending)}>
               <Send className="h-[1em] w-[1em]" />
               예측 열기
             </Button>
@@ -394,7 +400,7 @@ export function PredictionsPage() {
                 </div>
                 <div className="grid gap-[clamp(0.55rem,1.1vw,0.85rem)] sm:grid-cols-[repeat(auto-fit,minmax(min(100%,10rem),1fr))]">
                   {latest.status === 'open' ? (
-                    <Button type="button" variant="outline" onClick={() => action(`/api/predictions/${latest.id}/lock`, null, '예측을 마감했습니다.')} disabled={isPending}>
+                    <Button type="button" variant="outline" onClick={() => action(`/api/predictions/${latest.id}/lock`, null, '예측을 마감했습니다.')} disabled={!writable || (isPending)}>
                       <Lock className="h-[1em] w-[1em]" />
                       베팅 마감
                     </Button>
@@ -407,13 +413,13 @@ export function PredictionsPage() {
                           type="button"
                           variant="soft"
                           onClick={() => action(`/api/predictions/${latest.id}/settle`, { winningOptionId: option.id }, `${option.label} 결과로 정산했습니다.`)}
-                          disabled={isPending}
+                          disabled={!writable || (isPending)}
                         >
                           <CheckCircle2 className="h-[1em] w-[1em]" />
                           {index + 1}번 정산
                         </Button>
                       ))}
-                      <Button type="button" variant="destructive" onClick={() => action(`/api/predictions/${latest.id}/cancel`, null, '예측을 취소하고 환불했습니다.')} disabled={isPending}>
+                      <Button type="button" variant="destructive" onClick={() => action(`/api/predictions/${latest.id}/cancel`, null, '예측을 취소하고 환불했습니다.')} disabled={!writable || (isPending)}>
                         <XCircle className="h-[1em] w-[1em]" />
                         취소/환불
                       </Button>

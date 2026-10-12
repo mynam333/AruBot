@@ -65,7 +65,7 @@ export function wheelErrorMessage(error) {
   return messages[code] || (/^[가-힣]/u.test(code) ? code : '돌림판을 처리하지 못했습니다. 상태를 확인한 뒤 다시 시도해 주세요.');
 }
 
-export function createParticipationWheelRuntime({ getWheel, enterWheel, recordEvent = async () => {}, now = Date.now }) {
+export function createParticipationWheelRuntime({ getWheel, enterWheel, recordEvent = async () => {}, admitCommand = async () => true, now = Date.now }) {
   const cache = new Map();
   const pending = new Map();
   const rates = createBoundedRateStore({ maxEntries: 5000, now });
@@ -101,6 +101,7 @@ export function createParticipationWheelRuntime({ getWheel, enterWheel, recordEv
     if (collecting === false) return { handled: false };
     const parsed = parseWheelCommand(input.text, settings);
     if (!parsed) return { handled: false };
+    if (!await admitCommand(input)) return { handled: true, reply: '' };
     if (rates.take(`wheel-user:${input.sid}:${input.userId}`, 6, 10000) || rates.take(`wheel-owner:${input.sid}`, 120, 1000)) {
       return { handled: true, reply: '' };
     }

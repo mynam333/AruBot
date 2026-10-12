@@ -1,5 +1,7 @@
 'use client';
 
+import { useBotChannel } from '@/components/app-shell/bot-channel-provider';
+
 import * as Dialog from '@radix-ui/react-dialog';
 import * as Switch from '@radix-ui/react-switch';
 import { BellPlus, Check, Loader2, MessageSquareText, Timer, X } from 'lucide-react';
@@ -50,6 +52,8 @@ export function MacroCreateDialog({
   variant = 'secondary',
   label = '알림 만들기',
 }: MacroCreateDialogProps) {
+  const { canWrite } = useBotChannel();
+  const writable = canWrite('macros');
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState('');
   const [intervalMinutes, setIntervalMinutes] = useState('10');
@@ -70,6 +74,7 @@ export function MacroCreateDialog({
   };
 
   const submit = () => {
+    if (!writable) return;
     const trimmed = message.trim();
     if (!trimmed) {
       toast.warning('알림 문구를 입력해 주세요.');
@@ -104,6 +109,7 @@ export function MacroCreateDialog({
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
       <Dialog.Trigger
+        disabled={!writable}
         type="button"
         className={cn(
           'inline-flex min-h-[var(--control-height)] max-w-full min-w-0 items-center justify-center gap-2 whitespace-nowrap rounded-[var(--radius-control)] px-[clamp(0.875rem,1.6vw,1.125rem)] text-sm font-semibold tracking-normal transition duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50',
@@ -152,7 +158,7 @@ export function MacroCreateDialog({
               알림 문구
               <div className="relative">
                 <MessageSquareText className="pointer-events-none absolute left-[clamp(0.75rem,1.4vw,1rem)] top-[clamp(0.875rem,1.6vw,1.125rem)] h-[1.1em] w-[1.1em] text-muted-foreground" />
-                <textarea
+                <textarea disabled={!writable}
                   value={message}
                   onChange={(event) => setMessage(event.target.value.slice(0, 1000))}
                   placeholder="예: !투표로 예측에 참여하고 포인트를 확인해 보세요."
@@ -167,7 +173,7 @@ export function MacroCreateDialog({
                 반복 간격
                 <div className="relative">
                   <Timer className="pointer-events-none absolute left-[clamp(0.75rem,1.4vw,1rem)] top-1/2 h-[1.1em] w-[1.1em] -translate-y-1/2 text-muted-foreground" />
-                  <Input
+                  <Input disabled={!writable}
                     value={intervalMinutes}
                     onChange={(event) => setIntervalMinutes(event.target.value)}
                     inputMode="decimal"
@@ -180,6 +186,7 @@ export function MacroCreateDialog({
               <div className="flex flex-wrap gap-[clamp(0.4rem,0.9vw,0.65rem)]">
                 {intervalPresets.map((preset) => (
                   <Button
+                    disabled={!writable}
                     key={preset.value}
                     type="button"
                     variant={intervalSec === preset.value ? 'soft' : 'outline'}
@@ -199,7 +206,7 @@ export function MacroCreateDialog({
                   끄면 저장만 하고 방송 중에는 보내지 않아요.
                 </p>
               </div>
-              <Switch.Root
+              <Switch.Root disabled={!writable}
                 checked={enabled}
                 onCheckedChange={setEnabled}
                 aria-label="자동 알림 사용 여부"
@@ -216,7 +223,7 @@ export function MacroCreateDialog({
                 취소
               </Button>
             </Dialog.Close>
-            <Button type="button" onClick={submit} disabled={isPending} data-testid="macro-create-submit">
+            <Button type="button" onClick={submit} disabled={!writable || (isPending)} data-testid="macro-create-submit">
               {isPending ? <Loader2 className="h-[1em] w-[1em] animate-spin" /> : <Check className="h-[1em] w-[1em]" />}
               추가하기
             </Button>

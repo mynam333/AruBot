@@ -1,5 +1,7 @@
 'use client';
 
+import { useBotChannel } from '@/components/app-shell/bot-channel-provider';
+
 import * as Dialog from '@radix-ui/react-dialog';
 import {
   Activity,
@@ -1406,6 +1408,11 @@ function BlueprintCanvasNode({ data, selected }: NodeProps<BlueprintFlowNode>) {
 const flowNodeTypes = { blueprintNode: BlueprintCanvasNode };
 
 export function ActionBlueprintPage() {
+  const { active, canWrite, canRead } = useBotChannel();
+  const writable = canWrite('actions');
+  const automationsReadable = canRead('actions') || canRead('automations');
+  const automationsWritable = canWrite('automations');
+  const autosaveKey = `${AUTOSAVE_KEY}:${active.ownerUserId}`;
   const flowWrapperRef = useRef<HTMLDivElement | null>(null);
   const flowInstanceRef = useRef<ReactFlowInstance<BlueprintFlowNode, BlueprintFlowEdge> | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
@@ -1480,14 +1487,14 @@ export function ActionBlueprintPage() {
       initialWidth: NODE_WIDTH,
       width: NODE_WIDTH,
       selected: selectedIds.includes(node.id),
-      draggable: node.type !== 'start',
+      draggable: writable && node.type !== 'start',
       data: {
         node,
         active: activeRunNodeId === node.id,
         latestStep: latestStepByNodeId.get(node.id),
       },
     }));
-  }, [activeRunNodeId, latestStepByNodeId, nodes, selectedIds]);
+  }, [activeRunNodeId, latestStepByNodeId, nodes, selectedIds, writable]);
   const flowEdges = useMemo<BlueprintFlowEdge[]>(() => {
     return edges.map((edge) => ({
       id: edge.id,
@@ -1525,6 +1532,7 @@ export function ActionBlueprintPage() {
   const zoomLabel = Math.round((liveViewport.zoom || 1) * 100);
 
   const updateBlueprint = useCallback((updater: (current: Blueprint) => Blueprint) => {
+    if (!writable) return;
     setBlueprint((current) => updater({
       ...current,
       version: {
@@ -1534,7 +1542,7 @@ export function ActionBlueprintPage() {
         viewport: current.version?.viewport || DEFAULT_VIEWPORT,
       },
     }));
-  }, []);
+  }, [writable]);
 
   const syncFlowViewport = useCallback((nextViewport: Viewport) => {
     setLiveViewport(nextViewport);
@@ -1545,7 +1553,7 @@ export function ActionBlueprintPage() {
     startTransition(async () => {
       const [data, automationData] = await Promise.all([
         readJson<{ blueprints?: Blueprint[] }>('/api/action-blueprints'),
-        readJson<AutomationOverview>('/api/automations/overview').catch(() => null),
+        automationsReadable ? readJson<AutomationOverview>('/api/automations/overview').catch(() => null) : Promise.resolve(null),
       ]);
       setAutomationOverview(automationData);
       const list = data?.blueprints || [];
@@ -1567,15 +1575,17 @@ export function ActionBlueprintPage() {
         setVersions(versionData?.versions || []);
       }
     });
-  }, [syncFlowViewport]);
+  }, [syncFlowViewport, automationsReadable]);
 
   const refreshAutomationOverview = useCallback(async () => {
+    if (!automationsReadable) return null;
     const data = await readJson<AutomationOverview>('/api/automations/overview').catch(() => null);
     setAutomationOverview(data);
     return data;
-  }, []);
+  }, [automationsReadable]);
 
   const ensureAutomationConnection = useCallback(async (type: 'tits' | 'vtube' | 'obs') => {
+    if (!writable || !automationsWritable) throw new Error('자동화 수정 권한이 필요합니다.');
     const existing = type === 'tits' ? titsConnection : type === 'vtube' ? vtubeConnection : obsConnection;
     if (existing) return existing;
     const data = await jsonRequest<{ connection: AutomationConnection }>('/api/automations/connections', 'POST', {
@@ -1586,9 +1596,10 @@ export function ActionBlueprintPage() {
     });
     await refreshAutomationOverview();
     return data.connection;
-  }, [obsConnection, refreshAutomationOverview, titsConnection, vtubeConnection]);
+  }, [writable, automationsWritable, obsConnection, refreshAutomationOverview, titsConnection, vtubeConnection]);
 
   const discoverAutomation = useCallback(async (type: 'tits' | 'vtube' | 'obs') => {
+    if (!writable || !automationsWritable) return;
     const busyKey = `${type}.discover`;
     setAutomationBusy(busyKey);
     try {
@@ -1612,7 +1623,7 @@ export function ActionBlueprintPage() {
     } finally {
       setAutomationBusy(null);
     }
-  }, [ensureAutomationConnection, refreshAutomationOverview]);
+  }, [writable, automationsWritable, ensureAutomationConnection, refreshAutomationOverview]);
 
   useEffect(() => {
     load();
@@ -1639,12 +1650,12 @@ export function ActionBlueprintPage() {
   }, [blueprint]);
 
   useEffect(() => {
-    if (!historyPastRef.current.length && draftStatus !== 'restored') return;
+    if (!writable || (!historyPastRef.current.length && draftStatus !== 'restored')) return;
     const payload = buildBlueprintExport(blueprint, nodes, edges, viewport);
     if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
     autosaveTimerRef.current = setTimeout(() => {
       try {
-        localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(payload));
+        localStorage.setItem(autosaveKey, JSON.stringify(payload));
         setDraftStatus('saved');
       } catch {
         setDraftStatus('idle');
@@ -1653,7 +1664,7 @@ export function ActionBlueprintPage() {
     return () => {
       if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
     };
-  }, [blueprint, draftStatus, edges, nodes, viewport]);
+  }, [blueprint, draftStatus, edges, nodes, viewport, writable, autosaveKey]);
 
   useEffect(() => () => {
     if (historyTimerRef.current) clearTimeout(historyTimerRef.current);
@@ -1739,6 +1750,7 @@ export function ActionBlueprintPage() {
   }, [nodes]);
 
   const addNode = (type: NodeType) => {
+    if (!writable) return;
     const rect = flowWrapperRef.current?.getBoundingClientRect();
     const center = rect
       ? flowInstanceRef.current?.screenToFlowPosition({ x: rect.left + rect.width * 0.5, y: rect.top + rect.height * 0.5 }) || { x: 320, y: 220 }
@@ -1758,6 +1770,7 @@ export function ActionBlueprintPage() {
   };
 
   const removeSelection = () => {
+    if (!writable) return;
     if (!selectedIds.length && !selectedEdgeId) return;
     const startSelected = nodes.some((node) => selectedIds.includes(node.id) && node.type === 'start');
     if (startSelected) {
@@ -1803,6 +1816,7 @@ export function ActionBlueprintPage() {
   }, []);
 
   const upsertConnection = useCallback((connection: Connection, replaceEdgeId?: string) => {
+    if (!writable) return;
     const sourceId = String(connection.source || '');
     const targetId = String(connection.target || '');
     const sourcePort = String(connection.sourceHandle || 'out');
@@ -1835,7 +1849,7 @@ export function ActionBlueprintPage() {
     });
     setSelectedIds([]);
     setSelectedEdgeId(null);
-  }, [nodes, updateBlueprint]);
+  }, [writable, nodes, updateBlueprint]);
 
   const onConnect = useCallback<OnConnect>((connection: Connection) => {
     upsertConnection(connection);
@@ -1851,6 +1865,7 @@ export function ActionBlueprintPage() {
   }, [upsertConnection]);
 
   const onReconnectEnd = useCallback(() => {
+    if (!writable) return;
     const pending = reconnectEdgeRef.current;
     reconnectEdgeRef.current = null;
     if (!pending || pending.completed) return;
@@ -1865,7 +1880,7 @@ export function ActionBlueprintPage() {
       },
     }));
     setSelectedEdgeId(null);
-  }, [edges, nodes, updateBlueprint]);
+  }, [writable, edges, nodes, updateBlueprint]);
 
   const onSelectionChange = useCallback((params: OnSelectionChangeParams<BlueprintFlowNode, BlueprintFlowEdge>) => {
     setSelectedIds(params.nodes.map((node) => node.id));
@@ -1890,6 +1905,7 @@ export function ActionBlueprintPage() {
   };
 
   const updateNodeConfig = (key: string, value: unknown) => {
+    if (!writable) return;
     if (!selectedNode) return;
     updateBlueprint((current) => ({
       ...current,
@@ -1901,6 +1917,7 @@ export function ActionBlueprintPage() {
   };
 
   const updateNodeConfigById = (nodeId: string, key: string, value: unknown) => {
+    if (!writable) return;
     updateBlueprint((current) => ({
       ...current,
       version: {
@@ -1911,6 +1928,7 @@ export function ActionBlueprintPage() {
   };
 
   const updateNodeNameById = (nodeId: string, name: string) => {
+    if (!writable) return;
     updateBlueprint((current) => ({
       ...current,
       version: {
@@ -1928,6 +1946,7 @@ export function ActionBlueprintPage() {
   };
 
   const deleteNodeById = (nodeId: string) => {
+    if (!writable) return;
     const node = nodes.find((item) => item.id === nodeId);
     if (!node) return;
     if (node.type === 'start') {
@@ -1968,6 +1987,7 @@ export function ActionBlueprintPage() {
   };
 
   const testRunFromNode = async (nodeId: string) => {
+    if (!writable) return;
     setSelectedIds([nodeId]);
     setSelectedEdgeId(null);
     setContextMenu(null);
@@ -1975,6 +1995,7 @@ export function ActionBlueprintPage() {
   };
 
   const save = async () => {
+    if (!writable) return;
     setSaving(true);
     try {
       const data = await jsonRequest<{ blueprint: Blueprint; validationErrors?: string[] }>('/api/action-blueprints', 'POST', {
@@ -2005,6 +2026,7 @@ export function ActionBlueprintPage() {
   };
 
   const publish = async () => {
+    if (!writable) return;
     if (validationErrors.length) {
       toast.error('검증 항목을 먼저 해결한 뒤 게시할 수 있습니다.');
       return;
@@ -2046,6 +2068,7 @@ export function ActionBlueprintPage() {
   });
 
   const testRun = async () => {
+    if (!writable) return;
     if (validationErrors.length) {
       toast.error('검증 항목을 먼저 해결한 뒤 테스트할 수 있습니다.');
       return;
@@ -2078,6 +2101,7 @@ export function ActionBlueprintPage() {
   };
 
   const deleteBlueprint = async () => {
+    if (!writable) return;
     if (!blueprint.id || !window.confirm(`"${blueprint.name}" 블루프린트를 삭제할까요?`)) return;
     try {
       await jsonRequest(`/api/action-blueprints/${encodeURIComponent(blueprint.id)}`, 'DELETE');
@@ -2098,6 +2122,7 @@ export function ActionBlueprintPage() {
   };
 
   const duplicateSelection = () => {
+    if (!writable) return;
     if (!selectedIds.length) return;
     const selectedNodes = nodes.filter((node) => selectedIds.includes(node.id) && node.type !== 'start');
     if (!selectedNodes.length) return;
@@ -2124,6 +2149,7 @@ export function ActionBlueprintPage() {
   };
 
   const autoLayout = () => {
+    if (!writable) return;
     const levels = new Map<string, number>();
     const start = nodes.find((node) => node.type === 'start') || nodes[0];
     if (start) levels.set(start.id, 0);
@@ -2171,6 +2197,7 @@ export function ActionBlueprintPage() {
   };
 
   const restoreVersion = async (versionId: string) => {
+    if (!writable) return;
     if (!blueprint.id) return;
     try {
       const data = await jsonRequest<{ blueprint: Blueprint }>(`/api/action-blueprints/${encodeURIComponent(blueprint.id)}/versions/${encodeURIComponent(versionId)}/restore`, 'POST');
@@ -2197,6 +2224,7 @@ export function ActionBlueprintPage() {
   };
 
   const newBlueprint = () => {
+    if (!writable) return;
     const fresh = normalizeBlueprint(null);
     setBlueprint(fresh);
     syncFlowViewport(fresh.version?.viewport || DEFAULT_VIEWPORT);
@@ -2246,6 +2274,7 @@ export function ActionBlueprintPage() {
   };
 
   const undoBlueprint = () => {
+    if (!writable) return;
     flushPendingHistory();
     const target = historyPastRef.current.at(-1);
     if (!target) return;
@@ -2263,6 +2292,7 @@ export function ActionBlueprintPage() {
   };
 
   const redoBlueprint = () => {
+    if (!writable) return;
     const target = historyFutureRef.current[0];
     if (!target) return;
     const current = serializeBlueprintSnapshot(blueprint);
@@ -2279,8 +2309,10 @@ export function ActionBlueprintPage() {
   };
 
   const restoreAutosaveDraft = () => {
+    if (!writable) return;
     try {
-      const raw = localStorage.getItem(AUTOSAVE_KEY);
+      const raw = localStorage.getItem(autosaveKey)
+        || (active.role === 'owner' ? localStorage.getItem(AUTOSAVE_KEY) : null);
       const imported = raw ? normalizeImportedBlueprint(JSON.parse(raw)) : null;
       if (!imported) {
         toast.info('복원할 자동 저장 초안이 없습니다.');
@@ -2328,6 +2360,7 @@ export function ActionBlueprintPage() {
   };
 
   const insertTemplate = (templateId: string) => {
+    if (!writable) return;
     const template = blueprintTemplates.find((item) => item.id === templateId);
     if (!template) return;
     const rect = flowWrapperRef.current?.getBoundingClientRect();
@@ -2421,6 +2454,7 @@ export function ActionBlueprintPage() {
   };
 
   const pasteSelection = async (targetPosition?: { x: number; y: number }) => {
+    if (!writable) return;
     const payload = await readClipboardSelection();
     if (!payload?.nodes?.length) {
       toast.info('붙여넣을 블루프린트 노드가 없습니다.');
@@ -2485,6 +2519,7 @@ export function ActionBlueprintPage() {
   };
 
   const importBlueprintJson = async (file: File | null) => {
+    if (!writable) return;
     if (!file) return;
     try {
       const imported = normalizeImportedBlueprint(JSON.parse(await file.text()));
@@ -2572,7 +2607,7 @@ export function ActionBlueprintPage() {
               <Badge tone={blueprint.version?.published ? 'mint' : 'lemon'}>{blueprint.version?.published ? '게시됨' : '초안'}</Badge>
               <Badge tone={validationErrors.length ? 'amber' : 'neutral'}>{validationErrors.length ? `${validationErrors.length}개 확인 필요` : '검증 통과'}</Badge>
               <Badge tone={draftStatus === 'restored' ? 'sky' : draftStatus === 'saved' ? 'mint' : 'neutral'}>
-                {draftStatus === 'restored' ? '임시 초안 복원' : draftStatus === 'saved' ? '자동 저장됨' : '편집 중'}
+                {!writable ? '읽기 전용' : draftStatus === 'restored' ? '임시 초안 복원' : draftStatus === 'saved' ? '자동 저장됨' : '편집 중'}
               </Badge>
             </div>
             <h1 className="max-w-[22ch] break-keep text-[clamp(1.75rem,3.2vw,2.7rem)] font-bold leading-tight tracking-tight">방송 액션 설계</h1>
@@ -2593,6 +2628,7 @@ export function ActionBlueprintPage() {
           <div className="grid min-w-0 gap-2 sm:grid-cols-[repeat(2,minmax(0,1fr))] xl:max-w-[min(100%,42rem)] xl:grid-cols-[repeat(5,minmax(0,1fr))]">
             <input
               ref={importInputRef}
+              disabled={!writable}
               type="file"
               accept="application/json,.json"
               className="hidden"
@@ -2614,7 +2650,7 @@ export function ActionBlueprintPage() {
                 </option>
               ))}
             </select>
-            <Button type="button" variant="outline" size="sm" onClick={newBlueprint}>
+            <Button disabled={!writable} type="button" variant="outline" size="sm" onClick={newBlueprint}>
               <Plus className="h-4 w-4" />
               새 블루프린트
             </Button>
@@ -2622,23 +2658,23 @@ export function ActionBlueprintPage() {
               label="관리"
               entries={[
                 { label: 'JSON 내보내기', icon: Download, onSelect: exportBlueprintJson },
-                { label: 'JSON 불러오기', icon: Upload, onSelect: () => importInputRef.current?.click() },
-                { label: '임시 초안 복원', icon: RefreshCw, onSelect: restoreAutosaveDraft },
+                { label: 'JSON 불러오기', icon: Upload, onSelect: () => importInputRef.current?.click(), disabled: !writable },
+                { label: '임시 초안 복원', icon: RefreshCw, onSelect: restoreAutosaveDraft, disabled: !writable },
                 { label: '특수 변수 복사', icon: Copy, onSelect: copyVariable, disabled: !blueprint.id && !blueprint.slug },
-                { label: '블루프린트 삭제', icon: Trash2, onSelect: deleteBlueprint, disabled: !blueprint.id, danger: true, separatorBefore: true },
+                { label: '블루프린트 삭제', icon: Trash2, onSelect: deleteBlueprint, disabled: !writable || !blueprint.id, danger: true, separatorBefore: true },
               ]}
             />
-            <Button type="button" variant="outline" size="sm" onClick={testRun} disabled={testing || saving}>
+            <Button type="button" variant="outline" size="sm" onClick={testRun} disabled={!writable || (testing || saving)}>
               {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
               테스트
             </Button>
             <Tooltip content="AruBot 블루프린트 초안만 저장합니다. YouTube OAuth 권한이나 YouTube API 데이터는 이 버튼으로 저장되지 않습니다.">
-              <Button type="button" variant="secondary" size="sm" onClick={save} disabled={saving} aria-label="AruBot 초안 저장">
+              <Button type="button" variant="secondary" size="sm" onClick={save} disabled={!writable || (saving)} aria-label="AruBot 초안 저장">
                 {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                 초안 저장
               </Button>
             </Tooltip>
-            <Button type="button" size="sm" onClick={publish} disabled={!!validationErrors.length || saving}>
+            <Button type="button" size="sm" onClick={publish} disabled={!writable || (!!validationErrors.length || saving)}>
               <Radio className="h-4 w-4" />
               게시
             </Button>
@@ -2665,7 +2701,7 @@ export function ActionBlueprintPage() {
             <div className="grid max-h-[18rem] gap-2 overflow-y-auto rounded-[calc(var(--radius-control)*0.95)] border bg-background/48 p-2 md:max-h-none">
               <div className="px-1 text-[0.68rem] font-extrabold uppercase text-muted-foreground">템플릿</div>
               {blueprintTemplates.map((template) => (
-                <button
+                <button disabled={!writable}
                   key={template.id}
                   type="button"
                   onClick={() => insertTemplate(template.id)}
@@ -2689,7 +2725,7 @@ export function ActionBlueprintPage() {
                   {items.map((item) => {
                     const Icon = item.icon;
                     return (
-                      <button
+                      <button disabled={!writable}
                         key={item.type}
                         type="button"
                         onClick={() => addNode(item.type)}
@@ -2723,8 +2759,8 @@ export function ActionBlueprintPage() {
           <CardHeader className="border-b bg-card p-3">
             <div className="flex flex-col gap-3">
               <div className="grid gap-2 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)_auto] lg:items-center">
-                <Input value={blueprint.name} onChange={(event) => setBlueprint((current) => ({ ...current, name: event.target.value }))} aria-label="블루프린트 이름" className="font-bold" />
-                <Input value={blueprint.description || ''} onChange={(event) => setBlueprint((current) => ({ ...current, description: event.target.value }))} placeholder="설명" aria-label="블루프린트 설명" />
+                <Input disabled={!writable} value={blueprint.name} onChange={(event) => setBlueprint((current) => ({ ...current, name: event.target.value }))} aria-label="블루프린트 이름" className="font-bold" />
+                <Input disabled={!writable} value={blueprint.description || ''} onChange={(event) => setBlueprint((current) => ({ ...current, description: event.target.value }))} placeholder="설명" aria-label="블루프린트 설명" />
                 <div className="flex items-center gap-2 overflow-x-auto pb-1 text-xs font-bold text-muted-foreground lg:justify-end lg:overflow-visible lg:pb-0">
                   <span className="shrink-0 rounded-full border bg-background/70 px-3 py-2">노드 {nodes.length}</span>
                   <span className="shrink-0 rounded-full border bg-background/70 px-3 py-2">연결 {edges.length}</span>
@@ -2742,13 +2778,13 @@ export function ActionBlueprintPage() {
                   <Move className="h-4 w-4" />
                   전체 보기
                 </Button>
-                <Button type="button" variant="outline" size="icon" onClick={autoLayout} aria-label="자동 정렬" title="자동 정렬">
+                <Button disabled={!writable} type="button" variant="outline" size="icon" onClick={autoLayout} aria-label="자동 정렬" title="자동 정렬">
                   <Workflow className="h-4 w-4" />
                 </Button>
-                <Button type="button" variant="outline" size="icon" onClick={undoBlueprint} disabled={!historyCount.past} aria-label="되돌리기" title="되돌리기">
+                <Button type="button" variant="outline" size="icon" onClick={undoBlueprint} disabled={!writable || (!historyCount.past)} aria-label="되돌리기" title="되돌리기">
                   <Undo2 className="h-4 w-4" />
                 </Button>
-                <Button type="button" variant="outline" size="icon" onClick={redoBlueprint} disabled={!historyCount.future} aria-label="다시 실행" title="다시 실행">
+                <Button type="button" variant="outline" size="icon" onClick={redoBlueprint} disabled={!writable || (!historyCount.future)} aria-label="다시 실행" title="다시 실행">
                   <Redo2 className="h-4 w-4" />
                 </Button>
                 <ActionMenu
@@ -2756,10 +2792,10 @@ export function ActionBlueprintPage() {
                   entries={[
                     { label: '선택 보기', icon: MousePointer2, onSelect: focusSelection, disabled: !nodes.length },
                     { label: '실행 재생', icon: Play, onSelect: () => replayRunSteps(), disabled: !runSteps.length },
-                    { label: '선택 복제', icon: Copy, onSelect: duplicateSelection, disabled: !selectedIds.length, separatorBefore: true },
+                    { label: '선택 복제', icon: Copy, onSelect: duplicateSelection, disabled: !writable || !selectedIds.length, separatorBefore: true },
                     { label: '선택 복사', icon: Copy, onSelect: () => void copySelection(), disabled: !selectedIds.length },
-                    { label: '붙여넣기', icon: Upload, onSelect: () => void pasteSelection() },
-                    { label: '선택 삭제', icon: Trash2, onSelect: removeSelection, disabled: !selectedIds.length && !selectedEdgeId, danger: true, separatorBefore: true },
+                    { label: '붙여넣기', icon: Upload, onSelect: () => void pasteSelection(), disabled: !writable },
+                    { label: '선택 삭제', icon: Trash2, onSelect: removeSelection, disabled: !writable || (!selectedIds.length && !selectedEdgeId), danger: true, separatorBefore: true },
                   ]}
                 />
               </div>
@@ -2801,14 +2837,14 @@ export function ActionBlueprintPage() {
                 selectionOnDrag
                 multiSelectionKeyCode={['Control', 'Meta']}
                 deleteKeyCode={null}
-                nodesDraggable
-                nodesConnectable
+                nodesDraggable={writable}
+                nodesConnectable={writable}
                 elementsSelectable
                 onInit={onInit}
                 onNodesChange={onNodesChange}
                 onEdgesChange={onEdgesChange}
                 onConnect={onConnect}
-                edgesReconnectable
+                edgesReconnectable={writable}
                 onReconnectStart={onReconnectStart}
                 onReconnect={onReconnect}
                 onReconnectEnd={onReconnectEnd}
@@ -2826,7 +2862,7 @@ export function ActionBlueprintPage() {
                 className="arubot-blueprint-flow"
               >
                 <Background gap={40} color="hsl(var(--border))" />
-                <Controls className="!border !border-border !bg-card/88 !shadow-subtle !backdrop-blur-xl" />
+                <Controls showInteractive={writable} className="!border !border-border !bg-card/88 !shadow-subtle !backdrop-blur-xl" />
                 <MiniMap
                   pannable
                   zoomable
@@ -2895,7 +2931,7 @@ export function ActionBlueprintPage() {
               <Field label="채팅 메시지" value={simulator.message} onChange={(value) => setSimulator((current) => ({ ...current, message: value }))} />
               <Field label="룰렛 결과값" value={simulator.rouletteResult} onChange={(value) => setSimulator((current) => ({ ...current, rouletteResult: value }))} />
               <div className="flex flex-wrap gap-2">
-                <Button type="button" variant="outline" onClick={testRun} disabled={testing || saving}>
+                <Button type="button" variant="outline" onClick={testRun} disabled={!writable || (testing || saving)}>
                   {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
                   시뮬레이션 실행
                 </Button>
@@ -2918,16 +2954,16 @@ export function ActionBlueprintPage() {
                   <NodeReferencePanel node={selectedNode} />
                   <label className="grid gap-2 text-sm font-semibold">
                     노드 이름
-                    <Input value={selectedNode.name} onChange={(event) => updateBlueprint((current) => ({ ...current, version: { ...current.version, nodes: (current.version?.nodes || []).map((node) => node.id === selectedNode.id ? { ...node, name: event.target.value } : node) } }))} />
+                    <Input disabled={!writable} value={selectedNode.name} onChange={(event) => updateBlueprint((current) => ({ ...current, version: { ...current.version, nodes: (current.version?.nodes || []).map((node) => node.id === selectedNode.id ? { ...node, name: event.target.value } : node) } }))} />
                   </label>
-                  <ConfigFields
+                  <fieldset disabled={!writable} className="contents"><ConfigFields
                     node={selectedNode}
                     onChange={updateNodeConfig}
                     automationOverview={automationOverview}
                     automationBusy={automationBusy}
                     onDiscoverAutomation={discoverAutomation}
                     blueprints={blueprints}
-                  />
+                  /></fieldset>
                   <div className="rounded-[var(--radius-control)] border bg-background/70 p-3 text-xs leading-5 text-muted-foreground">
                     예: <code>{'{user.name}'}</code>, <code>{'{user.points}'}</code>, <code>{'{roulette.result}'}</code>, <code>{'{flow.bonusPoint} * 2'}</code>
                   </div>
@@ -2974,7 +3010,7 @@ export function ActionBlueprintPage() {
                   </div>
                   <div className="flex items-center gap-2">
                     {version.published ? <Badge tone="mint">게시</Badge> : <Badge tone="neutral">초안</Badge>}
-                    <Button type="button" variant="outline" size="sm" onClick={() => restoreVersion(version.id)}>
+                    <Button disabled={!writable} type="button" variant="outline" size="sm" onClick={() => restoreVersion(version.id)}>
                       복원
                     </Button>
                   </div>
@@ -3038,21 +3074,21 @@ export function ActionBlueprintPage() {
           {contextNode ? (
             <>
               <div className="px-3 py-2 text-xs font-bold text-muted-foreground">{contextNode.name}</div>
-              <ContextMenuButton icon={<Pencil className="h-4 w-4" />} label="수정" onClick={() => editNode(contextNode.id)} />
+              <ContextMenuButton icon={<Pencil className="h-4 w-4" />} label={writable ? '수정' : '자세히'} onClick={() => editNode(contextNode.id)} />
               <ContextMenuButton icon={<Copy className="h-4 w-4" />} label="복사" onClick={() => void copyNodesByIds([contextNode.id]).then(() => setContextMenu(null))} />
-              <ContextMenuButton icon={<Play className="h-4 w-4" />} label="테스트 실행" onClick={() => void testRunFromNode(contextNode.id)} disabled={testing || saving} />
-              <ContextMenuButton icon={<Trash2 className="h-4 w-4" />} label="삭제" onClick={() => deleteNodeById(contextNode.id)} disabled={contextNode.type === 'start'} danger />
+              <ContextMenuButton icon={<Play className="h-4 w-4" />} label="테스트 실행" onClick={() => void testRunFromNode(contextNode.id)} disabled={!writable || (testing || saving)} />
+              <ContextMenuButton icon={<Trash2 className="h-4 w-4" />} label="삭제" onClick={() => deleteNodeById(contextNode.id)} disabled={!writable || (contextNode.type === 'start')} danger />
               <div className="my-1 h-px bg-border" />
             </>
           ) : (
             <>
               <div className="px-3 py-2 text-xs font-bold text-muted-foreground">캔버스</div>
-              <ContextMenuButton icon={<Upload className="h-4 w-4" />} label="붙여넣기" onClick={() => void pasteSelection(contextMenu.flowPosition)} />
+              <ContextMenuButton disabled={!writable} icon={<Upload className="h-4 w-4" />} label="붙여넣기" onClick={() => void pasteSelection(contextMenu.flowPosition)} />
               <div className="my-1 h-px bg-border" />
             </>
           )}
-          <ContextMenuButton icon={<Undo2 className="h-4 w-4" />} label="되돌리기" onClick={undoBlueprint} disabled={!historyCount.past} />
-          <ContextMenuButton icon={<Redo2 className="h-4 w-4" />} label="다시 실행" onClick={redoBlueprint} disabled={!historyCount.future} />
+          <ContextMenuButton icon={<Undo2 className="h-4 w-4" />} label="되돌리기" onClick={undoBlueprint} disabled={!writable || (!historyCount.past)} />
+          <ContextMenuButton icon={<Redo2 className="h-4 w-4" />} label="다시 실행" onClick={redoBlueprint} disabled={!writable || (!historyCount.future)} />
         </div>
       ) : null}
       <Dialog.Root open={!!editingNode} onOpenChange={(open) => {
@@ -3081,17 +3117,17 @@ export function ActionBlueprintPage() {
                 <div className="grid max-h-[calc(min(86svh,48rem)-8rem)] gap-4 overflow-y-auto p-[clamp(1rem,2vw,1.35rem)]">
                   <label className="grid min-w-0 gap-2 text-sm font-semibold">
                     노드 이름
-                    <Input value={editingNode.name} onChange={(event) => updateNodeNameById(editingNode.id, event.target.value)} className="w-full min-w-0" />
+                    <Input disabled={!writable} value={editingNode.name} onChange={(event) => updateNodeNameById(editingNode.id, event.target.value)} className="w-full min-w-0" />
                   </label>
                   <NodeReferencePanel node={editingNode} />
-                  <ConfigFields
+                  <fieldset disabled={!writable} className="contents"><ConfigFields
                     node={editingNode}
                     onChange={(key, value) => updateNodeConfigById(editingNode.id, key, value)}
                     automationOverview={automationOverview}
                     automationBusy={automationBusy}
                     onDiscoverAutomation={discoverAutomation}
                     blueprints={blueprints}
-                  />
+                  /></fieldset>
                 </div>
               </>
             ) : null}
@@ -3925,6 +3961,8 @@ function AutomationDiscoveryHeader({
   onDiscover: () => void;
 }) {
   const cache = connection?.discoveryCache;
+  const { canWrite } = useBotChannel();
+  const writable = canWrite('actions') && canWrite('automations');
   return (
     <div className="grid gap-3 rounded-[var(--radius-control)] border bg-background/70 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -3939,7 +3977,7 @@ function AutomationDiscoveryHeader({
           {connection?.endpoint ? <Badge tone="neutral">{connection.endpoint}</Badge> : null}
         </div>
       </div>
-      <Button type="button" variant="outline" size="sm" onClick={onDiscover} disabled={busy}>
+      <Button type="button" variant="outline" size="sm" onClick={onDiscover} disabled={!writable || busy}>
         {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
         로컬 프로그램에서 목록 불러오기
       </Button>

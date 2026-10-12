@@ -2,51 +2,34 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Cable, Menu, X } from 'lucide-react';
+import { ArrowRight, Cable, Eye, Menu, ShieldAlert, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { adminNav, adminNavGroups } from '@/shared/config/navigation';
+import { adminNav, adminNavGroups, getBotPageModule } from '@/shared/config/navigation';
 import { cn } from '@/shared/lib/utils';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
 import { Button, LinkButton } from '@/components/ui/button';
 import { Tooltip } from '@/components/ui/tooltip';
 import { LegalFooter } from '@/components/app-shell/legal-footer';
-import { readJsonResult } from '@/shared/api/http';
+import { BotChannelProvider, useBotChannel } from '@/components/app-shell/bot-channel-provider';
+import { BotChannelSwitcher } from '@/components/app-shell/bot-channel-switcher';
+import { Badge } from '@/components/ui/badge';
 
-type AdminAccess = {
-  isAdmin?: boolean;
-};
-
-let adminAccessCache: { value: boolean; expiresAt: number } | null = null;
-let adminAccessPromise: Promise<boolean> | null = null;
-
-async function readAdminAccess() {
-  const now = Date.now();
-  if (adminAccessCache && adminAccessCache.expiresAt > now) return adminAccessCache.value;
-  if (!adminAccessPromise) {
-    adminAccessPromise = readJsonResult<AdminAccess>('/api/arubot-admin/me')
-      .then((result) => {
-        if (!result.ok) return false;
-        const value = result.data?.isAdmin === true;
-        adminAccessCache = { value, expiresAt: Date.now() + 5 * 60 * 1000 };
-        return value;
-      })
-      .finally(() => {
-        adminAccessPromise = null;
-      });
-  }
-  return adminAccessPromise;
-}
-
-function getVisibleNav(isAdmin: boolean) {
-  return adminNav.filter((item) => !item.adminOnly || isAdmin);
+function getVisibleNav(context: ReturnType<typeof useBotChannel>) {
+  return adminNav.filter((item) => {
+    if (item.adminOnly) return context.isSiteAdmin;
+    if (item.membersOnly) return context.canManageMembers;
+    if (item.href === '/viewer/me') return true;
+    const module = getBotPageModule(item.href);
+    return module !== null && context.canRead(module);
+  });
 }
 
 function isItemActive(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
-function getActiveLabel(pathname: string, isAdmin: boolean) {
-  return getVisibleNav(isAdmin).find((item) => isItemActive(pathname, item.href))?.label || '방송 관리';
+function getActiveLabel(pathname: string, context: ReturnType<typeof useBotChannel>) {
+  return getVisibleNav(context).find((item) => isItemActive(pathname, item.href))?.label || '방송 관리';
 }
 
 function Brand({ compact = false, onClick }: { compact?: boolean; onClick?: () => void }) {
@@ -108,9 +91,9 @@ function NavItem({
   return compact ? <Tooltip content={item.label} side="right">{link}</Tooltip> : link;
 }
 
-function GroupedNav({ compact = false, onNavigate, isAdmin }: { compact?: boolean; onNavigate?: () => void; isAdmin: boolean }) {
+function GroupedNav({ compact = false, onNavigate }: { compact?: boolean; onNavigate?: () => void }) {
   const pathname = usePathname();
-  const nav = getVisibleNav(isAdmin);
+  const nav = getVisibleNav(useBotChannel());
   if (compact) {
     return (
       <nav aria-label="관리 메뉴" className="grid gap-1">
@@ -137,15 +120,15 @@ function GroupedNav({ compact = false, onNavigate, isAdmin }: { compact?: boolea
   );
 }
 
-function MobileBottomNav({ isAdmin, openMenu }: { isAdmin: boolean; openMenu: () => void }) {
+function MobileBottomNav({ openMenu }: { openMenu: () => void }) {
   const pathname = usePathname();
-  const nav = getVisibleNav(isAdmin);
+  const nav = getVisibleNav(useBotChannel());
   const items = ['/dashboard', '/commands', '/points', '/roulette']
     .map((href) => nav.find((item) => item.href === href))
     .filter((item): item is (typeof adminNav)[number] => Boolean(item));
 
   return (
-    <nav aria-label="빠른 메뉴" className="fixed inset-x-0 bottom-0 z-40 grid h-[calc(4rem+env(safe-area-inset-bottom))] grid-cols-5 border-t bg-card/95 px-1 pb-[env(safe-area-inset-bottom)] shadow-[0_-8px_24px_hsl(222_30%_6%/0.08)] backdrop-blur md:hidden">
+    <nav aria-label="빠른 메뉴" style={{ gridTemplateColumns: `repeat(${items.length + 1}, minmax(0, 1fr))` }} className="fixed inset-x-0 bottom-0 z-40 grid h-[calc(4rem+env(safe-area-inset-bottom))] border-t bg-card/95 px-1 pb-[env(safe-area-inset-bottom)] shadow-[0_-8px_24px_hsl(222_30%_6%/0.08)] backdrop-blur md:hidden">
       {items.map((item) => {
         const Icon = item.icon;
         const active = isItemActive(pathname, item.href);
@@ -165,18 +148,20 @@ function MobileBottomNav({ isAdmin, openMenu }: { isAdmin: boolean; openMenu: ()
 }
 
 export function AdminShell({ children }: { children: React.ReactNode }) {
-  const [open, setOpen] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(false);
-  const pathname = usePathname();
-  const title = getActiveLabel(pathname, isAdmin);
+  return <BotChannelProvider><AdminShellContent>{children}</AdminShellContent></BotChannelProvider>;
+}
 
-  useEffect(() => {
-    let alive = true;
-    readAdminAccess().then((nextIsAdmin) => {
-      if (alive) setIsAdmin(nextIsAdmin);
-    });
-    return () => { alive = false; };
-  }, []);
+function AdminShellContent({ children }: { children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const context = useBotChannel();
+  const pathname = usePathname();
+  const title = getActiveLabel(pathname, context);
+  const module = getBotPageModule(pathname);
+  const allowed = isItemActive(pathname, '/bot-managers') ? context.canManageMembers
+    : isItemActive(pathname, '/arubot-admin') ? context.isSiteAdmin
+      : module !== null && context.canRead(module);
+  const readonly = allowed && module !== null && !context.canWrite(module);
+  const firstAllowed = getVisibleNav(context).find((item) => getBotPageModule(item.href));
 
   useEffect(() => {
     setOpen(false);
@@ -186,12 +171,12 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
     <div className="min-h-screen bg-background">
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-[var(--shell-sidebar)] overflow-y-auto border-r bg-card p-4 scrollbar-none overscroll-contain xl:block">
         <Brand />
-        <div className="mt-6 pb-4"><GroupedNav isAdmin={isAdmin} /></div>
+        <div className="mt-6 pb-4"><GroupedNav /></div>
       </aside>
 
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-[var(--shell-rail)] flex-col border-r bg-card px-2 py-3 md:flex xl:hidden">
         <Brand compact />
-        <div className="mt-4 min-h-0 flex-1 overflow-y-auto scrollbar-none"><GroupedNav compact isAdmin={isAdmin} /></div>
+        <div className="mt-4 min-h-0 flex-1 overflow-y-auto scrollbar-none"><GroupedNav compact /></div>
       </aside>
 
       <header className="sticky top-0 z-20 border-b bg-card/95 backdrop-blur">
@@ -200,15 +185,17 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
             <Menu className="h-5 w-5" />
           </Button>
           <div className="min-w-0 flex-1">
-            <div className="truncate text-base font-semibold tracking-tight">{title}</div>
-            <div className="hidden truncate text-xs text-muted-foreground sm:block">실시간 방송 운영과 시청자 참여를 관리합니다.</div>
+            <div className="flex flex-wrap items-center gap-2"><span className="text-base font-semibold">{title}</span>{readonly ? <Badge tone="amber"><Eye className="mr-1 h-3 w-3" />읽기 전용</Badge> : null}</div>
           </div>
           <div className="flex items-center gap-2">
-            <LinkButton href="/connection" variant="outline" size="sm" className="hidden sm:inline-flex">
+            {context.canRead('connection') ? <LinkButton href="/connection" variant="outline" size="sm" className="hidden sm:inline-flex">
               <Cable className="h-4 w-4" />플랫폼 연결
-            </LinkButton>
+            </LinkButton> : null}
             <ThemeToggle />
           </div>
+        </div>
+        <div className="flex min-w-0 items-center border-t px-[var(--page-gutter)] py-2 md:pl-[calc(var(--shell-rail)+var(--page-gutter))] xl:pl-[calc(var(--shell-sidebar)+var(--page-gutter))]">
+          <BotChannelSwitcher />
         </div>
       </header>
 
@@ -221,7 +208,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
               <Button variant="ghost" size="icon" onClick={() => setOpen(false)} aria-label="메뉴 닫기"><X className="h-5 w-5" /></Button>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto pr-1 scrollbar-none overscroll-contain">
-              <GroupedNav isAdmin={isAdmin} onNavigate={() => setOpen(false)} />
+              <GroupedNav onNavigate={() => setOpen(false)} />
             </div>
           </aside>
         </div>
@@ -229,11 +216,18 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
 
       <main className="px-[var(--page-gutter)] pb-[calc(5.5rem+env(safe-area-inset-bottom))] pt-[clamp(1.25rem,2.4vw,1.75rem)] md:pb-7 md:pl-[calc(var(--shell-rail)+var(--page-gutter))] xl:pl-[calc(var(--shell-sidebar)+var(--page-gutter))]">
         <div className="mx-auto flex w-full max-w-[90rem] flex-col gap-5 md:gap-6">
-          {children}
+          {allowed ? children : (
+            <section className="flex flex-col items-start gap-3 py-8" aria-labelledby="bot-access-denied">
+              <ShieldAlert className="h-6 w-6 text-muted-foreground" />
+              <h1 id="bot-access-denied" className="text-lg font-semibold">이 메뉴에 접근할 권한이 없습니다.</h1>
+              <p className="text-sm text-muted-foreground">{context.active.displayName} 채널의 관리 권한을 확인해 주세요.</p>
+              <LinkButton href={firstAllowed?.href || '/viewer/me'} variant="outline"><ArrowRight className="h-4 w-4" />{firstAllowed ? `${firstAllowed.label}(으)로 이동` : '내 계정으로 이동'}</LinkButton>
+            </section>
+          )}
           <LegalFooter className="mt-2" />
         </div>
       </main>
-      <MobileBottomNav isAdmin={isAdmin} openMenu={() => setOpen(true)} />
+      <MobileBottomNav openMenu={() => setOpen(true)} />
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { readServerJson } from './server';
 import { decodeChannelRouteParam } from '@/shared/lib/channel-route-param';
 
-export type PublicChannelKind = 'commands' | 'points' | 'roulette' | 'rouletteLogs' | 'live';
+export type PublicChannelKind = 'commands' | 'points' | 'roulette' | 'rouletteLogs' | 'live' | 'requests' | 'songbook';
 export type PublicChannelProfile = { uid: string; provider: string; displayName: string | null };
 
 const endpoints = {
@@ -10,6 +10,8 @@ const endpoints = {
   roulette: (uid: string) => `/api/public/${encodeURIComponent(uid)}/roulette-defs`,
   rouletteLogs: (uid: string) => `/api/roulette/logs?uid=${encodeURIComponent(uid)}`,
   live: (uid: string) => `/api/public/${encodeURIComponent(uid)}/live`,
+  requests: (uid: string) => `/api/public/${encodeURIComponent(uid)}/requests`,
+  songbook: (uid: string) => `/api/public/${encodeURIComponent(uid)}/songbook`,
 } as const;
 
 const cacheSeconds = {
@@ -18,6 +20,8 @@ const cacheSeconds = {
   roulette: 45,
   rouletteLogs: 10,
   live: 15,
+  requests: 0,
+  songbook: 0,
 } as const;
 
 export function getPublicEndpoint(channelUid: string, kind: PublicChannelKind) {

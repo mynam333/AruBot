@@ -1,5 +1,7 @@
 'use client';
 
+import { useBotChannel } from '@/components/app-shell/bot-channel-provider';
+
 import { Loader2, RefreshCw, Save, Search, Settings, ShieldOff, SlidersHorizontal, Trash2, X } from 'lucide-react';
 import { useCallback, useDeferredValue, useEffect, useState, useTransition } from 'react';
 import { toast } from 'sonner';
@@ -44,10 +46,6 @@ type PointsResponse = {
   };
 };
 
-type BotSettingsResponse = {
-  settings?: Record<string, unknown>;
-};
-
 type DonationSettingsResponse = {
   settings?: {
     pointsPerK?: number;
@@ -79,6 +77,10 @@ async function postJson(path: string, body: unknown) {
 }
 
 export function PointsPage() {
+  const { canWrite, canRead } = useBotChannel();
+  const writable = canWrite('points');
+  const donationReadable = canRead('points') || canRead('donations');
+  const donationWritable = writable || canWrite('donations');
   const [rows, setRows] = useState<PointRow[]>([]);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -115,7 +117,7 @@ export function PointsPage() {
       if (term) params.set('q', term);
       const [data, donationData] = await Promise.all([
         readJson<PointsResponse>(`/api/channelpoints/list?${params.toString()}`),
-        readJson<DonationSettingsResponse>('/api/donation/settings'),
+        donationReadable ? readJson<DonationSettingsResponse>('/api/donation/settings') : Promise.resolve(null),
       ]);
       const nextRows = data?.points || [];
       setRows(nextRows);
@@ -131,13 +133,14 @@ export function PointsPage() {
       setExcludeText(data?.settings?.channelPointsExcludeUserIdsText || '');
       setPointsPerDonationK(String(donationData?.settings?.pointsPerK ?? 10));
     });
-  }, [deferredQuery, page, sortBy]);
+  }, [deferredQuery, page, sortBy, donationReadable]);
 
   useEffect(() => {
     load();
   }, [load]);
 
   const savePoints = async (row: PointRow) => {
+    if (!writable) return;
     const userId = rowUserId(row);
     if (!userId) return;
     setBusyId(`save:${userId}`);
@@ -157,6 +160,7 @@ export function PointsPage() {
   };
 
   const adjustPoints = async (row: PointRow, delta: number) => {
+    if (!writable) return;
     const userId = rowUserId(row);
     if (!userId) return;
     setBusyId(`adjust:${userId}:${delta}`);
@@ -176,6 +180,7 @@ export function PointsPage() {
   };
 
   const deletePoints = async (row: PointRow) => {
+    if (!writable) return;
     const userId = rowUserId(row);
     if (!userId || !window.confirm(`${row.username || userId}님의 포인트 기록을 삭제할까요?`)) return;
     setBusyId(`delete:${userId}`);
@@ -191,18 +196,17 @@ export function PointsPage() {
   };
 
   const savePointSettings = async () => {
+    if (!writable) return;
     setBusyId('settings');
     try {
-      const current = await readJson<BotSettingsResponse>('/api/bot/settings');
       await postJson('/api/bot/settings', {
         settings: {
-          ...(current?.settings || {}),
           channelPointsPerChat: Math.floor(Math.max(0, Number(pointsPerChat || 0))),
           channelPointsPerAttendance: Math.floor(Math.max(0, Number(pointsPerAttendance || 0))),
           channelPointsExcludeUserIdsText: excludeText,
         },
       });
-      await postJson('/api/donation/settings', {
+      if (donationWritable) await postJson('/api/donation/settings', {
         settings: {
           pointsPerK: Math.max(0, Number(pointsPerDonationK || 0)),
         },
@@ -353,7 +357,7 @@ export function PointsPage() {
                         </td>
                         <td className="px-4 py-3 font-bold">{formatPoints(Number(row.points || 0))}</td>
                         <td className="px-4 py-3">
-                          <Input
+                          <Input disabled={!writable}
                             value={drafts[userId] ?? String(Number(row.points || 0))}
                             onChange={(event) => setDrafts((current) => ({ ...current, [userId]: event.target.value }))}
                             inputMode="numeric"
@@ -364,7 +368,7 @@ export function PointsPage() {
                         <td className="px-4 py-3">
                           <div className="flex flex-wrap gap-1.5">
                             {[100, 1000, -100].map((delta) => (
-                              <Button key={delta} type="button" variant="outline" size="sm" onClick={() => adjustPoints(row, delta)} disabled={!!busyId}>
+                              <Button key={delta} type="button" variant="outline" size="sm" onClick={() => adjustPoints(row, delta)} disabled={!writable || (!!busyId)}>
                                 {delta > 0 ? `+${delta}` : delta}
                               </Button>
                             ))}
@@ -372,10 +376,10 @@ export function PointsPage() {
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-1">
-                            <Button type="button" variant="ghost" size="icon" onClick={() => savePoints(row)} disabled={!!busyId} aria-label="포인트 저장">
+                            <Button type="button" variant="ghost" size="icon" onClick={() => savePoints(row)} disabled={!writable || (!!busyId)} aria-label="포인트 저장">
                               {busyId === `save:${userId}` ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                             </Button>
-                            <Button type="button" variant="ghost" size="icon" onClick={() => deletePoints(row)} disabled={!!busyId} aria-label="포인트 삭제">
+                            <Button type="button" variant="ghost" size="icon" onClick={() => deletePoints(row)} disabled={!writable || (!!busyId)} aria-label="포인트 삭제">
                               {busyId === `delete:${userId}` ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
                             </Button>
                           </div>
@@ -421,20 +425,20 @@ export function PointsPage() {
               <div className="grid min-w-0 gap-3 sm:grid-cols-[repeat(3,minmax(0,1fr))]">
                 <label className="grid gap-2 text-sm font-semibold">
                   채팅 1개당 포인트
-                  <Input value={pointsPerChat} onChange={(event) => setPointsPerChat(event.target.value)} inputMode="numeric" />
+                  <Input disabled={!writable} value={pointsPerChat} onChange={(event) => setPointsPerChat(event.target.value)} inputMode="numeric" />
                 </label>
                 <label className="grid gap-2 text-sm font-semibold">
                   출석 포인트
-                  <Input value={pointsPerAttendance} onChange={(event) => setPointsPerAttendance(event.target.value)} inputMode="numeric" />
+                  <Input disabled={!writable} value={pointsPerAttendance} onChange={(event) => setPointsPerAttendance(event.target.value)} inputMode="numeric" />
                 </label>
-                <label className="grid gap-2 text-sm font-semibold">
+                {donationReadable ? <label className="grid gap-2 text-sm font-semibold">
                   후원 1,000원당 포인트
-                  <Input value={pointsPerDonationK} onChange={(event) => setPointsPerDonationK(event.target.value)} inputMode="numeric" />
-                </label>
+                  <Input disabled={!writable || !donationWritable} value={pointsPerDonationK} onChange={(event) => setPointsPerDonationK(event.target.value)} inputMode="numeric" />
+                </label> : null}
               </div>
               <label className="grid gap-2 text-sm font-semibold">
                 포인트 적립 제외 UUID
-                <textarea
+                <textarea disabled={!writable}
                   value={excludeText}
                   onChange={(event) => setExcludeText(event.target.value)}
                   placeholder={'aru_로 시작하는 아루봇 UUID\nCHZZK 또는 CIME 플랫폼 채팅 ID'}
@@ -444,7 +448,7 @@ export function PointsPage() {
             </div>
             <div className="flex flex-col-reverse gap-2 border-t bg-background/64 p-[clamp(1rem,2.4vw,1.5rem)] sm:flex-row sm:justify-end">
               <Button type="button" variant="ghost" onClick={() => setSettingsOpen(false)}>취소</Button>
-              <Button type="button" onClick={savePointSettings} disabled={busyId === 'settings'}>
+              <Button type="button" onClick={savePointSettings} disabled={!writable || (busyId === 'settings')}>
                 {busyId === 'settings' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                 설정 저장
               </Button>

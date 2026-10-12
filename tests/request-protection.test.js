@@ -85,6 +85,32 @@ test('caps global concurrency even across different clients', () => {
   first.emit('close');
 });
 
+test('authenticated stream promotion preserves API capacity and releases its separate budget once', () => {
+  const guard = createRequestProtection({ limits: { httpConcurrent: 1, streamConcurrent: 2, streamConcurrentPerIp: 1 } });
+  const req = request();
+  const first = response();
+  expect(guard.promoteStream(req, first)).toBe(false);
+  guard.http(req, first, () => {});
+  expect(guard.promoteStream(req, first)).toBe(true);
+  expect(guard.promoteStream(req, first)).toBe(true);
+  const api = response(); const next = jest.fn();
+  guard.http(req, api, next); expect(next).toHaveBeenCalledTimes(1); api.emit('finish');
+  const denied = response(); guard.http(req, denied, () => {});
+  expect(guard.promoteStream(req, denied)).toBe(false); expect(denied.statusCode).toBe(429);
+  first.emit('finish'); first.emit('close');
+  const again = response(); guard.http(req, again, () => {});
+  expect(guard.promoteStream(req, again)).toBe(true); again.emit('close');
+});
+
+test('stream budget remains bounded across different IPs', () => {
+  const guard = createRequestProtection({ limits: { streamConcurrent: 1 } });
+  const first = response(); guard.http(request(), first, () => {});
+  expect(guard.promoteStream(request(), first)).toBe(true);
+  const second = response(); const other = request('198.51.100.2'); guard.http(other, second, () => {});
+  expect(guard.promoteStream(other, second)).toBe(false); expect(second.statusCode).toBe(503);
+  first.emit('close');
+});
+
 test('auth route casing cannot obtain a second budget', () => {
   const guard = createRequestProtection();
   for (let i = 0; i < 60; i += 1) {

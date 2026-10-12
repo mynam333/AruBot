@@ -52,6 +52,7 @@
     "test:avatars": "node --test tests/local-avatars.test.cjs tests/local-avatars-engine-v3.test.cjs tests/local-avatars-engine-review.test.cjs tests/local-avatars-service-v3.test.cjs tests/local-avatars-overlay-v3.test.cjs tests/local-avatar-relay.test.mjs",
     "test:avatars:ui": "node --test tests/local-avatars-editor-v3.test.cjs",
     "test:wheel": "node --test tests/participation-wheel-core.test.mjs tests/participation-wheel-store.test.mjs tests/participation-wheel-runtime.test.mjs src/features/wheel/wheel-motion.test.mjs",
+    "test:emotes": "node --test tests/emote-connection.test.mjs tests/emote-engine.test.mjs tests/emote-overlay-extractor.test.mjs tests/emote-overlay-runtime.test.mjs tests/emote-overlay-store.test.mjs tests/emote-overlay-routes.test.mjs",
     "test:watch": "jest --watch"
   },
   "dependencies": {

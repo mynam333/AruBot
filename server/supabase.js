@@ -11,7 +11,16 @@ import { cleanupDrawingBatch, drawingRetentionDays, refundDrawingWithClient } fr
 import { MAX_ORIGINAL_BYTES } from '../shared/drawing/limits.js';
 import { createParticipationWheelStore } from './participation-wheel.js';
 import { repairYoutubeAccountsWithClient, upsertYoutubeIdentityWithClient, updateYoutubeProfileWithClient } from './youtube-account-identity.js';
+import { createBotManagementStore } from './bot-management-store.js';
+import { createSongbookStore } from './songbook-store.js';
+import { createEmoteOverlayStore } from './emote-overlay-store.js';
+import { createCommandAdmissionStore } from './command-admission-store.js';
 const { Client, Pool } = pkg;
+
+export const botManagementStore = createBotManagementStore({ withPgClient, ensureIdentityTables: ensurePlatformIdentityTables });
+export const songbookStore = createSongbookStore({ withPgClient, ensureIdentityTables: ensurePlatformIdentityTables });
+export const emoteOverlayStore = createEmoteOverlayStore({ withPgClient, ensureIdentityTables: ensurePlatformIdentityTables });
+export const commandAdmissionStore = createCommandAdmissionStore({ withPgClient });
 
 export const {
   getParticipationWheel, updateParticipationWheel, actParticipationWheel, enterParticipationWheel,
@@ -8140,6 +8149,30 @@ export async function setBotSettings(sid, settingsObj) {
   const settings = settingsObj || {};
   const { error } = await supabase.from('bot_settings').upsert({ sid, settings });
   if (error) throw error;
+}
+
+export async function patchBotSettings(sid, patch) {
+  return updateBotSettingsAtomically(sid, (current) => ({ ...current, ...patch }));
+}
+
+// Merge delegated edits while holding the row lock so another manager's edits
+// and owner-only settings cannot be overwritten by a stale read.
+export async function updateBotSettingsAtomically(sid, updater) {
+  ensure();
+  return withPgClient(async (pg) => {
+    await pg.query('begin');
+    try {
+      await pg.query("insert into bot_settings (sid, settings) values ($1, '{}'::jsonb) on conflict (sid) do nothing", [sid]);
+      const { rows } = await pg.query('select settings from bot_settings where sid = $1 for update', [sid]);
+      const next = await updater(rows[0]?.settings || {});
+      await pg.query('update bot_settings set settings = $2::jsonb where sid = $1', [sid, JSON.stringify(next)]);
+      await pg.query('commit');
+      return next;
+    } catch (error) {
+      try { await pg.query('rollback'); } catch { /* Preserve the original failure. */ }
+      throw error;
+    }
+  }, 0);
 }
 
 // Find sid by viewer token stored in bot_settings.settings.videoDonationViewerToken

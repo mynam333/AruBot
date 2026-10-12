@@ -1,5 +1,7 @@
 'use client';
 
+import { useBotChannel } from '@/components/app-shell/bot-channel-provider';
+
 import { Clapperboard, GripVertical, Loader2, Pause, Play, RefreshCw, RotateCcw, SkipForward, Trash2, UserRound, Volume2, VolumeX } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { toast } from 'sonner';
@@ -133,24 +135,27 @@ function VideoDonationItemCard({
   onRefundDelete: () => void;
   onSkip?: () => void;
 }) {
+  const { canWrite } = useBotChannel();
+  const writable = canWrite('video');
   const thumb = thumbnailUrl(item);
   const time = requestedAt(item);
 
   return (
     <div
-      draggable={draggable}
+      draggable={writable && draggable}
       onDragStart={(event) => {
+        if (!writable) { event.preventDefault(); return; }
         event.dataTransfer.effectAllowed = 'move';
         onDragStart?.();
       }}
       onDragOver={(event) => {
-        if (!draggable) return;
+        if (!writable || !draggable) return;
         event.preventDefault();
         event.dataTransfer.dropEffect = 'move';
         onDragOver?.();
       }}
       onDrop={(event) => {
-        if (!draggable) return;
+        if (!writable || !draggable) return;
         event.preventDefault();
         onDrop?.();
       }}
@@ -217,13 +222,13 @@ function VideoDonationItemCard({
           </div>
 
           <div className="flex flex-wrap justify-end gap-2">
-            {current && onSkip ? <Button type="button" size="icon" variant="outline" onClick={onSkip} disabled={busy} title="현재 영상 스킵" aria-label="현재 영상 스킵"><SkipForward className="h-4 w-4" /></Button> : null}
+            {current && onSkip ? <Button type="button" size="icon" variant="outline" onClick={onSkip} disabled={!writable || (busy)} title="현재 영상 스킵" aria-label="현재 영상 스킵"><SkipForward className="h-4 w-4" /></Button> : null}
             {!item.idle ? <>
-            <Button type="button" variant="outline" onClick={onDelete} disabled={busy}>
+            <Button type="button" variant="outline" onClick={onDelete} disabled={!writable || (busy)}>
               {busy ? <Loader2 className="h-[1em] w-[1em] animate-spin" /> : <Trash2 className="h-[1em] w-[1em]" />}
               삭제
             </Button>
-            <Button type="button" variant="destructive" onClick={onRefundDelete} disabled={busy}>
+            <Button type="button" variant="destructive" onClick={onRefundDelete} disabled={!writable || (busy)}>
               {busy ? <Loader2 className="h-[1em] w-[1em] animate-spin" /> : <RotateCcw className="h-[1em] w-[1em]" />}
               삭제 후 반환
             </Button>
@@ -236,6 +241,8 @@ function VideoDonationItemCard({
 }
 
 export function VideoDonationQueuePage() {
+  const { canWrite } = useBotChannel();
+  const writable = canWrite('video');
   const [items, setItems] = useState<VideoDonationItem[]>([]);
   const [currentItem, setCurrentItem] = useState<VideoDonationItem | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
@@ -372,6 +379,7 @@ export function VideoDonationQueuePage() {
   }, [load]);
 
   const persistOrder = async (nextItems: VideoDonationItem[]) => {
+    if (!writable) return;
     setItems(nextItems);
     try {
       await postJson('/api/video-donation/reorder', { ids: nextItems.map((item) => item.id) });
@@ -384,6 +392,7 @@ export function VideoDonationQueuePage() {
   };
 
   const moveWaitingItem = (targetId: string) => {
+    if (!writable) return;
     if (!draggingId || draggingId === targetId) return;
     const from = waitingItems.findIndex((item) => item.id === draggingId);
     const to = waitingItems.findIndex((item) => item.id === targetId);
@@ -397,6 +406,7 @@ export function VideoDonationQueuePage() {
   };
 
   const removeItem = async (item: VideoDonationItem, refund: boolean) => {
+    if (!writable) return;
     const action = refund ? '삭제하고 포인트를 반환할까요?' : '대기열에서 삭제할까요?';
     if (!window.confirm(`${item.title || mediaIdLabel(item) || '영상'}을 ${action}`)) return;
     setBusyId(item.id);
@@ -412,6 +422,7 @@ export function VideoDonationQueuePage() {
   };
 
   const applyVolume = async () => {
+    if (!writable) return;
     const nextVolume = Math.max(0, Math.min(100, Math.round(Number(volume || 0))));
     setVolumePending(true);
     try {
@@ -426,6 +437,7 @@ export function VideoDonationQueuePage() {
   };
 
   const controlPlayback = async (op: 'pause' | 'play' | 'skip') => {
+    if (!writable) return;
     if (!currentItem || playbackPending) return;
     setPlaybackPending(op);
     queuePayloadVersionRef.current += 1;
@@ -471,7 +483,7 @@ export function VideoDonationQueuePage() {
                 size="icon"
                 variant={!paused && currentItem ? 'soft' : 'ghost'}
                 onClick={() => void controlPlayback('play')}
-                disabled={!currentItem || !paused || playbackPending !== null}
+                disabled={!writable || (!currentItem || !paused || playbackPending !== null)}
                 aria-label="영상 후원 재생"
                 title="영상 후원 재생"
               >
@@ -482,20 +494,20 @@ export function VideoDonationQueuePage() {
                 size="icon"
                 variant={paused && currentItem ? 'soft' : 'ghost'}
                 onClick={() => void controlPlayback('pause')}
-                disabled={!currentItem || paused || playbackPending !== null}
+                disabled={!writable || (!currentItem || paused || playbackPending !== null)}
                 aria-label="영상 후원 일시정지"
                 title="영상 후원 일시정지"
               >
                 {playbackPending === 'pause' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Pause className="h-4 w-4" />}
               </Button>
               <Button type="button" size="icon" variant="ghost" onClick={() => void controlPlayback('skip')}
-                disabled={!currentItem || playbackPending !== null} aria-label="영상 후원 스킵" title="현재 영상 스킵">
+                disabled={!writable || (!currentItem || playbackPending !== null)} aria-label="영상 후원 스킵" title="현재 영상 스킵">
                 {playbackPending === 'skip' ? <Loader2 className="h-4 w-4 animate-spin" /> : <SkipForward className="h-4 w-4" />}
               </Button>
             </div>
             <div className="flex min-h-[var(--control-height)] min-w-[min(100%,18rem)] items-center gap-2 rounded-[var(--radius-control)] border bg-card/74 px-[clamp(0.8rem,1.4vw,1rem)] shadow-subtle backdrop-blur">
               {volume <= 0 ? <VolumeX className="h-[1em] w-[1em] text-muted-foreground" /> : <Volume2 className="h-[1em] w-[1em] text-primary" />}
-              <input
+              <input disabled={!writable}
                 type="range"
                 min="0"
                 max="100"
@@ -506,7 +518,7 @@ export function VideoDonationQueuePage() {
               />
               <span className="w-[4ch] text-right text-sm font-semibold tabular-nums">{volume}%</span>
             </div>
-            <Button type="button" variant="secondary" onClick={() => void applyVolume()} disabled={volumePending}>
+            <Button type="button" variant="secondary" onClick={() => void applyVolume()} disabled={!writable || (volumePending)}>
               {volumePending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Volume2 className="h-4 w-4" />}
               소리 적용
             </Button>
@@ -520,8 +532,8 @@ export function VideoDonationQueuePage() {
       </section>
 
       <ViewerTokenPanel
-        title="영상 후원 화면 주소"
-        description="이 주소를 OBS 브라우저 소스에 넣으면 시청자가 신청한 영상이 방송 화면에 표시돼요."
+        title="영상 후원 · BGM 주소"
+        description="영상 후원 플레이어, BGM 플레이어와 신청곡 대기열"
         endpoint="/api/video-donation/viewer-url"
         rotateEndpoint="/api/video-donation/rotate-viewer-token"
       />

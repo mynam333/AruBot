@@ -33,6 +33,8 @@ function loadPages() {
       '@/components/ui/share-link-actions': { ShareLinkActions: placeholder },
       './public-point-earning-summary': { PublicPointEarningSummary: placeholder },
       './public-realtime-data-view': { PublicRealtimeDataView: placeholder },
+      './public-request-queue': { PublicRequestQueue: placeholder },
+      './public-songbook': { PublicSongbook: placeholder },
     }),
   };
 }

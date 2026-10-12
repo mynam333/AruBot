@@ -1,5 +1,7 @@
 'use client';
 
+import { useBotChannel } from '@/components/app-shell/bot-channel-provider';
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ComponentType } from 'react';
 import { toast } from 'sonner';
@@ -209,8 +211,11 @@ function ToggleRow({
   description?: string;
   onClick: () => void;
 }) {
+  const { canWrite } = useBotChannel();
+  const writable = canWrite('automations');
   return (
     <button
+      disabled={!writable}
       type="button"
       onClick={onClick}
       className={cn(
@@ -228,12 +233,14 @@ function ToggleRow({
 }
 
 function SecretCopyBlock({ value, empty = '생성된 주소가 없습니다.' }: { value: string; empty?: string }) {
+  const { active } = useBotChannel();
   const copy = async () => {
     if (!value) return;
     await navigator.clipboard?.writeText(value).catch(() => undefined);
     toast.success('주소를 복사했습니다.');
   };
 
+  if (active?.role === 'manager') return null;
   return (
     <button
       type="button"
@@ -265,8 +272,11 @@ function SegmentedButton({
   icon: ComponentType<{ className?: string }>;
   onClick: () => void;
 }) {
+  const { canWrite } = useBotChannel();
+  const writable = canWrite('automations');
   return (
     <button
+      disabled={!writable}
       type="button"
       onClick={onClick}
       className={cn(
@@ -289,6 +299,10 @@ function SegmentedButton({
 }
 
 export function AutomationsPage() {
+  const { active, canWrite, canRead } = useBotChannel();
+  const writable = canWrite('automations');
+  const ownerControls = active?.role !== 'manager';
+  const actionsReadable = canRead('actions');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [activeTab, setActiveTab] = useState<AutomationTab>('local');
   const [overview, setOverview] = useState<Overview | null>(null);
@@ -363,7 +377,7 @@ export function AutomationsPage() {
     setLoading(true);
     const [overviewData, blueprintData] = await Promise.all([
       readJson<Overview>('/api/automations/overview'),
-      readJson<{ blueprints?: Blueprint[] }>('/api/action-blueprints'),
+      actionsReadable ? readJson<{ blueprints?: Blueprint[] }>('/api/action-blueprints') : Promise.resolve(null),
     ]);
     if (overviewData) {
       setOverview(overviewData);
@@ -393,7 +407,7 @@ export function AutomationsPage() {
     const firstPublished = nextBlueprints.find((item) => item.enabled !== false && item.version?.published);
     setSelectedControlActionId((current) => current || firstPublished?.slug || firstPublished?.id || '');
     setLoading(false);
-  }, []);
+  }, [actionsReadable]);
 
   useEffect(() => {
     load();
@@ -420,6 +434,7 @@ export function AutomationsPage() {
   }, [availableObsFilters, selectedObsFilter]);
 
   const saveSettings = async () => {
+    if (!writable) return;
     setSaving(true);
     try {
       const data = await jsonRequest<{ settings: AutomationSettings }>('/api/automations/settings', 'PUT', {
@@ -476,6 +491,7 @@ export function AutomationsPage() {
   };
 
   const discoverTits = async () => {
+    if (!writable) return;
     setBusyAction('tits.discover');
     try {
       const connection = await ensureTitsConnection();
@@ -496,6 +512,7 @@ export function AutomationsPage() {
   };
 
   const runTitsThrow = async () => {
+    if (!writable) return;
     if (!selectedTitsItem) return toast.warning('던질 아이템을 선택해 주세요.');
     setBusyAction('tits.throw');
     try {
@@ -515,6 +532,7 @@ export function AutomationsPage() {
   };
 
   const runTitsTrigger = async () => {
+    if (!writable) return;
     if (!selectedTitsTrigger) return toast.warning('실행할 트리거를 선택해 주세요.');
     setBusyAction('tits.trigger');
     try {
@@ -533,6 +551,7 @@ export function AutomationsPage() {
   };
 
   const discoverVtube = async () => {
+    if (!writable) return;
     setBusyAction('vtube.discover');
     try {
       const connection = await ensureVtubeConnection();
@@ -552,6 +571,7 @@ export function AutomationsPage() {
   };
 
   const runVtubeHotkey = async () => {
+    if (!writable) return;
     if (!selectedVtubeHotkey) return toast.warning('실행할 VTube Studio 핫키를 선택해 주세요.');
     setBusyAction('vtube.hotkey');
     try {
@@ -571,6 +591,7 @@ export function AutomationsPage() {
   };
 
   const discoverObs = async () => {
+    if (!writable) return;
     setBusyAction('obs.discover');
     try {
       const connection = await ensureObsConnection();
@@ -590,6 +611,7 @@ export function AutomationsPage() {
   };
 
   const runObsAction = async () => {
+    if (!writable) return;
     setBusyAction('obs.action');
     try {
       const connection = await ensureObsConnection();
@@ -617,6 +639,7 @@ export function AutomationsPage() {
   };
 
   const testTts = async () => {
+    if (!writable) return;
     setBusyAction('tts');
     try {
       await jsonRequest('/api/automations/tts/test', 'POST', {
@@ -634,6 +657,7 @@ export function AutomationsPage() {
   };
 
   const testSound = async (fileId: string) => {
+    if (!writable) return;
     setBusyAction(`sound-test:${fileId}`);
     try {
       await jsonRequest('/api/automations/sounds/test', 'POST', { fileId });
@@ -646,6 +670,7 @@ export function AutomationsPage() {
   };
 
   const runNetwork = async (type: 'http' | 'websocket' | 'udp') => {
+    if (!writable) return;
     setBusyAction(`network.${type}`);
     try {
       const payload = type === 'http'
@@ -663,6 +688,7 @@ export function AutomationsPage() {
   };
 
   const createControlLink = async () => {
+    if (!ownerControls) return;
     if (!selectedControlActionId) return toast.warning('실행할 액션을 선택해 주세요.');
     setBusyAction('control');
     try {
@@ -682,6 +708,7 @@ export function AutomationsPage() {
   };
 
   const createLocalProgramToken = async () => {
+    if (!ownerControls) return;
     setBusyAction('local-program');
     try {
       const data = await jsonRequest<{ token?: string | null; tokenMasked?: string | null }>('/api/automations/local-agents/pair', 'POST', {
@@ -704,6 +731,7 @@ export function AutomationsPage() {
   };
 
   const rotateLocalProgramToken = async () => {
+    if (!ownerControls) return;
     setBusyAction('local-program-rotate');
     try {
       const data = await jsonRequest<{ token: string }>('/api/automations/local-agents/rotate', 'POST', {
@@ -721,6 +749,7 @@ export function AutomationsPage() {
   };
 
   const saveConnection = async (connection: AutomationConnection) => {
+    if (!writable) return;
     const draft = connectionDrafts[connection.id];
     if (!draft) return;
     setBusyAction(`connection-save:${connection.id}`);
@@ -746,6 +775,7 @@ export function AutomationsPage() {
   };
 
   const removeConnection = async (connection: AutomationConnection) => {
+    if (!writable) return;
     if (!window.confirm(`${connection.name || '연결 항목'}을 삭제할까요?`)) return;
     setBusyAction(`connection-delete:${connection.id}`);
     try {
@@ -764,6 +794,7 @@ export function AutomationsPage() {
   };
 
   const uploadSound = async (file?: File) => {
+    if (!writable) return;
     if (!file) return;
     setBusyAction('sound');
     try {
@@ -789,6 +820,7 @@ export function AutomationsPage() {
   };
 
   const deleteSound = async (fileId: string) => {
+    if (!writable) return;
     setBusyAction(fileId);
     try {
       await fetch(apiUrl(`/api/automations/assets/sounds/${encodeURIComponent(fileId)}`), {
@@ -805,6 +837,7 @@ export function AutomationsPage() {
   };
 
   const loadFxViewerUrl = async () => {
+    if (!ownerControls) return;
     setBusyAction('fx-viewer-url');
     try {
       const data = await readJson<{ path?: string }>('/api/fx/viewer-url');
@@ -834,20 +867,20 @@ export function AutomationsPage() {
             <SegmentedButton active={mode === 'local'} title="방송 PC 실행" description="내 PC의 방송 도구를 바로 움직여요" icon={HardDrive} onClick={() => setMode('local')} />
             <SegmentedButton active={mode === 'web'} title="웹에서 실행" description="외부에서 접근 가능한 도구에 사용해요" icon={Database} onClick={() => setMode('web')} />
           </div>
-          <Button type="button" variant="outline" onClick={saveSettings} disabled={saving}>
+          <Button type="button" variant="outline" onClick={saveSettings} disabled={!writable || (saving)}>
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
             설정 저장
           </Button>
         </CardContent>
       </Card>
-      <Card>
+      {ownerControls ? (<Card>
         <CardHeader>
           <CardTitle>로컬 프로그램 연결</CardTitle>
           <CardDescription>생성된 토큰은 한 번만 표시됩니다. 복사해서 로컬 프로그램에 붙여넣으세요.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
           <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(var(--control-height),0.32fr)_minmax(var(--control-height),0.32fr)]">
-            <Input value={localProgramName} onChange={(event) => setLocalProgramName(event.target.value)} placeholder="방송 PC" />
+            <Input disabled={!writable} value={localProgramName} onChange={(event) => setLocalProgramName(event.target.value)} placeholder="방송 PC" />
             <Button type="button" variant="outline" onClick={createLocalProgramToken} disabled={busyAction === 'local-program'}>
               {busyAction === 'local-program' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Copy className="h-4 w-4" />}
               토큰 확인
@@ -871,8 +904,8 @@ export function AutomationsPage() {
             {!localAgents.length ? <div className="rounded-[var(--radius-control)] border bg-background/70 p-4 text-sm text-muted-foreground">등록된 로컬 프로그램이 없습니다.</div> : null}
           </div>
         </CardContent>
-      </Card>
-      <Card className="xl:col-span-2">
+      </Card>) : null}
+      {ownerControls ? (<Card className="xl:col-span-2">
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><Sparkles className="h-5 w-5 text-primary" />FX 오버레이</CardTitle>
           <CardDescription>OBS 브라우저 소스에 추가하면 실행 액션의 이미지, 비디오, 사운드 효과가 실시간으로 표시됩니다.</CardDescription>
@@ -887,7 +920,7 @@ export function AutomationsPage() {
           </div>
           <SecretCopyBlock value={fxViewerUrl} empty="OBS 주소를 만들면 여기에 표시됩니다." />
         </CardContent>
-      </Card>
+      </Card>) : null}
     </div>
   );
 
@@ -900,9 +933,9 @@ export function AutomationsPage() {
         </CardHeader>
         <CardContent className="grid gap-4">
           <Field label="OBS WebSocket 주소">
-            <Input value={obsEndpoint} onChange={(event) => setObsEndpoint(event.target.value)} placeholder="ws://localhost:4455" />
+            <Input disabled={!writable} value={obsEndpoint} onChange={(event) => setObsEndpoint(event.target.value)} placeholder="ws://localhost:4455" />
           </Field>
-          <Button type="button" onClick={discoverObs} disabled={busyAction === 'obs.discover'}>
+          <Button type="button" onClick={discoverObs} disabled={!writable || (busyAction === 'obs.discover')}>
             {busyAction === 'obs.discover' ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
             장면/소스 불러오기
           </Button>
@@ -920,7 +953,7 @@ export function AutomationsPage() {
         </CardHeader>
         <CardContent className="grid gap-4">
           <Field label="동작">
-            <select value={selectedObsAction} onChange={(event) => setSelectedObsAction(event.target.value)} className="min-h-[var(--control-height)] w-full min-w-0 rounded-[var(--radius-control)] border bg-background px-[clamp(0.75rem,1.4vw,1rem)] text-sm">
+            <select disabled={!writable} value={selectedObsAction} onChange={(event) => setSelectedObsAction(event.target.value)} className="min-h-[var(--control-height)] w-full min-w-0 rounded-[var(--radius-control)] border bg-background px-[clamp(0.75rem,1.4vw,1rem)] text-sm">
               <option value="scene.switch">장면 전환</option>
               <option value="source.visibility">소스 표시</option>
               <option value="filter.enabled">필터 켜기</option>
@@ -932,32 +965,32 @@ export function AutomationsPage() {
             </select>
           </Field>
           <Field label="장면">
-            <select value={selectedObsScene} onChange={(event) => setSelectedObsScene(event.target.value)} className="min-h-[var(--control-height)] w-full min-w-0 rounded-[var(--radius-control)] border bg-background px-[clamp(0.75rem,1.4vw,1rem)] text-sm">
+            <select disabled={!writable} value={selectedObsScene} onChange={(event) => setSelectedObsScene(event.target.value)} className="min-h-[var(--control-height)] w-full min-w-0 rounded-[var(--radius-control)] border bg-background px-[clamp(0.75rem,1.4vw,1rem)] text-sm">
               <option value="">장면 선택</option>
               {obsScenes.map((scene) => <option key={scene.id || scene.name} value={scene.name}>{scene.name}{scene.current ? ' · 현재' : ''}</option>)}
             </select>
           </Field>
           <Field label="소스">
-            <select value={selectedObsSource} onChange={(event) => setSelectedObsSource(event.target.value)} className="min-h-[var(--control-height)] w-full min-w-0 rounded-[var(--radius-control)] border bg-background px-[clamp(0.75rem,1.4vw,1rem)] text-sm">
+            <select disabled={!writable} value={selectedObsSource} onChange={(event) => setSelectedObsSource(event.target.value)} className="min-h-[var(--control-height)] w-full min-w-0 rounded-[var(--radius-control)] border bg-background px-[clamp(0.75rem,1.4vw,1rem)] text-sm">
               <option value="">소스 선택</option>
               {obsSources.map((source) => <option key={`${source.sceneName || 'global'}:${source.name}`} value={source.name}>{source.name}{source.sceneName ? ` · ${source.sceneName}` : ''}</option>)}
             </select>
           </Field>
           {selectedObsAction.startsWith('filter.') ? (
             <Field label="필터 대상 종류">
-              <select value={selectedObsFilterTargetType} onChange={(event) => setSelectedObsFilterTargetType(event.target.value === 'scene' ? 'scene' : 'source')} className="min-h-[var(--control-height)] w-full min-w-0 rounded-[var(--radius-control)] border bg-background px-[clamp(0.75rem,1.4vw,1rem)] text-sm">
+              <select disabled={!writable} value={selectedObsFilterTargetType} onChange={(event) => setSelectedObsFilterTargetType(event.target.value === 'scene' ? 'scene' : 'source')} className="min-h-[var(--control-height)] w-full min-w-0 rounded-[var(--radius-control)] border bg-background px-[clamp(0.75rem,1.4vw,1rem)] text-sm">
                 <option value="source">소스</option>
                 <option value="scene">장면</option>
               </select>
             </Field>
           ) : null}
           <Field label="필터">
-            <select value={selectedObsFilter} onChange={(event) => setSelectedObsFilter(event.target.value)} className="min-h-[var(--control-height)] w-full min-w-0 rounded-[var(--radius-control)] border bg-background px-[clamp(0.75rem,1.4vw,1rem)] text-sm">
+            <select disabled={!writable} value={selectedObsFilter} onChange={(event) => setSelectedObsFilter(event.target.value)} className="min-h-[var(--control-height)] w-full min-w-0 rounded-[var(--radius-control)] border bg-background px-[clamp(0.75rem,1.4vw,1rem)] text-sm">
               <option value="">필터 선택</option>
               {availableObsFilters.map((filter) => <option key={`${filter.targetType || 'source'}:${filter.sourceName || 'source'}:${filter.name}`} value={filter.name}>{filter.name}{filter.sourceName ? ` · ${filter.sourceName}` : ''}</option>)}
             </select>
           </Field>
-          <Button type="button" onClick={runObsAction} disabled={busyAction === 'obs.action'}>
+          <Button type="button" onClick={runObsAction} disabled={!writable || (busyAction === 'obs.action')}>
             {busyAction === 'obs.action' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
             OBS 실행
           </Button>
@@ -975,9 +1008,9 @@ export function AutomationsPage() {
         </CardHeader>
         <CardContent className="grid gap-4">
           <Field label="WebSocket 주소">
-            <Input value={titsEndpoint} onChange={(event) => setTitsEndpoint(event.target.value)} placeholder="ws://localhost:42069" />
+            <Input disabled={!writable} value={titsEndpoint} onChange={(event) => setTitsEndpoint(event.target.value)} placeholder="ws://localhost:42069" />
           </Field>
-          <Button type="button" onClick={discoverTits} disabled={busyAction === 'tits.discover'}>
+          <Button type="button" onClick={discoverTits} disabled={!writable || (busyAction === 'tits.discover')}>
             {busyAction === 'tits.discover' ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
             목록 불러오기
           </Button>
@@ -995,26 +1028,26 @@ export function AutomationsPage() {
         <CardContent className="grid gap-4">
           <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,0.42fr)]">
             <Field label="던질 아이템">
-              <select value={selectedTitsItem} onChange={(event) => setSelectedTitsItem(event.target.value)} className="min-h-[var(--control-height)] w-full min-w-0 rounded-[var(--radius-control)] border bg-background px-[clamp(0.75rem,1.4vw,1rem)] text-sm">
+              <select disabled={!writable} value={selectedTitsItem} onChange={(event) => setSelectedTitsItem(event.target.value)} className="min-h-[var(--control-height)] w-full min-w-0 rounded-[var(--radius-control)] border bg-background px-[clamp(0.75rem,1.4vw,1rem)] text-sm">
                 <option value="">아이템 선택</option>
                 {titsItems.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
               </select>
             </Field>
             <Field label="수량">
-              <Input value={titsThrowAmount} onChange={(event) => setTitsThrowAmount(event.target.value)} inputMode="numeric" />
+              <Input disabled={!writable} value={titsThrowAmount} onChange={(event) => setTitsThrowAmount(event.target.value)} inputMode="numeric" />
             </Field>
           </div>
-          <Button type="button" variant="outline" onClick={runTitsThrow} disabled={busyAction === 'tits.throw' || !selectedTitsItem}>
+          <Button type="button" variant="outline" onClick={runTitsThrow} disabled={!writable || (busyAction === 'tits.throw' || !selectedTitsItem)}>
             {busyAction === 'tits.throw' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
             아이템 던지기
           </Button>
           <Field label="실행 트리거">
-            <select value={selectedTitsTrigger} onChange={(event) => setSelectedTitsTrigger(event.target.value)} className="min-h-[var(--control-height)] w-full min-w-0 rounded-[var(--radius-control)] border bg-background px-[clamp(0.75rem,1.4vw,1rem)] text-sm">
+            <select disabled={!writable} value={selectedTitsTrigger} onChange={(event) => setSelectedTitsTrigger(event.target.value)} className="min-h-[var(--control-height)] w-full min-w-0 rounded-[var(--radius-control)] border bg-background px-[clamp(0.75rem,1.4vw,1rem)] text-sm">
               <option value="">트리거 선택</option>
               {titsTriggers.map((trigger) => <option key={trigger.id || trigger.name} value={trigger.id}>{trigger.name}</option>)}
             </select>
           </Field>
-          <Button type="button" variant="outline" onClick={runTitsTrigger} disabled={busyAction === 'tits.trigger' || !selectedTitsTrigger}>
+          <Button type="button" variant="outline" onClick={runTitsTrigger} disabled={!writable || (busyAction === 'tits.trigger' || !selectedTitsTrigger)}>
             {busyAction === 'tits.trigger' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
             트리거 실행
           </Button>
@@ -1032,13 +1065,13 @@ export function AutomationsPage() {
         </CardHeader>
         <CardContent className="grid gap-4">
           <Field label="WebSocket 주소">
-            <Input value={vtubeEndpoint} onChange={(event) => setVtubeEndpoint(event.target.value)} placeholder="ws://localhost:8001" />
+            <Input disabled={!writable} value={vtubeEndpoint} onChange={(event) => setVtubeEndpoint(event.target.value)} placeholder="ws://localhost:8001" />
           </Field>
           <div className="grid gap-2 rounded-[var(--radius-card)] border bg-background/70 p-[clamp(0.9rem,1.6vw,1.15rem)] text-sm leading-6 text-muted-foreground">
             <div className="font-semibold text-foreground">연결 전 확인</div>
             <div>VTube Studio 설정에서 Plugin API access를 켠 뒤, 로컬 프로그램에서 인증 요청을 허용하세요.</div>
           </div>
-          <Button type="button" onClick={discoverVtube} disabled={busyAction === 'vtube.discover'}>
+          <Button type="button" onClick={discoverVtube} disabled={!writable || (busyAction === 'vtube.discover')}>
             {busyAction === 'vtube.discover' ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
             모델/핫키 불러오기
           </Button>
@@ -1058,12 +1091,12 @@ export function AutomationsPage() {
         </CardHeader>
         <CardContent className="grid gap-4">
           <Field label="실행 핫키">
-            <select value={selectedVtubeHotkey} onChange={(event) => setSelectedVtubeHotkey(event.target.value)} className="min-h-[var(--control-height)] w-full min-w-0 rounded-[var(--radius-control)] border bg-background px-[clamp(0.75rem,1.4vw,1rem)] text-sm">
+            <select disabled={!writable} value={selectedVtubeHotkey} onChange={(event) => setSelectedVtubeHotkey(event.target.value)} className="min-h-[var(--control-height)] w-full min-w-0 rounded-[var(--radius-control)] border bg-background px-[clamp(0.75rem,1.4vw,1rem)] text-sm">
               <option value="">핫키 선택</option>
               {vtubeHotkeys.map((hotkey) => <option key={hotkey.id || hotkey.name} value={hotkey.id}>{hotkey.name || hotkey.id}</option>)}
             </select>
           </Field>
-          <Button type="button" variant="outline" onClick={runVtubeHotkey} disabled={busyAction === 'vtube.hotkey' || !selectedVtubeHotkey}>
+          <Button type="button" variant="outline" onClick={runVtubeHotkey} disabled={!writable || (busyAction === 'vtube.hotkey' || !selectedVtubeHotkey)}>
             {busyAction === 'vtube.hotkey' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
             핫키 실행
           </Button>
@@ -1094,17 +1127,17 @@ export function AutomationsPage() {
         <CardContent className="grid gap-4">
           <ToggleRow checked={ttsEnabled} label={ttsEnabled ? 'TTS 사용 중' : 'TTS 꺼짐'} onClick={() => setTtsEnabled((value) => !value)} />
           <div className="grid gap-3 md:grid-cols-[repeat(3,minmax(0,1fr))]">
-            <Field label="음성 이름"><Input value={ttsVoice} onChange={(event) => setTtsVoice(event.target.value)} /></Field>
-            <Field label="속도"><Input value={ttsRate} onChange={(event) => setTtsRate(event.target.value)} inputMode="decimal" /></Field>
-            <Field label="피치"><Input value={ttsPitch} onChange={(event) => setTtsPitch(event.target.value)} inputMode="decimal" /></Field>
+            <Field label="음성 이름"><Input disabled={!writable} value={ttsVoice} onChange={(event) => setTtsVoice(event.target.value)} /></Field>
+            <Field label="속도"><Input disabled={!writable} value={ttsRate} onChange={(event) => setTtsRate(event.target.value)} inputMode="decimal" /></Field>
+            <Field label="피치"><Input disabled={!writable} value={ttsPitch} onChange={(event) => setTtsPitch(event.target.value)} inputMode="decimal" /></Field>
           </div>
           <Field label="테스트 문구"><Textarea value={ttsText} onChange={setTtsText} /></Field>
           <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="outline" onClick={saveSettings} disabled={saving}>
+            <Button type="button" variant="outline" onClick={saveSettings} disabled={!writable || (saving)}>
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
               설정 저장
             </Button>
-            <Button type="button" onClick={testTts} disabled={busyAction === 'tts'}>
+            <Button type="button" onClick={testTts} disabled={!writable || (busyAction === 'tts')}>
               {busyAction === 'tts' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
               TTS 테스트
             </Button>
@@ -1130,13 +1163,13 @@ export function AutomationsPage() {
             <SegmentedButton active={soundMode === 'managed'} title="클라우드 보관" description="짧은 효과음을 올려 재생" icon={Database} onClick={() => setSoundMode('managed')} />
             <SegmentedButton active={soundMode === 'local'} title="내 PC 저장" description="로컬 사운드 폴더에서 재생" icon={HardDrive} onClick={() => setSoundMode('local')} />
           </div>
-          <input ref={fileInputRef} type="file" accept="audio/*" className="hidden" onChange={(event) => uploadSound(event.target.files?.[0])} />
+          <input disabled={!writable} ref={fileInputRef} type="file" accept="audio/*" className="hidden" onChange={(event) => uploadSound(event.target.files?.[0])} />
           <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="outline" onClick={saveSettings} disabled={saving}>
+            <Button type="button" variant="outline" onClick={saveSettings} disabled={!writable || (saving)}>
               <Save className="h-4 w-4" />
               저장 방식 저장
             </Button>
-            <Button type="button" onClick={() => fileInputRef.current?.click()} disabled={busyAction === 'sound' || soundMode !== 'managed'}>
+            <Button type="button" onClick={() => fileInputRef.current?.click()} disabled={!writable || (busyAction === 'sound' || soundMode !== 'managed')}>
               {busyAction === 'sound' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
               사운드 업로드
             </Button>
@@ -1150,12 +1183,12 @@ export function AutomationsPage() {
                 </div>
                 <div className="flex items-center gap-1">
                   <Tooltip content="로컬 프로그램에서 테스트">
-                    <Button type="button" variant="ghost" size="icon" onClick={() => testSound(file.id)} aria-label="사운드 테스트">
+                    <Button disabled={!writable} type="button" variant="ghost" size="icon" onClick={() => testSound(file.id)} aria-label="사운드 테스트">
                       {busyAction === `sound-test:${file.id}` ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
                     </Button>
                   </Tooltip>
                   <Tooltip content="삭제">
-                    <Button type="button" variant="ghost" size="icon" onClick={() => deleteSound(file.id)} aria-label="사운드 삭제">
+                    <Button disabled={!writable} type="button" variant="ghost" size="icon" onClick={() => deleteSound(file.id)} aria-label="사운드 삭제">
                       {busyAction === file.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
                     </Button>
                   </Tooltip>
@@ -1178,13 +1211,13 @@ export function AutomationsPage() {
         </CardHeader>
         <CardContent className="grid gap-4">
           <div className="grid gap-3 md:grid-cols-[minmax(0,0.32fr)_minmax(0,1fr)]">
-            <Field label="메서드"><Input value={httpMethod} onChange={(event) => setHttpMethod(event.target.value.toUpperCase())} /></Field>
-            <Field label="URL"><Input value={httpUrl} onChange={(event) => setHttpUrl(event.target.value)} /></Field>
+            <Field label="메서드"><Input disabled={!writable} value={httpMethod} onChange={(event) => setHttpMethod(event.target.value.toUpperCase())} /></Field>
+            <Field label="URL"><Input disabled={!writable} value={httpUrl} onChange={(event) => setHttpUrl(event.target.value)} /></Field>
           </div>
           <Field label="Headers(JSON)"><Textarea value={httpHeaders} onChange={setHttpHeaders} /></Field>
           <Field label="Body"><Textarea value={httpBody} onChange={setHttpBody} /></Field>
           <ToggleRow checked={networkAllowPrivate} label="내 방송 PC 주소 허용" description="로컬 프로그램으로 실행할 때만 사용합니다." onClick={() => setNetworkAllowPrivate((value) => !value)} />
-          <Button type="button" onClick={() => runNetwork('http')} disabled={busyAction === 'network.http'}>
+          <Button type="button" onClick={() => runNetwork('http')} disabled={!writable || (busyAction === 'network.http')}>
             {busyAction === 'network.http' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
             HTTP 실행
           </Button>
@@ -1197,9 +1230,9 @@ export function AutomationsPage() {
             <CardDescription>로컬 도구에 메시지를 보냅니다.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-4">
-            <Field label="WebSocket URL"><Input value={websocketUrl} onChange={(event) => setWebsocketUrl(event.target.value)} /></Field>
+            <Field label="WebSocket URL"><Input disabled={!writable} value={websocketUrl} onChange={(event) => setWebsocketUrl(event.target.value)} /></Field>
             <Field label="메시지"><Textarea value={websocketMessage} onChange={setWebsocketMessage} /></Field>
-            <Button type="button" onClick={() => runNetwork('websocket')} disabled={busyAction === 'network.websocket'}>
+            <Button type="button" onClick={() => runNetwork('websocket')} disabled={!writable || (busyAction === 'network.websocket')}>
               {busyAction === 'network.websocket' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
               WebSocket 전송
             </Button>
@@ -1212,11 +1245,11 @@ export function AutomationsPage() {
           </CardHeader>
           <CardContent className="grid gap-4">
             <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,0.38fr)]">
-              <Field label="호스트"><Input value={udpHost} onChange={(event) => setUdpHost(event.target.value)} /></Field>
-              <Field label="포트"><Input value={udpPort} onChange={(event) => setUdpPort(event.target.value)} inputMode="numeric" /></Field>
+              <Field label="호스트"><Input disabled={!writable} value={udpHost} onChange={(event) => setUdpHost(event.target.value)} /></Field>
+              <Field label="포트"><Input disabled={!writable} value={udpPort} onChange={(event) => setUdpPort(event.target.value)} inputMode="numeric" /></Field>
             </div>
             <Field label="메시지"><Textarea value={udpMessage} onChange={setUdpMessage} /></Field>
-            <Button type="button" onClick={() => runNetwork('udp')} disabled={busyAction === 'network.udp'}>
+            <Button type="button" onClick={() => runNetwork('udp')} disabled={!writable || (busyAction === 'network.udp')}>
               {busyAction === 'network.udp' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
               UDP 전송
             </Button>
@@ -1235,10 +1268,10 @@ export function AutomationsPage() {
       <CardContent className="grid gap-4">
         <div className="grid gap-3 md:grid-cols-[minmax(0,0.72fr)_minmax(0,1fr)]">
           <Field label="버튼 이름">
-            <Input value={controlLabel} onChange={(event) => setControlLabel(event.target.value)} />
+            <Input disabled={!writable} value={controlLabel} onChange={(event) => setControlLabel(event.target.value)} />
           </Field>
           <Field label="실행 액션">
-            <select value={selectedControlActionId} onChange={(event) => setSelectedControlActionId(event.target.value)} className="min-h-[var(--control-height)] w-full min-w-0 rounded-[var(--radius-control)] border bg-background px-[clamp(0.75rem,1.4vw,1rem)] text-sm">
+            <select disabled={!writable} value={selectedControlActionId} onChange={(event) => setSelectedControlActionId(event.target.value)} className="min-h-[var(--control-height)] w-full min-w-0 rounded-[var(--radius-control)] border bg-background px-[clamp(0.75rem,1.4vw,1rem)] text-sm">
               <option value="">게시된 액션 선택</option>
               {publishedBlueprints.map((item) => (
                 <option key={item.id} value={item.slug || item.id}>{item.name}</option>
@@ -1286,17 +1319,17 @@ export function AutomationsPage() {
                 <Badge tone={item.executionMode === 'local' ? 'mint' : 'lemon'}>{item.executionMode === 'local' ? '방송 PC 실행' : '웹 실행'}</Badge>
               </div>
               <div className="flex items-center gap-1">
-                <Button type="button" variant="ghost" size="icon" onClick={() => saveConnection(item)} aria-label="연결 저장">
+                <Button disabled={!writable} type="button" variant="ghost" size="icon" onClick={() => saveConnection(item)} aria-label="연결 저장">
                   {busyAction === `connection-save:${item.id}` ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                 </Button>
-                <Button type="button" variant="ghost" size="icon" onClick={() => removeConnection(item)} aria-label="연결 삭제">
+                <Button disabled={!writable} type="button" variant="ghost" size="icon" onClick={() => removeConnection(item)} aria-label="연결 삭제">
                   {busyAction === `connection-delete:${item.id}` ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
                 </Button>
               </div>
             </div>
             <div className="grid gap-3 md:grid-cols-[minmax(0,0.6fr)_minmax(0,1fr)_minmax(var(--control-height),0.28fr)] md:items-end">
               <Field label="이름">
-                <Input
+                <Input disabled={!writable}
                   value={connectionDrafts[item.id]?.name ?? item.name}
                   onChange={(event) => setConnectionDrafts((current) => ({
                     ...current,
@@ -1305,7 +1338,7 @@ export function AutomationsPage() {
                 />
               </Field>
               <Field label="엔드포인트">
-                <Input
+                <Input disabled={!writable}
                   value={connectionDrafts[item.id]?.endpoint ?? item.endpoint ?? ''}
                   onChange={(event) => setConnectionDrafts((current) => ({
                     ...current,
@@ -1338,7 +1371,7 @@ export function AutomationsPage() {
     if (activeTab === 'vtube') return renderVtubeTab();
     if (activeTab === 'voice') return renderVoiceTab();
     if (activeTab === 'network') return renderNetworkTab();
-    if (activeTab === 'control') return renderControlTab();
+    if (activeTab === 'control') return ownerControls ? renderControlTab() : null;
     return renderConnectionsTab();
   };
 
@@ -1356,16 +1389,16 @@ export function AutomationsPage() {
               <div className="truncate text-xl font-bold">{connections.length}</div>
               <div className="mt-1 text-xs text-muted-foreground">연결</div>
             </div>
-            <div className="min-w-0 rounded-[var(--radius-card)] border bg-card p-[clamp(0.75rem,1.4vw,1rem)] text-center shadow-subtle">
+            {actionsReadable ? <div className="min-w-0 rounded-[var(--radius-card)] border bg-card p-[clamp(0.75rem,1.4vw,1rem)] text-center shadow-subtle">
               <div className="truncate text-xl font-bold">{publishedBlueprints.length}</div>
               <div className="mt-1 text-xs text-muted-foreground">액션</div>
-            </div>
+            </div> : null}
           </div>
         </div>
       </section>
 
       <div className="grid grid-cols-2 gap-2 sm:flex sm:max-w-full sm:flex-wrap">
-        {tabs.map((tab) => (
+        {tabs.filter((tab) => ownerControls || tab.id !== 'control').map((tab) => (
           <TabButton key={tab.id} active={activeTab === tab.id} label={tab.label} icon={tab.icon} onClick={() => setActiveTab(tab.id)} />
         ))}
       </div>

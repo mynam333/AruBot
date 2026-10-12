@@ -1,5 +1,7 @@
 'use client';
 
+import { useBotChannel } from '@/components/app-shell/bot-channel-provider';
+
 import * as Dialog from '@radix-ui/react-dialog';
 import * as Switch from '@radix-ui/react-switch';
 import { Bell, Check, Clock3, Edit3, Loader2, MessageSquareText, RefreshCw, Trash2, X } from 'lucide-react';
@@ -67,6 +69,8 @@ function MacroEditDialog({
   onSaved: () => void;
   onDeleted: () => void;
 }) {
+  const { canWrite } = useBotChannel();
+  const writable = canWrite('macros');
   const [message, setMessage] = useState('');
   const [intervalMinutes, setIntervalMinutes] = useState('10');
   const [enabled, setEnabled] = useState(true);
@@ -87,6 +91,7 @@ function MacroEditDialog({
   }, [intervalMinutes]);
 
   const save = () => {
+    if (!writable) return;
     if (!macro?.id) return;
     const trimmed = message.trim();
     if (!trimmed) return toast.warning('알림 문구를 입력해 주세요.');
@@ -113,6 +118,7 @@ function MacroEditDialog({
   };
 
   const remove = () => {
+    if (!writable) return;
     if (!macro?.id) return;
     startDeleteTransition(async () => {
       try {
@@ -156,7 +162,7 @@ function MacroEditDialog({
               알림 문구
               <div className="relative">
                 <MessageSquareText className="pointer-events-none absolute left-[clamp(0.75rem,1.4vw,1rem)] top-[clamp(0.875rem,1.6vw,1.125rem)] h-[1.1em] w-[1.1em] text-muted-foreground" />
-                <textarea
+                <textarea disabled={!writable}
                   value={message}
                   onChange={(event) => setMessage(event.target.value.slice(0, 1000))}
                   className="box-border min-h-[clamp(6.75rem,14svh,9.5rem)] w-full min-w-0 max-w-full resize-y rounded-[var(--radius-control)] border bg-background/80 py-[clamp(0.85rem,1.6vw,1.1rem)] pl-[clamp(2.45rem,4vw,3rem)] pr-[clamp(0.85rem,1.6vw,1.1rem)] text-sm leading-7 outline-none transition placeholder:text-muted-foreground focus:border-primary/45 focus:ring-2 focus:ring-ring"
@@ -170,12 +176,13 @@ function MacroEditDialog({
                 반복 간격
                 <div className="relative">
                   <Clock3 className="pointer-events-none absolute left-[clamp(0.75rem,1.4vw,1rem)] top-1/2 h-[1.1em] w-[1.1em] -translate-y-1/2 text-muted-foreground" />
-                  <Input value={intervalMinutes} onChange={(event) => setIntervalMinutes(event.target.value)} inputMode="decimal" className="pl-[clamp(2.45rem,4vw,3rem)]" />
+                  <Input disabled={!writable} value={intervalMinutes} onChange={(event) => setIntervalMinutes(event.target.value)} inputMode="decimal" className="pl-[clamp(2.45rem,4vw,3rem)]" />
                 </div>
               </label>
               <div className="flex flex-wrap gap-[clamp(0.4rem,0.9vw,0.65rem)]">
                 {intervalPresets.map((preset) => (
                   <Button
+                    disabled={!writable}
                     key={preset.value}
                     type="button"
                     variant={intervalSec === preset.value ? 'soft' : 'outline'}
@@ -193,7 +200,7 @@ function MacroEditDialog({
                 <div className="text-sm font-semibold">바로 사용하기</div>
                 <p className="mt-[clamp(0.25rem,0.8vw,0.45rem)] text-sm leading-6 text-muted-foreground">끄면 목록에는 남지만 방송 중에는 보내지 않아요.</p>
               </div>
-              <Switch.Root
+              <Switch.Root disabled={!writable}
                 checked={enabled}
                 onCheckedChange={setEnabled}
                 aria-label="자동 알림 사용 여부"
@@ -205,7 +212,7 @@ function MacroEditDialog({
           </div>
 
           <div className="flex flex-col-reverse gap-[clamp(0.65rem,1.2vw,0.875rem)] border-t bg-background/64 p-[clamp(1rem,2.4vw,1.5rem)] sm:flex-row sm:items-center sm:justify-between">
-            <Button type="button" variant="destructive" onClick={remove} disabled={deleting || isPending}>
+            <Button type="button" variant="destructive" onClick={remove} disabled={!writable || (deleting || isPending)}>
               {deleting ? <Loader2 className="h-[1em] w-[1em] animate-spin" /> : <Trash2 className="h-[1em] w-[1em]" />}
               삭제
             </Button>
@@ -213,7 +220,7 @@ function MacroEditDialog({
               <Dialog.Close asChild>
                 <Button type="button" variant="ghost" disabled={isPending || deleting}>취소</Button>
               </Dialog.Close>
-              <Button type="button" onClick={save} disabled={isPending || deleting}>
+              <Button type="button" onClick={save} disabled={!writable || (isPending || deleting)}>
                 {isPending ? <Loader2 className="h-[1em] w-[1em] animate-spin" /> : <Check className="h-[1em] w-[1em]" />}
                 저장
               </Button>
@@ -226,6 +233,8 @@ function MacroEditDialog({
 }
 
 export function MacrosPage() {
+  const { canWrite } = useBotChannel();
+  const writable = canWrite('macros');
   const [macros, setMacros] = useState<Macro[]>([]);
   const [isPending, startTransition] = useTransition();
   const [editingMacro, setEditingMacro] = useState<Macro | null>(null);
@@ -254,6 +263,7 @@ export function MacrosPage() {
   const activeCount = macros.filter((macro) => macro.enabled !== false).length;
 
   const openEdit = (macro: Macro) => {
+    if (!writable) return;
     setEditingMacro(macro);
     setEditOpen(true);
   };
@@ -293,7 +303,7 @@ export function MacrosPage() {
                 </div>
               </div>
               <div className="flex flex-wrap justify-start gap-2 lg:justify-end">
-                <Button type="button" variant="outline" size="sm" onClick={() => openEdit(macro)}>
+                <Button disabled={!writable} type="button" variant="outline" size="sm" onClick={() => openEdit(macro)}>
                   <Edit3 className="h-[1em] w-[1em]" />
                   수정
                 </Button>

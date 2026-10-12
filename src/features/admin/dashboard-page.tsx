@@ -1,5 +1,7 @@
 'use client';
 
+import { useBotChannel } from '@/components/app-shell/bot-channel-provider';
+
 import {
   Activity,
   Cable,
@@ -98,12 +100,12 @@ const providers = [
 ] as const;
 
 const featureLinks = [
-  { href: '/commands', title: '채팅 명령어', description: '반복 안내와 참여 명령을 관리합니다.', icon: MessageSquare },
-  { href: '/points', title: '시청자 포인트', description: '적립 정책과 시청자 잔액을 관리합니다.', icon: Coins },
-  { href: '/roulette', title: '룰렛', description: '참여 항목과 방송 오버레이를 설정합니다.', icon: Sparkles },
-  { href: '/video-donations/queue', title: '영상 후원', description: '재생 대기열과 현재 후원을 제어합니다.', icon: Clapperboard },
-  { href: '/donations/rules', title: '후원 반응', description: '금액과 조건별 반응 규칙을 구성합니다.', icon: HeartHandshake },
-  { href: '/macros', title: '자동 알림', description: '주기적인 채팅 공지를 예약합니다.', icon: Timer },
+  { module: 'commands', href: '/commands', title: '채팅 명령어', description: '반복 안내와 참여 명령을 관리합니다.', icon: MessageSquare },
+  { module: 'points', href: '/points', title: '시청자 포인트', description: '적립 정책과 시청자 잔액을 관리합니다.', icon: Coins },
+  { module: 'roulette', href: '/roulette', title: '룰렛', description: '참여 항목과 방송 오버레이를 설정합니다.', icon: Sparkles },
+  { module: 'video', href: '/video-donations/queue', title: '영상 후원', description: '재생 대기열과 현재 후원을 제어합니다.', icon: Clapperboard },
+  { module: 'donations', href: '/donations/rules', title: '후원 반응', description: '금액과 조건별 반응 규칙을 구성합니다.', icon: HeartHandshake },
+  { module: 'macros', href: '/macros', title: '자동 알림', description: '주기적인 채팅 공지를 예약합니다.', icon: Timer },
 ] as const;
 
 const compactNumber = new Intl.NumberFormat('ko-KR', { notation: 'compact', maximumFractionDigits: 1 });
@@ -188,10 +190,13 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 }
 
 function QuickStartPanel() {
+  const { active } = useBotChannel();
+  const writable = active.role !== 'manager' || active.scopes.includes('*');
   const [result, setResult] = useState<SetupTemplateResult | null>(null);
   const [isPending, startTransition] = useTransition();
 
   const applyTemplate = () => {
+    if (!writable) return;
     startTransition(async () => {
       try {
         const payload = await postJson<SetupTemplateResult>('/api/setup/templates/apply', { template: 'quick-start' });
@@ -222,7 +227,7 @@ function QuickStartPanel() {
             <span><strong className="text-foreground">{Number(result.counts?.applied || 0)}개 추가</strong> · {Number(result.counts?.skipped || 0)}개 유지</span>
           ) : '새 채널의 필수 참여 기능을 안전하게 구성합니다.'}
         </div>
-        <Button type="button" size="sm" onClick={applyTemplate} disabled={isPending}>
+        <Button type="button" size="sm" onClick={applyTemplate} disabled={!writable || isPending}>
           <Wand2 className={isPending ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />{isPending ? '적용 중' : '기본 설정 적용'}
         </Button>
       </CardContent>
@@ -231,6 +236,12 @@ function QuickStartPanel() {
 }
 
 export function DashboardPage() {
+  const { active, canRead, canWrite } = useBotChannel();
+  const ownerControls = active?.role !== 'manager';
+  const connectionReadable = canRead('connection');
+  const settingsReadable = canRead('settings');
+  const commandsReadable = canRead('commands');
+  const videoReadable = canRead('video');
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -246,45 +257,48 @@ export function DashboardPage() {
     try {
       const [platformsResult, youtubeResult] = await Promise.all([
         readJsonResult<{ platforms?: PlatformAccount[] }>('/api/account/platforms', { signal }),
-        readJsonResult<YoutubeStreamerStatus>('/api/youtube/streamer-channel', { signal }),
+        connectionReadable ? readJsonResult<YoutubeStreamerStatus>('/api/youtube/streamer-channel', { signal }) : Promise.resolve(null),
       ]);
       if (signal?.aborted) return;
-      if (!platformsResult.ok && !youtubeResult.ok) {
-        setError('message' in platformsResult ? platformsResult.message : 'message' in youtubeResult ? youtubeResult.message : '운영 정보를 불러오지 못했습니다.');
+      if (!platformsResult.ok && !youtubeResult?.ok) {
+        setError('message' in platformsResult ? platformsResult.message : youtubeResult && 'message' in youtubeResult ? youtubeResult.message : '운영 정보를 불러오지 못했습니다.');
         return;
       }
 
       const platforms = platformsResult.ok && Array.isArray(platformsResult.data.platforms) ? platformsResult.data.platforms : [];
-      const youtube = youtubeResult.ok ? youtubeResult.data : null;
+      const youtube = youtubeResult?.ok ? youtubeResult.data : null;
       const hasConnectedChannel = platforms.length > 0 || youtube?.configured === true;
       setDashboardData((current) => ({
         platforms,
         youtubeStreamerStatus: youtube,
-        settings: hasConnectedChannel ? current?.settings ?? null : null,
-        stats: hasConnectedChannel ? current?.stats ?? null : null,
+        settings: hasConnectedChannel && settingsReadable ? current?.settings ?? null : null,
+        stats: hasConnectedChannel && commandsReadable ? current?.stats ?? null : null,
         platformStatus: hasConnectedChannel ? current?.platformStatus ?? null : null,
-        queue: hasConnectedChannel ? current?.queue ?? [] : [],
+        queue: hasConnectedChannel && videoReadable ? current?.queue ?? [] : [],
       }));
       setLoading(false);
       hasLoadedRef.current = true;
 
       if (!hasConnectedChannel) return;
 
-      const detailKeys: DashboardDetailKey[] = ['settings', 'stats', 'platformStatus', 'queue'];
+      const detailKeys: DashboardDetailKey[] = ['platformStatus'];
+      if (settingsReadable) detailKeys.push('settings');
+      if (commandsReadable) detailKeys.push('stats');
+      if (videoReadable) detailKeys.push('queue');
       setPendingDetails(new Set(detailKeys));
       const [settingsResult, statsResult, platformStatusResult, queueResult] = await Promise.all([
-        readJsonResult<BotSettingsResponse>('/api/bot/settings', { signal }),
-        readJsonResult<BotStatsResponse>('/api/bot/stats', { signal }),
+        settingsReadable ? readJsonResult<BotSettingsResponse>('/api/bot/settings', { signal }) : Promise.resolve(null),
+        commandsReadable ? readJsonResult<BotStatsResponse>('/api/bot/stats', { signal }) : Promise.resolve(null),
         readJsonResult<PlatformStatusResponse>('/api/platforms/status?refresh=true', { signal }),
-        readJsonResult<unknown>('/api/video-donation/queue', { signal }),
+        videoReadable ? readJsonResult<unknown>('/api/video-donation/queue', { signal }) : Promise.resolve(null),
       ]);
       if (signal?.aborted) return;
       setDashboardData((current) => current ? {
         ...current,
-        settings: settingsResult.ok ? settingsResult.data.settings ?? {} : null,
-        stats: statsResult.ok ? statsResult.data.stats ?? {} : null,
+        settings: settingsResult?.ok ? settingsResult.data.settings ?? {} : null,
+        stats: statsResult?.ok ? statsResult.data.stats ?? {} : null,
         platformStatus: platformStatusResult.ok ? platformStatusResult.data : null,
-        queue: queueResult.ok ? queueResult.data : [],
+        queue: queueResult?.ok ? queueResult.data : [],
       } : current);
       setPendingDetails(new Set());
     } catch (loadError) {
@@ -296,7 +310,7 @@ export function DashboardPage() {
         setRefreshing(false);
       }
     }
-  }, []);
+  }, [connectionReadable, settingsReadable, commandsReadable, videoReadable]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -370,7 +384,7 @@ export function DashboardPage() {
       {error ? <ErrorState description={error} onRetry={() => void loadDashboard()} /> : null}
 
       <section aria-label="운영 지표" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {metrics.map((metric) => {
+        {metrics.filter((metric) => metric.label === '영상 대기열' ? videoReadable : metric.label === '명령 응답' ? commandsReadable : metric.label === '봇 상태' ? settingsReadable : true).map((metric) => {
           const Icon = metric.icon;
           return (
             <Card key={metric.label}>
@@ -440,7 +454,7 @@ export function DashboardPage() {
             ) : loading ? (
               <div className="loading-skeleton h-48 rounded-lg" />
             ) : (
-              <EmptyState title="연결된 방송 채널이 없습니다" description="플랫폼을 연결하면 명령어, 포인트, 룰렛과 후원 기능이 활성화됩니다." action={<LinkButton href="/connection" size="sm"><Cable className="h-4 w-4" />플랫폼 연결</LinkButton>} />
+              <EmptyState title="연결된 방송 채널이 없습니다" description={ownerControls ? '플랫폼을 연결하면 명령어, 포인트, 룰렛과 후원 기능이 활성화됩니다.' : '채널 소유자에게 플랫폼 연결 상태를 확인해 주세요.'} action={connectionReadable ? <LinkButton href="/connection" size="sm"><Cable className="h-4 w-4" />연결 상태</LinkButton> : undefined} />
             )}
           </CardContent>
         </Card>
@@ -448,15 +462,16 @@ export function DashboardPage() {
         <Card>
           <CardHeader><CardTitle>빠른 작업</CardTitle><CardDescription>방송 중 자주 사용하는 관리 작업입니다.</CardDescription></CardHeader>
           <CardContent className="grid gap-2">
-            <CommandCreateDialog variant="outline" label="명령어 만들기" trailingChevron className="w-full justify-between" />
-            <RouletteCreateDialog variant="outline" label="룰렛 만들기" trailingChevron className="w-full justify-between" />
-            <LinkButton href="/video-donations/queue" variant="outline" className="w-full justify-between"><span className="inline-flex items-center gap-2"><Clapperboard className="h-4 w-4 text-primary" />영상 후원 대기열</span><ChevronRight className="h-4 w-4 text-muted-foreground" /></LinkButton>
-            <LinkButton href="/settings" variant="outline" className="w-full justify-between"><span className="inline-flex items-center gap-2"><Settings className="h-4 w-4 text-primary" />방송 설정</span><ChevronRight className="h-4 w-4 text-muted-foreground" /></LinkButton>
+            {canWrite('commands') ? <CommandCreateDialog variant="outline" label="명령어 만들기" trailingChevron className="w-full justify-between" /> : null}
+            {canWrite('roulette') ? <RouletteCreateDialog variant="outline" label="룰렛 만들기" trailingChevron className="w-full justify-between" /> : null}
+            {videoReadable ? <LinkButton href="/video-donations/queue" variant="outline" className="w-full justify-between"><span className="inline-flex items-center gap-2"><Clapperboard className="h-4 w-4 text-primary" />영상 후원 대기열</span><ChevronRight className="h-4 w-4 text-muted-foreground" /></LinkButton> : null}
+            {settingsReadable ? <LinkButton href="/settings" variant="outline" className="w-full justify-between"><span className="inline-flex items-center gap-2"><Settings className="h-4 w-4 text-primary" />방송 설정</span><ChevronRight className="h-4 w-4 text-muted-foreground" /></LinkButton> : null}
+            {!canWrite('commands') && !canWrite('roulette') && !videoReadable && !settingsReadable ? <p className="text-sm text-muted-foreground">아래에서 접근 가능한 기능을 선택하세요.</p> : null}
           </CardContent>
         </Card>
       </section>
 
-      {!visibleAccounts.length && !loading ? (
+      {ownerControls && !visibleAccounts.length && !loading ? (
         <Card>
           <CardHeader><CardTitle>플랫폼 연결</CardTitle><CardDescription>실제로 사용할 방송 계정으로 로그인하세요.</CardDescription></CardHeader>
           <CardContent className="flex flex-wrap gap-2">
@@ -476,7 +491,7 @@ export function DashboardPage() {
       <section>
         <SectionHeader title="기능 관리" description="방송 참여와 연출 기능을 설정합니다." className="mb-3" />
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {featureLinks.map((item) => {
+          {featureLinks.filter((item) => canRead(item.module)).map((item) => {
             const Icon = item.icon;
             return (
               <Link key={item.href} href={item.href} prefetch={false} className="group flex min-w-0 items-center gap-3 rounded-[var(--radius-card)] border bg-card p-4 shadow-subtle transition-colors hover:border-primary/35 hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
@@ -489,7 +504,7 @@ export function DashboardPage() {
         </div>
       </section>
 
-      {visibleAccounts.length ? <QuickStartPanel /> : null}
+      {visibleAccounts.length && (ownerControls || active.scopes.includes('*')) ? <QuickStartPanel /> : null}
     </>
   );
 }

@@ -1,5 +1,7 @@
 'use client';
 
+import { useBotChannel } from '@/components/app-shell/bot-channel-provider';
+
 import { CalendarDays, Filter, ListChecks, Play, RefreshCw, Search, TrendingDown, TrendingUp } from 'lucide-react';
 import { useCallback, useDeferredValue, useEffect, useMemo, useState, useTransition } from 'react';
 import { toast } from 'sonner';
@@ -135,7 +137,13 @@ function replayLabel(log: EventLog) {
   return '효과 재생';
 }
 
+function replayFeature(log: EventLog) {
+  return log.category === 'video_donation' ? 'video' : log.category === 'drawing_donation' ? 'drawing' : 'actions';
+}
+
 function LogCard({ log, replaying, onReplay }: { log: EventLog; replaying?: boolean; onReplay: (log: EventLog) => void }) {
+  const { canWrite } = useBotChannel();
+  const writable = canWrite('logs');
   const delta = Number(log.point_delta || 0);
   const DeltaIcon = delta < 0 ? TrendingDown : TrendingUp;
   const replayable = canReplayLog(log);
@@ -176,7 +184,7 @@ function LogCard({ log, replaying, onReplay }: { log: EventLog; replaying?: bool
               <span className="text-right font-semibold text-foreground">{log.point_after == null ? '-' : `${formatNumber(Number(log.point_after))}P`}</span>
             </div>
             {replayable ? (
-              <Button type="button" variant="outline" onClick={() => onReplay(log)} disabled={replaying} className="mt-1 w-full">
+              <Button type="button" variant="outline" onClick={() => onReplay(log)} disabled={!writable || !canWrite(replayFeature(log)) || replaying} className="mt-1 w-full">
                 <Play className={cn('h-4 w-4', replaying && 'animate-pulse')} />
                 {replaying ? '재생 중' : replayLabel(log)}
               </Button>
@@ -189,6 +197,8 @@ function LogCard({ log, replaying, onReplay }: { log: EventLog; replaying?: bool
 }
 
 export function EventLogsPage() {
+  const { canWrite } = useBotChannel();
+  const writable = canWrite('logs');
   const [logs, setLogs] = useState<EventLog[]>([]);
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
@@ -235,6 +245,8 @@ export function EventLogsPage() {
   }, [load]);
 
   const replay = useCallback(async (log: EventLog) => {
+    if (!writable) return;
+    if (!canWrite(replayFeature(log))) return;
     if (!log.id || replayingId) return;
     setReplayingId(log.id);
     try {
@@ -261,7 +273,7 @@ export function EventLogsPage() {
     } finally {
       setReplayingId(null);
     }
-  }, [load, replayingId]);
+  }, [writable, canWrite, load, replayingId]);
 
   return (
     <div className="grid gap-5">

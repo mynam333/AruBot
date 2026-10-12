@@ -1,5 +1,7 @@
 'use client';
 
+import { useBotChannel } from '@/components/app-shell/bot-channel-provider';
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
@@ -229,6 +231,9 @@ function formatYoutubeScope(value?: string | null) {
 }
 
 export function ConnectionPage() {
+  const { active, canWrite } = useBotChannel();
+  const writable = canWrite('connection');
+  const ownerControls = active?.role !== 'manager';
   const searchParams = useSearchParams();
   const [platforms, setPlatforms] = useState<PlatformAccount[]>([]);
   const [loading, setLoading] = useState(true);
@@ -292,6 +297,7 @@ export function ConnectionPage() {
   }, [platforms]);
 
   const revoke = async (provider: ProviderId, account: PlatformAccount) => {
+    if (!ownerControls) return;
     const config = providerConfigs.find((item) => item.id === provider);
     if (!config) return;
     const platformUserId = account.platform_user_id || account.channel_id || '';
@@ -318,6 +324,7 @@ export function ConnectionPage() {
   };
 
   const confirmYoutubeConsent = async () => {
+    if (!ownerControls) return;
     if (!window.confirm('현재 동의한 범위와 목적에 따라 AruBot이 YouTube 권한을 계속 보관하고 사용하는 것에 동의하시겠습니까?')) return;
     setBusyAccount('youtube:consent');
     try {
@@ -338,6 +345,7 @@ export function ConnectionPage() {
   };
 
   const syncProfile = async (provider?: ProviderId) => {
+    if (!writable) return;
     setSyncingProvider(provider || 'all');
     try {
       const response = await fetch(apiUrl('/api/account/platforms/refresh'), {
@@ -378,6 +386,7 @@ export function ConnectionPage() {
   }, [searchParams, youtubeBotConfigured, youtubeRegistered, youtubeStreamerStatus]);
 
   const registerYoutubeChannel = async () => {
+    if (!ownerControls) return;
     const popup = window.open('about:blank', '_blank');
     if (popup) popup.opener = null;
     setYoutubeBusy(true);
@@ -405,6 +414,7 @@ export function ConnectionPage() {
   };
 
   const removeYoutubeChannel = async () => {
+    if (!ownerControls) return;
     setYoutubeBusy(true);
     try {
       const response = await fetch(apiUrl('/api/youtube/streamer-channel'), {
@@ -422,6 +432,7 @@ export function ConnectionPage() {
   };
 
   const confirmYoutubeModerator = async () => {
+    if (!ownerControls || !writable) return;
     setYoutubeBusy(true);
     try {
       const response = await fetch(apiUrl('/api/youtube/streamer-channel/moderator-confirmed'), {
@@ -443,6 +454,7 @@ export function ConnectionPage() {
   };
 
   const retryYoutubeConnection = async () => {
+    if (!writable) return;
     setYoutubeBusy(true);
     try {
       const response = await fetch(apiUrl('/api/youtube/reset'), { method: 'POST', credentials: 'include' });
@@ -485,7 +497,7 @@ export function ConnectionPage() {
               <div className="text-3xl font-semibold">{connectedCount}</div>
               <p className="mt-2 text-sm text-muted-foreground">연결된 채널</p>
               {connectedCount ? (
-                <Button type="button" variant="outline" size="sm" className="mt-4 w-full" onClick={() => syncProfile()} disabled={syncingProvider === 'all'}>
+                <Button type="button" variant="outline" size="sm" className="mt-4 w-full" onClick={() => syncProfile()} disabled={!writable || syncingProvider === 'all'}>
                   <RefreshCw className={syncingProvider === 'all' ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
                   최신 채널 정보 보기
                 </Button>
@@ -599,7 +611,7 @@ export function ConnectionPage() {
                             <Badge tone="neutral">{compactCount(account.metadata?.publicProfile?.subscriberCount)} 구독자</Badge>
                           ) : null}
                           <CheckCircle2 className="h-4 w-4 text-primary" />
-                          <Button
+                          {ownerControls ? (<Button
                             type="button"
                             variant="outline"
                             size="sm"
@@ -609,7 +621,7 @@ export function ConnectionPage() {
                           >
                             <Unlink className="h-4 w-4" />
                             {busyAccount === accountKey ? '처리 중' : '연결 해제'}
-                          </Button>
+                          </Button>) : null}
                         </div>
                       </div>
                     );})
@@ -619,7 +631,7 @@ export function ConnectionPage() {
                     </div>
                   )}
                 </div>
-                {config.id === 'youtube' && youtubeAuthorization ? (
+                {ownerControls && config.id === 'youtube' && youtubeAuthorization ? (
                   <div className="mt-4 grid gap-3 rounded-[var(--radius-control)] border border-rose-200/70 bg-rose-50/55 p-4 text-sm dark:border-rose-500/20 dark:bg-rose-500/10">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="font-semibold">YouTube 권한 보관</div>
@@ -649,7 +661,7 @@ export function ConnectionPage() {
                 <div className="mt-4 flex flex-wrap gap-2">
                   {config.id === 'youtube' ? (
                     <>
-                      <Button asChild variant={youtubeRegistered ? 'secondary' : 'default'}>
+                      {ownerControls ? (<Button asChild variant={youtubeRegistered ? 'secondary' : 'default'}>
                         <a href={youtubeLoginHref}>
                           <img
                             src={config.iconPath}
@@ -661,8 +673,8 @@ export function ConnectionPage() {
                           {youtubeRegistered ? 'YouTube 다시 연결' : 'YouTube로 시작'}
                           <ExternalLink className="h-4 w-4" />
                         </a>
-                      </Button>
-                      {youtubeBotConfigured ? (
+                      </Button>) : null}
+                      {ownerControls && youtubeBotConfigured ? (
                         <Button type="button" variant="outline" onClick={() => setShowYoutubeModal(true)}>
                           <Cable className="h-4 w-4" />
                           {youtubeRegistered ? '채널 수동 등록' : '채널 직접 등록'}
@@ -676,33 +688,33 @@ export function ConnectionPage() {
                           </a>
                         </Button>
                       ) : null}
-                      {youtubeRegistered && !youtubeStreamerStatus?.channel?.moderatorRegistered ? (
-                        <Button type="button" variant="outline" onClick={confirmYoutubeModerator} disabled={youtubeBusy}>
+                      {ownerControls && youtubeRegistered && !youtubeStreamerStatus?.channel?.moderatorRegistered ? (
+                        <Button type="button" variant="outline" onClick={confirmYoutubeModerator} disabled={!writable || youtubeBusy}>
                           <CheckCircle2 className="h-4 w-4" />
                           운영자 실제 확인
                         </Button>
                       ) : null}
                       {youtubeRegistered ? (
-                        <Button type="button" variant="outline" onClick={retryYoutubeConnection} disabled={youtubeBusy}>
+                        <Button type="button" variant="outline" onClick={retryYoutubeConnection} disabled={!writable || youtubeBusy}>
                           <RefreshCw className={youtubeBusy ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
                           채팅 연결 재시도
                         </Button>
                       ) : null}
                       {youtubeRegistered ? (
-                        <Button type="button" variant="outline" onClick={removeYoutubeChannel} disabled={youtubeBusy}>
+                        (ownerControls ? (<Button type="button" variant="outline" onClick={removeYoutubeChannel} disabled={youtubeBusy}>
                           <Unlink className="h-4 w-4" />
                           등록 해제
-                        </Button>
+                        </Button>) : null)
                       ) : null}
                       {youtubeAuthorization && youtubeAccount ? (
-                        <Button type="button" variant="destructive" onClick={() => revoke('youtube', youtubeAccount)} disabled={busyAccount?.startsWith('youtube:')}>
+                        (ownerControls ? (<Button type="button" variant="destructive" onClick={() => revoke('youtube', youtubeAccount)} disabled={busyAccount?.startsWith('youtube:')}>
                           <Unlink className="h-4 w-4" />
                           OAuth 연결 해제
-                        </Button>
+                        </Button>) : null)
                       ) : null}
                     </>
                   ) : (
-                    <Button asChild variant={connected ? 'secondary' : 'default'}>
+                    (ownerControls ? (<Button asChild variant={connected ? 'secondary' : 'default'}>
                       <a href={apiUrl(config.loginPath)}>
                       <img
                         src={config.iconPath}
@@ -714,7 +726,7 @@ export function ConnectionPage() {
                       {connected ? '추가 연결' : `${config.label}로 로그인`}
                       <ExternalLink className="h-4 w-4" />
                       </a>
-                    </Button>
+                    </Button>) : null)
                   )}
                   {connected ? (
                     <Button
@@ -727,7 +739,7 @@ export function ConnectionPage() {
                           void syncProfile(config.id);
                         }
                       }}
-                      disabled={config.id === 'youtube' ? loading : syncingProvider === config.id}
+                      disabled={config.id === 'youtube' ? loading : !writable || syncingProvider === config.id}
                     >
                       <RefreshCw className={(config.id === 'youtube' ? loading : syncingProvider === config.id) ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
                       {config.id === 'youtube' ? '채널 상태 보기' : '최신 정보 보기'}
