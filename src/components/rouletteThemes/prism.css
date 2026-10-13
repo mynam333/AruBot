@@ -1,0 +1,41 @@
+.roulette-presentation[data-roulette-theme='prism'] .roulette-heading,
+.roulette-presentation[data-roulette-theme='prism'] .roulette-result {
+  background:
+    linear-gradient(130deg, #e4efff 0 9%, transparent 9% 91%, #dff6ef 91%),
+    #fbfdff;
+  box-shadow: 0 5px 16px rgba(24, 45, 91, .14);
+}
+
+.roulette-presentation[data-roulette-theme='prism'] .roulette-heading::after {
+  background: linear-gradient(90deg, #2453e6 0 38%, #f47768 38% 64%, #eee36b 64% 80%, #20b7a3 80%);
+}
+
+.roulette-presentation[data-roulette-theme='prism'] .roulette-result {
+  border-bottom-color: #2453e6;
+  background:
+    linear-gradient(130deg, #ffdcd1 0 8%, transparent 8% 92%, #fff4b4 92%),
+    #fbfdff;
+}
+
+.roulette-presentation[data-roulette-theme='prism'] .roulette-reel-stage {
+  background: #f0f6fc;
+}
+
+.roulette-presentation[data-roulette-theme='prism'] .roulette-reel-frame {
+  border-top-color: #2453e6;
+  border-right-color: #f47768;
+  border-bottom-color: #eee36b;
+  border-left-color: #20b7a3;
+  box-shadow: inset 0 0 0 2px #ffffff;
+}
+
+.roulette-presentation[data-roulette-theme='prism'] .roulette-reel-track {
+  background:
+    linear-gradient(125deg, #e4efff 0 5%, transparent 5% 95%, #e2f7ee 95%),
+    #ffffff;
+  border-color: #b0c2e8;
+}
+
+.roulette-presentation[data-roulette-theme='prism'] .roulette-reel-index {
+  background: #2453e6;
+}

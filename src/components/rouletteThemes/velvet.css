@@ -1,0 +1,37 @@
+.roulette-presentation[data-roulette-theme='velvet'] .roulette-heading,
+.roulette-presentation[data-roulette-theme='velvet'] .roulette-result {
+  background: linear-gradient(105deg, #350d20 0%, #681c36 28%, #72243f 45%, #53142c 72%, #350d20 100%);
+  border-color: #c6a06b;
+  box-shadow: inset 0 2px 3px #e1a8a51c, inset 0 -3px 5px #1b051e66, 0 5px 10px #24071726;
+}
+
+.roulette-presentation[data-roulette-theme='velvet'] .roulette-heading h1,
+.roulette-presentation[data-roulette-theme='velvet'] .roulette-result-name {
+  text-shadow: 0 2px 2px #26091b80;
+}
+
+.roulette-presentation[data-roulette-theme='velvet'] .roulette-panel-ornaments {
+  opacity: 1;
+}
+
+.roulette-presentation[data-roulette-theme='velvet'] .roulette-reel-stage {
+  background: linear-gradient(90deg, #310b20, #681d37 12%, #471127 29%, #53172e 68%, #732540 88%, #310b20);
+  border-color: #bb975e;
+  box-shadow: inset 0 4px 10px #25061880, 0 8px 18px #22071826;
+}
+
+.roulette-presentation[data-roulette-theme='velvet'] .roulette-reel-track {
+  background: linear-gradient(90deg, #381025, #752740 48%, #381025);
+  border-color: #d4b578;
+  box-shadow: inset 0 3px 7px #24071873, inset 0 -2px 4px #24071859;
+}
+
+.roulette-presentation[data-roulette-theme='velvet'] .roulette-reel-frame {
+  border-color: #d4b57880;
+}
+
+.roulette-presentation[data-roulette-theme='velvet'] .roulette-reel-frame i {
+  background: #d4b578;
+  border-color: #f0d7a0;
+  border-radius: 2px;
+}

@@ -8,6 +8,7 @@ describe('룰렛 오버레이 레이아웃 회귀 방지', () => {
   const rouletteWheelUtils = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'rouletteWheelUtils.ts'), 'utf8');
   const rouletteThemeMaterials = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'rouletteThemeMaterials.ts'), 'utf8');
   const rouletteThemeAtmosphere = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'rouletteThemeAtmosphere.tsx'), 'utf8');
+  const roulettePresentation = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'roulettePresentation.css'), 'utf8');
   const roulettePage = fs.readFileSync(path.join(__dirname, '..', 'src', 'features', 'admin', 'roulette-page.tsx'), 'utf8');
   const adminActionDialogs = fs.readFileSync(path.join(__dirname, '..', 'src', 'features', 'admin', 'admin-action-dialogs.tsx'), 'utf8');
 
@@ -71,7 +72,7 @@ describe('룰렛 오버레이 레이아웃 회귀 방지', () => {
     expect(rouletteViewer).toContain("type RouletteLayout = 'reel' | 'wheel'");
     expect(rouletteViewer).toContain('function parseRouletteLook');
     expect(rouletteViewer).toContain("const layout: RouletteLayout = urlLook.layout || serverLayout || 'reel'");
-    expect(rouletteViewer).toContain('const themeMaterial = getRouletteThemeMaterial(theme)');
+    expect(rouletteViewer).toContain('getRouletteThemeMaterial(theme, getRouletteThemeArtwork(theme))');
     expect(rouletteViewer).toContain('style={themeMaterial.css}');
     expect(rouletteViewer).toContain('palette={themeMaterial.palette}');
     expect(rouletteViewer).toContain('RouletteThemeAtmosphere');
@@ -122,7 +123,8 @@ describe('룰렛 오버레이 레이아웃 회귀 방지', () => {
     expect(rouletteWheelSkins).not.toContain('filter="url(#rouletteWheelTextShadow)"');
     expect(rouletteWheelSkins).toContain('React.useId()');
     expect(rouletteWheelSkins).toContain('function texturePattern');
-    expect(rouletteWheelSkins).toContain('function FamilyMotif');
+    expect(rouletteWheelSkins).toContain('getRouletteThemeArtwork(theme).rim');
+    expect(rouletteWheelSkins).toContain('getRouletteThemeArtwork(theme).pointer');
     expect(rouletteWheelSkins).toContain('fontFamily="var(--roulette-font-display)"');
     expect(rouletteWheelSkins).toContain('data-wheel-theme={themeId}');
     expect(rouletteWheelSkins).toContain('data-pointer-theme={themeId}');
@@ -147,5 +149,12 @@ describe('룰렛 오버레이 레이아웃 회귀 방지', () => {
     expect(rouletteThemeMaterials).toContain("atmosphere: 'cyber'");
     expect(rouletteThemeMaterials).toContain("atmosphere: 'gold'");
     expect(rouletteThemeAtmosphere).toContain('prefers-reduced-motion:reduce');
+  });
+
+  test('테마 외곽 실루엣을 공통 배경으로 덮지 않고 안쪽 이음선만 채워야 함', () => {
+    expect(rouletteViewer).toContain('className="roulette-wheel-seat" aria-hidden="true"');
+    expect(rouletteViewer).not.toContain('className="roulette-wheel-rim"');
+    expect(roulettePresentation).toMatch(/\.roulette-wheel-seat\s*\{[^}]*inset:\s*8\.3%;[^}]*border-radius:\s*50%/);
+    expect(roulettePresentation).not.toContain('.roulette-wheel-rim');
   });
 });

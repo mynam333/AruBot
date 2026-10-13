@@ -1,0 +1,57 @@
+.roulette-presentation[data-roulette-theme='mono'] .roulette-wheel-stage > .roulette-heading {
+  background: #ffffff;
+  border-color: #111111;
+  box-shadow: inset 0 4px 0 #111111;
+}
+
+.roulette-presentation[data-roulette-theme='mono'] .roulette-heading h1,
+.roulette-presentation[data-roulette-theme='mono'] .roulette-result-name {
+  font-weight: 900;
+  text-shadow: none;
+}
+
+.roulette-presentation[data-roulette-theme='mono'] .roulette-result {
+  background: #ffffff;
+  border-color: #111111;
+  box-shadow: inset 0 -3px 0 #111111;
+}
+
+.roulette-presentation[data-roulette-theme='mono'] .roulette-wheel-hub {
+  background: #ffffff;
+  border-color: #111111;
+  box-shadow: inset 0 0 0 4px #ffffff, inset 0 0 0 5px #111111;
+}
+
+.roulette-presentation[data-roulette-theme='mono'] .roulette-wheel-pointer,
+.roulette-presentation[data-roulette-theme='mono'] .roulette-wheel-ornaments {
+  filter: none;
+}
+
+.roulette-presentation[data-roulette-theme='mono'] .roulette-reel-stage {
+  background: #ffffff;
+  border-color: #111111;
+  box-shadow: none;
+}
+
+.roulette-presentation[data-roulette-theme='mono'] .roulette-reel-frame {
+  border-color: #111111;
+}
+
+.roulette-presentation[data-roulette-theme='mono'] .roulette-reel-track {
+  background: #eeeeee;
+  border-color: #111111;
+  box-shadow: inset 0 3px 0 #ffffff, inset 0 -3px 0 #ffffff, inset 0 4px 0 #111111, inset 0 -4px 0 #111111;
+}
+
+.roulette-presentation[data-roulette-theme='mono'] .roulette-reel-row {
+  color: #4a4a4a;
+}
+
+.roulette-presentation[data-roulette-theme='mono'] .roulette-reel-row[data-center='true'] {
+  color: #111111;
+}
+
+.roulette-presentation[data-roulette-theme='mono'] .roulette-panel-ornaments,
+.roulette-presentation[data-roulette-theme='mono'] .roulette-hub-emblem {
+  color: #111111;
+}

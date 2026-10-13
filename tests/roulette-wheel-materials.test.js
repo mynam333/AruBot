@@ -2,7 +2,8 @@ const React = require('react');
 const { renderToStaticMarkup } = require('react-dom/server');
 const load = require('./helpers/load-source.cjs');
 const utils = load('src/components/rouletteWheelUtils.ts');
-const skins = load('src/components/rouletteWheelSkins.tsx', { react: { ...React, default: React }, './rouletteWheelUtils': utils });
+const artwork = require('./helpers/load-roulette-themes.cjs')();
+const skins = load('src/components/rouletteWheelSkins.tsx', { react: { ...React, default: React }, './rouletteWheelUtils': utils, './rouletteThemes': artwork });
 const themes = ['studio', 'prism', 'aurora', 'velvet', 'mono', 'deco', 'crystal', 'ink', 'nova', 'ceramic', 'arcade', 'sakura', 'ocean', 'solar', 'cyber', 'gold'];
 const render = (Component, props) => renderToStaticMarkup(React.createElement(Component, props));
 

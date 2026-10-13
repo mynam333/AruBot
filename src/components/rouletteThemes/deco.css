@@ -1,0 +1,36 @@
+.roulette-presentation[data-roulette-theme='deco'] .roulette-heading,
+.roulette-presentation[data-roulette-theme='deco'] .roulette-result {
+  background: linear-gradient(120deg, #294235 0%, #10241e 28%, #091a16 72%, #22372c 100%);
+  border-color: #c5ac75;
+  box-shadow: inset 0 1px #f6e9c74d, inset 0 -2px #00000066;
+}
+
+.roulette-presentation[data-roulette-theme='deco'] .roulette-panel-ornaments {
+  color: #d6bd82;
+}
+
+.roulette-presentation[data-roulette-theme='deco'] .roulette-reel-stage {
+  background: linear-gradient(115deg, #243a2d, #091a16 38%, #10241e 80%, #293e30);
+  border-color: #d6bd82;
+}
+
+.roulette-presentation[data-roulette-theme='deco'] .roulette-reel-frame {
+  border-color: #d6bd82;
+}
+
+.roulette-presentation[data-roulette-theme='deco'] .roulette-reel-frame i {
+  background: #17382b;
+  border-color: #ead6a6;
+  box-shadow: inset 0 1px #f6e9c766;
+}
+
+.roulette-presentation[data-roulette-theme='deco'] .roulette-reel-track {
+  background: linear-gradient(90deg, #1c3328, #344a37 50%, #1c3328);
+  border-color: #e4cb94;
+  box-shadow: inset 0 2px #071612, inset 0 -2px #071612;
+}
+
+.roulette-presentation[data-roulette-theme='deco'] .roulette-wheel-hub {
+  background: linear-gradient(135deg, #274535, #091a16 64%);
+  border-color: #d6bd82;
+}

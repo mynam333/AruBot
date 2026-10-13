@@ -60,6 +60,36 @@ smaller ornaments and fixed text slots rather than cropping the winning label.
 Decorative states do not change the weighted geometry, stop position or result
 acknowledgement. Reduced-motion and inactive-overlay behavior remain respected.
 
+## Independent Theme Artwork
+
+Each of the 16 themes owns one module under `src/components/rouletteThemes`.
+The registry supplies a matched rim, single-tip pointer, panel ornament, hub
+emblem and picker swatch, with optional palette and material-token overrides.
+The viewer and picker apply these overrides over the base material; omitted
+values retain the base palette and tokens. Theme-local CSS is
+scoped to its presentation attribute. Shared weighted sectors, text fitting,
+motion curves and queue acknowledgement remain outside these modules.
+
+Rim artwork uses a 1000-square viewBox with center (500, 500), a clear aperture
+below radius 414 and outer bounds no greater than radius 496. Pointer artwork
+uses a 180-by-200 viewBox and the same winning tip at (90, 190) in every theme.
+Panel artwork uses a 100-square viewBox and describes the left side only; the
+host mirrors it on the right and clips each side to at most 20% of the panel,
+keeping the middle 60% free of ornaments. Hub emblems use a 48-square viewBox
+and picker swatches a 64-square viewBox; neither contains text.
+Gradient and clipping IDs belong to each mounted instance. Small static motifs
+are ID-free so repeated previews cannot steal one another's paint references.
+The shared opaque backing is limited to radius 417 beneath the inner aperture;
+only theme artwork determines the outer silhouette. This prevents a circular or
+rounded-square legacy background from filling the new cutouts.
+
+The construction distinguishes the themes beyond color: calibrated studio
+hardware, folded prism facets, aurora silk, velvet embroidery, monochrome print
+registration, stepped deco fans, cut quartz, brush ink, an observatory astrolabe,
+cobalt porcelain, a pixel cabinet, a silk folding fan, a nautical porthole,
+an enamel solar corona, circuit traces and an engraved casino medallion.
+All still use the existing saved theme names and legacy aliases.
+
 Font sources: [Galmuri](https://github.com/quiple/galmuri) and
 [Gowun Batang](https://github.com/yangheeryu/Gowun-Batang), plus
 [Pretendard](https://github.com/orioncactus/pretendard).
@@ -103,3 +133,9 @@ Inspect all 32 theme/layout combinations with a local WebSocket fixture using th
 real viewer. Check narrow and landscape layouts, long text, spin-to-result
 alignment and reduced motion. Fixtures use `시청자 1` and cannot mutate production
 data. Local browser checks do not establish live OBS playback after deployment.
+
+The artwork refinement passed all 268 roulette tests across 21 suites, TypeScript
+and scoped ESLint. Local Chrome checks covered all 32 theme/layout combinations,
+SVG bounds and clear apertures, plus six motion, long-label and mobile cases.
+The final design review approved the corrected outer silhouettes and internal
+seat. These results do not establish live OBS playback or production deployment.

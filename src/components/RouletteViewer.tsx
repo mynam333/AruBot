@@ -4,6 +4,7 @@ import { getBrowserApiBase } from '@/shared/api/http';
 import { connectOverlaySocket } from '@/shared/api/overlay-socket';
 import { RouletteThemeAtmosphere } from './rouletteThemeAtmosphere';
 import { getRouletteThemeMaterial } from './rouletteThemeMaterials';
+import { getRouletteThemeArtwork } from './rouletteThemes';
 import { WheelGlassOverlay, WheelLabelsSvg, WheelPointer, WheelSegmentsSvg, WheelSelectedSegment, WheelSkinOrnaments } from './rouletteWheelSkins';
 import { createWheelSegments, splitWheelLabel } from './rouletteWheelUtils';
 import { buildRouletteWheelEntries } from './rouletteWheelEntries';
@@ -1357,7 +1358,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
   };
 
 
-  const themeMaterial = getRouletteThemeMaterial(theme);
+  const themeMaterial = React.useMemo(() => getRouletteThemeMaterial(theme, getRouletteThemeArtwork(theme)), [theme]);
   const wheelItems = React.useMemo(
     () => wheelItemsState.map((item) => String(item || '').trim()).filter(Boolean),
     [wheelItemsState]
@@ -1464,7 +1465,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       {renderHeading()}
       <div className="roulette-wheel-chassis">
         <RouletteThemeAtmosphere kind={themeMaterial.atmosphere} active={active} />
-        <div className="roulette-wheel-rim"><div /></div>
+        <div className="roulette-wheel-seat" aria-hidden="true" />
         <WheelSkinOrnaments family={wheelSkinFamily} themeId={theme} />
         <div
           ref={wheelDiscRef}

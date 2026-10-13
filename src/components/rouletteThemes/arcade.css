@@ -1,0 +1,43 @@
+.roulette-presentation[data-roulette-theme='arcade'] .roulette-wheel-stage > .roulette-heading {
+  background: #121616;
+  border-color: #ffdb3b;
+  box-shadow: inset 0 3px 0 #121616, inset 0 5px 0 #29cbb7;
+}
+
+.roulette-presentation[data-roulette-theme='arcade'] .roulette-result {
+  background: #121616;
+  border-color: #29cbb7;
+  box-shadow: inset 0 -3px 0 #121616, inset 0 -5px 0 #ff6655;
+}
+
+.roulette-presentation[data-roulette-theme='arcade'] .roulette-wheel-hub {
+  background: #121616;
+  border-color: #ffdb3b;
+  box-shadow: 3px 3px 0 #121616, inset 0 -3px 0 #29cbb7;
+}
+
+.roulette-presentation[data-roulette-theme='arcade'] .roulette-wheel-pointer,
+.roulette-presentation[data-roulette-theme='arcade'] .roulette-wheel-ornaments {
+  filter: none;
+}
+
+.roulette-presentation[data-roulette-theme='arcade'] .roulette-heading h1,
+.roulette-presentation[data-roulette-theme='arcade'] .roulette-result-name {
+  text-shadow: none;
+}
+
+.roulette-presentation[data-roulette-theme='arcade'] .roulette-reel-stage {
+  background: #121616;
+  border-color: #ffdb3b;
+  box-shadow: inset 0 6px 0 #202828, inset 0 -6px 0 #202828;
+}
+
+.roulette-presentation[data-roulette-theme='arcade'] .roulette-reel-frame {
+  border-color: #ff6655;
+}
+
+.roulette-presentation[data-roulette-theme='arcade'] .roulette-reel-track {
+  background: #202828;
+  border-color: #29cbb7;
+  box-shadow: inset 0 3px 0 #121616, inset 0 -3px 0 #121616;
+}

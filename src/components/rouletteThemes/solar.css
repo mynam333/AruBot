@@ -1,0 +1,27 @@
+.roulette-presentation[data-roulette-theme='solar'] {
+  --roulette-panel-finish: linear-gradient(115deg, #ffffff80, transparent 46%, #ff872b12);
+}
+
+.roulette-presentation[data-roulette-theme='solar'] .roulette-heading,
+.roulette-presentation[data-roulette-theme='solar'] .roulette-result {
+  background: #fffefb;
+  border-color: #e8402a;
+  box-shadow: 0 4px 0 #e8402a12;
+}
+
+.roulette-presentation[data-roulette-theme='solar'] .roulette-heading::after {
+  background: linear-gradient(90deg, #e8402a 0 48%, #ff872b 48% 76%, #e9ef59 76%);
+}
+
+.roulette-presentation[data-roulette-theme='solar'] .roulette-reel-frame {
+  border-color: #e8402a #ff872b #e9ef59 #e8402a;
+}
+
+.roulette-presentation[data-roulette-theme='solar'] .roulette-wheel-hub {
+  border-color: #e8402a;
+  box-shadow: 0 0 0 3px #fffefb, 0 5px 0 #802b2620;
+}
+
+.roulette-presentation[data-roulette-theme='solar'] .roulette-reel-index {
+  background: #e8402a;
+}

@@ -403,9 +403,12 @@ const materials: Record<string, RouletteThemeMaterial> = {
   },
 };
 
-export function getRouletteThemeMaterial(themeId: string): RouletteThemeMaterial {
+export function getRouletteThemeMaterial(themeId: string, overrides?: {
+  palette?: string[]; tokens?: Record<`--roulette-${string}`, string>;
+}): RouletteThemeMaterial {
   const id = String(themeId || '').toLowerCase();
   const normalized = Object.prototype.hasOwnProperty.call(legacyThemeAliases, id) ? legacyThemeAliases[id] : id;
-  return Object.prototype.hasOwnProperty.call(materials, normalized) ? materials[normalized] : materials.studio;
+  const material = Object.prototype.hasOwnProperty.call(materials, normalized) ? materials[normalized] : materials.studio;
+  return overrides ? { ...material, palette: overrides.palette || material.palette, css: { ...material.css, ...overrides.tokens } } : material;
 }
 

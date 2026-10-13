@@ -1,0 +1,21 @@
+.roulette-presentation[data-roulette-theme='gold'] .roulette-wheel-stage > .roulette-heading,
+.roulette-presentation[data-roulette-theme='gold'] .roulette-result {
+  border-color: #e7ce8d;
+  box-shadow: inset 0 0 0 1px #083d2c, 0 5px 12px #001e1726;
+}
+
+.roulette-presentation[data-roulette-theme='gold'] .roulette-wheel-hub {
+  border-color: #eedba4;
+  box-shadow: inset 0 0 0 1px #b9a062, 0 4px 10px #00271938;
+}
+
+.roulette-presentation[data-roulette-theme='gold'] .roulette-reel-stage,
+.roulette-presentation[data-roulette-theme='gold'] .roulette-reel-frame {
+  border-color: #d8c182;
+}
+
+.roulette-presentation[data-roulette-theme='gold'] .roulette-reel-frame i {
+  border-color: #fff2cb;
+  border-radius: 50%;
+  background: #07583e;
+}

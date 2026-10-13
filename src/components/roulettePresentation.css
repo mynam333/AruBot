@@ -59,8 +59,8 @@
 }
 .roulette-wheel-stage > .roulette-heading h1 { height: 30px; }
 .roulette-wheel-chassis { position: relative; flex: none; width: var(--roulette-diameter); height: var(--roulette-diameter); isolation: isolate; }
-.roulette-wheel-rim { position: absolute; inset: 0; z-index: 10; border-radius: 50%; padding: 4.4%; background: var(--roulette-rim-outer); box-shadow: 0 9px 20px #00000029; }
-.roulette-wheel-rim > div { height: 100%; border-radius: 50%; background: var(--roulette-rim-inner); border: 1px solid var(--roulette-rim-line); }
+/* Radius 417 overlaps the widest artwork aperture (416), without filling its outer silhouette. */
+.roulette-wheel-seat { position: absolute; inset: 8.3%; z-index: 10; border-radius: 50%; background: var(--roulette-rim-inner); }
 .roulette-wheel-disc { position: absolute; inset: 8.6%; z-index: 10; overflow: hidden; border-radius: 50%; will-change: transform; }
 .roulette-wheel-hub {
   position: absolute; inset: 39%; z-index: 40; border-radius: 50%; border: 1px solid var(--roulette-hub-line);
@@ -153,7 +153,6 @@
 [data-roulette-theme='mono'] .roulette-reel-frame { border: 1px solid #171717; inset: 5px; }
 [data-roulette-theme='mono'] .roulette-reel-frame i { display: none; }
 [data-roulette-theme='mono'] .roulette-result { border-radius: 0; border: 0; border-top: 4px double #171717; border-bottom: 1px solid #171717; box-shadow: none; }
-[data-roulette-theme='mono'] .roulette-wheel-rim { box-shadow: none; }
 [data-roulette-theme='mono'] .roulette-wheel-hub { border: 2px solid #171717; box-shadow: none; }
 
 [data-roulette-theme='deco'] .roulette-reel-stage { padding: 26px; border: 1px solid #bda36f; border-radius: 0; clip-path: polygon(20px 0, calc(100% - 20px) 0, calc(100% - 20px) 12px, 100% 12px, 100% calc(100% - 12px), calc(100% - 20px) calc(100% - 12px), calc(100% - 20px) 100%, 20px 100%, 20px calc(100% - 12px), 0 calc(100% - 12px), 0 12px, 20px 12px); }
@@ -173,7 +172,6 @@
 [data-roulette-theme='ink'] .roulette-reel-frame i { display: none; }
 [data-roulette-theme='ink'] .roulette-result { border: 0; border-radius: 0; border-top: 1px solid #a4a299; box-shadow: none; }
 [data-roulette-theme='ink'] .roulette-result-caption { border: 1px solid #ad3028; color: #ad3028; padding: 3px; }
-[data-roulette-theme='ink'] .roulette-wheel-rim { box-shadow: none; }
 [data-roulette-theme='ink'] .roulette-wheel-hub { border: 2px solid #333430; }
 
 [data-roulette-theme='nova'] .roulette-reel-stage { border: 2px solid #ae7e55; border-radius: 12px; }
@@ -191,7 +189,6 @@
 [data-roulette-theme='arcade'] .roulette-reel-frame { border: 3px solid #ef5e53; border-radius: 0; inset: 4px; }
 [data-roulette-theme='arcade'] .roulette-reel-frame i { display: none; }
 [data-roulette-theme='arcade'] .roulette-result { border: 3px solid #51c8b9; border-radius: 0; font-family: AruRoulettePixel, sans-serif; }
-[data-roulette-theme='arcade'] .roulette-wheel-rim { border-radius: 16%; }
 [data-roulette-theme='arcade'] .roulette-wheel-hub { border: 4px solid #f6ce49; border-radius: 0; }
 
 [data-roulette-theme='sakura'] .roulette-reel-stage { border: 1px solid #ad697c; border-radius: 2px 32px 2px 32px; padding: 22px; }

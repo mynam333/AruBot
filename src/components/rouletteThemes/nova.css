@@ -1,0 +1,33 @@
+.roulette-presentation[data-roulette-theme='nova'] .roulette-heading,
+.roulette-presentation[data-roulette-theme='nova'] .roulette-result {
+  background: linear-gradient(115deg, #29332f, #14191b 30%, #14191b 70%, #29332f);
+  border-color: #ba8a68;
+  box-shadow: inset 0 1px #efc9a747, inset 0 -2px #080f10;
+}
+
+.roulette-presentation[data-roulette-theme='nova'] .roulette-wheel-hub {
+  background: linear-gradient(140deg, #34423b, #14191b 62%);
+  border-color: #d09a73;
+  box-shadow: inset 0 0 0 3px #14191b, inset 0 0 0 4px #688f86;
+}
+
+.roulette-presentation[data-roulette-theme='nova'] .roulette-reel-stage {
+  background: linear-gradient(120deg, #303a33, #14191b 34%, #1d2925 75%, #343b32);
+  border-color: #ba8a68;
+}
+
+.roulette-presentation[data-roulette-theme='nova'] .roulette-reel-frame {
+  border-color: #ba8a6870;
+}
+
+.roulette-presentation[data-roulette-theme='nova'] .roulette-reel-frame i {
+  background: #d09a73;
+  border-color: #14191b;
+  box-shadow: inset 0 1px #f3d3b4;
+}
+
+.roulette-presentation[data-roulette-theme='nova'] .roulette-reel-track {
+  background: linear-gradient(90deg, #14191b, #30423b 50%, #14191b);
+  border-color: #80c7c5;
+  box-shadow: inset 0 2px #0a1112, inset 0 -2px #0a1112;
+}
