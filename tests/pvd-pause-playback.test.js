@@ -18,7 +18,7 @@ afterEach(() => {
   jest.clearAllTimers(); jest.useRealTimers();
 });
 
-function mount(initialPayload = {}) {
+function mount(initialPayload = {}, playerRole = 'video') {
   const effects = [];
   const listeners = new Map();
   let socket;
@@ -29,13 +29,14 @@ function mount(initialPayload = {}) {
   const node = () => ({ style: {}, dataset: {}, appendChild() {}, replaceChildren() {} });
   class Player {
     constructor(_mount, options) {
-      this.id = options.videoId; this.events = options.events; this.time = 20;
+      this.id = options.videoId; this.events = options.events; this.time = 20; this.options = options;
       this.pauseVideo = jest.fn(); this.playVideo = jest.fn();
       this.seekTo = jest.fn((time) => { this.time = time; });
       player = this;
     }
     getVideoData() { return { video_id: this.id }; }
     getCurrentTime() { return this.time; }
+    getPlayerState() { return this.state; }
     getDuration() { return 180; }
     loadVideoById({ videoId }) { this.id = videoId; }
     setVolume(volume) { this.volume = volume; }
@@ -43,7 +44,7 @@ function mount(initialPayload = {}) {
     unMute() { this.muted = false; this.volume = Math.max(5, this.volume || 0); }
     unloadModule() {} destroy() {} stopVideo() {}
     ready() { this.events.onReady({ target: this }); }
-    emit(data) { this.events.onStateChange({ data, target: this }); }
+    emit(data) { this.state = data; this.events.onStateChange({ data, target: this }); }
   }
   global.window = { YT: { Player, PlayerState: { PLAYING: 1, PAUSED: 2, ENDED: 0 } }, location: { origin: 'http://localhost', pathname: '/pvd/test' }, addEventListener: (name, fn) => listeners.set(name, fn), removeEventListener() {}, setTimeout };
   global.document = { hidden: false, createElement: node, addEventListener() {}, removeEventListener() {} };
@@ -56,7 +57,7 @@ function mount(initialPayload = {}) {
   global.fetch = jest.fn(async (url, options = {}) => {
     const body = options.body ? JSON.parse(options.body) : {};
     calls.push({ url, body });
-    return { ok: true, json: url.includes('/now-playing') ? getSnapshot : async () => ({ ok: true }) };
+    return { ok: true, json: url.includes('/now-playing') ? getSnapshot : async () => ({ ok: true, ...(body.op === 'bgm_status' ? { accepted: true } : {}) }) };
   });
   const states = [];
   const refs = [];
@@ -94,7 +95,7 @@ function mount(initialPayload = {}) {
     '@/shared/api/http': { getBrowserApiBase: () => 'http://localhost' },
     '@/shared/api/overlay-socket': loadSource('src/shared/api/overlay-socket.ts'),
   });
-  const render = () => { stateIndex = 0; refIndex = 0; Viewer({ viewerToken: 'test' }); firstRender = false; };
+  const render = () => { stateIndex = 0; refIndex = 0; Viewer({ viewerToken: 'test', playerRole }); firstRender = false; };
   render();
   const disposers = effects.map((effect) => effect());
   cleanup = () => disposers.reverse().forEach((dispose) => { if (typeof dispose === 'function') dispose(); });
@@ -175,4 +176,73 @@ test('external media respects a pause received before mounting and delayed initi
   expect(h.externalVideo.currentTime).toBe(83);
   h.control('play');
   expect(h.externalVideo.play).toHaveBeenCalledTimes(1);
+});
+
+const bgmPayload = (patch = {}) => ({
+  item: { id: 'bgm-1', kind: 'bgm', mediaProvider: 'youtube', videoId: 'video000001', startSec: 12, durationSec: 100 },
+  bgm: { enabled: true }, ...patch,
+});
+
+test('BGM native controls expose the timeline and synchronize seeks across buffering events', async () => {
+  const h = mount(bgmPayload(), 'bgm'); await flush(); h.player.ready();
+  expect(h.player.options.playerVars).toMatchObject({ controls: 1, disablekb: 0 });
+  jest.advanceTimersByTime(1500); await flush();
+  h.player.time = 83; h.player.emit(3); h.player.emit(1);
+  jest.advanceTimersByTime(300); await flush();
+  expect(h.calls.filter(({ body }) => body.op === 'seek').map(({ body }) => body))
+    .toEqual([expect.objectContaining({ atSec: 83, itemId: 'bgm-1' })]);
+});
+
+test('BGM native seek updates a paused queue without resuming it', async () => {
+  const h = mount(bgmPayload({ paused: true }), 'bgm'); await flush(); h.player.ready();
+  jest.advanceTimersByTime(1500); await flush(); h.player.playVideo.mockClear();
+  h.player.time = 83; h.player.emit(2);
+  jest.advanceTimersByTime(300); await flush();
+  expect(h.calls).toContainEqual(expect.objectContaining({ body: expect.objectContaining({ op: 'seek', atSec: 83 }) }));
+  expect(h.calls.some(({ body }) => body.op === 'play')).toBe(false);
+  expect(h.player.playVideo).not.toHaveBeenCalled();
+});
+
+test('BGM native pause and resume are explicit controls, not automatic recovery events', async () => {
+  const h = mount(bgmPayload(), 'bgm'); await flush(); h.player.ready();
+  jest.advanceTimersByTime(1500); await flush();
+  h.player.emit(2); await flush();
+  h.player.time = 40; h.player.emit(1); await flush();
+  expect(h.calls.filter(({ body }) => ['pause', 'play'].includes(body.op)).map(({ body }) => body))
+    .toEqual([
+      expect.objectContaining({ op: 'pause', source: 'bgm-window', itemId: 'bgm-1' }),
+      expect.objectContaining({ op: 'play', source: 'bgm-window', atSec: 40 }),
+    ]);
+});
+
+test('a native BGM pause is accepted immediately after player readiness', async () => {
+  const h = mount(bgmPayload(), 'bgm'); await flush(); h.player.ready();
+  h.player.emit(2); await flush();
+  expect(h.calls).toContainEqual(expect.objectContaining({ body: expect.objectContaining({ op: 'pause', source: 'bgm-window' }) }));
+});
+
+test('a native BGM seek immediately after the server pause acknowledgement is not discarded', async () => {
+  const h = mount(bgmPayload(), 'bgm'); await flush(); h.player.ready();
+  jest.advanceTimersByTime(1500); await flush();
+  h.control('pause', 20); h.player.emit(2);
+  h.player.time = 60; h.player.emit(3); h.player.emit(2);
+  jest.advanceTimersByTime(300); await flush();
+  expect(h.calls).toContainEqual(expect.objectContaining({ body: expect.objectContaining({ op: 'seek', atSec: 60 }) }));
+  expect(h.calls.some(({ body }) => body.op === 'play')).toBe(false);
+});
+
+test.each([[0, 12], [175, 112]])('BGM native seek %s stays inside the requested segment at %s', async (time, bounded) => {
+  const h = mount(bgmPayload(), 'bgm'); await flush(); h.player.ready();
+  jest.advanceTimersByTime(1500); await flush();
+  h.player.time = time; h.player.emit(3);
+  jest.advanceTimersByTime(300); await flush();
+  expect(h.player.seekTo).toHaveBeenLastCalledWith(bounded, true);
+  expect(h.calls).toContainEqual(expect.objectContaining({ body: expect.objectContaining({ op: 'seek', atSec: bounded }) }));
+});
+
+test('native BGM controls do not resume playback during a Chzzk donation interruption', async () => {
+  const h = mount(bgmPayload({ paused: true, chzzkDonationPaused: true }), 'bgm'); await flush();
+  h.player.ready(); jest.advanceTimersByTime(1500); await flush();
+  h.player.emit(1);
+  expect(h.calls.some(({ body }) => body.op === 'play')).toBe(false);
 });

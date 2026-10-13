@@ -30,6 +30,8 @@ type MixOptions = {
   getHost: () => HTMLElement | null;
   fetchSeed: (signal: AbortSignal) => Promise<string>;
   isVisible: () => boolean;
+  controls?: boolean;
+  onPauseChange?: (paused: boolean) => void;
   onPlaying: (playing: boolean) => void;
   onBoundary: () => boolean;
   onTrack?: (track: { id: string; mediaId: string; title: string; durationSec: number } | null) => void;
@@ -69,6 +71,7 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
   let rotationsWithoutPlay = 0;
   let configuredSeedCursor = 0;
   let paused = false;
+  let controlSuppressedUntil = 0;
   let trackSerial = 0;
   let reportedTrackKey = '';
   let reportedTrackTitle = '';
@@ -88,6 +91,8 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
   };
 
   const canPlay = () => active && !paused && !disposed && options.isVisible();
+  const isNativeBuffering = (state: number | undefined) => options.controls && active && paused
+    && !disposed && options.isVisible() && state === 3;
   const remember = (id: string) => {
     if (!id) return;
     seen.add(id);
@@ -184,8 +189,20 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
     else rotate();
   };
 
-  const onStateChange = (event: MixEvent) => {
+  const onStateChange = (event: MixEvent, nativeEvent = true) => {
     if (!player || (event.target && event.target !== player)) return;
+    // Only visible BGM windows accept native controls; recovery ticks are not user actions.
+    if (nativeEvent && options.controls && active && ready && !disposed && options.isVisible()
+      && (now() >= controlSuppressedUntil || event.data === 2) && !advancing && acceptedId
+      && (event.data === 1 || event.data === 2)) {
+      const nextPaused = event.data === 2;
+      if (paused !== nextPaused) {
+        paused = nextPaused;
+        options.onPauseChange?.(paused);
+      }
+    }
+    // Native resume and paused scrubbing both buffer before reporting their final state.
+    if (isNativeBuffering(event.data)) return;
     if (!canPlay()) { suspend(); return; }
     const index = Number(player.getPlaylistIndex?.() ?? -1);
     const id = player.getVideoData?.()?.video_id || tracks()[index] || '';
@@ -295,7 +312,7 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
       rotationSeeds.clear();
       player = new YT.Player(mount, {
         width: '100%', height: '100%', videoId: target.videoId || undefined,
-        playerVars: { listType: 'playlist', list: target.playlistId, autoplay: 1, playsinline: 1, controls: 0, disablekb: 1, origin: window.location.origin },
+        playerVars: { listType: 'playlist', list: target.playlistId, autoplay: 1, playsinline: 1, controls: options.controls ? 1 : 0, disablekb: options.controls ? 0 : 1, origin: window.location.origin },
         events: {
           onReady: (event: MixEvent) => {
             if (version !== generation || event.target !== player) return;
@@ -337,6 +354,7 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
   };
 
   const sync = () => {
+    if (isNativeBuffering(player?.getPlayerState?.())) return;
     if (!canPlay()) { suspend(); return; }
     if (suspendedAt !== null) {
       if (deadline) deadline += now() - suspendedAt;
@@ -345,10 +363,10 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
     if (!player) { void ensure(); return; }
     if (deadline && now() >= deadline) { fail('mix_player_timeout'); return; }
     if (ready) {
-      if (player.getPlayerState?.() === 1) onStateChange({ data: 1, target: player });
+      if (player.getPlayerState?.() === 1) onStateChange({ data: 1, target: player }, false);
       if (!player) return;
       if (advanceOnResume) { advanceOnResume = false; advancing = false; advance(); }
-      else if (player.getPlayerState?.() !== 1) player.playVideo?.();
+      else if (player.getPlayerState?.() !== 1 && player.getPlayerState?.() !== 3) player.playVideo?.();
     }
   };
   const timer = setInterval(sync, 1000);
@@ -378,7 +396,11 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
       sync();
     },
     pause() { active = false; suspend(); },
-    setPaused(next: boolean) { paused = next; sync(); },
+    setPaused(next: boolean) {
+      if (paused !== next) controlSuppressedUntil = now() + 1000;
+      paused = next;
+      sync();
+    },
     skip() {
       paused = false;
       advanceOnResume = true;

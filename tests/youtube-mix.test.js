@@ -245,6 +245,51 @@ test('a web pause survives timer ticks and repeated startup snapshots', async ()
   expect(h.player.destroy).not.toHaveBeenCalled();
 });
 
+test.each([true, false])('Mix native controls are opt-in for BGM windows: %s', async (controls) => {
+  const h = setup({ controls });
+  h.controller.start(playlist()); await flush();
+  expect(h.player.options.playerVars).toMatchObject({ controls: controls ? 1 : 0, disablekb: controls ? 0 : 1 });
+});
+
+test('native Mix pause and paused scrubbing survive recovery until native resume', async () => {
+  const onPauseChange = jest.fn();
+  const h = setup({ controls: true, onPauseChange });
+  h.controller.start(playlist()); await flush(); h.player.ready(); h.player.emit(1);
+  h.player.emit(2); h.player.time = 83;
+  h.player.playVideo.mockClear();
+  jest.advanceTimersByTime(5000); h.controller.start(playlist());
+  expect(h.player.playVideo).not.toHaveBeenCalled();
+  expect(h.controller.getCurrentTime()).toBe(83);
+  expect(onPauseChange).toHaveBeenLastCalledWith(true);
+  h.player.pauseVideo.mockClear();
+  h.player.emit(3); jest.advanceTimersByTime(1500);
+  expect(h.player.pauseVideo).not.toHaveBeenCalled();
+  h.player.emit(1);
+  expect(onPauseChange).toHaveBeenLastCalledWith(false);
+  expect(h.onPlaying).toHaveBeenLastCalledWith(true);
+  expect(h.player.playVideoAt).not.toHaveBeenCalled();
+});
+
+test('Mix controls cannot override a hidden or donation-suspended player', async () => {
+  const onPauseChange = jest.fn();
+  const h = setup({ controls: true, onPauseChange });
+  h.controller.start(playlist()); await flush(); h.player.ready(); h.player.emit(1);
+  h.controller.setPaused(true); h.player.emit(1);
+  jest.advanceTimersByTime(1500);
+  h.setVisible(false); h.player.emit(1);
+  h.setVisible(true); h.controller.pause(); h.player.emit(1);
+  expect(onPauseChange).not.toHaveBeenCalled();
+  expect(h.onPlaying).toHaveBeenLastCalledWith(false);
+});
+
+test('Mix recovery does not interrupt native timeline buffering', async () => {
+  const h = setup({ controls: true });
+  h.controller.start(playlist()); await flush(); h.player.ready(); h.player.emit(1);
+  h.player.emit(3); h.player.playVideo.mockClear();
+  jest.advanceTimersByTime(1000);
+  expect(h.player.playVideo).not.toHaveBeenCalled();
+});
+
 test('refreshes a delayed title without changing the current track identity', async () => {
   const onTrack = jest.fn();
   const h = setup({ onTrack });
