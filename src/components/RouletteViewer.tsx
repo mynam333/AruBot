@@ -8,6 +8,7 @@ import { WheelGlassOverlay, WheelLabelsSvg, WheelPointer, WheelSegmentsSvg, Whee
 import { createWheelSegments, splitWheelLabel } from './rouletteWheelUtils';
 import { buildRouletteWheelEntries } from './rouletteWheelEntries';
 import { RouletteFitText } from './rouletteFitText';
+import { RouletteHubEmblem, RoulettePanelOrnaments } from './roulettePanelOrnaments';
 import { getRouletteMotionProfile, rouletteMotionPhase, rouletteMotionProgress, rouletteWheelKeyframes } from './rouletteMotion';
 import './roulettePresentation.css';
 
@@ -1370,6 +1371,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
 
   const renderHeading = () => (
     <header className="roulette-heading">
+      <RoulettePanelOrnaments themeId={theme} position="heading" />
       <h1><RouletteFitText max={30} min={10}>{state.name || '룰렛'}</RouletteFitText></h1>
       {state.username ? <p><RouletteFitText max={16} min={9}>{state.username + '님'}</RouletteFitText></p> : null}
     </header>
@@ -1382,6 +1384,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       role="status"
       aria-live={active ? 'polite' : 'off'}
     >
+      <RoulettePanelOrnaments themeId={theme} position="result" />
       <span className="roulette-result-caption">{wheelSettled ? '당첨' : '추첨 중'}</span>
       {(!reel || wheelSettled) ? (
         <div className="roulette-result-name">
@@ -1478,8 +1481,10 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
         <WheelGlassOverlay themeId={theme} />
         <WheelPointer themeId={theme} />
         <div className="roulette-wheel-hub">
-          <span className="roulette-hub-mark" aria-hidden="true" />
-          <span>{wheelSettled ? '당첨' : '회전 중'}</span>
+          <div className="roulette-hub-content">
+            <RouletteHubEmblem themeId={theme} />
+            <span>{wheelSettled ? '당첨' : '회전 중'}</span>
+          </div>
         </div>
       </div>
       {renderResult()}

@@ -65,6 +65,41 @@ const inkByTheme: Record<WheelThemeId, string> = {
   ocean: '#d2f7ed', solar: '#571d0d', cyber: '#c6ff51', gold: '#efe1b4',
 };
 
+function matteMaterial(theme: WheelThemeId) {
+  return theme === 'mono' || theme === 'ink';
+}
+
+function flatSectorMaterial(theme: WheelThemeId) {
+  return matteMaterial(theme) || theme === 'arcade' || theme === 'cyber';
+}
+
+function MaterialDefs({ theme, id }: { theme: WheelThemeId; id: string }) {
+  const soft = theme === 'sakura' || theme === 'velvet';
+  const glass = theme === 'crystal' || theme === 'ceramic' || theme === 'ocean' || theme === 'aurora';
+  return <>
+    <linearGradient id={`${id}-bevel`} x1="0" y1="0" x2="1" y2="1">
+      <stop stopColor="#fff" stopOpacity={soft ? '.28' : '.65'} />
+      <stop offset=".28" stopColor="#fff" stopOpacity=".08" />
+      <stop offset=".52" stopColor="#10191a" stopOpacity=".16" />
+      <stop offset=".74" stopColor="#fff" stopOpacity={soft ? '.12' : '.42'} />
+      <stop offset="1" stopColor="#10191a" stopOpacity=".25" />
+    </linearGradient>
+    <radialGradient id={`${id}-surface`} cx=".42" cy=".32" r=".72">
+      <stop stopColor="#fff" stopOpacity={soft ? '.1' : glass ? '.24' : '.15'} />
+      <stop offset=".55" stopColor="#fff" stopOpacity=".015" />
+      <stop offset=".88" stopColor="#142027" stopOpacity={soft ? '.08' : '.06'} />
+      <stop offset="1" stopColor="#142027" stopOpacity={glass ? '.19' : '.12'} />
+    </radialGradient>
+    <radialGradient id={`${id}-lip`}>
+      <stop offset=".84" stopColor="#10191a" stopOpacity="0" />
+      <stop offset=".91" stopColor="#10191a" stopOpacity=".2" />
+      <stop offset=".94" stopColor="#fff" stopOpacity=".48" />
+      <stop offset=".975" stopColor="#fff" stopOpacity=".1" />
+      <stop offset="1" stopColor="#10191a" stopOpacity=".16" />
+    </radialGradient>
+  </>;
+}
+
 function texturePattern(themeId: WheelThemeId, id: string) {
   const common = { id, patternUnits: 'userSpaceOnUse' as const };
   switch (themeId) {
@@ -100,6 +135,7 @@ export const WheelSegmentsSvg = React.memo(function WheelSegmentsSvg({ palette, 
     <svg className={`roulette-wheel-sectors roulette-wheel-sectors--${theme} pointer-events-none absolute inset-0 h-full w-full overflow-visible`} viewBox="0 0 1000 1000" aria-hidden="true" data-wheel-theme={themeId}>
       <defs>
         {texturePattern(theme, `${uid}-texture`)}
+        {!flatSectorMaterial(theme) ? <MaterialDefs theme={theme} id={uid} /> : null}
         <clipPath id={`${uid}-border`}><path d={ringPath('M500 8A492 492 0 1 1 500 992A492 492 0 1 1 500 8Z', 454)} clipRule="evenodd" /></clipPath>
       </defs>
       <circle cx="500" cy="500" r="498" fill={lightPaper ? '#f6f6ef' : '#172226'} />
@@ -114,17 +150,71 @@ export const WheelSegmentsSvg = React.memo(function WheelSegmentsSvg({ palette, 
         return (
           <g key={`${themeId}-segment-${index}`} data-wheel-segment-index={index} data-wheel-segment-start={segment.start} data-wheel-segment-end={segment.end}>
             <path d={d} fill={color} />
+            {!flatSectorMaterial(theme) ? <path d={d} fill={`url(#${uid}-surface)`} /> : null}
+            {segment.span >= 4 ? <>
+              <path d={bandPath(480, 487, segment.start + detailGap, segment.end - detailGap)} fill={foreground} opacity=".16" />
+              <path d={bandPath(477, 478.2, segment.start + detailGap, segment.end - detailGap)} fill={foreground} opacity=".46" />
+            </> : null}
+            {segment.span >= 7.5 && (theme === 'velvet' || theme === 'sakura') ? <path d={bandPath(451, 452, segment.start + detailGap, segment.end - detailGap)} fill="none" stroke={foreground} strokeWidth=".85" strokeDasharray={theme === 'velvet' ? '2 6' : '1 8'} opacity=".5" /> : null}
+            {segment.span >= 15 && (theme === 'prism' || theme === 'crystal') ? <path d={bandPath(456, 473, segment.start + detailGap, segment.center)} fill="#fff" opacity={theme === 'crystal' ? '.32' : '.16'} /> : null}
             {segment.span >= 7.5 ? <path d={d} fill={`url(#${uid}-texture)`} opacity={theme === 'ceramic' ? .58 : theme === 'ink' ? .18 : .24} clipPath={`url(#${uid}-border)`} /> : null}
             {segment.span >= 10 && theme === 'studio' ? <path d={bandPath(455, 460, segment.start + detailGap, segment.end - detailGap)} fill={foreground} opacity=".4" /> : null}
             {segment.span >= 7.5 && (theme === 'arcade' || theme === 'cyber') ? <rect x={marker.x - 3} y={marker.y - 6} width="6" height="12" fill={foreground} opacity=".72" transform={`rotate(${angle} ${marker.x} ${marker.y})`} /> : null}
           </g>
         );
       })}
+      {segments.length > 1 ? <g fill="none" strokeLinecap="butt" data-wheel-hairlines={theme}>
+        {segments.filter(segment => segment.span > .12 && segment.span < 360).map((segment, index) => {
+          const inner = polarPoint(500, 500, 100, segment.start);
+          const outer = polarPoint(500, 500, 489, segment.start);
+          return <g key={index}>
+            {!flatSectorMaterial(theme) ? <path d={`M${inner.x} ${inner.y}L${outer.x} ${outer.y}`} stroke="#fff" strokeOpacity=".28" strokeWidth="2.2" /> : null}
+            <path d={`M${inner.x} ${inner.y}L${outer.x} ${outer.y}`} stroke={matteMaterial(theme) ? inkByTheme[theme] : '#142027'} strokeOpacity={matteMaterial(theme) ? '.3' : '.32'} strokeWidth={matteMaterial(theme) ? '.8' : '.65'} />
+          </g>;
+        })}
+      </g> : null}
       <circle cx="500" cy="500" r="491" fill="none" stroke={inkByTheme[theme]} strokeWidth={theme === 'arcade' ? 7 : 2} opacity=".7" />
       {theme === 'ink' ? <path d={contourPath(487, 2, 13)} fill="none" stroke="#30342e" strokeWidth="3" opacity=".36" /> : null}
     </svg>
   );
 });
+
+function RimFinish({ theme, id }: { theme: WheelThemeId; id: string }) {
+  if (theme === 'mono') return <g fill="none" stroke="#181b1b"><circle cx="500" cy="500" r="484" strokeWidth=".8" /><circle cx="500" cy="500" r="430" strokeWidth=".7" /></g>;
+  if (theme === 'ink') return <g fill="none" stroke="#f3f1e8" opacity=".62"><path d={contourPath(459, 7, 5, 16)} strokeWidth="1.2" strokeDasharray="39 12 7 24 91 8" /><path d={contourPath(466, 6, 5, 16)} strokeWidth=".7" strokeDasharray="70 32 9 18" /></g>;
+  if (theme === 'cyber') return <g fill="none" stroke="#5adee1" strokeWidth=".9" data-wheel-rim-finish={theme}>
+    <circle cx="500" cy="500" r="416" strokeDasharray="46 8 7 12" opacity=".65" />
+    <circle cx="500" cy="500" r="430" strokeDasharray="30 6 3 6" opacity=".5" />
+    {[45, 135, 225, 315].map(angle => <g key={angle} transform={`rotate(${angle} 500 500)`}><path d="M481 64H494L505 75H519" /><path d="M484 71H491L502 82H510" stroke="#ef91c7" /><rect x="479" y="62" width="3" height="3" fill="#c6ff51" stroke="none" /></g>)}
+  </g>;
+  const textile = theme === 'velvet' || theme === 'sakura';
+  const metal = theme === 'deco' || theme === 'gold' || theme === 'nova' || theme === 'ocean';
+  const edge = theme === 'velvet' ? '#f1d497' : theme === 'sakura' ? '#fff2f4' : inkByTheme[theme];
+  return <g data-wheel-rim-finish={theme}>
+    <path d={bandPath(415, 431, 0, 360)} fill={`url(#${id}-lip)`} fillRule="evenodd" opacity={textile ? '.5' : '.85'} />
+    <path d={bandPath(418, 425, 0, 360)} fill={`url(#${id}-bevel)`} fillRule="evenodd" />
+    <circle cx="500" cy="500" r="416" fill="none" stroke="#fff" strokeWidth="1.1" opacity=".48" />
+    <circle cx="500" cy="500" r="428" fill="none" stroke="#10191a" strokeWidth=".8" opacity=".35" />
+    {metal ? <>
+      <path d={bandPath(477, 486, 0, 360)} fill={`url(#${id}-bevel)`} fillRule="evenodd" opacity=".65" />
+      <circle cx="500" cy="500" r="474" fill="none" stroke={edge} strokeWidth=".8" opacity=".55" />
+      <circle cx="500" cy="500" r="432" fill="none" stroke={edge} strokeWidth=".8" opacity=".7" />
+    </> : null}
+    {textile ? <>
+      <path d={contourPath(theme === 'velvet' ? 477 : 474, theme === 'velvet' ? 8 : 10, theme === 'velvet' ? 24 : 8)} fill="none" stroke={edge} strokeWidth="1.1" strokeDasharray="2.2 5" opacity=".7" />
+      <circle cx="500" cy="500" r="444" fill="none" stroke={edge} strokeWidth=".7" opacity=".45" />
+    </> : null}
+    {theme === 'ceramic' ? <>
+      <path d={contourPath(483, 7, 32)} fill="none" stroke="#fff" strokeWidth="3" opacity=".8" />
+      <circle cx="500" cy="500" r="440" fill="none" stroke="#1746a0" strokeWidth=".7" opacity=".65" />
+    </> : null}
+    {theme === 'aurora' ? <path d={contourPath(470, 17, 3, 25)} fill="none" stroke={`url(#${id}-bevel)`} strokeWidth="9" /> : null}
+    {theme === 'studio' ? <circle cx="500" cy="500" r="483" fill="none" stroke={`url(#${id}-bevel)`} strokeWidth="15" /> : null}
+    {theme === 'crystal' || theme === 'prism' ? <polygon points={polygonPoints(12, 488, 15)} fill="none" stroke={theme === 'crystal' ? '#fff' : '#f9fff7'} strokeWidth="1.3" opacity=".8" /> : null}
+    {theme === 'solar' ? <circle cx="500" cy="500" r="453" fill="none" stroke={`url(#${id}-bevel)`} strokeWidth="25" /> : null}
+    {theme === 'arcade' ? <circle cx="500" cy="500" r="430" fill="none" stroke={edge} strokeWidth="1" strokeDasharray="4 12" opacity=".55" /> : null}
+  </g>;
+}
 
 function DialTicks({ count = 60, inner = 438, outer = 471, color = '#f5f6f4', majorEvery = 5, width = 2, skipAngles = [] }: {
   count?: number; inner?: number; outer?: number; color?: string; majorEvery?: number; width?: number; skipAngles?: number[];
@@ -264,8 +354,11 @@ function FamilyMotif({ themeId }: { themeId: WheelThemeId }) {
 
 export const WheelSkinOrnaments = React.memo(function WheelSkinOrnaments({ family, themeId }: { family: WheelSkinFamily; themeId?: string }) {
   const theme = getWheelThemeId(themeId || family);
+  const uid = React.useId().replace(/:/g, '');
   return <svg className={`roulette-wheel-ornaments roulette-wheel-ornaments--${theme} pointer-events-none absolute inset-0 z-20 h-full w-full overflow-visible`} viewBox="0 0 1000 1000" aria-hidden="true" data-wheel-chrome={themeId || theme}>
+    {!matteMaterial(theme) && theme !== 'cyber' ? <defs><MaterialDefs theme={theme} id={uid} /></defs> : null}
     <FamilyMotif themeId={theme} />
+    <RimFinish theme={theme} id={uid} />
   </svg>;
 });
 
@@ -278,12 +371,16 @@ export function WheelSelectedSegment({ selectedIndex, segmentCount, family = 'mo
   const angle = segment.center;
   const graphic = theme === 'arcade' || theme === 'cyber' || theme === 'mono';
   const color = theme === 'studio' || theme === 'ink' ? '#c83f36' : theme === 'ceramic' ? '#1746a0' : theme === 'sakura' ? '#832c4e' : 'var(--roulette-result)';
-  const start = segment.start + Math.min(.8, segment.span * .025);
-  const end = segment.end - Math.min(.8, segment.span * .025);
-  const strokeWidth = Math.min(4, segment.span * Math.PI / 180 * 250 * .2);
+  const inset = segment.span >= 360 ? 0 : Math.min(.8, segment.span * .025);
+  const start = segment.start + inset;
+  const end = segment.end - inset;
+  const strokeWidth = Math.min(1.6, segment.span * Math.PI / 180 * 250 * .12);
   return <svg className={`roulette-wheel-selection roulette-wheel-selection--${theme} pointer-events-none absolute inset-0 h-full w-full overflow-visible`} viewBox="0 0 1000 1000" aria-hidden="true" data-wheel-selection={theme}>
     <path d={segmentPath(segment)} fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinejoin={graphic ? 'miter' : 'round'} strokeDasharray={theme === 'mono' ? '9 6' : undefined} opacity=".9" />
-    {segment.span >= 360 ? <circle cx="500" cy="500" r="476" fill="none" stroke={color} strokeWidth="12" /> : <path d={bandPath(469, 483, start, end)} fill={color} />}
+    <path d={bandPath(468, 484, start, end)} fill={color} opacity=".12" />
+    <path d={bandPath(479, 483, start, end)} fill={color} />
+    <path d={bandPath(470, 471.2, start, end)} fill={color} opacity=".8" />
+    {!flatSectorMaterial(theme) ? <path d={bandPath(477, 478, start, end)} fill="#fff" opacity=".7" /> : null}
     {segment.span >= 5.625 ? <g transform={`rotate(${angle} 500 500)`} fill={color}>{graphic ? <path d="M491 39H509V48H504V56H496V48H491Z" /> : <path d="M491 37Q500 42 509 37L500 55Z" />}</g> : null}
   </svg>;
 }
@@ -373,9 +470,32 @@ function PointerMotif({ themeId }: { themeId: WheelThemeId }) {
   }
 }
 
+function PointerFinish({ theme }: { theme: WheelThemeId }) {
+  // Inset tooling never extends past the shared winning tip at (90, 190).
+  const line = { fill: 'none', strokeWidth: 1.25, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
+  switch (theme) {
+    case 'studio': return <g {...line}><path d="M60 64V24H120M77 61 89 163" stroke="#fff" /><path d="M116 30V61M68 44H112" stroke="#8e9698" /><path d="M84 29H96" stroke="#e34b43" /></g>;
+    case 'prism': return <g {...line} stroke="#fff" strokeOpacity=".8"><path d="M47 46 101 20 132 69 99 77ZM46 51 85 158M99 86 93 159" /><path d="M102 30 97 62" /></g>;
+    case 'aurora': return <g {...line} stroke="#d5fff1"><path d="M60 51C74 25 117 28 126 54M124 60C138 96 102 120 96 148" /><path d="M87 52C99 78 80 102 87 125" opacity=".55" /></g>;
+    case 'velvet': return <g {...line} stroke="#f7e1ac"><path d="M53 76Q38 57 57 45Q52 27 73 32Q90 18 107 32Q127 27 123 45Q143 57 127 76" /><path d="M67 91 90 151 113 91" strokeDasharray="1 4" /><path d="M74 57Q90 40 106 57" opacity=".6" /></g>;
+    case 'mono': return <path d="M48 24H132V61M63 58H117" fill="none" stroke="#151719" strokeWidth="1" />;
+    case 'deco': return <g {...line} stroke="#fff0c2"><path d="M42 25H138M42 29H49V50H62V75H73V98M131 30V50H118V75H107V98" /><path d="M84 106 90 151 96 106" /></g>;
+    case 'crystal': return <g {...line}><path d="M65 23H115L133 60H109L90 170 71 60H47Z" stroke="#fff" /><path d="M82 69H98L90 149Z" fill="#fff" fillOpacity=".32" stroke="none" /><path d="M107 24 99 57M52 68 82 143" stroke="#548ca5" strokeOpacity=".45" /></g>;
+    case 'ink': return <path d="M65 25 68 58M114 31 111 61M72 85 78 106M99 95 96 119" fill="none" stroke="#f3f1e8" strokeWidth=".8" strokeDasharray="6 3 2 4" opacity=".6" />;
+    case 'nova': return <g {...line} stroke="#ffe1bd"><path d="M71 88V97L86 158M109 88V97L96 141" /><circle cx="90" cy="52" r="24" strokeDasharray="1 5" /><path d="M82 48H98M90 44V60" stroke="#6cd8d9" /></g>;
+    case 'ceramic': return <g {...line}><path d="M52 77Q32 52 58 33Q70 18 87 25M95 26Q116 16 126 39" stroke="#fff" strokeWidth="3" /><path d="M56 84Q65 103 72 117M124 84Q115 103 108 117M81 119H99" stroke="#1746a0" strokeOpacity=".5" /></g>;
+    case 'arcade': return <g fill="none" strokeWidth="2"><path d="M48 24H131M48 28V60H60V96H72V131" stroke="#fff7c1" /><path d="M130 69H121V104H109V136H98V165" stroke="#943e38" /></g>;
+    case 'sakura': return <g {...line} stroke="#fff3f7"><path d="M40 60Q51 24 87 22M96 22Q128 26 140 60M53 71Q90 51 127 71" /><path d="M65 77 84 137M98 127 118 74" opacity=".6" /></g>;
+    case 'ocean': return <g {...line}><path d="M69 21H111L131 61 102 136M48 61 79 145" stroke="#d9fff2" /><circle cx="90" cy="57" r="19" stroke="#e9fff4" strokeDasharray="20 6" /><path d="M81 111 90 163 99 111" stroke="#174c60" /></g>;
+    case 'solar': return <g {...line} stroke="#fff0b8"><path d="M40 42 69 46 90 17 108 46 138 39M31 77 51 79 63 96M139 77 128 82 119 97M87 95 90 146" /></g>;
+    case 'cyber': return <g {...line} stroke="#dcfff4"><path d="M56 19H113L134 41V68M46 42V70L65 95M117 86 104 105" /><path d="M64 33H72M116 47V54M84 111 90 146" stroke="#ef91c7" strokeWidth="2" /></g>;
+    case 'gold': return <g {...line} stroke="#fff0c6"><path d="M48 40Q64 10 98 21Q132 28 135 57M48 78Q50 94 64 103L78 130M130 88 112 108 102 135" /><circle cx="90" cy="61" r="29" strokeWidth=".7" strokeDasharray="1 4" /><path d="M85 52V72M95 52V72" /></g>;
+  }
+}
+
 export const WheelPointer = React.memo(function WheelPointer({ themeId = 'studio' }: { themeId?: string }) {
   const theme = getWheelThemeId(themeId);
   return <div className={`roulette-wheel-pointer roulette-wheel-pointer--${theme} pointer-events-none absolute left-[43%] top-[-1%] z-50 h-[16%] w-[14%]`} style={{ transformOrigin: '50% 24%', transform: 'rotate(var(--roulette-pointer-deflect, 0deg))' }} aria-hidden="true" data-pointer-theme={themeId}>
-    <svg className="block h-full w-full overflow-visible" viewBox="0 0 180 200"><PointerMotif themeId={theme} /></svg>
+    <svg className="block h-full w-full overflow-visible" viewBox="0 0 180 200"><PointerMotif themeId={theme} /><PointerFinish theme={theme} /></svg>
   </div>;
 });

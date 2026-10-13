@@ -46,6 +46,20 @@ mostly changed colors without changing their construction.
 - No remote font requests at runtime. Galmuri and Gowun Batang are self-hosted,
   with original OFL notices in `public/fonts/roulette`.
 
+## Material Refinement
+
+The wheel, title plaque, central emblem and result plaque now share the same
+material vocabulary. Fine inset borders, bevel highlights and restrained edge
+ornaments add depth without covering sector labels. Paper/mono keep flat inked
+surfaces; porcelain uses a pale glaze and cobalt details; metal and glass retain
+directional highlights instead of a uniform glow across every theme.
+
+Winning labels are centered beneath a small status caption. Side ornaments occupy
+reserved gutters, so long names never compete with them. Small overlay sizes use
+smaller ornaments and fixed text slots rather than cropping the winning label.
+Decorative states do not change the weighted geometry, stop position or result
+acknowledgement. Reduced-motion and inactive-overlay behavior remain respected.
+
 Font sources: [Galmuri](https://github.com/quiple/galmuri) and
 [Gowun Batang](https://github.com/yangheeryu/Gowun-Batang), plus
 [Pretendard](https://github.com/orioncactus/pretendard).
