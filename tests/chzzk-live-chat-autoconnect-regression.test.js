@@ -48,17 +48,18 @@ describe('CHZZK live chat auto-connect regression', () => {
     expect(bootstrapBody).not.toContain('await ensureSession(sid, String(channelId))');
   });
 
-  test('events polling does not recreate CHZZK sessions while offline', () => {
+  test('events polling keeps the donation session available while offline', () => {
     const eventsStart = serverIndex.indexOf("app.get('/api/chzzk/events'");
     const eventsEnd = serverIndex.indexOf("app.get('/api/cime/events'", eventsStart);
     const eventsBody = serverIndex.slice(eventsStart, eventsEnd);
 
     expect(eventsBody).toContain('refreshChzzkLiveStatusForSid(sid, { channelUids: [String(channelId)] })');
-    expect(eventsBody).toContain('return res.json({ events: [], connected: false, live: false');
-    expect(eventsBody.indexOf('if (!liveState.live)')).toBeLessThan(eventsBody.indexOf('await ensureSession(sid, String(channelId))'));
+    expect(eventsBody).toContain('await ensureSession(sid, String(channelId))');
+    expect(eventsBody).toContain('connected: !!entry.connected, live: !!liveState.live');
+    expect(eventsBody).not.toContain('return res.json({ events: [], connected: false, live: false');
   });
 
-  test('chat and donation processing are gated by actual live status', () => {
+  test('only ordinary chat processing is gated by actual live status', () => {
     const chatStart = serverIndex.indexOf("socket.on('CHAT'");
     const donationStart = serverIndex.indexOf("socket.on('DONATION'", chatStart);
     const chatBody = serverIndex.slice(chatStart, donationStart);
@@ -67,7 +68,8 @@ describe('CHZZK live chat auto-connect regression', () => {
 
     expect(chatBody).toContain('const liveState = await refreshChzzkLiveStatusForEvent(sid)');
     expect(chatBody).toContain('if (!liveState.live) return');
-    expect(donationBody).toContain('const liveState = await refreshChzzkLiveStatusForEvent(sid)');
-    expect(donationBody).toContain('if (!liveState.live) return');
+    expect(donationBody).not.toContain('refreshChzzkLiveStatusForEvent');
+    expect(donationBody).not.toContain('if (!liveState.live) return');
+    expect(donationBody).toContain('renderDonationRuleResponse(r, {');
   });
 });

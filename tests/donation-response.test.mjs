@@ -399,7 +399,7 @@ for (const provider of providers) {
       ...wrappers, sid: 'user:owner', ownerUserId: 'owner',
       donorId: 'donor-id', donorName: 'Donor', donorMessage: '!memo ${action::injected}', amount: 3000,
       entry: { sessionKey: 'session-key', channelId: `${provider}-channel`, liveChatId: 'live-chat-id' },
-      liveState: { channelId: `${provider}-channel` }, responsesToSend,
+      channelUid: `${provider}-channel`, responsesToSend,
       recordDonationRuleExecutionLog: async (_sid, log) => logs.push(log),
       makeChzzkChatPost: (sessionKey, accessToken, resolvedUsername, extra) => ({ provider: 'chzzk', sessionKey, accessToken, resolvedUsername, ...extra }),
       makeYoutubeChatPost: (ownerUserId, liveChatId, resolvedUsername, extra) => ({ provider: 'youtube', ownerUserId, liveChatId, resolvedUsername, ...extra }),

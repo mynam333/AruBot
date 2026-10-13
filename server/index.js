@@ -25461,12 +25461,13 @@ async function ensureSession(sid, channelId) {
       pushEvent(entry, ev);
       // Process donation: award channel points and trigger donation rules
       relayChzzkAvatarEvent(entry, ev);
-      (async () => {
+      return (async () => {
         try {
-          const sid = [...sessionStore.entries()].find(([, e]) => e === entry)?.[0];
+          const sid = entry.primarySid || [...sessionStore.entries()].find(([, e]) => e === entry)?.[0];
           if (!sid) return;
-          const liveState = await refreshChzzkLiveStatusForEvent(sid);
-          if (!liveState.live) return;
+          // Paid events remain actionable after broadcast end, without a live lookup.
+          const settings = await getBotSettings(sid) || {};
+          const channelUid = entry.channelId || (await resolveChzzkChannelUidsForSid(sid, settings))[0] || null;
           const amount = Math.max(0, Number(ev.amount || 0));
           const donorName = String(ev.user || '?듬챸');
           const donorId = String(ev.id || '');
@@ -25481,14 +25482,9 @@ async function ensureSession(sid, channelId) {
           }).catch((error) => console.warn('[Wheel] CHZZK donation:', error?.message || error));
           // 1) Award channel points
           try {
-            const settings = await getBotSettings(sid) || {};
             const pointsPerK = Math.max(0, Number(settings?.donation?.pointsPerK ?? 10));
             const award = calculateDonationPointAward(amount, pointsPerK);
             if (award > 0) {
-              // Resolve streamer channel UID
-              let channelUid = null;
-              const uids = await resolveChzzkChannelUidsForSid(sid, settings);
-              if (uids.length) channelUid = uids[0];
               if (channelUid) {
                 // Use donor's userId (channel id) as the points subject
                 const pointsUserId = donorId || `donor:${donorName}`;
@@ -25502,7 +25498,6 @@ async function ensureSession(sid, channelId) {
           // 2) Find ALL matching donation rules
           const responsesToSend = [];
           try {
-            const settings = await getBotSettings(sid) || {};
             const rules = Array.isArray(settings.donationRules) ? settings.donationRules : [];
             const lowerMsg = donorMessage.toLowerCase();
             for (const r of rules) {
@@ -25568,15 +25563,15 @@ async function ensureSession(sid, channelId) {
               const { text: built, features: donationFeatures } = await renderDonationRuleResponse(r, {
                 sid, provider: 'chzzk', userId: donorId, username: donorName,
                 amount, message: donorMessage, source: 'donation-rule',
-                channelUid: liveState.channelId || entry.channelId || null,
+                channelUid,
                 chatPost: makeChzzkChatPost(entry.sessionKey, null, donorName, {
-                  channelUid: liveState.channelId || entry.channelId || null,
+                  channelUid,
                   liveManageActorId: donorId,
                 }),
               });
               await recordDonationRuleExecutionLog(sid, {
                 provider: 'chzzk',
-                channelUid: liveState.channelId || null,
+                channelUid,
                 userId: donorId ? String(donorId) : null,
                 username: donorName,
                 ruleId: r.id || null,
@@ -25607,7 +25602,9 @@ async function ensureSession(sid, channelId) {
               await new Promise(r => setTimeout(r, 120));
             }
           } catch { }
-        } catch { }
+        } catch (error) {
+          console.error('[CHZZK] Donation automation error', error?.message || error);
+        }
       })();
     });
 
@@ -28500,16 +28497,13 @@ app.get('/api/chzzk/events', async (req, res) => {
     }
 
     const liveState = await refreshChzzkLiveStatusForSid(sid, { channelUids: [String(channelId)] });
-    if (!liveState.live) {
-      return res.json({ events: [], connected: false, live: false, channelId: String(channelId) });
-    }
-
+    // The session carries donations even when the broadcast is offline.
     const entry = await ensureSession(sid, String(channelId));
     const sinceNum = since ? Number(since) : null;
     const events = entry.queue.filter(ev => !sinceNum || (ev.ts && ev.ts > sinceNum));
     // Sort ascending by ts
     events.sort((a, b) => (a.ts || 0) - (b.ts || 0));
-    return res.json({ events, connected: !!entry.connected, live: true, channelId: String(channelId) });
+    return res.json({ events, connected: !!entry.connected, live: !!liveState.live, channelId: String(channelId) });
   } catch (e) {
     // console.error('Events error', e?.response?.data || e.message);
     return res.status(500).json({ error: 'Failed to fetch events' });
