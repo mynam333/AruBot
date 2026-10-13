@@ -88,6 +88,26 @@ async function click(page, action) {
 }
 async function tab(page, name) { await page.locator(`[data-tab="${name}"]`).click(); }
 
+test('chat bubble controls save, validate, and survive scene presets', async (t) => {
+  const { page } = await mount(t);
+  await tab(page, 'scene');
+  assert.equal(await page.locator('[data-field="bubbles"]').isChecked(), true);
+  await page.locator('[data-field="bubbleDuration"]').fill('9');
+  await page.locator('[data-field="bubbleMaxLength"]').fill('96');
+  await page.locator('[data-field="bubbleSize"]').fill('28');
+  await page.locator('[data-field="bubbles"]').uncheck();
+  await page.locator('[data-preset="party"]').click();
+  assert.equal(await page.locator('[data-field="bubbles"]').isChecked(), false);
+  await page.locator('[data-field="bubbles"]').check();
+  await click(page, 'save');
+  const config = await page.evaluate(() => window.__calls.filter(([kind]) => kind === 'save').at(-1)[1]);
+  assert.equal(config.bubbles, true);
+  assert.equal(config.bubbleDuration, 9);
+  assert.equal(config.bubbleMaxLength, 96);
+  assert.equal(config.bubbleSize, 28);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+});
+
 test('unsaved export and canceled export retain draft, selection, and undo', async (t) => {
   const { page, config } = await mount(t);
   assert.match(await page.locator('.av-state').filter({ has: page.locator('[data-state="run"]') }).textContent(), /걷기 이미지 대체/);

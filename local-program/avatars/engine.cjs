@@ -1,6 +1,6 @@
 const Matter = require('matter-js');
 const crypto = require('crypto');
-const { LIMITS, text, number } = require('./schema.cjs');
+const { LIMITS, text, number, speechText } = require('./schema.cjs');
 const { hasZalgoText } = require('./text-safety.cjs');
 const { Engine, Bodies, Body, Composite } = Matter;
 const WIDTH = 1920,
@@ -101,6 +101,7 @@ class AvatarEngine {
         for (const key of [
           'until',
           'nextWalk',
+          'bubbleStartedAt',
           'bubbleUntil',
           'effectUntil',
           'pushedUntil',
@@ -489,7 +490,7 @@ class AvatarEngine {
       event.kind === 'chat' &&
       !content.startsWith('!')
     )
-      this.say(actor, content);
+      this.say(actor, content, this.config.bubbleDuration ?? 6, this.config.bubbleMaxLength ?? 72);
     const controlKey = `${key}:control`;
     const customControl =
       [
@@ -581,9 +582,13 @@ class AvatarEngine {
     if (!candidates.length) this.diagnose('NO_RULE', '', event);
     return applied || !candidates.length;
   }
-  say(actor, message) {
-    actor.bubble = text(message, 100);
-    actor.bubbleUntil = this.now() + 5000;
+  say(actor, message, duration = 5, maxLength = 100) {
+    const content = speechText(message, maxLength);
+    if (!content) return;
+    actor.speechOwner = null;
+    actor.bubble = content;
+    actor.bubbleStartedAt = this.now();
+    actor.bubbleUntil = this.now() + number(duration, 0.1, LIMITS.duration, 5) * 1000;
   }
   target(actor, name) {
     if (
@@ -781,13 +786,13 @@ class AvatarEngine {
       this.game.players.includes(actor.id);
     if (step.action === 'say') {
       this.stats.actions++;
-      actor.speechOwner = sequence?.id;
       this.say(
         actor,
         step.value
           .replaceAll('{user}', actor.profile.name)
           .replaceAll('{target}', target?.profile.name || ''),
       );
+      actor.speechOwner = sequence?.id;
       actor.bubbleUntil =
         now + number(step.duration, 0.1, LIMITS.duration, 5) * 1000;
       return true;
@@ -1475,6 +1480,7 @@ class AvatarEngine {
       nameLimit: this.config.nameLimit ?? 150,
       namesMode: this.config.namesMode || 'always',
       bubbleLimit: this.config.bubbleLimit ?? 10,
+      bubbleSize: this.config.bubbleSize ?? 22,
       gameBottom: this.config.gameBottom ?? 245,
       ground: this.ground,
       previewHeight: Math.min(
@@ -1518,6 +1524,8 @@ class AvatarEngine {
         targeting: a.profile.targeting !== false,
         animationRate: a.state === 'run' ? 1.7 : 1,
         bubble: a.bubbleUntil > now ? a.bubble : '',
+        bubbleStartedAt: a.bubbleStartedAt,
+        bubbleUntil: a.bubbleUntil,
         effect: a.effectUntil > now ? a.effect : '',
         test: a.test,
         wins: a.profile.wins,

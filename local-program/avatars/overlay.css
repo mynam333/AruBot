@@ -66,18 +66,47 @@ body {
   text-overflow: ellipsis;
 }
 .bubble {
-  max-width: 230px;
+  z-index: 2;
+  max-width: 300px;
   width: max-content;
-  padding: 8px 12px;
+  padding: 10px 14px;
+  border: 1px solid #26313e;
   border-radius: 8px;
+  background: #fffffff7;
+  color: #17212b;
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.4;
+  box-shadow: 0 3px 12px #0003;
+  text-align: left;
+  transform-origin: center bottom;
+}
+.bubble::after {
+  content: '';
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  left: var(--bubble-tail-x, 50%);
+  bottom: -6px;
+  transform: translateX(-50%) rotate(45deg);
   background: #fff;
-  color: #222;
-  font-size: 18px;
+  border-right: 1px solid #26313e;
+  border-bottom: 1px solid #26313e;
+}
+.bubble[data-side='below']::after {
+  top: -6px;
+  bottom: auto;
+  transform: translateX(-50%) rotate(225deg);
+}
+.bubble-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  max-height: 4.2em;
   overflow-wrap: anywhere;
-  white-space: pre-wrap;
+  white-space: normal;
   overflow: hidden;
-  box-shadow: 0 2px 8px #0002;
-  text-align: center;
 }
 .effect {
   color: #fff;

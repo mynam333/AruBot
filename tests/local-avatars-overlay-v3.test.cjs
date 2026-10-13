@@ -19,6 +19,7 @@ const {
   sceneLayout,
   fitActor,
   labelVisibility,
+  placeBubbles,
   createFrameGate,
   reloadBudget,
   createAssetCache,
@@ -55,6 +56,24 @@ const snapshot = (changes = {}) => ({
   height: 1080,
   ground: 1056,
   ...changes,
+});
+
+test('speech layout keeps edge tails attached, avoids overlap and hides excess bubbles', () => {
+  const safe = { left: 0, top: 0, right: 500, bottom: 300 };
+  const base = { x: 20, top: 220, bottom: 280, width: 200, height: 70 };
+  const placed = placeBubbles(['new', 'old', 'oldest', 'overflow'].map((id) => ({ ...base, id })), safe);
+  assert.equal(placed.get('new').left, 6);
+  assert.equal(placed.get('new').tail, 16);
+  assert.equal(placed.get('old').top + 70 + 10, placed.get('new').top);
+  assert.equal(placed.has('overflow'), false);
+  for (const item of placed.values()) {
+    assert.ok(item.left >= 6 && item.left + item.width <= 494);
+    assert.ok(item.top >= 6 && item.top + item.height <= 294);
+  }
+  const ceiling = placeBubbles([{ ...base, id: 'top', x: 490, top: 10, bottom: 80 }], safe).get('top');
+  assert.equal(ceiling.side, 'below');
+  assert.equal(ceiling.left, 294);
+  assert.equal(ceiling.tail, 184);
 });
 
 test('non-square frames use explicit metadata, then natural image dimensions per cell', () => {
@@ -414,7 +433,7 @@ function client({
     listeners = new Map();
   class Element {
     constructor() {
-      this.style = {};
+      this.style = { setProperty(key, value) { this[key] = value; } };
       this.dataset = {};
       this.children = [];
       this.hidden = false;
@@ -436,7 +455,7 @@ function client({
         ? 0
         : Math.min(
             parseFloat(this.style.maxWidth) || 240,
-            this.textContent.length * 10 + 24,
+            (this.textContent || this.children.map((child) => child.textContent).join('')).length * 10 + 24,
           );
     }
     get offsetHeight() {
@@ -580,6 +599,30 @@ function client({
     },
   };
 }
+
+test('client renders safe bubble text without moving the actor and uses authoritative fade timing', async () => {
+  const app = client();
+  await app.ready(snapshot());
+  const root = app.actor();
+  const transform = root.style.transform;
+  app.sockets[0].message(snapshot({ sequence: 2, bubbleSize: 26,
+    actors: [{ ...actor, bubble: '<img src=x onerror=alert(1)>', bubbleStartedAt: 1900, bubbleUntil: 7000 }] }));
+  app.render();
+  const bubble = root.children[2];
+  assert.equal(root.style.transform, transform);
+  assert.equal(bubble.hidden, false);
+  assert.equal(bubble.children[0].textContent, '<img src=x onerror=alert(1)>');
+  assert.equal(bubble.style.fontSize, '26px');
+  assert.equal(bubble.dataset.side, 'above');
+  assert.equal(Number(bubble.style.opacity), 0.625);
+  app.sockets[0].message(snapshot({ sequence: 3, simulationTime: 6890,
+    actors: [{ ...actor, bubble: 'ending', bubbleStartedAt: 1900, bubbleUntil: 7000 }] }));
+  app.render();
+  assert.equal(Number(bubble.style.opacity), 0.5);
+  app.sockets[0].message(snapshot({ sequence: 4, simulationTime: 7000 }));
+  app.render();
+  assert.equal(bubble.hidden, true);
+});
 
 test('client draws run-to-walk fallback with frame aspect, ignores stale frames, and resets on a new session', async () => {
   const app = client();

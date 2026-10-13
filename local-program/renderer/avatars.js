@@ -433,7 +433,7 @@
         ${field('캐릭터 크기 (px)', 'size', draft.size, 'number', 'min="24" max="160"')}${field('걷기 속도', 'speed', draft.speed, 'number', 'min="0.2" max="4" step="0.1"')}
         ${field('최대 참여자', 'maxActors', draft.maxActors, 'number', 'min="1" max="150"')}${field('자동 퇴장 (분)', 'idleMinutes', draft.idleMinutes, 'number', 'min="1" max="120"')}
         ${field('바닥 여백 (px)', 'floor', draft.floor, 'number', 'min="0" max="300"')}${field('OBS 출력 포트', 'port', draft.port, 'number', 'min="1024" max="65535"')}
-        ${check('채팅 시 자동 입장', 'autoJoin', draft.autoJoin)}${check('이름표 표시', 'showNames', draft.showNames)}${check('일반 채팅 말풍선', 'bubbles', draft.bubbles)}${check('시청자 간 대상 상호작용', 'allowTargeting', draft.allowTargeting)}</div></div>`;
+        ${check('채팅 시 자동 입장', 'autoJoin', draft.autoJoin)}${check('이름표 표시', 'showNames', draft.showNames)}${check('시청자 간 대상 상호작용', 'allowTargeting', draft.allowTargeting)}</div></div>`;
     } else if (tab === 'rules') {
       const r =
         draft.rules.find((r) => r.id === selectedRule) || draft.rules[0];
@@ -651,8 +651,12 @@
     } else if (tab === 'scene') {
       editor.querySelector('.av-form').insertAdjacentHTML('beforeend', `${check('신규 참여 허용', 'newJoins', draft.newJoins !== false)}${check('방송 출력 숨김', 'outputHidden', draft.outputHidden)}${select('정원 초과 정책', 'admission', { reject: '신규 입장 거부', replaceIdle: '오래 쉰 참여자 교체', queue: '입장 대기열' }, draft.admission || 'reject')}${select('이름표 표시 정책', 'namesMode', { always: '항상', recent: '최근 반응 참여자' }, draft.namesMode || 'always')}${[
         ['safeLeft', '왼쪽 안전 여백 (px)', 0, 600, 0], ['safeRight', '오른쪽 안전 여백 (px)', 0, 600, 0], ['safeTop', '위쪽 안전 여백 (px)', 0, 500, 0],
-        ['nameSize', '이름표 글자 크기', 10, 40, 20], ['nameLimit', '이름표 최대 개수', 0, 150, 150], ['bubbleLimit', '말풍선 최대 개수', 0, 30, 10], ['gameBottom', '게임 표시 하단 여백 (px)', 0, 900, 245],
+        ['nameSize', '이름표 글자 크기', 10, 40, 20], ['nameLimit', '이름표 최대 개수', 0, 150, 150], ['gameBottom', '게임 표시 하단 여백 (px)', 0, 900, 245],
       ].map(([key, label, min, max, fallback]) => field(label, key, draft[key] ?? fallback, 'number', `min="${min}" max="${max}" step="${['nameLimit', 'bubbleLimit'].includes(key) ? 1 : 'any'}"`)).join('')}`);
+      editor.insertAdjacentHTML('beforeend', `<h3>채팅 말풍선</h3><div class="av-form">${check('일반 채팅 말풍선', 'bubbles', draft.bubbles)}${[
+        ['bubbleDuration', '표시 시간 (초)', 2, 15, 6], ['bubbleMaxLength', '최대 글자 수', 16, 120, 72],
+        ['bubbleSize', '글자 크기 (px)', 14, 36, 22], ['bubbleLimit', '동시 표시 개수', 0, 30, 10],
+      ].map(([key, label, min, max, fallback]) => field(label, key, draft[key] ?? fallback, 'number', `min="${min}" max="${max}" step="1"`)).join('')}</div>`);
     } else if (tab === 'rules') {
       const r = draft.rules.find((v) => v.id === selectedRule);
       list.insertAdjacentHTML('beforeend', `${button('편집 명령 복사', 'copy-draft-commands')}<label>반응 템플릿<select id="avTemplate">${options(Object.fromEntries((state.templates || []).map((v) => [v.id, v.name])), state.templates?.[0]?.id)}</select></label>${button('템플릿 복제', 'add-template')}`);
@@ -695,7 +699,7 @@
       const value = object[key];
       if (value === '' || !Number.isFinite(Number(value)) || value < min || value > max || (integer && !Number.isInteger(Number(value)))) errors.push(`${key}: ${min}~${max}${integer ? ' 정수' : ''} 범위를 확인하세요.`);
     };
-    for (const [key, min, max, integer] of [['port', 1024, 65535, true], ['size', 24, 160], ['speed', 0.2, 4], ['maxActors', 1, 150, true], ['idleMinutes', 1, 120], ['floor', 0, 300], ['safeLeft', 0, 600], ['safeRight', 0, 600], ['safeTop', 0, 500], ['nameSize', 10, 40], ['nameLimit', 0, 150, true], ['bubbleLimit', 0, 30, true], ['gameBottom', 0, 900]]) numeric(draft, key, min, max, integer);
+    for (const [key, min, max, integer] of [['port', 1024, 65535, true], ['size', 24, 160], ['speed', 0.2, 4], ['maxActors', 1, 150, true], ['idleMinutes', 1, 120], ['floor', 0, 300], ['safeLeft', 0, 600], ['safeRight', 0, 600], ['safeTop', 0, 500], ['nameSize', 10, 40], ['nameLimit', 0, 150, true], ['bubbleLimit', 0, 30, true], ['bubbleDuration', 2, 15], ['bubbleMaxLength', 16, 120, true], ['bubbleSize', 14, 36], ['gameBottom', 0, 900]]) numeric(draft, key, min, max, integer);
     for (const [key, min, max, integer] of [['duration', 10, 120], ['recruitSeconds', 0, 60], ['countdownSeconds', 0, 10], ['resultSeconds', 1, 30], ['goal', 0, 10000, true], ['boosts', 0, 5, true]]) numeric(draft.gameSettings || {}, key, min, max, integer);
     for (const input of root.querySelectorAll('[data-field]')) {
       const previous = input.parentElement.querySelector('.av-field-error');
@@ -1143,9 +1147,9 @@
         Object.assign(
           draft,
           {
-            quiet: { speed: 0.6, size: 64, maxActors: 30, bubbles: false },
-            normal: { speed: 1.5, size: 76, maxActors: 60, bubbles: false },
-            party: { speed: 2.5, size: 90, maxActors: 100, bubbles: false },
+            quiet: { speed: 0.6, size: 64, maxActors: 30 },
+            normal: { speed: 1.5, size: 76, maxActors: 60 },
+            party: { speed: 2.5, size: 90, maxActors: 100 },
           }[target.dataset.preset],
         );
         changed();

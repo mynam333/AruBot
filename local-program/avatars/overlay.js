@@ -228,6 +228,32 @@
     };
   }
 
+  function placeBubbles(items, safe) {
+    const placed = new Map();
+    const gap = 10;
+    for (const item of items) {
+      if (item.width > safe.right - safe.left - 12 || item.height > safe.bottom - safe.top - 12) continue;
+      const left = clamp(item.x - item.width / 2, safe.left + 6, safe.right - item.width - 6);
+      for (const side of ['above', 'below']) {
+        let top = side === 'above' ? item.top - item.height - 12 : item.bottom + 12;
+        for (let attempt = 0; attempt <= placed.size; attempt++) {
+          if (top < safe.top + 6 || top + item.height > safe.bottom - 6) break;
+          const collision = [...placed.values()].find((rect) =>
+            left < rect.left + rect.width + gap && left + item.width + gap > rect.left
+            && top < rect.top + rect.height + gap && top + item.height + gap > rect.top);
+          if (!collision) {
+            placed.set(item.id, { left, top, width: item.width, height: item.height, side,
+              tail: clamp(item.x - left, 16, item.width - 16) });
+            break;
+          }
+          top = side === 'above' ? collision.top - item.height - gap : collision.top + collision.height + gap;
+        }
+        if (placed.has(item.id)) break;
+      }
+    }
+    return placed;
+  }
+
   function createFrameGate() {
     let session = null,
       sequence = -1,
@@ -367,6 +393,7 @@
   }
 
   const helpers = {
+    placeBubbles,
     normalizeClip,
     resolveClip,
     clipGeometry,
@@ -569,6 +596,9 @@
     name.className = 'name';
     const bubble = document.createElement('div');
     bubble.className = 'bubble';
+    const bubbleText = document.createElement('span');
+    bubbleText.className = 'bubble-text';
+    bubble.append(bubbleText);
     const effect = document.createElement('div');
     effect.className = 'effect';
     root.append(appearance, name, bubble, effect);
@@ -579,6 +609,7 @@
       sprite,
       name,
       bubble,
+      bubbleText,
       effect,
       x: actor.x,
       y: actor.y,
@@ -618,7 +649,7 @@
       node.avatar = avatars.get(actor.avatar) || data.avatars[0];
       node.name.textContent = actor.name || '';
       node.name.style.color = actor.color || '#ffffff';
-      node.bubble.textContent = actor.bubble || '';
+      if (node.bubbleText.textContent !== (actor.bubble || '')) node.bubbleText.textContent = actor.bubble || '';
       node.effect.textContent =
         actor.effect === 'highfive'
           ? '짝!'
@@ -760,8 +791,8 @@
     const safe = layout.safe;
     node.name.style.fontSize = `${clamp(finite(snapshot.nameSize, 20), 8, 72)}px`;
     node.name.style.maxWidth = `${Math.min(240, safe.right - safe.left)}px`;
-    node.bubble.style.maxWidth = `${Math.min(230, safe.right - safe.left)}px`;
-    node.bubble.style.maxHeight = `${Math.max(20, safe.bottom - safe.top)}px`;
+    node.bubble.style.fontSize = `${clamp(finite(snapshot.bubbleSize, 22), 14, 36)}px`;
+    node.bubble.style.maxWidth = `${Math.max(1, Math.min(300, safe.right - safe.left - 12))}px`;
     const padding = transform
       ? Math.max(16, geometry.width * 0.25, geometry.height * 0.25)
       : 0;
@@ -777,7 +808,8 @@
   function measureActor({ node, bounds }) {
     let top = Math.min(0, bounds.top) - 2;
     const labels = [];
-    for (const label of [node.name, node.effect, node.bubble]) {
+    // Speech must never move or shrink the character when a new message arrives.
+    for (const label of [node.name, node.effect]) {
       if (label.hidden) continue;
       labels.push({ label, bottom: -top });
       bounds.left = Math.min(bounds.left, -label.offsetWidth / 2);
@@ -788,6 +820,10 @@
     return {
       node,
       labels,
+      top: bounds.top,
+      bottom: bounds.bottom,
+      bubbleWidth: node.bubble.hidden ? 0 : node.bubble.offsetWidth,
+      bubbleHeight: node.bubble.hidden ? 0 : node.bubble.offsetHeight,
       fitted: fitActor({ x: node.x, y: node.y }, bounds, layout.safe),
     };
   }
@@ -812,10 +848,31 @@
         }
         // Batch reads between writes instead of forcing layout once per actor/label.
         const measured = prepared.map(measureActor);
+        const byId = new Map(measured.map((entry) => [entry.node.target.id, entry]));
+        const bubbles = placeBubbles([...visibility.bubbles].flatMap((id) => {
+          const entry = byId.get(id);
+          if (!entry || !entry.bubbleWidth) return [];
+          return [{ id, x: entry.fitted.x, top: entry.fitted.y + entry.top * entry.fitted.scale,
+            bottom: entry.fitted.y + entry.bottom * entry.fitted.scale,
+            width: entry.bubbleWidth, height: entry.bubbleHeight }];
+        }), layout.safe);
         for (const { node, labels, fitted } of measured) {
           for (const { label, bottom } of labels)
             label.style.bottom = `${bottom}px`;
           node.root.style.transform = `translate(${fitted.x}px,${fitted.y}px) scale(${fitted.scale})`;
+          const bubble = bubbles.get(node.target.id);
+          node.bubble.hidden = !bubble;
+          node.root.style.zIndex = bubble ? '1' : '0';
+          if (bubble) {
+            node.bubble.style.left = `${(bubble.left + bubble.width / 2 - fitted.x) / fitted.scale}px`;
+            node.bubble.style.bottom = `${(fitted.y - bubble.top - bubble.height) / fitted.scale}px`;
+            node.bubble.style.setProperty('--bubble-tail-x', `${bubble.tail}px`);
+            node.bubble.dataset.side = bubble.side;
+            const enter = clamp((time - finite(node.target.bubbleStartedAt, time - 160)) / 160, 0, 1);
+            const exit = clamp((finite(node.target.bubbleUntil, time + 220) - time) / 220, 0, 1);
+            node.bubble.style.opacity = String(Math.min(enter, exit));
+            node.bubble.style.transform = `translateX(-50%) scale(${1 / fitted.scale})`;
+          }
         }
       }
     } catch {

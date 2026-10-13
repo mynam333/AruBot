@@ -7,6 +7,7 @@ const {
   validateConfig,
   reactionTemplates,
   text,
+  speechText,
 } = require('../local-program/avatars/schema.cjs');
 const { hasZalgoText } = require('../local-program/avatars/text-safety.cjs');
 function world(patch = {}) {
@@ -61,6 +62,76 @@ const step = (action, duration = 2, extra = {}) => ({
   duration,
   value: '',
   ...extra,
+});
+
+test('chat bubble defaults are enabled without overriding saved preferences and values are bounded', () => {
+  const config = defaultConfig();
+  assert.equal(config.bubbles, true);
+  assert.equal(config.bubbleDuration, 6);
+  assert.equal(config.bubbleMaxLength, 72);
+  assert.equal(config.bubbleSize, 22);
+  const saved = validateConfig({ ...config, bubbles: false, bubbleDuration: 90, bubbleMaxLength: 2, bubbleSize: 99 }, config);
+  assert.equal(saved.bubbles, false);
+  assert.equal(saved.bubbleDuration, 15);
+  assert.equal(saved.bubbleMaxLength, 16);
+  assert.equal(saved.bubbleSize, 36);
+});
+
+test('speech truncation counts whole graphemes, normalizes whitespace and visibly ellipsizes', () => {
+  assert.equal(speechText('  hello\n world\t '), 'hello world');
+  assert.equal(speechText('\u1100\u1161'), '\uac00');
+  const emoji = '\u{1F44D}\u{1F3FD}';
+  assert.equal(speechText(emoji.repeat(20), 16), emoji.repeat(13) + '...');
+  assert.equal(speechText('a'.repeat(16), 16), 'a'.repeat(16));
+  assert.equal(speechText('   '), '');
+});
+
+test('ordinary chat bubbles belong to their sender and renew until the configured expiry', () => {
+  const w = world({ bubbleDuration: 3, bubbleMaxLength: 16, bubbleSize: 26 });
+  w.send('a'.repeat(50));
+  w.send('different viewer', 'b');
+  assert.equal(w.actor().bubble, 'a'.repeat(13) + '...');
+  assert.equal(w.engine.actors.get(w.engine.key('b')).bubble, 'different viewer');
+  assert.equal(w.engine.snapshot().bubbleSize, 26);
+  w.advance(2000);
+  w.send('new message');
+  assert.equal(w.actor().bubbleStartedAt, 102000);
+  assert.equal(w.actor().bubbleUntil, 105000);
+  w.advance(2999);
+  assert.equal(w.engine.snapshot().actors.find((a) => a.id === w.actor().id).bubble, 'new message');
+  w.advance(2);
+  assert.equal(w.engine.snapshot().actors.find((a) => a.id === w.actor().id).bubble, '');
+});
+
+test('chat commands stay out of bubbles and disabled ordinary speech preserves explicit say actions', () => {
+  const w = world({ bubbles: false });
+  w.send('hello');
+  assert.equal(w.engine.snapshot().actors[0].bubble, '');
+  w.engine.action(w.actor(), step('say', 2, { value: 'scripted speech' }));
+  assert.equal(w.actor().bubble, 'scripted speech');
+  const enabled = world();
+  enabled.send('!not-a-command');
+  assert.equal(enabled.engine.snapshot().actors[0].bubble, '');
+});
+
+test('new chat survives cancellation of old scripted speech and pause preserves its timestamps', () => {
+  const w = world({ rules: [reaction([step('say', 10, { value: 'scripted' })])] });
+  w.send('!custom');
+  w.advance(1);
+  const sequence = w.actor().speechOwner;
+  assert.ok(sequence);
+  w.advance(1100);
+  w.send('new chat');
+  w.engine.cancelSequence(sequence);
+  assert.equal(w.actor().bubble, 'new chat');
+  assert.ok(w.actor().bubbleUntil > 0);
+  const started = w.actor().bubbleStartedAt;
+  const until = w.actor().bubbleUntil;
+  w.engine.setConfig({ ...w.config, paused: true });
+  w.advance(5000);
+  w.engine.setConfig({ ...w.config, paused: false });
+  assert.equal(w.actor().bubbleStartedAt, started + 5000);
+  assert.equal(w.actor().bubbleUntil, until + 5000);
 });
 
 test('v2 semantics survive normalization and unknown future versions reject', () => {

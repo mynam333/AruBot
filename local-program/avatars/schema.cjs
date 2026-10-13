@@ -61,6 +61,13 @@ const text = (value, limit = 80) =>
     .replace(/[\p{Cc}\p{Cf}]/gu, '')
     .trim()
     .slice(0, limit);
+const speechSegments = new Intl.Segmenter('ko', { granularity: 'grapheme' });
+function speechText(value, limit = 72) {
+  const clean = text(String(value ?? '').replace(/\s+/gu, ' '), 8192);
+  const parts = Array.from(speechSegments.segment(clean), (part) => part.segment);
+  const max = Math.round(number(limit, 16, 120, 72));
+  return parts.length > max ? `${parts.slice(0, max - 3).join('').trimEnd()}...` : clean;
+}
 const id = () => crypto.randomUUID();
 const assetId = (value) =>
   /^[a-f0-9]{64}\.(png|gif|webp|jpg)$/.test(String(value)) ? value : '';
@@ -143,7 +150,10 @@ function defaultConfig() {
     speed: 1.5,
     floor: 24,
     showNames: true,
-    bubbles: false,
+    bubbles: true,
+    bubbleDuration: 6,
+    bubbleMaxLength: 72,
+    bubbleSize: 22,
     allowTargeting: false,
     newJoins: true,
     outputHidden: false,
@@ -404,7 +414,10 @@ function validateConfig(input, previous = defaultConfig()) {
     speed: number(input.speed, 0.2, 4, 1.5),
     floor: number(input.floor, 0, 300, 24),
     showNames: bool(input.showNames, true),
-    bubbles: bool(input.bubbles, false),
+    bubbles: bool(input.bubbles, previous.bubbles ?? true),
+    bubbleDuration: number(input.bubbleDuration, 2, 15, 6),
+    bubbleMaxLength: Math.round(number(input.bubbleMaxLength, 16, 120, 72)),
+    bubbleSize: number(input.bubbleSize, 14, 36, 22),
     allowTargeting: bool(input.allowTargeting, false),
     newJoins: bool(input.newJoins, true),
     outputHidden: bool(input.outputHidden, false),
@@ -443,6 +456,7 @@ function validateConfig(input, previous = defaultConfig()) {
 }
 
 module.exports = {
+  speechText,
   STATES,
   ACTIONS,
   TRIGGERS,
