@@ -20,6 +20,7 @@ import { createChzzkVideoStore } from './chzzk-video-store.js';
 import { createMarbleStore } from './marble-store.js';
 import { lockUnlinkedAccount, cleanupUnlinkedAccountBatch } from './unlinked-account-cleanup.js';
 import { platformTokenSnapshotMatches } from './platform-token-guard.js';
+import { validateCommandRuleRegex } from './rule-pattern.js';
 const { Client, Pool } = pkg;
 
 export const botManagementStore = createBotManagementStore({ withPgClient, ensureIdentityTables: ensurePlatformIdentityTables });
@@ -4482,6 +4483,7 @@ export async function ensureSchema() {
           alter table bot_rules add constraint bot_rules_sid_id_uniq unique (sid, id);
         end if;
       end $$;
+      alter table bot_rules add column if not exists regex_enabled boolean not null default false;
       alter table bot_rules add column if not exists admin_only boolean default false;
       alter table bot_rules add column if not exists required_role_level integer default 1;
       alter table bot_rules add column if not exists points_cost integer default 0;
@@ -8471,6 +8473,7 @@ function normalizeBotRuleRow(row = {}, columns = {}) {
     keywords: normalizeBotRuleStringArray(row.keywords),
     responses: normalizeBotRuleStringArray(row.responses),
     enabled: row.enabled !== false,
+    regex: columns.regex ? row.regex_enabled === true : false,
     adminOnly: columns.adminOnly ? !!row.admin_only : !!row.adminOnly,
     requiredRoleLevel: columns.requiredRoleLevel ? Number(row.required_role_level || 1) : Number(row.requiredRoleLevel || 1),
     pointsCost: columns.pointsCost ? Math.max(0, Number(row.points_cost || 0)) : Math.max(0, Number(row.pointsCost || 0)),
@@ -8481,12 +8484,14 @@ function normalizeBotRuleRow(row = {}, columns = {}) {
 
 export async function getBotRules(sid) {
   ensure();
+  const hasRegex = await tableHasColumn('bot_rules', 'regex_enabled');
   const hasAdminOnly = await tableHasColumn('bot_rules', 'admin_only');
   const hasReq = await tableHasColumn('bot_rules', 'required_role_level');
   const hasPointsCost = await tableHasColumn('bot_rules', 'points_cost');
   const hasCooldown = await tableHasColumn('bot_rules', 'cooldown');
   const hasLastUsed = await tableHasColumn('bot_rules', 'last_used');
   const columns = {
+    regex: hasRegex,
     adminOnly: hasAdminOnly,
     requiredRoleLevel: hasReq,
     pointsCost: hasPointsCost,
@@ -8494,6 +8499,7 @@ export async function getBotRules(sid) {
     lastUsed: hasLastUsed,
   };
   const selectCols = ['id','name','keywords','responses','enabled']
+    .concat(hasRegex ? ['regex_enabled'] : [])
     .concat(hasAdminOnly ? ['admin_only'] : [])
     .concat(hasReq ? ['required_role_level'] : [])
     .concat(hasPointsCost ? ['points_cost'] : [])
@@ -8915,6 +8921,9 @@ export async function listRouletteSessionsByToken(token, { q, limit = 50, offset
 
 export async function upsertBotRule(sid, rule) {
   ensure();
+  validateCommandRuleRegex(rule);
+  const hasRegex = await tableHasColumn('bot_rules', 'regex_enabled');
+  if (rule.regex === true && !hasRegex) throw Object.assign(new Error('정규식 저장을 위해 데이터베이스 업데이트가 필요합니다.'), { status: 503 });
   const hasAdminOnly = await tableHasColumn('bot_rules', 'admin_only');
   const hasReq = await tableHasColumn('bot_rules', 'required_role_level');
   const hasPointsCost = await tableHasColumn('bot_rules', 'points_cost');
@@ -8929,6 +8938,7 @@ export async function upsertBotRule(sid, rule) {
     keywords,
     responses,
     enabled: !!rule.enabled,
+    ...(hasRegex ? { regex_enabled: rule.regex === true } : {}),
     ...(hasAdminOnly ? { admin_only: !!rule.adminOnly } : {}),
     ...(hasReq ? { required_role_level: Math.max(1, Math.min(4, Number(rule.requiredRoleLevel || 1))) } : {}),
     ...(hasPointsCost ? { points_cost: Math.max(0, Number(rule.pointsCost || 0)) } : {}),

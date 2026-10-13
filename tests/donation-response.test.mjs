@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { renderDonationResponse } from '../server/donation-response.js';
+import { renderDonationResponse, dispatchDonationRuleDesktop } from '../server/donation-response.js';
 import { CommandSafetyError, createCommandExecutionSafety, isCommandSafetyError } from '../server/command-execution-safety.js';
 import { assertSafeTextPayload } from '../shared/text-safety.js';
 import { resolveCounterVariablePlan } from '../server/counter-variables.js';
@@ -383,7 +383,10 @@ test('existing executor shares the donation action budget across tokens', async 
 for (const provider of providers) {
   test(`${provider}: actual handler block wires context, features log, and chat suppression`, async () => {
     const f = fixture(provider);
-    const deps = { renderDonationResponse, ...f.dependencies, memoVariableStore: { read: f.dependencies.readMemos } };
+    const desktop = [];
+    const deps = { renderDonationResponse, dispatchDonationRuleDesktop, assertSafeTextPayload,
+      broadcastToDesktop: (...args) => { desktop.push(args); return 1; },
+      ...f.dependencies, memoVariableStore: { read: f.dependencies.readMemos } };
     const wrappers = new Function(...Object.keys(deps), `${wrapperSource}; return { renderDonationRuleResponse, donationResponseTargetName };`)(...Object.values(deps));
     const marker = "const { text: built, features: donationFeatures } = await renderDonationRuleResponse(r, {";
     const blocks = [...serverSource.matchAll(new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'))];
@@ -409,6 +412,8 @@ for (const provider of providers) {
     const runBlock = new AsyncFunction('r', ...Object.keys(input), block);
     await runBlock({ id: 'rule-id', name: 'Rule', response: '${roulette::Wheel} ${blueprint::thanks}' }, ...Object.values(input));
     assert.deepEqual(responsesToSend, []);
+    assert.equal(desktop.length, 1);
+    assert.equal(desktop[0][1].cmd, 'Rule');
     assert.deepEqual(logs[0].features, ['roulette', 'action']);
     assert.equal(logs[0].targetName, '\ub8f0\ub81b/\uc561\uc158 \uc2e4\ud589');
     assert.equal(logs[0].source, sources[provider]);

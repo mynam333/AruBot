@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 import { CommandCreateDialog } from '@/features/admin/admin-action-dialogs';
 import { CommandVariableHelpButton } from '@/features/admin/command-variable-help';
 import { formatCommandTriggers, parseCommandTriggers } from '@/features/admin/command-triggers';
+import { RegexSwitch } from './regex-switch';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -20,6 +21,7 @@ type BotRule = {
   id: string;
   name?: string;
   keywords?: string[];
+  regex?: boolean;
   responses?: string[];
   enabled?: boolean;
   adminOnly?: boolean;
@@ -47,6 +49,7 @@ type BotSettingsResponse = {
 type CommandForm = {
   name: string;
   command: string;
+  regex: boolean;
   response: string;
   pointsCost: string;
   cooldownSec: string;
@@ -82,7 +85,8 @@ function normalizeCommand(value: string) {
 function toForm(rule: BotRule): CommandForm {
   return {
     name: rule.name || '',
-    command: formatCommandTriggers(rule.keywords) || '!',
+    command: formatCommandTriggers(rule.keywords, { regex: rule.regex === true }) || '!',
+    regex: rule.regex === true,
     response: rule.responses?.join('\n') || '',
     pointsCost: String(rule.pointsCost ?? 0),
     cooldownSec: String(Math.max(1, Math.round((rule.cooldown ?? 3000) / 1000))),
@@ -183,7 +187,7 @@ export function CommandsPage() {
   const saveEdit = async () => {
     if (!writable) return;
     if (!editingRule || !form) return;
-    const keywords = parseCommandTriggers(form.command);
+    const keywords = parseCommandTriggers(form.command, { regex: form.regex });
     const primaryKeyword = keywords[0] || '';
     const responses = form.response.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
     if (!primaryKeyword) return toast.warning('명령어를 입력해 주세요.');
@@ -197,6 +201,7 @@ export function CommandsPage() {
           ...editingRule,
           name: form.name.trim() || primaryKeyword,
           keywords,
+          regex: form.regex,
           responses,
           enabled: form.enabled,
           adminOnly: editingRule.adminOnly ?? false,
@@ -372,9 +377,11 @@ export function CommandsPage() {
               </label>
               <label className="grid gap-2 text-sm font-semibold">
                 채팅 명령어
-                <Input disabled={!writable} value={form.command} onChange={(event) => setForm({ ...form, command: event.target.value })} placeholder="예: !투표 !예측 !vote" />
+                {form.regex ? <textarea disabled={!writable} value={form.command} onChange={(event) => setForm({ ...form, command: event.target.value })} placeholder="!(투표|예측|vote)" className="min-h-20 w-full rounded-md border bg-background px-3 py-2 font-mono text-sm" />
+                  : <Input disabled={!writable} value={form.command} onChange={(event) => setForm({ ...form, command: event.target.value })} placeholder="예: !투표 !예측 !vote" />}
               </label>
             </div>
+            <RegexSwitch checked={form.regex} onCheckedChange={(regex) => setForm({ ...form, regex })} disabled={!writable} />
             <label className="grid gap-2 text-sm font-semibold">
               응답 문구
               <textarea disabled={!writable}

@@ -35,11 +35,11 @@ describe('multiple chat command triggers', () => {
   });
 
   test('create and edit forms save every parsed trigger', () => {
-    expect(createDialog).toContain('const keywords = parseCommandTriggers(command)');
+    expect(createDialog).toContain('const keywords = parseCommandTriggers(command, { regex })');
     expect(createDialog).toContain('name: name.trim() || primaryKeyword');
     expect(createDialog).toContain('keywords,');
-    expect(commandsPage).toContain('command: formatCommandTriggers(rule.keywords)');
-    expect(commandsPage).toContain('const keywords = parseCommandTriggers(form.command)');
+    expect(commandsPage).toContain('command: formatCommandTriggers(rule.keywords, { regex: rule.regex === true })');
+    expect(commandsPage).toContain('const keywords = parseCommandTriggers(form.command, { regex: form.regex })');
     expect(commandsPage).toContain('name: form.name.trim() || primaryKeyword');
     expect(commandsPage).toContain('rule.keywords.map((keyword) =>');
   });

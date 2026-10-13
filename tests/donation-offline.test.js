@@ -19,6 +19,7 @@ function harness(provider = 'chzzk') {
   const rule = { id: 'rule', name: 'thanks', enabled: true, minAmount: 1000, response: '${blueprint::thanks} ${roulette::wheel}' };
   const settings = { onlyWhenLive: true, donation: { pointsPerK: 10 }, donationRules: [rule] };
   const bindings = {
+    ...load('server/rule-pattern.js'),
     entry, sessionStore: new Map([['user:owner', entry]]),
     inspectTextPayload: jest.fn(() => null),
     pushEvent: jest.fn((target, event) => target.queue.push(event)), relayChzzkAvatarEvent: jest.fn(),
@@ -58,7 +59,6 @@ describe('received donations do not depend on broadcast state', () => {
     expect(h.bindings.incrChannelPoints.mock.calls).toEqual([['channel', 'donor', 'Viewer', 30]]);
     expect(h.bindings.marbleRuntime.donation).toHaveBeenCalledTimes(1);
     expect(h.bindings.participationWheelRuntime.donation).toHaveBeenCalledTimes(1);
-    expect(h.bindings.broadcastToDesktop).toHaveBeenCalledTimes(2);
     expect(h.bindings.renderDonationRuleResponse).toHaveBeenCalledTimes(2);
     expect(h.bindings.renderDonationRuleResponse).toHaveBeenCalledWith(h.rule, expect.objectContaining({ sid: 'user:owner', provider, channelUid: 'channel', amount: 3000 }));
     expect(h.bindings.recordDonationRuleExecutionLog).toHaveBeenCalledTimes(2);

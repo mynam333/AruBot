@@ -7,6 +7,8 @@ import { useCallback, useEffect, useMemo, useState, useTransition } from 'react'
 import { toast } from 'sonner';
 import { DonationRuleCreateDialog, DonationSettingsDialog } from '@/features/admin/admin-action-dialogs';
 import { CommandVariableHelpButton } from '@/features/admin/command-variable-help';
+import { DonationTestDialog } from './donation-test-dialog';
+import { RegexSwitch } from './regex-switch';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -32,6 +34,7 @@ type DonationRule = {
   amountConditions?: DonationAmountCondition[];
   message?: string;
   wildcard?: boolean;
+  regex?: boolean;
   response?: string;
   lastUsed?: number;
 };
@@ -44,6 +47,7 @@ type DonationForm = {
   name: string;
   amountConditions: DonationAmountConditionForm[];
   message: string;
+  regex: boolean;
   response: string;
   enabled: boolean;
 };
@@ -55,8 +59,9 @@ async function postJson(path: string, body: unknown) {
     credentials: 'include',
     body: JSON.stringify(body),
   });
-  if (!response.ok) throw new Error('request_failed');
-  return response.json().catch(() => ({}));
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || '요청을 처리하지 못했습니다.');
+  return data;
 }
 
 function toForm(rule: DonationRule): DonationForm {
@@ -64,6 +69,7 @@ function toForm(rule: DonationRule): DonationForm {
     name: rule.name || '',
     amountConditions: normalizeDonationAmountConditionForms(rule),
     message: rule.message || '',
+    regex: rule.regex === true,
     response: rule.response || '',
     enabled: rule.enabled !== false,
   };
@@ -137,6 +143,7 @@ export function DonationRulesPage() {
           ...legacyAmounts,
           amountConditions,
           message: form.message.trim(),
+          regex: form.regex,
           wildcard: editingRule.wildcard ?? true,
           response: form.response.trim(),
         },
@@ -144,8 +151,8 @@ export function DonationRulesPage() {
       toast.success('후원 반응을 수정했어요.');
       closeEdit();
       load();
-    } catch {
-      toast.error('후원 반응을 저장하지 못했어요.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '후원 반응을 저장하지 못했어요.');
     } finally {
       setBusyId(null);
     }
@@ -214,6 +221,7 @@ export function DonationRulesPage() {
             </div>
             <div className="flex flex-wrap gap-2">
               <DonationRuleCreateDialog />
+              <DonationTestDialog />
               <DonationSettingsDialog variant="outline" label="포인트 설정" />
               <Button type="button" variant="outline" onClick={load} disabled={isPending}>
                 <RefreshCw className={isPending ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
@@ -240,7 +248,7 @@ export function DonationRulesPage() {
                   <Badge tone="lemon">{amountRange(rule)}</Badge>
                 </div>
                 <div className="mt-2 truncate text-base font-bold">{rule.name || '이름 없는 후원 반응'}</div>
-                <div className="mt-1 text-xs text-muted-foreground">{rule.message ? `메시지 포함: ${rule.message}` : '메시지 조건 없음'}</div>
+                <div className="mt-1 break-all text-xs text-muted-foreground">{rule.message ? `${rule.regex ? '정규식' : rule.wildcard ? '메시지 포함' : '메시지 시작'}: ${rule.message}` : '메시지 조건 없음'}</div>
               </div>
               <p className="min-w-0 whitespace-pre-wrap break-keep text-sm leading-6 text-muted-foreground">{rule.response || '반응 문구가 없습니다.'}</p>
               <div className="flex flex-wrap justify-end gap-2">
@@ -279,10 +287,11 @@ export function DonationRulesPage() {
                 <Input disabled={!writable} value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
               </label>
               <label className="grid gap-2 text-sm font-semibold">
-                메시지 포함 조건
-                <Input disabled={!writable} value={form.message} onChange={(event) => setForm({ ...form, message: event.target.value })} placeholder="특정 문구가 없으면 금액만 볼게요." />
+                {form.regex ? '메시지 정규식' : '메시지 조건'}
+                <Input disabled={!writable} value={form.message} onChange={(event) => setForm({ ...form, message: event.target.value })} placeholder={form.regex ? '(룰렛|돌려줘)' : '특정 문구가 없으면 금액만 볼게요.'} maxLength={form.regex ? 256 : undefined} />
               </label>
             </div>
+            <RegexSwitch checked={form.regex} onCheckedChange={(regex) => setForm({ ...form, regex })} disabled={!writable} />
             <div className="grid gap-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="text-sm font-semibold">트리거 금액 조건</div>

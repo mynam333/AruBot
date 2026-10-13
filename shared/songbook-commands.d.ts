@@ -1,6 +1,6 @@
 export type SongbookCommandKind = 'request' | 'url';
 export type SongbookCommandRule = {
-  id: string; name?: string; keywords?: string[]; responses?: string[]; enabled?: boolean;
+  id: string; name?: string; keywords?: string[]; responses?: string[]; enabled?: boolean; regex?: boolean;
   adminOnly?: boolean; requiredRoleLevel?: number; pointsCost?: number; cooldown?: number; lastUsed?: number;
   [key: string]: unknown;
 };

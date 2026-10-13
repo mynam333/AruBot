@@ -29,6 +29,7 @@ import { Tooltip } from '@/components/ui/tooltip';
 import { RouletteThemeSwatch } from '@/components/rouletteThemeSwatch';
 import { CommandVariableHelpButton } from '@/features/admin/command-variable-help';
 import { parseCommandTriggers } from '@/features/admin/command-triggers';
+import { RegexSwitch } from './regex-switch';
 import {
   RouletteItemsEditor,
 } from '@/features/admin/roulette-item-editor';
@@ -303,6 +304,7 @@ function Textarea({
 export function CommandCreateDialog({ variant = 'secondary', label = '명령어 만들기', className, trailingChevron }: ActionDialogButtonProps) {
   const [name, setName] = useState('');
   const [command, setCommand] = useState('!');
+  const [regex, setRegex] = useState(false);
   const [response, setResponse] = useState('');
   const [pointsCost, setPointsCost] = useState('0');
   const [cooldownSec, setCooldownSec] = useState('3');
@@ -310,7 +312,7 @@ export function CommandCreateDialog({ variant = 'secondary', label = '명령어 
   const [isPending, startTransition] = useTransition();
 
   const submit = (close: () => void) => {
-    const keywords = parseCommandTriggers(command);
+    const keywords = parseCommandTriggers(command, { regex });
     const primaryKeyword = keywords[0] || '';
     const message = response.trim();
     if (!primaryKeyword) return toast.warning('명령어를 입력해 주세요.');
@@ -322,6 +324,7 @@ export function CommandCreateDialog({ variant = 'secondary', label = '명령어 
             id: `cmd_${Date.now().toString(36)}`,
             name: name.trim() || primaryKeyword,
             keywords,
+            regex,
             responses: [message],
             enabled,
             adminOnly: false,
@@ -335,6 +338,7 @@ export function CommandCreateDialog({ variant = 'secondary', label = '명령어 
         refreshResource('/api/bot/rules');
         setName('');
         setCommand('!');
+        setRegex(false);
         setResponse('');
         setPointsCost('0');
         close();
@@ -366,9 +370,11 @@ export function CommandCreateDialog({ variant = 'secondary', label = '명령어 
           <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="예: 투표 안내" />
         </Field>
         <Field label="채팅 명령어">
-          <Input value={command} onChange={(event) => setCommand(event.target.value)} placeholder="예: !투표 !예측 !vote" />
+          {regex ? <Textarea value={command} onChange={setCommand} placeholder="!(투표|예측|vote)" min="min-h-20" />
+            : <Input value={command} onChange={(event) => setCommand(event.target.value)} placeholder="예: !투표 !예측 !vote" />}
         </Field>
       </div>
+      <RegexSwitch checked={regex} onCheckedChange={setRegex} />
       <Field label="응답 문구">
         <Textarea
           value={response}
@@ -909,6 +915,7 @@ export function DonationRuleCreateDialog({ variant = 'secondary', label = '반�
     { id: 'cond_initial', operator: 'gte', amount: '1000', amountTo: '' },
   ]);
   const [messageIncludes, setMessageIncludes] = useState('');
+  const [regex, setRegex] = useState(false);
   const [response, setResponse] = useState('');
   const [enabled, setEnabled] = useState(true);
   const [isPending, startTransition] = useTransition();
@@ -928,6 +935,7 @@ export function DonationRuleCreateDialog({ variant = 'secondary', label = '반�
             ...legacyAmounts,
             amountConditions: normalizedAmountConditions,
             message: messageIncludes.trim(),
+            regex,
             wildcard: true,
             response: response.trim(),
           },
@@ -937,10 +945,11 @@ export function DonationRuleCreateDialog({ variant = 'secondary', label = '반�
         setName('');
         setResponse('');
         setMessageIncludes('');
+        setRegex(false);
         setAmountConditions([{ id: 'cond_initial', operator: 'gte', amount: '1000', amountTo: '' }]);
         close();
-      } catch {
-        toast.error('후원 반응을 저장하지 못했어요.');
+      } catch (error) {
+        toast.error(getApiErrorMessage(error, '후원 반응을 저장하지 못했어요.'));
       }
     });
   };
@@ -1027,9 +1036,10 @@ export function DonationRuleCreateDialog({ variant = 'secondary', label = '반�
           </div>
         </div>
       </div>
-      <Field label="메시지 포함 조건">
-        <Input value={messageIncludes} onChange={(event) => setMessageIncludes(event.target.value)} placeholder="특정 문구가 없으면 금액만 볼게요." />
+      <Field label={regex ? '메시지 정규식' : '메시지 포함 조건'}>
+        <Input value={messageIncludes} onChange={(event) => setMessageIncludes(event.target.value)} placeholder={regex ? '(룰렛|돌려줘)' : '특정 문구가 없으면 금액만 볼게요.'} maxLength={regex ? 256 : undefined} />
       </Field>
+      <RegexSwitch checked={regex} onCheckedChange={setRegex} />
       <Field label="반응 문구">
         <Textarea value={response} onChange={setResponse} placeholder="예: 후원 감사합니다! 방송에서 바로 확인할게요." />
       </Field>

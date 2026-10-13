@@ -75,6 +75,7 @@ export function botManagementRoutePolicy(method, pathname) {
   if (/^\/api\/macros(?:\/(?:upsert|delete|reset-timers|performance))?$/.test(path)) return rule('macros');
   if (/^\/api\/channelpoints(?:\/(?:list|set|incr|get|delete|export(?:\/page)?|import|clear))?$/.test(path)) return rule('points');
   if (path === '/api/donation/settings') return rule(['points', 'donations']);
+  if (path === '/api/donation/test') return rule('donations');
   if (/^\/api\/donation\/rules(?:\/(?:upsert|delete))?$/.test(path)) return rule('donations');
   if (/^\/api\/predictions(?:\/(?:active|create|[^/]+\/(?:lock|cancel|settle)))?$/.test(path)) return rule('predictions');
   if (/^\/api\/roulette\/(?:definitions(?:\/(?:upsert|delete))?|test|logs)$/.test(path)) return rule('roulette');

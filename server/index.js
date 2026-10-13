@@ -85,7 +85,8 @@ import {
 import { getKstCalendarDate, resolveAttendanceDate } from './attendance-calendar.js';
 import { DEFAULT_ATTENDANCE_MESSAGE, renderAttendanceTemplate } from './attendance-message.js';
 import { executeAttendanceSpecialOperations, extractAttendanceSpecialVariables } from './attendance-special-variables.js';
-import { renderDonationResponse } from './donation-response.js';
+import { renderDonationResponse, dispatchDonationRuleDesktop } from './donation-response.js';
+import { createDonationTestHandler } from './donation-test.js';
 import { prepareCounterVariablePlan, resolveCounterVariablePlan, stripUnplannedCounterVariables } from './counter-variables.js';
 import { memoVariableStore } from './supabase.js';
 import { prepareMemoVariablePlan, resolveMemoVariablePlan, stripUnplannedMemoVariables, memoCommandArguments } from './memo-variables.js';
@@ -111,6 +112,7 @@ import {
 import { buildCanonicalOAuthStartUrl, createOAuthStateToken, resolveOAuthRequestOrigin, verifyOAuthStateToken } from './oauth-state.js';
 import { getChannelIdFromUserId, selectPlatformChannelId, validateChannelId } from './channel-identity.js';
 import { findCommandKeywordMatch, getCommandRuleMatches } from './command-keyword.js';
+import { donationRuleMatchesMessage, validateRulePattern, validateCommandRuleRegex } from './rule-pattern.js';
 import { createRuntimeRecoverySupervisor } from './runtime-recovery.js';
 import {
   buildPublicShortLinkRedirectUrl,
@@ -298,6 +300,7 @@ const rateLimiters = {
   externalLookup: createIpRateLimiter({ prefix: 'externalLookup', windowMs: 60 * 1000, max: 30 }),
   drawingPlayback: createIpRateLimiter({ prefix: 'drawingPlayback', windowMs: 60 * 1000, max: 300 }),
   userWrite: createIpRateLimiter({ prefix: 'userWrite', windowMs: 60 * 1000, max: 120 }),
+  donationTest: createIpRateLimiter({ prefix: 'donationTest', windowMs: 60 * 1000, max: 12 }),
   apiKeyCommand: createIpRateLimiter({ prefix: 'apiKeyCommand', windowMs: 60 * 1000, max: 240 }),
   shortLinkCreate: createIpRateLimiter({ prefix: 'shortLinkCreate', windowMs: 60 * 1000, max: 20 }),
   shortLinkResolve: createIpRateLimiter({ prefix: 'shortLinkResolve', windowMs: 60 * 1000, max: 120 }),
@@ -6200,6 +6203,7 @@ app.post('/api/donation/rules/upsert', async (req, res) => {
       const rules = Array.isArray(s.donationRules) ? s.donationRules.slice() : [];
       const idx = rules.findIndex(r => String(r.id || '') === String(incoming.id || ''));
       rule = normalizeDonationRuleForStorage(idx < 0 ? incoming : { ...rules[idx], ...incoming });
+      if (rule.regex === true) validateRulePattern(rule.message);
       assertBotManagerEffects(rule, req.botManagement);
       if (idx < 0) {
         rule.id = rule.id || `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -6211,10 +6215,31 @@ app.post('/api/donation/rules/upsert', async (req, res) => {
     });
     return res.json({ ok: true, rule });
   } catch (error) {
-    if (error?.status === 403) return res.status(403).json({ error: error.message, code: error.code });
+    if ([400, 403].includes(error?.status)) return res.status(error.status).json({ error: error.message, code: error.code });
     return res.status(500).json({ error: 'failed' });
   }
 });
+
+async function resolveDonationTestContext(sid, provider, username) {
+  const owner = ownerUserIdFromSid(sid);
+  const accounts = await listPlatformAccounts(owner);
+  const account = accounts.find(item => item.provider === provider);
+  const entry = provider === 'chzzk' ? sessionStore.get(sid)
+    : provider === 'cime' ? cimeSessionStore.get(owner) : youtubeSessionStore.get(owner);
+  const youtube = provider === 'youtube' ? await getYoutubeStreamerChannel(owner) : null;
+  const channelUid = youtube?.youtubeChannelId || entry?.channelId || account?.channel_id || null;
+  if (!channelUid) throw Object.assign(new Error('선택한 플랫폼의 채널을 먼저 연결해 주세요.'), { status: 400 });
+  const chatPost = provider === 'chzzk' ? makeChzzkChatPost(entry?.sessionKey || null, null, username, { channelUid })
+    : provider === 'cime' ? makeCimeChatPost(owner, username, { channelUid })
+      : makeYoutubeChatPost(owner, entry?.liveChatId || null, username, { channelUid });
+  return { channelUid, chatPost };
+}
+
+app.post('/api/donation/test', rateLimiters.donationTest, createDonationTestHandler({
+  getPartitionId, getBotSettings: getBotSettingsStrict, donationRuleMatchesAmount,
+  resolveContext: resolveDonationTestContext, claimRuntimeLease, releaseRuntimeLease,
+  renderDonationRuleResponse, sendChatByPost, recordDonationRuleExecutionLog,
+}));
 
 // DELETE rule
 app.post('/api/donation/rules/delete', async (req, res) => {
@@ -22371,6 +22396,7 @@ app.post('/api/bot/rules/upsert', async (req, res) => {
   if (!rule || !rule.id) return res.status(400).json({ error: 'rule with id is required' });
 
   try {
+    validateCommandRuleRegex(rule);
     const rules = await getBotRules(sid);
     if (req.body.expectedVersion !== undefined && commandEditVersion(rules.find(item => item.id === rule.id) || null) !== req.body.expectedVersion) {
       return res.status(409).json({ error: '다른 곳에서 명령어가 변경되었거나 삭제되었습니다. 다시 불러온 후 수정해 주세요.' });
@@ -22402,6 +22428,7 @@ app.post('/api/bot/rules/upsert', async (req, res) => {
     const runtimeRevision = markRuntimeConfigurationChanged(sid, 'bot_rule_upserted');
     return res.json({ ok: true, runtimeRevision });
   } catch (e) {
+    if ([400, 503].includes(e?.status)) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error('Rule upsert failed:', e?.message || e, e?.hint || '', e?.details || '');
     return res.status(500).json({ error: 'Failed to save rule' });
   }
@@ -25499,66 +25526,10 @@ async function ensureSession(sid, channelId) {
           const responsesToSend = [];
           try {
             const rules = Array.isArray(settings.donationRules) ? settings.donationRules : [];
-            const lowerMsg = donorMessage.toLowerCase();
             for (const r of rules) {
               if (!r || r.enabled === false) continue;
               if (!donationRuleMatchesAmount(r, amount)) continue;
-              const pat = String(r.message || '').trim();
-              const wildcard = !!r.wildcard;
-              let passed = true;
-              if (pat) {
-                const needle = pat.toLowerCase();
-                passed = wildcard ? lowerMsg.includes(needle) : lowerMsg.startsWith(needle);
-              }
-              if (!passed) continue;
-
-              // Emit desktop command if rule has a name
-              try {
-                const name = String(r.name || '').trim();
-                if (name) {
-                  const repeatEnabled = !!r.repeatEnabled;
-                  const repeatPerAmount = repeatEnabled && r.repeatPerAmount ? Math.max(1, Number(r.repeatPerAmount)) : null;
-                  const repeatCooldown = repeatEnabled ? Math.max(50, Math.min(30000, Number(r.repeatCooldown || 0))) : 0;
-
-                  if (repeatEnabled && repeatPerAmount && amount >= repeatPerAmount) {
-                    const repeatCount = Math.min(100, Math.floor(amount / repeatPerAmount));
-                    
-                    (async () => {
-                      for (let i = 0; i < repeatCount; i++) {
-                        try {
-                          broadcastToDesktop(sid, {
-                            type: 'command',
-                            cmd: name,
-                            args: [],
-                            from: { userId: donorId ? String(donorId) : '', username: donorName },
-                            amount: amount,
-                            repeatIndex: i + 1,
-                            repeatTotal: repeatCount,
-                            at: Date.now(),
-                            source: 'donation-rule'
-                          });
-                        } catch { }
-                        
-                        if (i < repeatCount - 1 && repeatCooldown > 0) {
-                          await new Promise(resolve => setTimeout(resolve, repeatCooldown));
-                        }
-                      }
-                    })();
-                  } else {
-                    try {
-                      broadcastToDesktop(sid, {
-                        type: 'command',
-                        cmd: name,
-                        args: [],
-                        from: { userId: donorId ? String(donorId) : '', username: donorName },
-                        amount: amount,
-                        at: Date.now(),
-                        source: 'donation-rule'
-                      });
-                    } catch { }
-                  }
-                }
-              } catch { }
+              if (!donationRuleMatchesMessage(r, donorMessage)) continue;
 
               const { text: built, features: donationFeatures } = await renderDonationRuleResponse(r, {
                 sid, provider: 'chzzk', userId: donorId, username: donorName,
@@ -26359,6 +26330,11 @@ async function sendYoutubeChat(ownerUserId, liveChatId, message) {
 }
 
 async function renderDonationRuleResponse(rule, context) {
+  assertSafeTextPayload([rule, context]);
+  const desktop = dispatchDonationRuleDesktop(rule, context, {
+    broadcastToDesktop,
+    onError: (error) => console.warn('[Donation Response] Desktop delivery failed:', error?.message || error),
+  });
   const result = await renderDonationResponse(rule.response, {
     ...context, ruleId: rule.id || null, ruleName: rule.name || null,
   }, {
@@ -26368,7 +26344,7 @@ async function renderDonationRuleResponse(rule, context) {
   for (const failure of result.errors) {
     console.warn(`[Donation Response] ${context.provider} ${failure.phase} failed:`, failure.error?.message || failure.error);
   }
-  return result;
+  return { ...result, ...desktop };
 }
 
 function donationResponseTargetName(features) {
@@ -26404,32 +26380,10 @@ async function processYoutubeDonationAutomation(entry, ev) {
 
     const responsesToSend = [];
     const rules = Array.isArray(settings.donationRules) ? settings.donationRules : [];
-    const lowerMsg = donorMessage.toLowerCase();
     for (const r of rules) {
       if (!r || r.enabled === false) continue;
       if (!donationRuleMatchesAmount(r, amount)) continue;
-      const pat = String(r.message || '').trim();
-      if (pat) {
-        const needle = pat.toLowerCase();
-        const passed = r.wildcard ? lowerMsg.includes(needle) : lowerMsg.startsWith(needle);
-        if (!passed) continue;
-      }
-
-      const name = String(r.name || '').trim();
-      if (name) {
-        try {
-          broadcastToDesktop(sid, {
-            type: 'command',
-            cmd: name,
-            args: [],
-            from: { userId: donorId, username: donorName },
-            amount,
-            currency: 'KRW',
-            at: Date.now(),
-            source: 'youtube-super-chat-rule'
-          });
-        } catch { }
-      }
+      if (!donationRuleMatchesMessage(r, donorMessage)) continue;
 
       const { text: built, features: donationFeatures } = await renderDonationRuleResponse(r, {
         sid, provider: 'youtube', userId: donorId, username: donorName,
@@ -28080,31 +28034,10 @@ async function processCimeDonationAutomation(entry, ev) {
 
     const responsesToSend = [];
     const rules = Array.isArray(settings.donationRules) ? settings.donationRules : [];
-    const lowerMsg = donorMessage.toLowerCase();
     for (const r of rules) {
       if (!r || r.enabled === false) continue;
       if (!donationRuleMatchesAmount(r, amount)) continue;
-      const pat = String(r.message || '').trim();
-      if (pat) {
-        const needle = pat.toLowerCase();
-        const passed = r.wildcard ? lowerMsg.includes(needle) : lowerMsg.startsWith(needle);
-        if (!passed) continue;
-      }
-
-      const name = String(r.name || '').trim();
-      if (name) {
-        try {
-          broadcastToDesktop(sid, {
-            type: 'command',
-            cmd: name,
-            args: [],
-            from: { userId: donorId, username: donorName },
-            amount,
-            at: Date.now(),
-            source: 'cime-donation-rule'
-          });
-        } catch { }
-      }
+      if (!donationRuleMatchesMessage(r, donorMessage)) continue;
 
       const { text: built, features: donationFeatures } = await renderDonationRuleResponse(r, {
         sid, provider: 'cime', userId: donorId, username: donorName,

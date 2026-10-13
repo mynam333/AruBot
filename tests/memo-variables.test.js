@@ -128,7 +128,7 @@ test.each(['youtube', 'cime'])('%s real command handler saves only verified mana
     isLikelyYoutubeSelfEcho: () => false, isLikelyCimeBotSelfEcho: async () => false,
     participationWheelRuntime: { chat: async () => ({ handled: false }) }, marbleRuntime: { chat: async () => ({ handled: false }) }, handlePredictionBetCommand: async () => null,
     getRuntimeBotRulesWithDefaults: async () => [{ id: 'memo-rule', keywords: ['!공지'], enabled: true, pointsCost: paid ? 100 : 0, responses: ['공지: ${memo}'] }],
-    ...load('server/command-keyword.js', { '../shared/text-safety.js': safety }),
+    ...load('server/command-keyword.js', { '../shared/text-safety.js': safety, './rule-pattern.js': load('server/rule-pattern.js') }),
     ...load('server/counter-variables.js'), ...memo,
     admitChatCommand: async () => true, claimBotRuleCooldown: async () => ({ claimed: true }),
     deductChannelPointsIfEnough: async () => ({ deducted: false, balanceBefore: 0 }),

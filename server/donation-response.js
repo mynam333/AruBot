@@ -7,6 +7,33 @@ import { prepareMemoVariablePlan, resolveMemoVariablePlan } from './memo-variabl
 const SPECIAL_TOKEN_RE = /\$\{\s*(roulette|action|automation|blueprint)::([^{}]+)\s*\}/gi;
 const DONOR_TOKEN_RE = /\$\{\s*(username|amount|message)\s*\}|\{donation\.(username|amount|message)\}|\{user\.(name|username|nickname|id)\}/g;
 
+export function dispatchDonationRuleDesktop(rule, context, { broadcastToDesktop, onError = () => {} }) {
+  const name = String(rule.name || '').trim();
+  if (!name) return { desktopSent: 0, repeatCount: 0 };
+  const perAmount = Number(rule.repeatPerAmount);
+  const repeatCount = rule.repeatEnabled && Number.isFinite(perAmount) && perAmount > 0 && context.amount >= perAmount
+    ? Math.min(100, Math.floor(context.amount / perAmount)) : 1;
+  const delay = Math.max(50, Math.min(30000, Number(rule.repeatCooldown) || 0));
+  const send = (index) => broadcastToDesktop(context.sid, {
+    type: 'command', cmd: name, args: [],
+    from: { userId: context.userId || '', username: context.username },
+    amount: context.amount, currency: 'KRW',
+    ...(repeatCount > 1 ? { repeatIndex: index + 1, repeatTotal: repeatCount } : {}),
+    at: Date.now(), source: context.source,
+  });
+  let desktopSent = 0;
+  try { desktopSent = Number(send(0)) || 0; } catch (error) { onError(error); }
+  if (repeatCount > 1) {
+    void (async () => {
+      for (let index = 1; index < repeatCount; index++) {
+        await new Promise(resolve => setTimeout(resolve, delay));
+        try { send(index); } catch (error) { onError(error); }
+      }
+    })();
+  }
+  return { desktopSent, repeatCount };
+}
+
 export async function renderDonationResponse(template, context, dependencies) {
   const {
     commandExecution,

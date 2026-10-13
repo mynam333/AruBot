@@ -3,7 +3,7 @@ const path = require('path');
 const loadSource = require('./helpers/load-source.cjs');
 const loadServerFunctions = require('./helpers/load-server-functions.cjs');
 const safety = loadSource('shared/text-safety.js');
-const matcher = loadSource('server/command-keyword.js', { '../shared/text-safety.js': safety });
+const matcher = loadSource('server/command-keyword.js', { '../shared/text-safety.js': safety, './rule-pattern.js': loadSource('server/rule-pattern.js') });
 const { hasZalgoText, inspectTextPayload, createSafeJsonReplacer } = safety;
 const zalgo = 'a\u0301\u0300\u0302\u0303';
 

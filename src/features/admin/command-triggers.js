@@ -3,14 +3,15 @@
  * Whitespace separates triggers; command arguments are still parsed from chat messages at runtime.
  *
  * @param {unknown} value
+ * @param {{ regex?: boolean }} options
  * @returns {string[]}
  */
-export function parseCommandTriggers(value) {
-  const triggers = String(value ?? '').trim().split(/\s+/u).filter(Boolean);
+export function parseCommandTriggers(value, options = {}) {
+  const triggers = String(value ?? '').trim().split(options.regex ? /\r?\n/u : /\s+/u).filter(Boolean);
   const seen = new Set();
   return triggers.filter((trigger) => {
     if (trigger === '!') return false;
-    const key = trigger.toLowerCase();
+    const key = options.regex ? trigger : trigger.toLowerCase();
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -19,11 +20,12 @@ export function parseCommandTriggers(value) {
 
 /**
  * @param {unknown} values
+ * @param {{ regex?: boolean }} options
  * @returns {string}
  */
-export function formatCommandTriggers(values) {
+export function formatCommandTriggers(values, options = {}) {
   return (Array.isArray(values) ? values : [])
     .map((value) => String(value ?? '').trim())
     .filter(Boolean)
-    .join(' ');
+    .join(options.regex ? '\n' : ' ');
 }

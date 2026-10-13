@@ -1,4 +1,5 @@
 import { hasZalgoText, inspectTextPayload } from '../shared/text-safety.js';
+import { matchRulePattern } from './rule-pattern.js';
 
 function normalizeKeyword(value) {
   return String(value || '').trim();
@@ -8,7 +9,7 @@ function hasCommandBoundary(source, keywordLength) {
   return source.length === keywordLength || /\s/u.test(source.charAt(keywordLength));
 }
 
-export function findCommandKeywordMatch(text, keywords = []) {
+export function findCommandKeywordMatch(text, keywords = [], options = {}) {
   const source = String(text || '').trim();
   if (!source || hasZalgoText(source)) return null;
   const sourceLower = source.toLowerCase();
@@ -17,6 +18,12 @@ export function findCommandKeywordMatch(text, keywords = []) {
   for (const [keywordIndex, rawKeyword] of (Array.isArray(keywords) ? keywords : [keywords]).entries()) {
     const configuredKeyword = normalizeKeyword(rawKeyword);
     if (!configuredKeyword || configuredKeyword === '!' || hasZalgoText(configuredKeyword)) continue;
+    if (options.regex === true) {
+      const match = matchRulePattern(configuredKeyword, source, { command: true });
+      if (!match?.[0] || match.index !== 0) continue;
+      candidates.push({ configuredKeyword, matchedText: match[0], argsText: source.slice(match[0].length).trim(), exactConfigured: false, keywordIndex });
+      continue;
+    }
     const configuredLower = configuredKeyword.toLowerCase();
     if (!sourceLower.startsWith(configuredLower) || !hasCommandBoundary(source, configuredKeyword.length)) continue;
     candidates.push({
@@ -38,7 +45,7 @@ export function findCommandKeywordMatch(text, keywords = []) {
 
 export function getCommandRuleMatches(text, rules = []) {
   return (Array.isArray(rules) ? rules : [])
-    .map((rule, ruleIndex) => ({ rule, ruleIndex, match: inspectTextPayload(rule) ? null : findCommandKeywordMatch(text, rule?.keywords || []) }))
+    .map((rule, ruleIndex) => ({ rule, ruleIndex, match: inspectTextPayload(rule) ? null : findCommandKeywordMatch(text, rule?.keywords || [], { regex: rule?.regex === true }) }))
     .filter((candidate) => candidate.match)
     .sort((left, right) => (
       right.match.matchedText.length - left.match.matchedText.length ||
