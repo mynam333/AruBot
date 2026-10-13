@@ -744,7 +744,7 @@ export function RoulettePage() {
                           </div>
                         ) : null}
                       </div>
-                      <Badge tone={item.value?.includes('${action::') || item.value?.includes('${automation::') || item.value?.includes('${blueprint::') ? 'violet' : 'neutral'}>
+                      <Badge tone={/\$\{\s*(?:roulette|action|automation|blueprint)::/i.test(item.value || '') ? 'violet' : 'neutral'}>
                         {item.probability != null ? `${item.probability}%` : `가중치 ${item.weight || 1}`}
                       </Badge>
                     </div>

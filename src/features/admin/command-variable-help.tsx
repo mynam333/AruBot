@@ -28,7 +28,7 @@ type CommandVariableHelpButtonProps = {
   onInsert?: (key: string) => void;
 };
 
-type VariableContext = 'command' | 'attendance' | 'donation' | 'blueprint';
+type VariableContext = 'command' | 'attendance' | 'donation' | 'blueprint' | 'roulette';
 
 const ATTENDANCE_VARIABLE_GROUPS = new Set(['시청자', '출석', '방송', '채널', '날짜']);
 const ATTENDANCE_SPECIAL_VARIABLES = new Set([
@@ -72,6 +72,11 @@ const SCOPE_COPY: Record<VariableContext, {
     triggerLabel: '블루프린트 변수 보기',
     title: '블루프린트에서 사용할 변수를 확인하세요.',
     description: '블루프린트 실행 조건과 노드 값에서 사용할 수 있는 변수만 모아 보여드립니다.',
+  },
+  roulette: {
+    triggerLabel: '룰렛 실행 액션 변수 보기',
+    title: '룰렛 실행 액션 변수',
+    description: '룰렛 결과 액션에서 사용할 수 있는 변수 목록입니다.',
   },
 };
 
@@ -125,7 +130,7 @@ export function CommandVariableHelpButton({ scope = 'command', onInsert }: Comma
       map.set(variable.group, list);
     }
     const entries = Array.from(map.entries());
-    if (scope === 'donation') {
+    if (scope === 'donation' || scope === 'roulette') {
       const priority = ['특수 실행', '후원', '카운트', '메모'];
       const rank = (group: string) => priority.includes(group) ? priority.indexOf(group) : priority.length;
       entries.sort(([left], [right]) => rank(left) - rank(right));

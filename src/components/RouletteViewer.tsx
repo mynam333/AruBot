@@ -5,16 +5,13 @@ import { connectOverlaySocket } from '@/shared/api/overlay-socket';
 import { RouletteThemeAtmosphere } from './rouletteThemeAtmosphere';
 import { getRouletteThemeMaterial } from './rouletteThemeMaterials';
 import { WheelGlassOverlay, WheelLabelsSvg, WheelPointer, WheelSegmentsSvg, WheelSelectedSegment, WheelSkinOrnaments } from './rouletteWheelSkins';
-import { splitWheelLabel } from './rouletteWheelUtils';
+import { createWheelSegments, splitWheelLabel } from './rouletteWheelUtils';
+import { buildRouletteWheelEntries } from './rouletteWheelEntries';
+import { RouletteFitText } from './rouletteFitText';
+import { getRouletteMotionProfile, rouletteMotionPhase, rouletteMotionProgress, rouletteWheelKeyframes } from './rouletteMotion';
+import './roulettePresentation.css';
 
-// Module-scope overlay kind and component to avoid remounts on parent re-renders
-type OverlayKind = 'none' | 'sakura' | 'midnight' | 'sunset' | 'grid' | 'noise' | 'embers' | 'snow' | 'scan' | 'shimmer' | 'confetti' | 'leaves' | 'gold-sweep';
-type CssVariableStyle = React.CSSProperties & Record<`--${string}`, string | number>;
 type WindowWithLegacyAudioContext = Window & { webkitAudioContext?: typeof AudioContext };
-
-function cssVariables(style: CssVariableStyle): React.CSSProperties {
-  return style;
-}
 
 const DEFAULT_PRODUCTION_API_BASE = 'https://arubotapi.yuaru.com';
 
@@ -37,327 +34,6 @@ function getRouletteWsUrl(token: string, testConnectionId = '') {
   if (testConnectionId) url.searchParams.set('testConnectionId', testConnectionId);
   return url.toString();
 }
-
-const OverlaySvg: React.FC<{ kind: OverlayKind }> = React.memo(({ kind }) => {
-  const makeSeed = (s: string) => {
-    let h = 2166136261;
-    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24); }
-    return () => { h ^= h << 13; h ^= h >>> 17; h ^= h << 5; return Math.abs(h) / 0xffffffff; };
-  };
-  const rnd = React.useMemo(() => makeSeed(String(kind)), [kind]);
-  const snowFlakes = React.useMemo(() => (
-    kind === 'snow' ? Array.from({ length: 32 }).map((_, i) => {
-      const s = +(0.7 + (i % 3) * 0.12).toFixed(2); // 크기 스케일
-      const rot = Math.floor(rnd() * 360);
-      const cx = (i * 5) % 100;
-      const cy = -Math.floor(rnd() * 50);
-      const dx = ((i % 4) - 2);
-      const dur = 6 + (i % 5);
-      const delay = -+(rnd() * dur).toFixed(2); // 중간부터 시작하도록 음수 지연
-      const yStart = -20 - ((i % 6) * 8); // -20% .. -68%
-      return { id: `f${i}`, cx, cy, s, rot, dx, dur, delay, yStart } as const;
-    }) : []
-  ), [kind, rnd]);
-  const confettiPieces = React.useMemo(() => (
-    kind === 'confetti' ? Array.from({ length: 24 }).map((_, i) => {
-      const w = 1.2 + (i % 3) * 0.3, h = 3 + (i % 2) * 0.5;
-      const x = (i * 4.5) % 100;
-      const y = -Math.floor(rnd() * 60);
-      const dx = ((i % 7) - 3);
-      const rot = (i % 8) * 22.5;
-      const dur = 5 + (i % 4);
-      const delay = -+(rnd() * dur).toFixed(2);
-      const palette = ['#fda4af', '#a7f3d0', '#fde68a', '#93c5fd', '#c4b5fd'];
-      const fill = palette[i % palette.length];
-      const yStart = -20 - ((i % 5) * 10); // -20% .. -60%
-      return { id: `c${i}`, w, h, x, y, dx, rot, dur, delay, fill, yStart } as const;
-    }) : []
-  ), [kind, rnd]);
-  const embers = React.useMemo(() => (
-    kind === 'embers' ? Array.from({ length: 28 }).map((_, i) => {
-      const cx = Math.floor(rnd() * 100);           // 0..100% 가로 시작
-      const cy = 105 + Math.floor(rnd() * 25);      // 105..130 아래 시작
-      const s  = +(0.7 + rnd() * 0.7).toFixed(2);   // 스케일 0.7..1.4
-      const rot = Math.floor(rnd() * 360);          // 무작위 회전
-      const dx = +( (rnd() * 10 - 5).toFixed(2) );  // -5%..+5% 가로 드리프트
-      const dur = 6 + Math.floor(rnd() * 5);        // 6..10s
-      const delay = -+(rnd() * dur).toFixed(2);     // 중간부터 시작
-      const fDur = +(0.7 + rnd() * 0.7).toFixed(2); // 깜빡임 0.7..1.4s
-      const fDelay = -+(rnd() * fDur).toFixed(2);
-      const palette = ['#f59e0b', '#f97316', '#fb923c', '#fbbf24'];
-      const stroke = ['#fed7aa', '#fde68a', '#fff7ed', '#fee2e2'][i % 4];
-      const fill = palette[i % palette.length];
-      return { id: `e${i}`, cx, cy, s, rot, dx, dur, delay, fDur, fDelay, fill, stroke } as const;
-    }) : []
-  ), [kind, rnd]);
-  const leavesPieces = React.useMemo(() => (
-    kind === 'leaves' ? Array.from({ length: 5 }).map((_, i) => {
-      const x = Math.floor(rnd() * 100);        // 0..100% 가로 분포
-      const y = Math.floor(rnd() * 8);          // 상단 여백 소폭
-      const s = 0.55 + rnd() * 0.25;            // 더 작게 0.55..0.80배
-      const rot = -25 + rnd() * 50;             // -25..+25deg
-      const yStart = -20 - Math.floor(rnd() * 60); // -20%..-80%
-      const dur = 7 + (i % 3);                  // 7..9s
-      const delay = -+(rnd() * dur).toFixed(2); // 중간부터 시작
-      return { id: `l${i}`, x, y, s, rot, yStart, dur, delay } as const;
-    }) : []
-  ), [kind, rnd]);
-  const sakuraPetals = React.useMemo(() => (
-    kind === 'sakura' ? Array.from({ length: 18 }).map((_, i) => {
-      const x = Math.floor((i * 100 / 18) + (i % 3) * 2) % 100; // 균일 분포 + 소폭 오프셋
-      const rot = -30 + (i % 9) * 7; // -30..+28deg
-      const s = 0.9 + (i % 4) * 0.06; // 0.9..1.08
-      const dur = (7.5 + (i % 5)) + (i % 2) * 0.6; // 7.5..11.1s
-      const delay = -+((rnd() * dur) % 3).toFixed(2); // 중간부터 시작
-      const yStart = -20 - ((i % 6) * 8); // -20..-68%
-      return { id: `p${i}`, x, rot, s, dur, delay, yStart } as const;
-    }) : []
-  ), [kind, rnd]);
-  const midnightStars = React.useMemo(() => (
-    kind === 'midnight' ? Array.from({ length: 24 }).map((_, i) => {
-      // Stratified grid (cols x rows) to avoid clustering + jitter for natural dispersion
-      const cols = 6, rows = 4;
-      const col = i % cols;
-      const row = Math.floor(i / cols);
-      const jx = (rnd() * 14 - 7); // -7..+7 jitter
-      const jy = (rnd() * 14 - 7); // -7..+7 jitter
-      let cx = ((col + 0.5) * (100 / cols)) + jx; // center of cell + jitter
-      let cy = ((row + 0.5) * (100 / rows)) + jy;
-      cx = Math.max(2, Math.min(98, cx));
-      cy = Math.max(2, Math.min(98, cy));
-      const s = +(0.55 + rnd() * 0.35).toFixed(2); // 0.55..0.90 (smaller)
-      const baseRot = Math.floor(rnd() * 360);
-      const t = +(1.6 + rnd() * 2.0).toFixed(2); // 1.6..3.6s twinkle
-      const delay = -+(rnd() * t).toFixed(2); // mid-cycle start
-      const rotAmp = +(2 + rnd() * 3).toFixed(2); // 2..5deg (smaller rotation)
-      const rotDur = +(6 + rnd() * 4).toFixed(2); // 6..10s
-      // Drift vectors (user units) from a unique angle per star so each wanders in a different direction
-      const ang = rnd() * Math.PI * 2; // 0..2pi
-      const A = 2 + rnd() * 2; // 2..4
-      const B = 1.5 + rnd() * 2; // 1.5..3.5
-      const ax = +( (Math.cos(ang) * A).toFixed(2) );
-      const ay = +( (Math.sin(ang) * A).toFixed(2) );
-      const bx = +( (Math.cos(ang + Math.PI / 2) * B).toFixed(2) );
-      const by = +( (Math.sin(ang + Math.PI / 2) * B).toFixed(2) );
-      const driftDur = +(24 + rnd() * 18).toFixed(2); // 24..42s (slower drift)
-      const driftDelay = -+(rnd() * driftDur).toFixed(2);
-      const palette = [
-        ['#e5e7eb', '#93c5fd'], // white -> light blue
-        ['#f3f4f6', '#a5b4fc'], // off-white -> indigo
-        ['#e0f2fe', '#bae6fd'], // sky tints
-        ['#fef3c7', '#fde68a']  // warm twinkle
-      ];
-      const [c1, c2] = palette[i % palette.length];
-      return { id: `ms${i}`, cx, cy, s, baseRot, t, delay, rotAmp, rotDur, ax, ay, bx, by, driftDur, driftDelay, c1, c2 } as const;
-    }) : []
-  ), [kind, rnd]);
-
-  if (kind === 'embers') {
-    return (
-      <svg className="absolute inset-0 z-0 w-full h-full pointer-events-none opacity-65 mix-blend-screen" viewBox="0 0 100 100" preserveAspectRatio="none">
-        <g>
-          {embers.map(p => (
-            <g key={p.id} transform={`translate(${p.cx}, ${p.cy})`}>
-              {/* 상승 애니메이션은 .ember, 깜빡임은 .ember-shape */}
-              <g className="ember" style={cssVariables({ '--dx': `${p.dx}%`, '--dur': `${p.dur}s`, '--delay': `${p.delay}s` })}>
-                <g transform={`rotate(${p.rot}) scale(${p.s})`}>
-                  {/* 눈물방울 형태의 불티 */}
-                  <path className="ember-shape" d="M0,-1.6 C0.55,-0.6 0.45,0.5 0,1.3 C-0.45,0.5 -0.55,-0.6 0,-1.6 Z"
-                    fill={p.fill} stroke={p.stroke} strokeWidth={0.15}
-                    style={cssVariables({ '--fDur': `${p.fDur}s`, '--fDelay': `${p.fDelay}s` })} />
-                </g>
-              </g>
-            </g>
-          ))}
-        </g>
-      </svg>
-    );
-  }
-  if (kind === 'snow') {
-    return (
-      <svg className="absolute inset-0 z-0 w-full h-full pointer-events-none opacity-65" viewBox="0 0 100 100" preserveAspectRatio="none">
-        <g stroke="#e0f2fe" strokeOpacity="0.95" strokeWidth="0.6" strokeLinecap="round">
-          {snowFlakes.map(f => (
-            <g key={f.id} className="flake" style={cssVariables({ '--dx': `${f.dx}px`, '--dur': `${f.dur}s`, '--delay': `${f.delay}s`, '--yStart': `${f.yStart}%` })}>
-              <g transform={`translate(${f.cx}, ${f.cy}) rotate(${f.rot}) scale(${f.s})`} className="flake-shape">
-                <line x1="0" y1="-2" x2="0" y2="2" />
-                <line x1="-2" y1="0" x2="2" y2="0" />
-                <line x1="-1.4" y1="-1.4" x2="1.4" y2="1.4" />
-                <line x1="-1.4" y1="1.4" x2="1.4" y2="-1.4" />
-                {/* 작은 가지 */}
-                <line x1="0" y1="-2" x2="0.6" y2="-2.6" />
-                <line x1="0" y1="-2" x2="-0.6" y2="-2.6" />
-                <line x1="2" y1="0" x2="2.6" y2="0.6" />
-                <line x1="2" y1="0" x2="2.6" y2="-0.6" />
-                <line x1="0" y1="2" x2="0.6" y2="2.6" />
-                <line x1="0" y1="2" x2="-0.6" y2="2.6" />
-                <line x1="-2" y1="0" x2="-2.6" y2="0.6" />
-                <line x1="-2" y1="0" x2="-2.6" y2="-0.6" />
-              </g>
-            </g>
-          ))}
-        </g>
-      </svg>
-    );
-  }
-  if (kind === 'scan') {
-    return (
-      <svg className="absolute inset-0 w-full h-full pointer-events-none opacity-65 mix-blend-screen" viewBox="0 0 100 100" preserveAspectRatio="none">
-        <defs>
-          <linearGradient id="scan-grad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#f0abfc" stopOpacity="0" />
-            <stop offset="50%" stopColor="#f0abfc" stopOpacity="0.5" />
-            <stop offset="100%" stopColor="#f0abfc" stopOpacity="0" />
-          </linearGradient>
-        </defs>
-        <rect className="scanline" x="0" y="0" width="100" height="100" fill="url(#scan-grad)" style={{ animationDelay: `${-(rnd() * 7).toFixed(2)}s` }} />
-      </svg>
-    );
-  }
-  if (kind === 'shimmer') {
-    return (
-      <svg className="absolute inset-0 z-0 w-full h-full pointer-events-none opacity-40 mix-blend-screen" viewBox="0 0 100 100" preserveAspectRatio="none">
-        <defs>
-          <linearGradient id="shim-grad" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stopColor="#fef3c7" stopOpacity="0" />
-            <stop offset="50%" stopColor="#fde68a" stopOpacity="0.9" />
-            <stop offset="100%" stopColor="#fbbf24" stopOpacity="0" />
-          </linearGradient>
-        </defs>
-        <rect className="gold-sweep" x="-20" y="-50" width="40" height="200" fill="url(#shim-grad)" style={cssVariables({ '--delay': `${-(rnd() * 7).toFixed(2)}s`, '--phase': `${-(rnd() * 7).toFixed(2)}s` })} />
-      </svg>
-    );
-  }
-  if (kind === 'confetti') {
-    return (
-      <svg className="absolute inset-0 z-0 w-full h-full pointer-events-none opacity-70 mix-blend-screen" viewBox="0 0 100 100" preserveAspectRatio="none">
-        <g>
-          {confettiPieces.map(c => (
-            <rect key={c.id} className="confetti" width={c.w} height={c.h} x={c.x} y={c.y} fill={c.fill} style={cssVariables({ '--dx': `${c.dx}px`, '--rot': `${c.rot}deg`, '--dur': `${c.dur}s`, '--delay': `${c.delay}s` })} />
-          ))}
-        </g>
-      </svg>
-    );
-  }
-  if (kind === 'leaves') {
-    return (
-      <svg className="absolute inset-0 w-full h-full pointer-events-none opacity-65 mix-blend-screen" viewBox="0 0 100 100" preserveAspectRatio="none">
-        <g fill="#86efac" fillOpacity="0.6">
-          {leavesPieces.map(l => (
-            <path key={l.id} className="leaf" d="M10 20 C 15 10, 25 10, 30 20 C 25 30, 15 30, 10 20 Z"
-              transform={`translate(${l.x},${l.y}) scale(${l.s}) rotate(${l.rot})`}
-              style={cssVariables({ '--yStart': `${l.yStart}%`, animationDuration: `${l.dur}s`, animationDelay: `${l.delay}s` })} />
-          ))}
-        </g>
-      </svg>
-    );
-  }
-  if (kind === 'sakura') {
-    return (
-      <svg className="absolute inset-0 w-full h-full pointer-events-none opacity-70 mix-blend-screen" viewBox="0 0 100 100" preserveAspectRatio="none">
-        <defs>
-          <radialGradient id="sak-grad" cx="50%" cy="0%" r="85%">
-            <stop offset="0%" stopColor="#fecdd3" stopOpacity="0.75" />
-            <stop offset="100%" stopColor="#000" stopOpacity="0" />
-          </radialGradient>
-          <linearGradient id="sak-glow" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stopColor="#fda4af" stopOpacity="0.4" />
-            <stop offset="100%" stopColor="#000" stopOpacity="0" />
-          </linearGradient>
-        </defs>
-        <rect x="0" y="0" width="100" height="100" fill="url(#sak-grad)" />
-        <g fill="#fecdd3" fillOpacity="0.55">
-          {sakuraPetals.map(p => (
-            <path key={p.id} className="petal" d="M5 20c2-3 6-3 8 0c2 3-1 6-4 7c-3-1-6-4-4-7z"
-              transform={`translate(${p.x},0) rotate(${p.rot}) scale(${p.s})`}
-              style={cssVariables({ '--dur': `${p.dur}s`, '--delay': `${p.delay}s`, '--yStart': `${p.yStart}%` })} />
-          ))}
-        </g>
-        <rect x="0" y="0" width="100" height="100" fill="url(#sak-glow)" />
-      </svg>
-    );
-  }
-  if (kind === 'midnight') {
-    return (
-      <svg className="absolute inset-0 w-full h-full pointer-events-none opacity-65 mix-blend-screen" viewBox="0 0 100 100" preserveAspectRatio="none">
-        <defs>
-          <radialGradient id="mid-vignette" cx="50%" cy="50%" r="70%">
-            <stop offset="0%" stopColor="#111827" stopOpacity="0" />
-            <stop offset="100%" stopColor="#000" stopOpacity="0.8" />
-          </radialGradient>
-        </defs>
-        <rect x="0" y="0" width="100" height="100" fill="url(#mid-vignette)" />
-        <g strokeLinejoin="round" strokeLinecap="round">
-          {midnightStars.map(s => (
-            <g key={s.id} className="star" style={cssVariables({ '--t': `${s.t}s`, '--delay': `${s.delay}s` })}>
-              <defs>
-                <radialGradient id={`mid-star-${s.id}`} cx="50%" cy="50%" r="70%">
-                  <stop offset="0%" stopColor={s.c1} stopOpacity="1" />
-                  <stop offset="100%" stopColor={s.c2} stopOpacity="0.35" />
-                </radialGradient>
-              </defs>
-              <g transform={`translate(${s.cx}, ${s.cy})`}>
-                <g className="star-drift" style={cssVariables({ '--ax': `${s.ax}`, '--ay': `${s.ay}`, '--bx': `${s.bx}`, '--by': `${s.by}`, '--driftDur': `${s.driftDur}s`, '--driftDelay': `${s.driftDelay}s` })}>
-                  <g className="star-rot" style={cssVariables({ '--rotAmp': `${s.rotAmp}deg`, '--rotDur': `${s.rotDur}s` })} transform={`rotate(${s.baseRot}) scale(${s.s})`}>
-                    <path className="star-shape" d="M0,-2.2 L0.35,-0.5 L1.2,0 L0.35,0.5 L0,2.2 L-0.35,0.5 L-1.2,0 L-0.35,-0.5 Z" fill={`url(#mid-star-${s.id})`} stroke={s.c1} strokeWidth="0.32" />
-                  </g>
-                </g>
-              </g>
-            </g>
-          ))}
-        </g>
-      </svg>
-    );
-  }
-  if (kind === 'sunset') {
-    return (
-      <svg className="absolute inset-0 w-full h-full pointer-events-none opacity-40 mix-blend-screen" viewBox="0 0 100 100" preserveAspectRatio="none">
-        <defs>
-          <radialGradient id="sun-core" cx="0%" cy="0%" r="60%">
-            <stop offset="0%" stopColor="#fde68a" stopOpacity="1.0" />
-            <stop offset="100%" stopColor="#f59e0b" stopOpacity="0" />
-          </radialGradient>
-          <linearGradient id="sun-rays" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stopColor="#f59e0b" stopOpacity="0.6" />
-            <stop offset="100%" stopColor="#000" stopOpacity="0" />
-          </linearGradient>
-        </defs>
-        <rect x="0" y="0" width="100" height="100" fill="url(#sun-core)" className="sun-core-pulse" style={cssVariables({ '--delay': `${-(rnd() * 6).toFixed(2)}s` })} />
-        <g stroke="url(#sun-rays)" strokeWidth="2" strokeOpacity="0.5" className="sun-rays-pulse" style={cssVariables({ '--delay2': `${-(rnd() * 7.2).toFixed(2)}s` })}>
-          <line x1="0" y1="0" x2="40" y2="0" />
-          <line x1="0" y1="0" x2="0" y2="40" />
-          <line x1="0" y1="0" x2="35" y2="15" />
-          <line x1="0" y1="0" x2="15" y2="35" />
-        </g>
-      </svg>
-    );
-  }
-  if (kind === 'grid') {
-    return (
-      <svg className="absolute inset-0 z-0 w-full h-full pointer-events-none opacity-60" viewBox="0 0 100 100" preserveAspectRatio="none">
-        <defs>
-          <pattern id="grid-pat" width="10" height="10" patternUnits="userSpaceOnUse">
-            <path d="M 10 0 L 0 0 0 10" fill="none" stroke="currentColor" strokeWidth="0.4" className="text-white/40" />
-          </pattern>
-        </defs>
-        <rect x="0" y="0" width="100" height="100" fill="url(#grid-pat)" />
-      </svg>
-    );
-  }
-  if (kind === 'noise') {
-    return (
-      <svg className="absolute inset-0 z-0 w-full h-full pointer-events-none opacity-57 mix-blend-soft-light" viewBox="0 0 100 100" preserveAspectRatio="none">
-        <filter id="noise">
-          <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" stitchTiles="stitch" />
-          <feColorMatrix type="saturate" values="0" />
-        </filter>
-        <rect width="100" height="100" filter="url(#noise)" />
-      </svg>
-    );
-  }
-  if (!kind || kind === 'none') return null;
-  return null;
-});
 
 type Theme = 'studio' | 'prism' | 'aurora' | 'velvet' | 'mono' | 'deco' | 'crystal' | 'ink' | 'nova' | 'ceramic' | 'arcade' | 'sakura' | 'ocean' | 'solar' | 'cyber' | 'gold' | 'classic' | 'fire' | 'ice' | 'pastel' | 'forest' | 'midnight' | 'sunset';
 type RouletteLayout = 'reel' | 'wheel';
@@ -397,6 +73,8 @@ type WsPayload = {
   createdAt?: number | string | null;
   theme?: string | null;
   items?: string[] | null;
+  itemWeights?: number[] | null;
+  selectedItemIndex?: number | null;
   channelId?: string | null;
   spinId?: string | null;
   spinDurationMs?: number | string | null;
@@ -439,6 +117,8 @@ type WheelSpinPlan = {
   startRotation: number;
   finalRotation: number;
   durationMs: number;
+  motionTheme: Theme;
+  reducedMotion: boolean;
 };
 
 type SpinCompletionBarrier = {
@@ -466,28 +146,23 @@ function normalizeRouletteSpinDuration(value: unknown) {
   return Math.round(durationMs);
 }
 
-function normalizeWheelResultLabel(value: unknown) {
-  return String(value || '').trim().normalize('NFC');
-}
-
 function randomWheelStopOffsetRatio(random = Math.random) {
   const maxOffset = 0.5 - WHEEL_STOP_EDGE_PADDING_RATIO;
   return ((random() * 2) - 1) * maxOffset;
 }
 
-function wheelStopRotationForIndex(index: number, segmentCount: number, offsetRatio = 0) {
-  const count = Math.max(1, segmentCount);
-  const segmentDeg = 360 / count;
+function wheelStopRotationForIndex(index: number, segmentCount: number, offsetRatio = 0, weights?: number[]) {
+  const segments = createWheelSegments(Math.max(1, segmentCount), weights);
+  const segment = segments[Math.max(0, Math.min(segments.length - 1, index))];
   const maxOffset = 0.5 - WHEEL_STOP_EDGE_PADDING_RATIO;
   const safeOffsetRatio = Math.max(-maxOffset, Math.min(maxOffset, offsetRatio));
-  return -((index * segmentDeg) + (segmentDeg / 2) + (safeOffsetRatio * segmentDeg));
+  return -(segment.center + safeOffsetRatio * segment.span);
 }
 
-function wheelIndexAtPointer(rotation: number, segmentCount: number) {
-  const count = Math.max(1, segmentCount);
-  const segmentDeg = 360 / count;
+function wheelIndexAtPointer(rotation: number, segmentCount: number, weights?: number[]) {
+  const segments = createWheelSegments(Math.max(1, segmentCount), weights);
   const pointerAngle = (((-rotation) % 360) + 360) % 360;
-  return Math.min(count - 1, Math.floor(pointerAngle / segmentDeg));
+  return Math.max(0, segments.findIndex(segment => segment.span > 0 && pointerAngle >= segment.start && pointerAngle < segment.end));
 }
 
 function equivalentForwardRotation(currentRotation: number, targetModuloRotation: number, turns = 6) {
@@ -495,20 +170,6 @@ function equivalentForwardRotation(currentRotation: number, targetModuloRotation
   const targetModulo = ((targetModuloRotation % 360) + 360) % 360;
   const delta = (targetModulo - currentModulo + 360) % 360;
   return currentRotation + delta + (Math.max(1, turns) * 360);
-}
-
-function buildWheelItemsForResult(pool: string[], finalLabel: string, selectedIndex: number) {
-  const target = finalLabel.trim();
-  const targetKey = normalizeWheelResultLabel(target);
-  const cleaned = pool.map((item) => String(item || '').trim()).filter(Boolean);
-  const targetPoolIndex = cleaned.findIndex((item) => normalizeWheelResultLabel(item) === targetKey);
-  const candidates = cleaned.slice();
-  if (target && targetPoolIndex >= 0) candidates.splice(targetPoolIndex, 1);
-  const itemCount = Math.max(1, candidates.length + (target ? 1 : 0));
-  const safeIndex = Math.min(Math.max(0, selectedIndex), itemCount - 1);
-  const items = candidates.slice();
-  if (target) items.splice(safeIndex, 0, target);
-  return items;
 }
 
 export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps) {
@@ -525,6 +186,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
   const rowsHalfRef = React.useRef(6);
   const rowsHalfSpinRef = React.useRef<number | null>(null);
   const [wheelItemsState, setWheelItemsState] = React.useState<string[]>([]);
+  const [wheelWeights, setWheelWeights] = React.useState<number[]>([]);
   const [wheelSelectedIndex, setWheelSelectedIndex] = React.useState(-1);
   const [wheelRotationDeg, setWheelRotationDeg] = React.useState(0);
   const [wheelSettled, setWheelSettled] = React.useState(false);
@@ -537,8 +199,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
   // RAF physics refs
   const rafIdRef = React.useRef<number | null>(null);
   const animStartRef = React.useRef<number>(0);
-  const v0Ref = React.useRef<number>(0); // px/s
-  const aRef = React.useRef<number>(0);  // px/s^2 (deceleration)
+  const presentationRef = React.useRef<HTMLDivElement>(null);
   const startCenterRef = React.useRef<number>(0); // start center index (rows)
   const targetIndexRef = React.useRef<number>(0);  // final center index (integer rows)
   const poolRef = React.useRef<string[]>([]);
@@ -818,8 +479,9 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
 
     try { wheelAnimationRef.current?.cancel(); } catch {}
 
-    const { id, startRotation, finalRotation, durationMs } = wheelSpinPlan;
-    wheel.style.transform = `rotate(${startRotation}deg)`;
+    const { id, startRotation, finalRotation, durationMs, motionTheme, reducedMotion } = wheelSpinPlan;
+    const profile = getRouletteMotionProfile(motionTheme);
+    wheel.style.transform = `rotate(${reducedMotion ? finalRotation : startRotation}deg)`;
     const notifyWheelFinished = () => {
       if (wheelSpinPlanIdRef.current !== id) return;
       wheelRotationRef.current = finalRotation;
@@ -833,39 +495,35 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     };
 
     if (typeof wheel.animate !== 'function') {
-      wheel.style.transition = `transform ${durationMs}ms cubic-bezier(0.12, 0.68, 0.1, 1)`;
       let completed = false;
-      let settleId: number | null = null;
+      let frameId = 0;
+      const started = performance.now();
       const finishFallback = () => {
         if (completed) return;
         completed = true;
-        wheel.removeEventListener('transitionend', onTransitionEnd);
+        wheel.style.transform = `rotate(${finalRotation}deg)`;
         notifyWheelFinished();
       };
-      const onTransitionEnd = (event: TransitionEvent) => {
-        if (event.target === wheel && event.propertyName === 'transform') finishFallback();
+      const tick = (now: number) => {
+        const time = Math.min(1, (now - started) / durationMs);
+        const progress = reducedMotion ? 1 : rouletteMotionProgress(time, profile);
+        wheel.style.transform = `rotate(${startRotation + (finalRotation - startRotation) * progress}deg)`;
+        if (time >= 1) finishFallback();
+        else if (!completed) frameId = window.requestAnimationFrame(tick);
       };
-      wheel.addEventListener('transitionend', onTransitionEnd);
-      const frameId = window.requestAnimationFrame(() => {
-        wheel.style.transform = `rotate(${finalRotation}deg)`;
-        settleId = window.setTimeout(finishFallback, durationMs + 250);
-      });
+      frameId = window.requestAnimationFrame(tick);
+      const settleId = window.setTimeout(finishFallback, durationMs + 250);
       return () => {
         window.cancelAnimationFrame(frameId);
-        if (settleId != null) window.clearTimeout(settleId);
-        wheel.removeEventListener('transitionend', onTransitionEnd);
-        wheel.style.transition = '';
+        window.clearTimeout(settleId);
       };
     }
 
     const animation = wheel.animate(
-      [
-        { transform: `rotate(${startRotation}deg)` },
-        { transform: `rotate(${finalRotation}deg)` },
-      ],
+      rouletteWheelKeyframes(reducedMotion ? finalRotation : startRotation, finalRotation, profile),
       {
         duration: durationMs,
-        easing: 'cubic-bezier(0.12, 0.68, 0.1, 1)',
+        easing: 'linear',
         fill: 'forwards',
       },
     );
@@ -1173,14 +831,12 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
             }
             
             // Build a key to detect duplicate payloads
-            const key = `${data.token || ''}|${data.label || ''}|${data.value ?? ''}|${data.createdAt || ''}`;
+            const key = data.spinId ? `${data.token || ''}|${data.spinId}` : `${data.token || ''}|${data.label || ''}|${data.value ?? ''}|${data.createdAt || ''}`;
             
-            // Ignore if in cooldown window to avoid quick re-triggers, except for instant/batched roulette events
+            // The visual cooldown must not discard a newly chained server spin.
             const isInstantPayload = data.instant === true;
             const hasBatch = !!data.batchId;
-            if (now < spinCooldownUntilRef.current && !isInstantPayload && !hasBatch) {
-              return;
-            }
+            const isCoolingDown = now < spinCooldownUntilRef.current && !isInstantPayload && !hasBatch;
             
             // Ignore if identical to last and very recent (handles multi-instance duplicate broadcasts)
             // Do not dedupe batched payloads
@@ -1210,7 +866,8 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
             };
             
             // If a spin is already in progress, buffer this event for later processing
-            if (isSpinningRef.current) {
+            if (isSpinningRef.current || isCoolingDown) {
+              if (data.spinId && queuedEventsRef.current.some(event => event.spinId === data.spinId)) return;
               // 우선순위에 따라 큐에 삽입
               const priority = getMessagePriority(data);
               const insertIndex = queuedEventsRef.current.findIndex(
@@ -1226,6 +883,10 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
               updateDebugInfo({ 
                 queuedMessagesCount: queuedEventsRef.current.length
               });
+              if (!isSpinningRef.current && isCoolingDown) {
+                const wakeId = window.setTimeout(() => processQueuedRef.current(), Math.max(1, spinCooldownUntilRef.current - now + 1));
+                timersRef.current.push(wakeId);
+              }
               return;
             }
             
@@ -1396,15 +1057,18 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       } catch {}
       setScrollItems([finalLabel]);
       setScrollIndex(0);
-      const instantWheelIndex = 0;
-      const instantWheelItems = buildWheelItemsForResult(poolRef.current, finalLabel, instantWheelIndex);
+      const instantEntries = buildRouletteWheelEntries(meta?.items || poolRef.current, finalLabel, meta?.itemWeights, meta?.selectedItemIndex);
+      const instantWheelIndex = instantEntries.selectedIndex;
+      const instantWheelItems = instantEntries.items;
       const spinRandom = createRouletteSpinRandom(resolveRouletteSpinSeed(meta, finalLabel));
       const instantWheelRotation = wheelStopRotationForIndex(
         instantWheelIndex,
         instantWheelItems.length,
         randomWheelStopOffsetRatio(spinRandom),
+        instantEntries.weights,
       );
       setWheelItemsState(instantWheelItems);
+      setWheelWeights(instantEntries.weights);
       setWheelSelectedIndex(instantWheelIndex);
       wheelRotationRef.current = instantWheelRotation;
       setWheelRotationDeg(instantWheelRotation);
@@ -1454,22 +1118,25 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       : [finalLabel];
     const cleaned = baseItems.map(s => String(s)).filter(s => s.length > 0);
     const pool = cleaned.length ? cleaned : [finalLabel].filter(Boolean);
+    const motionTheme = urlLook.theme || parseRouletteLook(meta?.theme).theme || theme;
+    const motionProfile = getRouletteMotionProfile(motionTheme);
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     poolRef.current = pool.slice();
     const spinRandom = createRouletteSpinRandom(resolveRouletteSpinSeed(meta, finalLabel));
-    const finalAlreadyIncluded = pool.some((item) => normalizeWheelResultLabel(item) === normalizeWheelResultLabel(finalLabel));
-    const wheelItemCount = Math.max(1, pool.length + (finalAlreadyIncluded ? 0 : 1));
-    const wheelTargetIndex = Math.floor(spinRandom() * wheelItemCount);
-    const nextWheelItems = buildWheelItemsForResult(pool, finalLabel, wheelTargetIndex);
+    const entries = buildRouletteWheelEntries(baseItems, finalLabel, meta?.itemWeights, meta?.selectedItemIndex);
+    const wheelTargetIndex = entries.selectedIndex;
+    const nextWheelItems = entries.items;
     setWheelItemsState(nextWheelItems);
+    setWheelWeights(entries.weights);
     setWheelSettled(false);
     const wheelStartRotation = spinRandom() * 360;
     const wheelStopOffsetRatio = randomWheelStopOffsetRatio(spinRandom);
     const wheelFinalRotation = equivalentForwardRotation(
       wheelStartRotation,
-      wheelStopRotationForIndex(wheelTargetIndex, nextWheelItems.length, wheelStopOffsetRatio),
-      6 + Math.floor(spinRandom() * 3)
+      wheelStopRotationForIndex(wheelTargetIndex, nextWheelItems.length, wheelStopOffsetRatio, entries.weights),
+      motionProfile.turns + Math.floor(spinRandom() * 3)
     );
-    const wheelResolvedIndex = wheelIndexAtPointer(wheelFinalRotation, nextWheelItems.length);
+    const wheelResolvedIndex = wheelIndexAtPointer(wheelFinalRotation, nextWheelItems.length, entries.weights);
     const wheelResolvedLabel = nextWheelItems[wheelResolvedIndex] || finalLabel;
     setWheelSelectedIndex(wheelResolvedIndex);
     const spinDurationMs = normalizeRouletteSpinDuration(meta?.spinDurationMs);
@@ -1484,6 +1151,9 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       setWheelRotationDeg(wheelFinalRotation);
       setWheelSettled(true);
       setWheelSpinPlan(null);
+      presentationRef.current?.setAttribute('data-spin-phase', 'settled');
+      presentationRef.current?.style.setProperty('--roulette-pointer-deflect', '0deg');
+      presentationRef.current?.style.setProperty('--roulette-spin-speed', '0');
       announceRouletteSettled({
         spinId: meta?.spinId || null,
         label: wheelResolvedLabel,
@@ -1535,6 +1205,8 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       startRotation: wheelStartRotation,
       finalRotation: wheelFinalRotation,
       durationMs: spinDurationMs,
+      motionTheme,
+      reducedMotion,
     });
     const rand = () => pool[Math.floor(spinRandom() * pool.length)];
     const seq: string[] = [];
@@ -1551,7 +1223,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     setActive(true);
     playStartSfx();
 
-    // Physics-based continuous scrolling with RAF
+    // Reel and wheel share the same material-specific acceleration curve.
     // Ensure we have a stable row height for this run
     const measuredH = rowRef.current?.getBoundingClientRect().height || 0;
     const rowHpx = (rowH && rowH > 0) ? rowH : (measuredH > 0 ? Math.round(measuredH) : 64);
@@ -1565,53 +1237,68 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     startCenterRef.current = startIdx;
     targetIndexRef.current = targetIdx;
     animStartRef.current = performance.now();
-    const distancePx = (targetIdx - startIdx) * rowHpx;
     const T = spinDurationMs;
-    const a = (2 * distancePx) / (T * T); // decel
-    const v0 = a * T; // initial velocity px/ms
-    aRef.current = a; v0Ref.current = v0;
+    let previousRotation = wheelStartRotation;
+    let previousTime = 0;
+    let lastContact = -1000;
+    let contactStrength = 0;
+    let phase = '';
 
     if (rafIdRef.current) { cancelAnimationFrame(rafIdRef.current); }
     const run = (now: number) => {
       const t = now - animStartRef.current;
       const clamped = Math.min(T, Math.max(0, t));
-      const s = (v0 * clamped) - (0.5 * a * clamped * clamped); // px
-      const currentCenter = startIdx + (s / rowHpx);
+      const progress = rouletteMotionProgress(clamped / T, motionProfile);
+      const currentCenter = reducedMotion ? targetIdx : startIdx + travelRows * progress;
       setOffsetRows(currentCenter);
       setScrollIndex(Math.floor(currentCenter));
+      const surface = presentationRef.current;
+      if (surface) {
+        const nextPhase = rouletteMotionPhase(clamped / T, motionProfile);
+        if (nextPhase !== phase) { surface.dataset.spinPhase = nextPhase; phase = nextPhase; }
+        const rotation = wheelStartRotation + (wheelFinalRotation - wheelStartRotation) * progress;
+        const speed = Math.abs(rotation - previousRotation) / Math.max(1, clamped - previousTime);
+        if (wheelIndexAtPointer(rotation, nextWheelItems.length, entries.weights) !== wheelIndexAtPointer(previousRotation, nextWheelItems.length, entries.weights)) {
+          lastContact = clamped;
+          contactStrength = Math.min(1, speed / .3);
+        }
+        const elapsed = clamped - lastContact;
+        const deflect = reducedMotion ? 0 : -motionProfile.pointer * contactStrength * Math.exp(-elapsed / 48) * Math.sin(elapsed / 18);
+        surface.style.setProperty('--roulette-pointer-deflect', `${deflect.toFixed(3)}deg`);
+        surface.style.setProperty('--roulette-spin-speed', reducedMotion ? '0' : Math.min(1, speed / 1.6).toFixed(3));
+        previousRotation = rotation;
+        previousTime = clamped;
+      }
       if (t < T) {
         rafIdRef.current = requestAnimationFrame(run);
       } else {
-        // Final snap to exact center and small overshoot bounce
+        // Keep the actual winning row fixed; only the track recoils on contact.
         setOffsetRows(targetIdx);
         setScrollIndex(targetIdx);
-        // Overshoot: +2px then settle back
-        const px2rows = (px: number) => px / rowHpx;
-        const overshoot = () => {
-          setOffsetRows(targetIdx + px2rows(2));
-          requestAnimationFrame(() => {
-            setOffsetRows(targetIdx - px2rows(1));
-            requestAnimationFrame(() => {
-              setOffsetRows(targetIdx);
-              const barrier = spinCompletionBarrierRef.current;
-              if (barrier?.id === wheelSpinPlanId) {
-                barrier.reelDone = true;
-                tryFinishSpinBarrier(barrier);
-              }
-            });
-          });
-        };
-        overshoot();
+        const track = surface?.querySelector('.roulette-reel-track');
+        if (!reducedMotion && motionProfile.recoil && track && typeof track.animate === 'function') {
+          track.animate([
+            { translate: '0 0' }, { translate: `0 ${motionProfile.recoil}px` },
+            { translate: `0 ${-motionProfile.recoil / 3}px` }, { translate: '0 0' },
+          ], { duration: 280, easing: 'ease-out' });
+        }
+        const barrier = spinCompletionBarrierRef.current;
+        if (barrier?.id === wheelSpinPlanId) {
+          barrier.reelDone = true;
+          tryFinishSpinBarrier(barrier);
+        }
       }
     };
     rafIdRef.current = requestAnimationFrame(run);
-  }, [playStartSfx, playEndSfx, rowH, computeRowsHalf, announceRouletteSettled, embeddedTestMode, updateDebugInfo, layout, urlLook.layout]);
+  }, [playStartSfx, playEndSfx, rowH, computeRowsHalf, announceRouletteSettled, embeddedTestMode, updateDebugInfo, layout, urlLook.layout, urlLook.theme, theme]);
 
   // Process any queued roulette events after current spin completes
   processQueuedRef.current = () => {
     if (isSpinningRef.current) return;
     const next = queuedEventsRef.current.shift();
     if (!next) return;
+    // Reserve the slot before the short transition delay; several wakeups may coincide.
+    isSpinningRef.current = true;
     
     // 큐 상태 업데이트
     updateDebugInfo({ 
@@ -1621,10 +1308,11 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     setTimeout(() => {
       // mimic onmessage path
       const payload: WsPayload = next;
-      const key = `${payload.token || ''}|${payload.label || ''}|${payload.value ?? ''}|${payload.createdAt || ''}`;
+      const key = payload.spinId ? `${payload.token || ''}|${payload.spinId}` : `${payload.token || ''}|${payload.label || ''}|${payload.value ?? ''}|${payload.createdAt || ''}`;
       const now = Date.now();
       const isBatch = !!payload.batchId;
       if (!isBatch && lastSpinKeyRef.current === key && (now - lastSpinAtRef.current) < 5000) {
+        isSpinningRef.current = false;
         processQueuedRef.current();
         return;
       }
@@ -1667,564 +1355,68 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     }, 50);
   };
 
-  type RouletteSkin = {
-    id: Theme;
-    label: string;
-    overlay: OverlayKind;
-    palette: string[];
-    css: React.CSSProperties & Record<`--roulette-${string}`, string>;
-  };
 
-  const ROULETTE_SKINS: Record<Theme, RouletteSkin> = {
-    studio: {
-      id: 'studio',
-      label: '스튜디오',
-      overlay: 'grid',
-      palette: ['#f8fafc', '#111827', '#8b5cf6', '#06b6d4', '#f59e0b', '#e5e7eb', '#22c55e', '#64748b'],
-      css: {
-        '--roulette-panel': 'rgba(15, 18, 28, 0.80)',
-        '--roulette-panel-strong': 'rgba(10, 13, 22, 0.94)',
-        '--roulette-line': 'rgba(248, 250, 252, 0.24)',
-        '--roulette-text': '#f8fafc',
-        '--roulette-muted': 'rgba(226, 232, 240, 0.72)',
-        '--roulette-accent': '#f8fafc',
-        '--roulette-accent-2': '#38bdf8',
-        '--roulette-result': '#ffffff',
-        '--roulette-shadow': 'rgba(148, 163, 184, 0.30)',
-      },
-    },
-    prism: {
-      id: 'prism',
-      label: '프리즘',
-      overlay: 'scan',
-      palette: ['#22d3ee', '#f0abfc', '#bef264', '#fb7185', '#a78bfa', '#67e8f9', '#facc15', '#34d399'],
-      css: {
-        '--roulette-panel': 'rgba(16, 13, 32, 0.77)',
-        '--roulette-panel-strong': 'rgba(20, 16, 42, 0.93)',
-        '--roulette-line': 'rgba(217, 249, 157, 0.30)',
-        '--roulette-text': '#fffaff',
-        '--roulette-muted': 'rgba(237, 233, 254, 0.72)',
-        '--roulette-accent': '#22d3ee',
-        '--roulette-accent-2': '#bef264',
-        '--roulette-result': '#eaff9a',
-        '--roulette-shadow': 'rgba(34, 211, 238, 0.32)',
-      },
-    },
-    aurora: {
-      id: 'aurora',
-      label: '오로라',
-      overlay: 'shimmer',
-      palette: ['#5eead4', '#8b5cf6', '#2dd4bf', '#c4b5fd', '#22c55e', '#38bdf8', '#a7f3d0', '#818cf8'],
-      css: {
-        '--roulette-panel': 'rgba(4, 24, 29, 0.76)',
-        '--roulette-panel-strong': 'rgba(8, 19, 37, 0.92)',
-        '--roulette-line': 'rgba(94, 234, 212, 0.30)',
-        '--roulette-text': '#f0fffb',
-        '--roulette-muted': 'rgba(209, 250, 244, 0.70)',
-        '--roulette-accent': '#5eead4',
-        '--roulette-accent-2': '#c4b5fd',
-        '--roulette-result': '#ccfbf1',
-        '--roulette-shadow': 'rgba(94, 234, 212, 0.34)',
-      },
-    },
-    velvet: {
-      id: 'velvet',
-      label: '벨벳',
-      overlay: 'gold-sweep',
-      palette: ['#f9d27d', '#7f1d1d', '#be123c', '#fbbf24', '#581c87', '#fecdd3', '#b45309', '#fff7ed'],
-      css: {
-        '--roulette-panel': 'rgba(38, 9, 20, 0.80)',
-        '--roulette-panel-strong': 'rgba(50, 10, 24, 0.94)',
-        '--roulette-line': 'rgba(249, 210, 125, 0.32)',
-        '--roulette-text': '#fff7ed',
-        '--roulette-muted': 'rgba(255, 235, 205, 0.70)',
-        '--roulette-accent': '#f9d27d',
-        '--roulette-accent-2': '#fecdd3',
-        '--roulette-result': '#ffe8a3',
-        '--roulette-shadow': 'rgba(190, 18, 60, 0.34)',
-      },
-    },
-    mono: {
-      id: 'mono',
-      label: '모노',
-      overlay: 'noise',
-      palette: ['#f9fafb', '#1f2937', '#d1d5db', '#4b5563', '#ffffff', '#111827', '#9ca3af', '#e5e7eb'],
-      css: {
-        '--roulette-panel': 'rgba(8, 10, 14, 0.84)',
-        '--roulette-panel-strong': 'rgba(3, 5, 8, 0.96)',
-        '--roulette-line': 'rgba(255, 255, 255, 0.26)',
-        '--roulette-text': '#f9fafb',
-        '--roulette-muted': 'rgba(229, 231, 235, 0.68)',
-        '--roulette-accent': '#f9fafb',
-        '--roulette-accent-2': '#a3a3a3',
-        '--roulette-result': '#ffffff',
-        '--roulette-shadow': 'rgba(255, 255, 255, 0.20)',
-      },
-    },
-    deco: {
-      id: 'deco',
-      label: '아르데코',
-      overlay: 'gold-sweep',
-      palette: ['#f8d77e', '#121212', '#d6a33f', '#2f2414', '#fff4bf', '#0b0d11', '#b8892f', '#2b1d0d'],
-      css: {
-        '--roulette-panel': 'rgba(16, 13, 10, 0.82)',
-        '--roulette-panel-strong': 'rgba(8, 7, 6, 0.96)',
-        '--roulette-line': 'rgba(248, 215, 126, 0.34)',
-        '--roulette-text': '#fff4d2',
-        '--roulette-muted': 'rgba(255, 234, 184, 0.68)',
-        '--roulette-accent': '#f8d77e',
-        '--roulette-accent-2': '#c9912a',
-        '--roulette-result': '#fff2b6',
-        '--roulette-shadow': 'rgba(201, 145, 42, 0.36)',
-      },
-    },
-    crystal: {
-      id: 'crystal',
-      label: '크리스탈',
-      overlay: 'snow',
-      palette: ['#e0faff', '#7dd3fc', '#c4b5fd', '#38bdf8', '#f8feff', '#93c5fd', '#67e8f9', '#dbeafe'],
-      css: {
-        '--roulette-panel': 'rgba(6, 21, 36, 0.74)',
-        '--roulette-panel-strong': 'rgba(6, 30, 52, 0.92)',
-        '--roulette-line': 'rgba(186, 230, 253, 0.34)',
-        '--roulette-text': '#f8feff',
-        '--roulette-muted': 'rgba(224, 247, 255, 0.72)',
-        '--roulette-accent': '#7dd3fc',
-        '--roulette-accent-2': '#c4b5fd',
-        '--roulette-result': '#f0fdff',
-        '--roulette-shadow': 'rgba(125, 211, 252, 0.38)',
-      },
-    },
-    ink: {
-      id: 'ink',
-      label: '수묵',
-      overlay: 'noise',
-      palette: ['#f7f7f2', '#1f2933', '#e8ecef', '#0b0d10', '#d9dde0', '#3b3f46', '#c1121f', '#f5f5f0'],
-      css: {
-        '--roulette-panel': 'rgba(10, 11, 12, 0.82)',
-        '--roulette-panel-strong': 'rgba(3, 4, 5, 0.96)',
-        '--roulette-line': 'rgba(255, 255, 255, 0.24)',
-        '--roulette-text': '#f7f7f2',
-        '--roulette-muted': 'rgba(230, 232, 232, 0.66)',
-        '--roulette-accent': '#f7f7f2',
-        '--roulette-accent-2': '#c1121f',
-        '--roulette-result': '#fff8f4',
-        '--roulette-shadow': 'rgba(193, 18, 31, 0.30)',
-      },
-    },
-    nova: {
-      id: 'nova',
-      label: '노바',
-      overlay: 'midnight',
-      palette: ['#c4b5fd', '#38bdf8', '#312e81', '#f0abfc', '#0f172a', '#93c5fd', '#fef08a', '#818cf8'],
-      css: {
-        '--roulette-panel': 'rgba(8, 9, 34, 0.80)',
-        '--roulette-panel-strong': 'rgba(6, 6, 26, 0.94)',
-        '--roulette-line': 'rgba(196, 181, 253, 0.34)',
-        '--roulette-text': '#f7f4ff',
-        '--roulette-muted': 'rgba(226, 221, 255, 0.68)',
-        '--roulette-accent': '#c4b5fd',
-        '--roulette-accent-2': '#38bdf8',
-        '--roulette-result': '#fef08a',
-        '--roulette-shadow': 'rgba(124, 58, 237, 0.40)',
-      },
-    },
-    ceramic: {
-      id: 'ceramic',
-      label: '세라믹',
-      overlay: 'shimmer',
-      palette: ['#f8fbff', '#1d4ed8', '#dbeafe', '#60a5fa', '#eff6ff', '#2563eb', '#ffffff', '#93c5fd'],
-      css: {
-        '--roulette-panel': 'rgba(8, 24, 48, 0.74)',
-        '--roulette-panel-strong': 'rgba(6, 18, 42, 0.92)',
-        '--roulette-line': 'rgba(147, 197, 253, 0.34)',
-        '--roulette-text': '#f8fbff',
-        '--roulette-muted': 'rgba(219, 234, 254, 0.72)',
-        '--roulette-accent': '#60a5fa',
-        '--roulette-accent-2': '#eff6ff',
-        '--roulette-result': '#ffffff',
-        '--roulette-shadow': 'rgba(37, 99, 235, 0.34)',
-      },
-    },
-    arcade: {
-      id: 'arcade',
-      label: '아케이드',
-      overlay: 'scan',
-      palette: ['#67e8f9', '#f0abfc', '#bef264', '#111827', '#22d3ee', '#fb7185', '#facc15', '#a78bfa'],
-      css: {
-        '--roulette-panel': 'rgba(8, 7, 24, 0.80)',
-        '--roulette-panel-strong': 'rgba(4, 5, 18, 0.94)',
-        '--roulette-line': 'rgba(103, 232, 249, 0.34)',
-        '--roulette-text': '#f5fbff',
-        '--roulette-muted': 'rgba(224, 242, 254, 0.68)',
-        '--roulette-accent': '#67e8f9',
-        '--roulette-accent-2': '#bef264',
-        '--roulette-result': '#f8ff9a',
-        '--roulette-shadow': 'rgba(240, 171, 252, 0.36)',
-      },
-    },
-    ocean: {
-      id: 'ocean',
-      label: '오션',
-      overlay: 'snow',
-      palette: ['#7dd3fc', '#0ea5e9', '#5eead4', '#0369a1', '#bae6fd', '#67e8f9', '#14b8a6', '#e0f2fe'],
-      css: {
-        '--roulette-panel': 'rgba(4, 24, 43, 0.78)',
-        '--roulette-panel-strong': 'rgba(3, 31, 56, 0.93)',
-        '--roulette-line': 'rgba(125, 211, 252, 0.32)',
-        '--roulette-text': '#f0fbff',
-        '--roulette-muted': 'rgba(224, 242, 254, 0.72)',
-        '--roulette-accent': '#7dd3fc',
-        '--roulette-accent-2': '#5eead4',
-        '--roulette-result': '#dffcff',
-        '--roulette-shadow': 'rgba(14, 165, 233, 0.35)',
-      },
-    },
-    solar: {
-      id: 'solar',
-      label: '솔라',
-      overlay: 'sunset',
-      palette: ['#fbbf24', '#fb923c', '#f97316', '#fde68a', '#ef4444', '#fed7aa', '#f59e0b', '#fff7ed'],
-      css: {
-        '--roulette-panel': 'rgba(38, 18, 8, 0.78)',
-        '--roulette-panel-strong': 'rgba(54, 23, 9, 0.93)',
-        '--roulette-line': 'rgba(251, 191, 36, 0.32)',
-        '--roulette-text': '#fff8ed',
-        '--roulette-muted': 'rgba(255, 232, 195, 0.70)',
-        '--roulette-accent': '#fbbf24',
-        '--roulette-accent-2': '#fb923c',
-        '--roulette-result': '#fff0b3',
-        '--roulette-shadow': 'rgba(249, 115, 22, 0.34)',
-      },
-    },
-    classic: {
-      id: 'classic',
-      label: '스튜디오',
-      overlay: 'none',
-      palette: ['#44f5b4', '#1f8f76', '#f7d66b', '#ff7b8f', '#7bb7ff', '#c4f970', '#41d7ff', '#ffb36b'],
-      css: {
-        '--roulette-panel': 'rgba(5, 12, 20, 0.76)',
-        '--roulette-panel-strong': 'rgba(7, 18, 28, 0.92)',
-        '--roulette-line': 'rgba(180, 255, 231, 0.24)',
-        '--roulette-text': '#f5fffb',
-        '--roulette-muted': 'rgba(223, 255, 246, 0.68)',
-        '--roulette-accent': '#44f5b4',
-        '--roulette-accent-2': '#f7d66b',
-        '--roulette-result': '#f8ffcf',
-        '--roulette-shadow': 'rgba(20, 245, 184, 0.32)',
-      },
-    },
-    fire: {
-      id: 'fire',
-      label: '솔라',
-      overlay: 'embers',
-      palette: ['#ffb86b', '#ff6b40', '#ffd166', '#f94144', '#f8961e', '#f3722c', '#ffe66d', '#ff477e'],
-      css: {
-        '--roulette-panel': 'rgba(31, 8, 5, 0.78)',
-        '--roulette-panel-strong': 'rgba(42, 10, 5, 0.92)',
-        '--roulette-line': 'rgba(255, 190, 111, 0.28)',
-        '--roulette-text': '#fff8ef',
-        '--roulette-muted': 'rgba(255, 231, 203, 0.68)',
-        '--roulette-accent': '#ff9d42',
-        '--roulette-accent-2': '#ffe66d',
-        '--roulette-result': '#fff0b8',
-        '--roulette-shadow': 'rgba(255, 112, 67, 0.34)',
-      },
-    },
-    ice: {
-      id: 'ice',
-      label: '오션',
-      overlay: 'snow',
-      palette: ['#b7f7ff', '#62d2ff', '#d7fbff', '#7dd3fc', '#bae6fd', '#a5f3fc', '#93c5fd', '#e0f2fe'],
-      css: {
-        '--roulette-panel': 'rgba(4, 21, 33, 0.72)',
-        '--roulette-panel-strong': 'rgba(3, 31, 49, 0.9)',
-        '--roulette-line': 'rgba(186, 230, 253, 0.30)',
-        '--roulette-text': '#f3fbff',
-        '--roulette-muted': 'rgba(225, 247, 255, 0.70)',
-        '--roulette-accent': '#8ee7ff',
-        '--roulette-accent-2': '#c7f9ff',
-        '--roulette-result': '#e7fbff',
-        '--roulette-shadow': 'rgba(125, 211, 252, 0.34)',
-      },
-    },
-    cyber: {
-      id: 'cyber',
-      label: '네온',
-      overlay: 'scan',
-      palette: ['#f0abfc', '#22d3ee', '#bef264', '#a78bfa', '#fb7185', '#67e8f9', '#e879f9', '#facc15'],
-      css: {
-        '--roulette-panel': 'rgba(17, 7, 31, 0.78)',
-        '--roulette-panel-strong': 'rgba(20, 8, 42, 0.93)',
-        '--roulette-line': 'rgba(240, 171, 252, 0.30)',
-        '--roulette-text': '#fff6ff',
-        '--roulette-muted': 'rgba(244, 214, 255, 0.68)',
-        '--roulette-accent': '#f0abfc',
-        '--roulette-accent-2': '#bef264',
-        '--roulette-result': '#d9ff8f',
-        '--roulette-shadow': 'rgba(217, 70, 239, 0.35)',
-      },
-    },
-    gold: {
-      id: 'gold',
-      label: '골드',
-      overlay: 'shimmer',
-      palette: ['#ffd66b', '#b8892f', '#fff1b8', '#f4a261', '#d4af37', '#ffe8a3', '#c58b28', '#fff7d6'],
-      css: {
-        '--roulette-panel': 'rgba(22, 18, 9, 0.80)',
-        '--roulette-panel-strong': 'rgba(34, 25, 10, 0.94)',
-        '--roulette-line': 'rgba(255, 214, 107, 0.34)',
-        '--roulette-text': '#fff8e1',
-        '--roulette-muted': 'rgba(255, 238, 194, 0.68)',
-        '--roulette-accent': '#ffd66b',
-        '--roulette-accent-2': '#fff1b8',
-        '--roulette-result': '#fff5bf',
-        '--roulette-shadow': 'rgba(255, 214, 107, 0.36)',
-      },
-    },
-    pastel: {
-      id: 'pastel',
-      label: '프리즘',
-      overlay: 'confetti',
-      palette: ['#fecdd3', '#bfdbfe', '#bbf7d0', '#fde68a', '#ddd6fe', '#fbcfe8', '#a7f3d0', '#fed7aa'],
-      css: {
-        '--roulette-panel': 'rgba(43, 24, 38, 0.68)',
-        '--roulette-panel-strong': 'rgba(52, 28, 46, 0.88)',
-        '--roulette-line': 'rgba(255, 214, 232, 0.30)',
-        '--roulette-text': '#fff7fb',
-        '--roulette-muted': 'rgba(255, 228, 239, 0.70)',
-        '--roulette-accent': '#f9a8d4',
-        '--roulette-accent-2': '#fde68a',
-        '--roulette-result': '#fff7ad',
-        '--roulette-shadow': 'rgba(249, 168, 212, 0.34)',
-      },
-    },
-    forest: {
-      id: 'forest',
-      label: '오로라',
-      overlay: 'leaves',
-      palette: ['#86efac', '#22c55e', '#bef264', '#14b8a6', '#4ade80', '#a3e635', '#34d399', '#bbf7d0'],
-      css: {
-        '--roulette-panel': 'rgba(4, 28, 20, 0.76)',
-        '--roulette-panel-strong': 'rgba(4, 39, 26, 0.91)',
-        '--roulette-line': 'rgba(134, 239, 172, 0.28)',
-        '--roulette-text': '#f1fff5',
-        '--roulette-muted': 'rgba(222, 255, 229, 0.68)',
-        '--roulette-accent': '#86efac',
-        '--roulette-accent-2': '#bef264',
-        '--roulette-result': '#ecffc8',
-        '--roulette-shadow': 'rgba(74, 222, 128, 0.32)',
-      },
-    },
-    sakura: {
-      id: 'sakura',
-      label: '사쿠라',
-      overlay: 'sakura',
-      palette: ['#fda4af', '#fecdd3', '#f9a8d4', '#f0abfc', '#ffe4e6', '#fb7185', '#fbcfe8', '#fef3c7'],
-      css: {
-        '--roulette-panel': 'rgba(44, 16, 31, 0.72)',
-        '--roulette-panel-strong': 'rgba(54, 20, 37, 0.90)',
-        '--roulette-line': 'rgba(253, 164, 175, 0.30)',
-        '--roulette-text': '#fff7fa',
-        '--roulette-muted': 'rgba(255, 225, 233, 0.70)',
-        '--roulette-accent': '#fda4af',
-        '--roulette-accent-2': '#fef3c7',
-        '--roulette-result': '#ffe5ee',
-        '--roulette-shadow': 'rgba(251, 113, 133, 0.35)',
-      },
-    },
-    midnight: {
-      id: 'midnight',
-      label: '모노',
-      overlay: 'midnight',
-      palette: ['#93c5fd', '#6366f1', '#c4b5fd', '#38bdf8', '#818cf8', '#e0e7ff', '#a5b4fc', '#67e8f9'],
-      css: {
-        '--roulette-panel': 'rgba(5, 9, 24, 0.80)',
-        '--roulette-panel-strong': 'rgba(8, 13, 35, 0.94)',
-        '--roulette-line': 'rgba(147, 197, 253, 0.28)',
-        '--roulette-text': '#f4f7ff',
-        '--roulette-muted': 'rgba(220, 230, 255, 0.68)',
-        '--roulette-accent': '#93c5fd',
-        '--roulette-accent-2': '#c4b5fd',
-        '--roulette-result': '#e0e7ff',
-        '--roulette-shadow': 'rgba(99, 102, 241, 0.38)',
-      },
-    },
-    sunset: {
-      id: 'sunset',
-      label: '솔라',
-      overlay: 'sunset',
-      palette: ['#fbbf24', '#fb7185', '#fdba74', '#f97316', '#fde68a', '#fca5a5', '#f59e0b', '#fef3c7'],
-      css: {
-        '--roulette-panel': 'rgba(38, 16, 11, 0.78)',
-        '--roulette-panel-strong': 'rgba(50, 19, 11, 0.92)',
-        '--roulette-line': 'rgba(251, 191, 36, 0.30)',
-        '--roulette-text': '#fff8f0',
-        '--roulette-muted': 'rgba(255, 226, 204, 0.68)',
-        '--roulette-accent': '#fbbf24',
-        '--roulette-accent-2': '#fb7185',
-        '--roulette-result': '#fff0bb',
-        '--roulette-shadow': 'rgba(249, 115, 22, 0.34)',
-      },
-    },
-  };
-
-  const t = ROULETTE_SKINS[theme] || ROULETTE_SKINS.studio;
-  const themeMaterial = getRouletteThemeMaterial(t.id);
-  const overlayKind: OverlayKind = t.overlay || 'none';
-  const overlayEl = React.useMemo(() => <OverlaySvg kind={overlayKind} />, [overlayKind]);
-
-  // Inject animation keyframes once to avoid re-creating <style> on every render (which can reset animations)
-  React.useEffect(() => {
-    const STYLE_ID = 'roulette-overlay-animations';
-    if (typeof document === 'undefined') return;
-    if (document.getElementById(STYLE_ID)) return;
-    const css = `
-@keyframes ember-rise { 0% { transform: translateY(0) translateX(0); opacity: 0; } 10% { opacity: 0.9; } 100% { transform: translateY(-160%) translateX(var(--dx, -6%)); opacity: 0; } }
-.ember { animation: ember-rise var(--dur, 7s) linear infinite; animation-delay: var(--delay, 0s); transform-box: view-box; transform-origin: center; }
-@keyframes ember-flicker { 0%, 100% { opacity: 0.85; transform: scale(1); } 50% { opacity: 1; transform: scale(1.12); } }
-.ember-shape { animation: ember-flicker var(--fDur, 1s) ease-in-out infinite; animation-delay: var(--fDelay, 0s); transform-box: fill-box; transform-origin: center; }
-
-@keyframes flake-fall { 0% { transform: translateY(var(--yStart, -20%)) translateX(0); opacity: 0; } 10% { opacity: 0.9; } 100% { transform: translateY(120%) translateX(var(--dx, 0)); opacity: 0; } }
-.flake { animation: flake-fall var(--dur, 7s) linear infinite; animation-delay: var(--delay, 0s); transform-box: view-box; transform-origin: center; }
-
-@keyframes scan-move { 0% { transform: translateY(-100%);} 100% { transform: translateY(100%);} }
-.scanline { animation: scan-move 7s linear infinite; transform-box: fill-box; transform-origin: center; }
-
-@keyframes shimmer-move { 0% { transform: translateX(-40%);} 100% { transform: translateX(240%);} }
-.shimmer { animation: shimmer-move 7s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
-
-/* Gold (shimmer) custom sweep: tilt to the right and run once over 7s */
-@keyframes gold-sweep-move { 0% { transform: translateX(-40%) rotate(8deg);} 100% { transform: translateX(240%) rotate(8deg);} }
-.gold-sweep { animation: gold-sweep-move 7s ease-in-out infinite; transform-box: fill-box; transform-origin: center; animation-delay: calc(var(--delay, 0s) + var(--phase, 0s)); }
-
-@keyframes confetti-fall { 0% { transform: translateY(var(--yStart, -20%)) rotate(0deg); opacity: 0; } 10% { opacity: 1; } 100% { transform: translateY(160%) rotate(var(--rot, 120deg)); opacity: 0; } }
-.confetti { animation: confetti-fall var(--dur, 7s) linear infinite; animation-delay: calc(var(--delay, 0s) - var(--rand, 0s)); transform-box: view-box; transform-origin: center; }
-
-@keyframes leaf-sway { 0% { transform: translateY(var(--yStart, -20%)) translateX(0) rotate(0deg); opacity: 0;} 10% { opacity: 0.9;} 50% { transform: translateY(50%) translateX(2%) rotate(6deg);} 100% { transform: translateY(120%) translateX(-2%) rotate(-8deg); opacity: 0;} }
-.leaf { animation: leaf-sway 8s ease-in-out infinite; transform-box: view-box; transform-origin: center; }
-
-/* Sakura petals */
-@keyframes petal-fall { 0% { transform: translateY(var(--yStart, -20%)) rotate(0deg); opacity: 0.6; } 10% { opacity: 1; } 100% { transform: translateY(160%) rotate(360deg); opacity: 0.6; } }
-@keyframes petal-sway { 0% { transform: translateX(0); } 50% { transform: translateX(2%); } 100% { transform: translateX(0); } }
-.petal { animation: petal-fall var(--dur, 8s) linear infinite, petal-sway 3.5s ease-in-out infinite; animation-delay: calc(var(--delay, 0s) - var(--rand, 0s)); transform-box: view-box; transform-origin: center; }
-
-/* Midnight stars */
-@keyframes star-twinkle { 0%, 100% { opacity: 0.6; transform: scale(1); } 50% { opacity: 1; transform: scale(1.6); } }
-.star { transform-box: view-box; transform-origin: center; }
-.star-shape { animation: star-twinkle var(--t, 2s) ease-in-out infinite; animation-delay: var(--delay, 0s); transform-box: fill-box; transform-origin: center; }
-@keyframes star-rotate { 0% { transform: rotate(calc(var(--rotAmp, 4deg) * -1)); } 50% { transform: rotate(calc(var(--rotAmp, 4deg))); } 100% { transform: rotate(calc(var(--rotAmp, 4deg) * -1)); } }
-.star-rot { animation: star-rotate var(--rotDur, 9s) ease-in-out infinite; transform-box: view-box; transform-origin: center; }
-
-/* Midnight star drift: slowly wander using two control vectors, loop back to origin */
-@keyframes star-drift {
-  0%   { transform: translate(0, 0); }
-  33%  { transform: translate(var(--ax, 1px), var(--ay, 1px)); }
-  66%  { transform: translate(var(--bx, -1px), var(--by, -1px)); }
-  100% { transform: translate(0, 0); }
-}
-.star-drift { animation: star-drift var(--driftDur, 18s) ease-in-out infinite; animation-delay: var(--driftDelay, 0s); transform-box: view-box; transform-origin: center; }
-
-/* Sunset pulse */
-@keyframes sunset-pulse { 0% { transform: scale(0.98);} 50% { transform: scale(1.06);} 100% { transform: scale(0.98);} }
-.sun-core-pulse { animation: sunset-pulse 6s ease-in-out infinite; animation-delay: var(--delay, 0s); transform-box: view-box; transform-origin: center; }
-.sun-rays-pulse { animation: sunset-pulse 7.2s ease-in-out infinite; animation-delay: var(--delay2, 0s); transform-box: view-box; transform-origin: center; }
-
-@keyframes pop { 0%{ transform: scale(0.9); opacity: .2 } 60%{ transform: scale(1.04); opacity: 1 } 100%{ transform: scale(1); } }
-@keyframes result-lock { 0% { filter: brightness(1); letter-spacing: 0; } 38% { filter: brightness(1.55); letter-spacing: 0.025em; } 100% { filter: brightness(1); letter-spacing: 0; } }
-.roulette-result-lock { animation: result-lock 900ms cubic-bezier(.2,.8,.2,1) both; }
-@media (prefers-reduced-motion: reduce) {
-  .roulette-result-lock,
-  .ember,
-  .flake,
-  .scanline,
-  .shimmer,
-  .gold-sweep,
-  .confetti,
-  .leaf,
-  .petal,
-  .star { animation: none !important; }
-}
-
-/* Pause all overlay animations when parent has .overlay-paused */
-.overlay-paused .ember,
-.overlay-paused .flake,
-.overlay-paused .scanline,
-.overlay-paused .shimmer,
-.overlay-paused .gold-sweep,
-.overlay-paused .confetti,
-.overlay-paused .leaf,
-.overlay-paused .petal,
-.overlay-paused .star { animation-play-state: paused !important; }
-@media (max-width: 520px) {
-  .roulette-wheel-ornaments .roulette-wheel-ornament-secondary { display: none; }
-  .roulette-wheel-ornaments { opacity: 0.78; }
-}
-    `;
-    const el = document.createElement('style');
-    el.id = STYLE_ID;
-    el.textContent = css;
-    document.head.appendChild(el);
-    return () => { /* keep global styles for the session */ };
-  }, []);
-
-
+  const themeMaterial = getRouletteThemeMaterial(theme);
   const wheelItems = React.useMemo(
     () => wheelItemsState.map((item) => String(item || '').trim()).filter(Boolean),
     [wheelItemsState]
   );
   const wheelLabelLines = React.useMemo(() => wheelItems.map(splitWheelLabel), [wheelItems]);
   const wheelSkinFamily = themeMaterial.family;
-
   const wheelCount = Math.max(1, wheelItems.length);
   const progressPercent = batchProgress.id
     ? Math.max(0, Math.min(100, (batchProgress.done / Math.max(1, batchProgress.total)) * 100))
     : 0;
 
+  const renderHeading = () => (
+    <header className="roulette-heading">
+      <h1><RouletteFitText max={30} min={10}>{state.name || '룰렛'}</RouletteFitText></h1>
+      {state.username ? <p><RouletteFitText max={16} min={9}>{state.username + '님'}</RouletteFitText></p> : null}
+    </header>
+  );
+
+  const renderResult = (reel = false) => (
+    <footer
+      className={`roulette-result ${wheelSettled ? 'roulette-result-lock' : ''}`}
+      data-settled={wheelSettled ? 'true' : 'false'}
+      role="status"
+      aria-live={active ? 'polite' : 'off'}
+    >
+      <span className="roulette-result-caption">{wheelSettled ? '당첨' : '추첨 중'}</span>
+      {(!reel || wheelSettled) ? (
+        <div className="roulette-result-name">
+          <RouletteFitText max={reel ? 26 : 38} min={8}>
+            {wheelSettled ? (state.label || String(state.value ?? '')) : '행운의 순간을 기다려 주세요'}
+          </RouletteFitText>
+        </div>
+      ) : <span className="roulette-reel-running" aria-hidden="true"><i /><i /><i /></span>}
+      {batchProgress.id ? (
+        <div className="roulette-batch" aria-label={`진행 ${batchProgress.done} / ${batchProgress.total}`}>
+          <span>{batchProgress.done} / {batchProgress.total}</span>
+          <div><i style={{ width: `${progressPercent}%` }} /></div>
+        </div>
+      ) : null}
+    </footer>
+  );
+
   const renderReelWindow = () => (
     <section
       aria-label="룰렛 릴 오버레이"
-      className={`roulette-stage relative isolate w-[min(94vw,1040px)] overflow-hidden border transition-[opacity,transform] ${active ? 'scale-100 opacity-100' : 'pointer-events-none scale-[0.985] opacity-0'}`}
-      style={{
-        borderColor: 'var(--roulette-line)',
-        borderRadius: 'var(--roulette-radius)',
-        background: 'var(--roulette-backdrop)',
-        boxShadow: '0 32px 90px rgba(0,0,0,.52), 0 0 54px var(--roulette-shadow), inset 0 1px 0 rgba(255,255,255,.16)',
-        color: 'var(--roulette-text)',
-        transitionDuration: FADE_MS + 'ms',
-      }}
+      className="roulette-stage roulette-reel-stage"
+      data-active={active}
+      data-settled={wheelSettled}
+      style={{ transitionDuration: FADE_MS + 'ms' }}
     >
       <RouletteThemeAtmosphere kind={themeMaterial.atmosphere} active={active} compact />
-      {active ? <div className="pointer-events-none absolute inset-0 overflow-hidden opacity-20 mix-blend-soft-light">{overlayEl}</div> : null}
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-20 h-px" style={{ background: 'linear-gradient(90deg,transparent,var(--roulette-accent),transparent)', boxShadow: '0 0 18px var(--roulette-shadow)' }} />
-      <div className="relative z-10 grid lg:grid-cols-[minmax(230px,0.66fr)_minmax(430px,1.34fr)]">
-        <header className="relative flex min-w-0 flex-col justify-between gap-6 overflow-hidden border-b p-[clamp(22px,3.6vw,42px)] lg:border-b-0 lg:border-r" style={{ borderColor: 'var(--roulette-line)', background: 'linear-gradient(145deg,rgba(255,255,255,.055),transparent 58%)' }}>
-          <div className="pointer-events-none absolute bottom-0 left-0 top-0 w-1" style={{ background: 'linear-gradient(180deg,transparent,var(--roulette-accent),transparent)', boxShadow: '0 0 18px var(--roulette-shadow)' }} />
-          <div className="min-w-0">
-            <div className="mb-4 flex items-center gap-2.5 text-[clamp(10px,1vw,12px)] font-extrabold tracking-[0.16em]" style={{ color: 'var(--roulette-accent-2)' }}>
-              <span className="h-2 w-2 rounded-full" style={{ background: 'currentColor', boxShadow: '0 0 12px currentColor' }} />
-              룰렛 실행
-            </div>
-            <h1 className="max-w-[12ch] break-keep text-[clamp(26px,3.4vw,48px)] font-black leading-[1.08] tracking-[-0.035em]" style={{ fontFamily: 'var(--roulette-font-display)' }}>{state.name || '룰렛'}</h1>
-            {state.username ? <p className="mt-3 truncate text-[clamp(15px,1.6vw,22px)] font-semibold" style={{ color: 'var(--roulette-muted)' }}>{state.username}님</p> : null}
-          </div>
-          {batchProgress.id ? (
-            <div className="grid gap-2.5">
-              <div className="flex items-center justify-between text-xs font-bold" style={{ color: 'var(--roulette-muted)' }}><span>진행</span><span style={{ color: 'var(--roulette-result)' }}>{batchProgress.done} / {batchProgress.total}</span></div>
-              <div className="h-1.5 overflow-hidden rounded-full bg-black/30"><div className="h-full rounded-full" style={{ width: `${progressPercent}%`, background: 'var(--roulette-accent-2)' }} /></div>
-            </div>
-          ) : null}
-        </header>
-
-        <div className="relative min-h-[clamp(280px,35vw,440px)] p-[clamp(20px,3.2vw,38px)]">
-          <div className="absolute inset-x-[10%] top-1/2 z-20 h-[clamp(92px,11vw,132px)] -translate-y-1/2 border" style={{ borderColor: 'var(--roulette-accent-2)', borderRadius: 'calc(var(--roulette-radius) * .55)', background: 'var(--roulette-track)', boxShadow: '0 0 36px var(--roulette-shadow), inset 0 0 28px rgba(255,255,255,.055)' }} />
-          <div className="pointer-events-none absolute inset-x-[8%] top-1/2 z-30 h-px -translate-y-1/2" style={{ background: 'linear-gradient(90deg,transparent,var(--roulette-accent-2),transparent)', boxShadow: '0 0 18px var(--roulette-shadow)' }} />
-          <div className="pointer-events-none absolute left-[7.2%] top-1/2 z-30 h-[clamp(48px,6vw,70px)] w-1 -translate-y-1/2" style={{ background: 'var(--roulette-accent)', boxShadow: '0 0 16px var(--roulette-shadow)' }} />
-          <div className="pointer-events-none absolute right-[7.2%] top-1/2 z-30 h-[clamp(48px,6vw,70px)] w-1 -translate-y-1/2" style={{ background: 'var(--roulette-accent)', boxShadow: '0 0 16px var(--roulette-shadow)' }} />
-          <div ref={reelRef} className="relative h-full min-h-[clamp(236px,30vw,370px)] overflow-hidden border bg-black/25" style={{ borderColor: 'var(--roulette-line)', borderRadius: 'calc(var(--roulette-radius) * .72)', boxShadow: 'inset 0 18px 36px rgba(0,0,0,.3), inset 0 -18px 36px rgba(0,0,0,.3)' }}>
-            <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-[32%] bg-gradient-to-b from-black/70 to-transparent" />
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-[32%] bg-gradient-to-t from-black/70 to-transparent" />
-            <div ref={rowRef} className="invisible absolute left-0 top-1/2 w-full -translate-y-1/2"><div className="px-4 text-center text-[clamp(44px,7vw,86px)] font-black leading-tight">8</div></div>
+      <div className="roulette-reel-frame" aria-hidden="true"><i /><i /><i /><i /></div>
+      <div className="roulette-reel-body">
+        {renderHeading()}
+        <div className="roulette-reel-machine">
+          <span className="roulette-reel-index roulette-reel-index-left" aria-hidden="true" />
+          <span className="roulette-reel-index roulette-reel-index-right" aria-hidden="true" />
+          <div className="roulette-reel-track" aria-hidden="true" />
+          <div ref={reelRef} className="roulette-reel-window" aria-hidden="true">
+            <div ref={rowRef} className="roulette-reel-measure">8</div>
             {(() => {
               const measured = rowRef.current?.getBoundingClientRect().height || 0;
               const rh = rowH > 0 ? rowH : (measured > 0 ? Math.round(measured) : 0);
@@ -2237,14 +1429,14 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
               const firstIndex = Math.floor(center) - Math.ceil(rowsVisible / 2) - buffer;
               const transformPx = Math.round((reelH / 2) - ((center - firstIndex + 0.5) * rh));
               return (
-                <div className="absolute left-0 right-0 top-0 flex flex-col items-stretch will-change-transform" style={{ transform: `translateY(${transformPx}px)` }}>
+                <div className="roulette-reel-rows" style={{ transform: `translateY(${transformPx}px)` }}>
                   {Array.from({ length: windowRows }).map((_, itemIndex) => {
                     const index = firstIndex + itemIndex;
                     const label = labelFor(index);
                     const isCenter = index === Math.round(center);
                     return (
-                      <div key={index} className="flex w-full items-center justify-center px-4" style={{ height: rh }}>
-                        <div className={`max-w-full truncate text-center text-[clamp(44px,7vw,86px)] font-black leading-tight tracking-[-0.035em] ${isCenter ? 'roulette-result-lock' : ''}`} style={{ color: isCenter ? 'var(--roulette-result)' : 'rgba(255,255,255,.24)', fontFamily: 'var(--roulette-font-display)', textShadow: isCenter ? '0 0 24px var(--roulette-shadow), 0 8px 24px rgba(0,0,0,.58)' : 'none', transform: isCenter ? 'scale(1)' : 'scale(.88)' }}>{label}</div>
+                      <div key={index} className="roulette-reel-row" data-center={isCenter} style={{ height: rh }}>
+                        <RouletteFitText max={52} min={8}>{label}</RouletteFitText>
                       </div>
                     );
                   })}
@@ -2254,52 +1446,57 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
           </div>
         </div>
       </div>
+      {renderResult(true)}
     </section>
   );
 
   const renderWheel = () => (
     <section
       aria-label="룰렛 휠 오버레이"
-      className={`roulette-stage relative isolate grid aspect-square w-[min(89vmin,760px)] place-items-center transition-[opacity,transform] ${active ? 'scale-100 opacity-100' : 'pointer-events-none scale-[0.985] opacity-0'}`}
-      style={{ color: 'var(--roulette-text)', filter: 'drop-shadow(0 30px 72px rgba(0,0,0,.58))', transitionDuration: FADE_MS + 'ms' }}
+      className="roulette-stage roulette-wheel-stage"
+      data-active={active}
+      data-settled={wheelSettled}
+      style={{ transitionDuration: FADE_MS + 'ms' }}
     >
-      <RouletteThemeAtmosphere kind={themeMaterial.atmosphere} active={active} />
-      {active ? <div className="pointer-events-none absolute inset-[-8%] z-0 overflow-hidden rounded-full opacity-10 mix-blend-soft-light">{overlayEl}</div> : null}
-      <div className="absolute inset-[-5%] z-0 rounded-full" style={{ background: 'radial-gradient(circle,var(--roulette-shadow),transparent 67%)', filter: 'blur(22px)', opacity: .84 }} />
-      <div className="absolute inset-0 z-10 rounded-full p-[clamp(13px,2.2vmin,22px)]" style={{ background: 'var(--roulette-rim-outer)', boxShadow: '0 22px 65px rgba(0,0,0,.56), 0 0 44px var(--roulette-shadow), inset 0 1px 1px rgba(255,255,255,.62)' }}>
-        <div className="h-full w-full rounded-full" style={{ background: 'var(--roulette-rim-inner)', boxShadow: 'inset 0 0 0 clamp(5px,.8vmin,8px) rgba(0,0,0,.46), inset 0 0 24px rgba(0,0,0,.62)' }} />
-      </div>
-      <WheelSkinOrnaments family={wheelSkinFamily} themeId={t.id} />
-      <div
-        ref={wheelDiscRef}
-        data-testid="roulette-wheel-disc"
-        data-selected-index={wheelSelectedIndex}
-        data-settled={wheelSettled ? 'true' : 'false'}
-        className="absolute inset-[8.6%] z-10 overflow-hidden rounded-full will-change-transform"
-        style={{ transform: `rotate(${wheelRotationDeg}deg)`, boxShadow: '0 0 38px var(--roulette-shadow), inset 0 0 34px rgba(0,0,0,.34)' }}
-      >
-        <WheelSegmentsSvg family={wheelSkinFamily} palette={t.palette} segmentCount={wheelCount} themeId={t.id} />
-        <WheelSelectedSegment selectedIndex={wheelSettled ? wheelSelectedIndex : -1} segmentCount={wheelCount} family={wheelSkinFamily} />
-        <WheelLabelsSvg labelLines={wheelLabelLines} selectedIndex={wheelSettled ? wheelSelectedIndex : -1} />
-      </div>
-      <WheelGlassOverlay />
-      <WheelPointer themeId={t.id} />
-      <div className="absolute inset-[35.2%] z-40 grid place-items-center rounded-full border p-[clamp(10px,1.6vmin,18px)] text-center" style={{ borderColor: 'var(--roulette-hub-line)', background: 'var(--roulette-hub)', boxShadow: '0 0 38px var(--roulette-shadow), 0 12px 32px rgba(0,0,0,.48), inset 0 1px 1px rgba(255,255,255,.28), inset 0 -10px 22px rgba(0,0,0,.30)' }}>
-        <div className="pointer-events-none absolute inset-[9%] rounded-full border" style={{ borderColor: 'rgba(255,255,255,.16)' }} />
-        <div className="grid max-w-full justify-items-center gap-[clamp(2px,.65vmin,6px)]">
-          <div className="max-w-full truncate text-[clamp(10px,1.4vmin,14px)] font-extrabold tracking-[0.08em]" style={{ color: 'var(--roulette-muted)', fontFamily: 'var(--roulette-font-display)' }}>{state.name || '룰렛'}</div>
-          {state.username ? <div className="max-w-full truncate text-[clamp(10px,1.4vmin,14px)] font-semibold" style={{ color: 'var(--roulette-muted)' }}>{state.username}님</div> : null}
-          <div className={wheelSettled ? 'roulette-result-lock max-w-[94%] break-keep text-center text-[clamp(18px,4vmin,42px)] font-black leading-[.98] tracking-[-0.04em]' : 'max-w-[92%] truncate text-[clamp(18px,3.2vmin,32px)] font-black leading-none tracking-[-0.03em]'} style={{ color: 'var(--roulette-result)', fontFamily: 'var(--roulette-font-display)', textShadow: '0 0 22px var(--roulette-shadow), 0 4px 12px rgba(0,0,0,.46)' }}>{wheelSettled ? (state.label || state.value || '') : '회전 중'}</div>
-          {batchProgress.id ? <div className="text-[clamp(10px,1.3vmin,13px)] font-bold" style={{ color: 'var(--roulette-accent-2)' }}>진행 {batchProgress.done} / {batchProgress.total}</div> : null}
+      {renderHeading()}
+      <div className="roulette-wheel-chassis">
+        <RouletteThemeAtmosphere kind={themeMaterial.atmosphere} active={active} />
+        <div className="roulette-wheel-rim"><div /></div>
+        <WheelSkinOrnaments family={wheelSkinFamily} themeId={theme} />
+        <div
+          ref={wheelDiscRef}
+          data-testid="roulette-wheel-disc"
+          data-selected-index={wheelSelectedIndex}
+          data-settled={wheelSettled ? 'true' : 'false'}
+          className="roulette-wheel-disc"
+          style={{ transform: `rotate(${wheelRotationDeg}deg)` }}
+        >
+          <WheelSegmentsSvg family={wheelSkinFamily} palette={themeMaterial.palette} segmentCount={wheelCount} themeId={theme} weights={wheelWeights} />
+          <WheelSelectedSegment selectedIndex={wheelSettled ? wheelSelectedIndex : -1} segmentCount={wheelCount} family={wheelSkinFamily} themeId={theme} weights={wheelWeights} />
+          <WheelLabelsSvg labelLines={wheelLabelLines} selectedIndex={wheelSettled ? wheelSelectedIndex : -1} palette={themeMaterial.palette} themeId={theme} weights={wheelWeights} />
+        </div>
+        <WheelGlassOverlay themeId={theme} />
+        <WheelPointer themeId={theme} />
+        <div className="roulette-wheel-hub">
+          <span className="roulette-hub-mark" aria-hidden="true" />
+          <span>{wheelSettled ? '당첨' : '회전 중'}</span>
         </div>
       </div>
+      {renderResult()}
     </section>
   );
 
   return (
-    <div className="min-h-screen w-screen overflow-hidden text-white" data-roulette-theme={t.id} data-roulette-material={themeMaterial.material} style={{ backgroundColor: 'transparent', ...t.css, ...themeMaterial.css }}>
-      {error ? <div className="fixed left-1/2 top-5 z-50 -translate-x-1/2 rounded-lg border border-red-300/30 bg-slate-950/90 px-3 py-2 text-xs font-semibold text-red-100 shadow-lg">{error}</div> : null}
-      <div className="grid h-[100dvh] w-full place-items-center p-[clamp(10px,2vw,24px)]">
+    <div
+      ref={presentationRef}
+      className="roulette-presentation"
+      data-roulette-theme={theme}
+      data-roulette-material={themeMaterial.material}
+      data-roulette-layout={layout}
+      style={themeMaterial.css}
+    >
+      {error ? <div role="alert" className="roulette-connection-error">{error}</div> : null}
+      <div className="roulette-viewport" aria-hidden={!active}>
         {layout === 'wheel' ? renderWheel() : renderReelWindow()}
       </div>
     </div>

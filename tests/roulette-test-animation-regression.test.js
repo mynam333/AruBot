@@ -55,8 +55,8 @@ describe('룰렛 실제 회전 테스트 회귀 방지', () => {
   });
 
   test('오버레이는 전체 항목으로 실제 회전한 뒤 포인터 위치의 항목을 완료 값으로 알려야 함', () => {
-    expect(rouletteViewer).toContain('const nextWheelItems = buildWheelItemsForResult(pool, finalLabel, wheelTargetIndex)');
-    expect(rouletteViewer).toContain('const wheelResolvedIndex = wheelIndexAtPointer(wheelFinalRotation, nextWheelItems.length)');
+    expect(rouletteViewer).toContain('const nextWheelItems = entries.items');
+    expect(rouletteViewer).toContain('const wheelResolvedIndex = wheelIndexAtPointer(wheelFinalRotation, nextWheelItems.length, entries.weights)');
     expect(rouletteViewer).toContain('const wheelResolvedLabel = nextWheelItems[wheelResolvedIndex] || finalLabel');
     expect(rouletteViewer).toContain("type: 'arubot:roulette-ready'");
     expect(rouletteViewer).toContain("type: 'arubot:roulette-settled'");
@@ -65,10 +65,12 @@ describe('룰렛 실제 회전 테스트 회귀 방지', () => {
     expect(rouletteViewer).toContain('barrier.wheelDone = true');
     expect(rouletteViewer).toContain('barrier.reelDone = true');
     expect(rouletteViewer).toContain('tryFinishSpinBarrier(barrier)');
-    expect(rouletteViewer).toContain("wheel.addEventListener('transitionend', onTransitionEnd)");
+    expect(rouletteViewer).toContain('rouletteWheelKeyframes(reducedMotion ? finalRotation : startRotation, finalRotation, profile)');
+    expect(rouletteViewer).toContain('window.setTimeout(finishFallback, durationMs + 250)');
+    expect(rouletteViewer).toContain('if (time >= 1) finishFallback()');
     expect(rouletteViewer).toContain('startSpinAnimation(final, Array.isArray(payload.items) ? payload.items : null, payload)');
     expect(rouletteViewer).toContain('createRouletteSpinRandom(resolveRouletteSpinSeed(meta, finalLabel))');
-    expect(rouletteViewer).toContain('const wheelTargetIndex = Math.floor(spinRandom() * wheelItemCount)');
+    expect(rouletteViewer).toContain('const wheelTargetIndex = entries.selectedIndex');
     expect(rouletteViewer).toContain('const wheelStopOffsetRatio = randomWheelStopOffsetRatio(spinRandom)');
     expect(rouletteViewer).toContain('const rand = () => pool[Math.floor(spinRandom() * pool.length)]');
   });

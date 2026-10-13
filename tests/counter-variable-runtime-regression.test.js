@@ -26,16 +26,23 @@ describe('counter variable runtime integration', () => {
   });
 
   test('plans trusted templates before user placeholder substitution on every chat command path', () => {
-    expect(serverIndex.match(/const counterPlan = prepareCounterVariablePlan\(response\);/g)).toHaveLength(4);
+    expect(serverIndex.match(/const counterPlan = prepareCounterVariablePlan\(response\);/g)).toHaveLength(3);
     const roulette = sourceBetween(serverIndex, 'async function executeRouletteResultCommand', 'async function substituteAllPlaceholders');
     const chzzk = sourceBetween(serverIndex, '// Prepare args for trigger handling', '// Send only one matching rule per message');
     const youtube = sourceBetween(serverIndex, 'async function processYoutubeChatAutomation', 'async function processCimeDonationAutomation');
     const cime = sourceBetween(serverIndex, 'async function processCimeChatAutomation', 'async function processCimeDonationAutomation');
 
-    for (const section of [roulette, chzzk, youtube, cime]) {
+    for (const section of [chzzk, youtube, cime]) {
+      expect(section.indexOf('prepareCounterVariablePlan(response)')).toBeGreaterThanOrEqual(0);
       expect(section.indexOf('prepareCounterVariablePlan(response)')).toBeLessThan(section.indexOf('substituteAllPlaceholders('));
       expect(section).toContain('resolveCommandCounterVariables(counterPlan');
     }
+    expect(roulette).toContain('await renderRouletteActionTemplate(sid, response,');
+    const rouletteRenderer = fs.readFileSync(path.join(root, 'server', 'roulette-result-template.js'), 'utf8');
+    const roulettePlan = rouletteRenderer.indexOf('prepareCounterVariablePlan(memoPlan.text)');
+    expect(roulettePlan).toBeGreaterThanOrEqual(0);
+    expect(roulettePlan).toBeLessThan(rouletteRenderer.indexOf('await substituteAllPlaceholders('));
+    expect(rouletteRenderer).toContain('resolveCommandCounterVariables(counterPlan');
 
     const placeholderRenderer = sourceBetween(serverIndex, 'async function substituteAllPlaceholders', 'async function resolveCommandCounterVariables');
     expect(placeholderRenderer).not.toContain('incrementBotCounter');

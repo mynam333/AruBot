@@ -2,6 +2,7 @@ const load = require('./helpers/load-source.cjs');
 const loadFunctions = require('./helpers/load-server-functions.cjs');
 const { createCommandExecutionSafety } = load('server/command-execution-safety.js');
 const { createRouletteResultActionCoordinator } = load('server/roulette-result-action-coordinator.js');
+const { getRouletteWheelMetadata } = load('server/roulette-wheel-metadata.js');
 
 const sid = 'user:owner';
 const flush = () => new Promise((resolve) => setImmediate(resolve));
@@ -55,6 +56,7 @@ function rouletteRuntime(commandExecution, { onResult = async () => {}, claim = 
     getBotSettings: async () => ({ rouletteDefs: defs, rouletteViewerToken: 'viewer-token' }),
     getRouletteDefsFromSettings: (settings) => settings.rouletteDefs,
     chooseRouletteItem: choose,
+    getRouletteWheelMetadata,
     getOrCreateViewerTokenSupabase: async () => 'viewer-token',
     updateBotSettingsAtomically: async (_, update) => update({ rouletteViewerToken: 'viewer-token' }),
     registerTokenChannelMapping: () => {},
@@ -73,7 +75,7 @@ function rouletteRuntime(commandExecution, { onResult = async () => {}, claim = 
     createRouletteBroadcastDelivery: () => async () => ({ success: 1, total: 1 }),
     broadcastRouletteResult: async () => ({ success: 0 }),
     reserveRouletteEnqueue: () => ({ accepted: true, position: 1 }),
-    commandAdmissionStore: { claimChainJob: claim },
+    commandAdmissionStore: { claimChainJob: claim, claimRouletteExecution: async () => true },
     enqueueDurableRuntimeJob: async (job) => { persisted.push(JSON.parse(JSON.stringify(job))); },
     runDurableRuntimeWorker: async () => {},
     rouletteQueues,
@@ -220,11 +222,23 @@ describe('delayed roulette continuation integration', () => {
     expect(returned.executionChain).toMatchObject({
       rootId: saved.executionChain.rootId, path: ['roulette:a', 'roulette:b'],
     });
-    const third = rouletteRuntime(createCommandExecutionSafety({ now: () => time }));
-    await expect(third.startRouletteSpin(sid, returned.name, 'viewer', 'Viewer', {
-      executionChain: returned.executionChain,
-    })).rejects.toMatchObject({ code: 'command_safety_cycle' });
-    expect(third.choose).not.toHaveBeenCalled();
+    let continuation = returned.executionChain;
+    // Four further A spins are allowed; process changes cannot reset path visits.
+    for (let visit = 2; visit <= 5; visit++) {
+      const worker = rouletteRuntime(createCommandExecutionSafety({ now: () => time }), {
+        onResult: async () => worker.enqueueRouletteSpin(sid, { name: 'a', userId: 'viewer' }),
+      });
+      await worker.startRouletteSpin(sid, 'a', 'viewer', 'Viewer', { executionChain: continuation });
+      time += 6200;
+      await worker.callbacks[0]();
+      continuation = JSON.parse(JSON.stringify(worker.persisted[0].payload.item.executionChain));
+      expect(continuation.rootId).toBe(saved.executionChain.rootId);
+    }
+    const finalWorker = rouletteRuntime(createCommandExecutionSafety({ now: () => time }));
+    await expect(finalWorker.startRouletteSpin(sid, 'a', 'viewer', 'Viewer', {
+      executionChain: continuation,
+    })).rejects.toMatchObject({ code: 'command_safety_roulette_limit' });
+    expect(finalWorker.choose).not.toHaveBeenCalled();
     expect(firstSafety.current()).toBeNull();
     expect(secondSafety.current()).toBeNull();
   });

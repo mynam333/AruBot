@@ -17,7 +17,7 @@ describe('영상 후원 자동 길이 조회 회귀 방지', () => {
     expect(viewer).toContain('if (isUnknownRecord(probe)) handleDurationProbe(probe)');
 
     const probeAwait = serverIndex.indexOf('fetchViewerDuration: () => requestPvdViewerDurationProbe(durationProbeSid, parsed.provider, parsed.mediaId)');
-    const pointCost = serverIndex.indexOf('const cost = Math.ceil(pps * dur)', probeAwait);
+    const pointCost = serverIndex.indexOf('Math.ceil(pps * dur)', probeAwait);
     expect(probeAwait).toBeGreaterThan(-1);
     expect(pointCost).toBeGreaterThan(probeAwait);
   });

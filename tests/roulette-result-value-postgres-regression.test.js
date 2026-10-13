@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const loadFunctions = require('./helpers/load-server-functions.cjs');
 
 describe('PostgreSQL roulette result value storage', () => {
   const root = path.join(__dirname, '..');
@@ -20,8 +21,18 @@ describe('PostgreSQL roulette result value storage', () => {
     expect(migration).toContain('using result_value::text');
   });
 
-  test('roulette action values remain available to storage and execution', () => {
+  test('stored action text reaches the unified result renderer without conversion', async () => {
     expect(serverIndex).toContain('result_value: picked.value');
-    expect(serverIndex).toContain('await executeActionVariableTokens(sid, picked.value');
+    const render = jest.fn(async () => ({ text: '', commandTemplate: '', used: true }));
+    const { executeRouletteResultActions } = loadFunctions(['executeRouletteResultActions'], {
+      renderRouletteActionTemplate: render,
+    });
+    const value = '${roulette::next} ${blueprint::celebrate}';
+    await executeRouletteResultActions('user:owner', { id: 'a', name: 'Wheel' },
+      { label: 'Winner', value }, 'viewer', 'Viewer', 'channel', { provider: 'youtube' });
+    expect(render).toHaveBeenCalledWith('user:owner', value, expect.objectContaining({
+      provider: 'youtube', userId: 'viewer', result: { label: 'Winner', value },
+      roulette: { id: 'a', name: 'Wheel', result: { label: 'Winner', value } },
+    }));
   });
 });

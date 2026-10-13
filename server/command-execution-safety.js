@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 
 export const EXECUTION_LIMITS = Object.freeze({
-  depth: 16, nodes: 512, actions: 64, jobs: 100, messages: 40,
+  depth: 16, nodes: 512, actions: 64, jobs: 100, messages: 40, rouletteRuns: 5,
   loop: 100, waitMs: 300000, durationMs: 600000,
   channelConcurrent: 16, globalConcurrent: 128,
 });
@@ -98,16 +98,22 @@ export function createCommandExecutionSafety({ now = Date.now, limits = {}, onBl
     const state = {
       sid, rootId: continuation?.rootId || randomUUID(), createdAt, path: [...path], startedAt: now(),
       lease: { references: 0 },
-      budget: { stopped: null, remaining: { nodes: config.nodes, actions: config.actions, jobs: config.jobs, messages: config.messages } },
+      budget: { stopped: null, rouletteCounts: new Map(), remaining: { nodes: config.nodes, actions: config.actions, jobs: config.jobs, messages: config.messages } },
     };
     return withState(state, task);
   }
   async function run(sid, key, task, continuation = null) {
     return scope(sid, async () => {
       const parent = current(sid);
-      if (parent.path.includes(key)) stop('cycle');
+      const roulette = key.startsWith('roulette:');
+      if (!roulette && parent.path.includes(key)) stop('cycle');
       if (parent.path.length >= config.depth) stop('depth');
       consume('actions');
+      if (roulette) {
+        const visits = Math.max(parent.budget.rouletteCounts.get(key) || 0, parent.path.filter(entry => entry === key).length);
+        if (visits >= config.rouletteRuns) stop('roulette_limit');
+        parent.budget.rouletteCounts.set(key, visits + 1);
+      }
       return storage.run({ ...parent, path: [...parent.path, key] }, task);
     }, continuation);
   }

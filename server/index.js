@@ -74,6 +74,9 @@ import {
   youtubeLiveEmbedUrl,
 } from './drawing-live-playback.js';
 import { createRouletteResultActionCoordinator } from './roulette-result-action-coordinator.js';
+import { getRouletteWheelMetadata } from './roulette-wheel-metadata.js';
+import { renderRouletteResultTemplate } from './roulette-result-template.js';
+import { withRouletteVariableContext } from './roulette-variable-catalog.js';
 import { buildPointEarningPolicy, calculateDonationPointAward, normalizePointAward } from './point-earning-policy.js';
 import { installChzzkSocketIo2ParserGuard } from './chzzk-socket-io2-guard.js';
 import {
@@ -3623,14 +3626,19 @@ async function processRouletteQueue(sid) {
   }
   });
 }
-function chooseRouletteItem(def) {
+function chooseRouletteItem(def, options = {}) {
   if (!def || !Array.isArray(def.items) || def.items.length === 0) return { label: 'N/A', value: null };
   const type = String(def.type || 'items');
-  const items = def.items.filter(it => it && typeof it.label === 'string');
+  const items = def.items.filter(it => it && typeof it.label === 'string' && it.label);
+  if (!items.length) return { label: 'N/A', value: null };
+  const resultAt = (index) => ({ label: items[index].label, value: items[index].value ?? null,
+    ...(options.includeIndex === true ? { selectedItemIndex: index } : {}),
+  });
   if (type === 'probability') {
     let totalPercent = 0;
     const probs = items.map(it => {
-      const p = Number(it.probability || 0);
+      const raw = Number(it.probability || 0);
+      const p = Number.isFinite(raw) ? Math.max(0, raw) : 0;
       totalPercent += p;
       return p / 100;
     });
@@ -3647,19 +3655,21 @@ function chooseRouletteItem(def) {
     const total = probs.reduce((sum, p) => sum + p, 0);
     let r = Math.random() * total;
     for (let i = 0; i < items.length; i++) {
-      if ((r -= probs[i]) <= 0) return { label: items[i].label, value: items[i].value ?? null };
+      if (probs[i] > 0 && (r -= probs[i]) < 0) return resultAt(i);
     }
-    return { label: items[items.length - 1].label, value: items[items.length - 1].value ?? null };
+    return resultAt(probs.findLastIndex(weight => weight > 0));
   }
   // items/weights
-  let sum = 0;
-  const weights = items.map(it => { const w = Math.max(0, Number(it.weight || 0)); sum += w; return w; });
-  if (sum <= 0) return { label: items[0].label, value: items[0].value ?? null };
+  const rawWeights = items.map(it => { const raw = Number(it.weight || 0); return Number.isFinite(raw) ? Math.max(0, raw) : 0; });
+  const max = rawWeights.reduce((largest, weight) => Math.max(largest, weight), 0);
+  if (max <= 0) return resultAt(0);
+  const weights = rawWeights.map(weight => weight / max);
+  const sum = weights.reduce((total, weight) => total + weight, 0);
   let r = Math.random() * sum;
   for (let i = 0; i < items.length; i++) {
-    if ((r -= weights[i]) <= 0) return { label: items[i].label, value: items[i].value ?? null };
+    if (weights[i] > 0 && (r -= weights[i]) < 0) return resultAt(i);
   }
-  return { label: items[items.length - 1].label, value: items[items.length - 1].value ?? null };
+  return resultAt(weights.findLastIndex(weight => weight > 0));
 }
 
 // Parse ISO8601 duration (e.g., PT1H2M10S) to seconds
@@ -11865,31 +11875,52 @@ async function executeCommandLiveChangeTokens(sid, text, context = {}) {
   return result;
 }
 
-async function executeRouletteResultActions(sid, def, picked, userId, username, channelId, chatPost = null) {
-  await executeActionVariableTokens(sid, picked.value, {
-    source: 'roulette',
-    roulette: {
-      id: def.id || null,
-      name: def.name,
-      result: { label: picked.label, value: picked.value },
-    },
-    result: { label: picked.label, value: picked.value },
-    user: { userId, username },
-    chatPost,
-    platform: chatPost?.provider || chatPost?.platform || null,
-    channelUid: channelId,
-    channel: { channelUid: channelId },
+async function renderRouletteActionTemplate(sid, template, context) {
+  const result = await renderRouletteResultTemplate(template, { ...context, sid }, {
+    commandExecution, substituteAllPlaceholders, resolveCommandCounterVariables, resolveCommandMemoVariables,
+    enqueueRouletteSpin, executeAndStripActionVariableTokens,
+    executeMediaRequest: (token, argsText, actionContext) => enqueueVideoDonationFromArgs({
+      sid, channelUid: actionContext.channelUid, userId: actionContext.userId, username: actionContext.username,
+      args: argsText.trim().split(/\s+/).filter(Boolean), response: token,
+      vdReAll: /\$\{\s*(?:video_donation|bgm_request)\s*\}/ig,
+      context: { ...actionContext, source: 'roulette-result', noPointCost: true },
+    }),
+    executeSongbookRequest: (token, argsText, actionContext) => executeSongbookCommand(token, {
+      owner: ownerUserIdFromSid(sid), provider: actionContext.provider, userId: actionContext.userId,
+      username: actionContext.username, argsText, allowed: true, template: token,
+      keyword: actionContext.command?.keyword || '룰렛 실행 액션',
+    }),
+    executeLiveChange: (token, argsText, actionContext) => executeCommandLiveChangeTokens(sid, token, {
+      provider: actionContext.provider, argsText,
+      canManageLive: () => resolveQueuedLiveManagePermission(sid, actionContext.chatPost),
+    }),
   });
+  for (const failure of result.errors) console.warn('[Roulette Result] Variable execution failed', failure.phase, failure.error?.message || failure.error);
+  return result;
+}
 
-  const commandValue = picked.value.replace(/\$\{\s*(?:action|automation|blueprint)::([^}]+)\s*\}/ig, '').trim();
-  if (!commandValue) return;
-
-  try {
-    console.log(`[Roulette] Executing command from settled result: ${commandValue} for user: ${username}`);
-    await executeRouletteResultCommand(sid, commandValue, userId, username, chatPost);
-  } catch (error) {
-    console.error('[Roulette] Failed to execute settled result command:', error);
-  }
+async function executeRouletteResultActions(sid, def, picked, userId, username, channelId, chatPost = null) {
+  return commandExecution.scope(sid, async () => {
+    const provider = String(chatPost?.provider || chatPost?.platform || 'chzzk').toLowerCase();
+    const post = chatPost || { ...makeBlueprintCommandChatPost(ownerUserIdFromSid(sid), sid, provider, username, userId), suppressResultChat: false };
+    const context = {
+      source: 'roulette', sid, provider, platform: provider, userId, username,
+      roulette: { id: def.id || null, name: def.name, result: { label: picked.label, value: picked.value } },
+      result: { label: picked.label, value: picked.value },
+      user: { userId, username }, chatPost: post,
+      channelUid: channelId, channel: { channelUid: channelId },
+    };
+    const rendered = await renderRouletteActionTemplate(sid, picked.value, context);
+    // Only a literal saved command prefix authorizes command dispatch. Rendered
+    // usernames/memos/result labels must never become a new command or effect.
+    const command = rendered.commandTemplate ? await executeRouletteResultCommand(
+      sid, rendered.text, userId, username, post, { ...context, commandTemplate: rendered.commandTemplate },
+    ) : { executed: false };
+    if (!command?.executed && rendered.used && rendered.text && post.suppressResultChat !== true) {
+      await sendChatByPost(sid, post, '[룰렛 결과] ' + rendered.text, { timeout: 5000 });
+    }
+    return { ...rendered, command };
+  });
 }
 
 async function startRouletteSpin(sid, rouletteName, userId, username, opts = {}) {
@@ -11919,7 +11950,14 @@ async function startRouletteSpin(sid, rouletteName, userId, username, opts = {})
     throw new Error('roulette_not_found');
   }
   return commandExecution.run(sid, `roulette:${String(def.id || def.name).trim().toLowerCase()}`, async () => {
-  const picked = chooseRouletteItem(def);
+  if (opts?.testMode !== true && !await commandAdmissionStore.claimRouletteExecution(
+    commandExecution.capture(sid), `roulette:${String(def.id || def.name).trim().toLowerCase()}`,
+  )) commandExecution.reject('roulette_limit');
+  commandExecution.check();
+  const picked = chooseRouletteItem(def, { includeIndex: true });
+  const wheelMetadata = getRouletteWheelMetadata(def, picked);
+  const rouletteSnapshot = { name: def.name, username: username || null, label: picked.label,
+    value: picked.value ?? null, theme: def.theme || null };
   const spinId = String(opts?.spinId || crypto.randomUUID());
 
   let token = typeof opts?.viewerToken === 'string' && opts.viewerToken.trim()
@@ -12061,10 +12099,10 @@ async function startRouletteSpin(sid, rouletteName, userId, username, opts = {})
   while (!broadcastSuccess && retryCount < maxRetries) {
     try {
       let theme = null;
-      let items = null;
+      let items = wheelMetadata.items;
       try {
         theme = def.theme || null;
-        items = Array.isArray(def.items) ? def.items.map(it => String(it.label || '')).filter(Boolean) : null;
+        items = wheelMetadata.items;
       } catch { }
 
       const message = {
@@ -12077,6 +12115,8 @@ async function startRouletteSpin(sid, rouletteName, userId, username, opts = {})
         createdAt: new Date(spinStartedAt).toISOString(),
         theme,
         items,
+        itemWeights: wheelMetadata.itemWeights,
+        selectedItemIndex: wheelMetadata.selectedItemIndex,
         spinId,
         spinDurationMs,
         instant: opts?.instant === true,
@@ -12132,6 +12172,8 @@ async function startRouletteSpin(sid, rouletteName, userId, username, opts = {})
         } else {
           try {
             const fallbackResult = await broadcastRouletteResult(token, {
+              wheelMetadata,
+              rouletteSnapshot,
               spinId,
               spinDurationMs,
               spinStartedAt,
@@ -12154,6 +12196,8 @@ async function startRouletteSpin(sid, rouletteName, userId, username, opts = {})
         } else {
           try {
             const fallbackResult = await broadcastRouletteResult(token, {
+              wheelMetadata,
+              rouletteSnapshot,
               spinId,
               spinDurationMs,
               spinStartedAt,
@@ -12232,271 +12276,56 @@ async function startRouletteSpin(sid, rouletteName, userId, username, opts = {})
     spinDurationMs,
     spinStartedAt,
   };
-  }, opts.executionChain || { version: 1, sid, path: [] });
+  }, opts.executionChain || (commandExecution.current(sid) ? null : { version: 1, sid, path: [] }));
 }
 
 /**
  */
-async function executeRouletteResultCommand(sid, commandText, userId, username, chatPost = null) {
+async function executeRouletteResultCommand(sid, commandText, userId, username, chatPost = null, context = {}) {
   return commandExecution.scope(sid, async () => {
-  try {
-    console.log(`[Roulette Command] Executing: "${commandText}" for user: ${username} (${userId})`);
-
-    const entry = sessionStore.get(sid);
-    const chatPostProvider = String(chatPost?.provider || '').toLowerCase();
-    const isCimeChatPost = chatPostProvider === 'cime';
-    const isYoutubeChatPost = chatPostProvider === 'youtube';
-    if (!isCimeChatPost && !isYoutubeChatPost && (!entry || !entry.sessionKey)) {
-      console.error('[Roulette Command] No valid session found for sid:', sid);
-      return;
-    }
-
-    const fakeMessage = {
-      messageText: commandText,
-      profile: {
-        userId: userId,
-        nickname: username
-      },
-      executionContext: {
-        source: 'roulette',
-        shouldDeductPoints: false,
-        originalUser: { userId, username },
-        rouletteExecution: true
-      },
-      messageTime: Date.now(),
-      messageId: `roulette_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-    };
-
-    console.log(`[Roulette Command] Created fake message with context:`, {
-      text: commandText,
-      user: username,
-      context: fakeMessage.executionContext
-    });
-
-    const settings = await getBotSettings(sid) || {};
-    const rules = Array.isArray(settings.rules) ? settings.rules : [];
-    const text = String(commandText || '').trim();
-    const now = Date.now();
-
-    for (const { rule: r, match: commandMatch } of getCommandRuleMatches(text, rules)) {
-      if (!r || r.enabled === false) continue;
-
-      const keywords = Array.isArray(r.keywords) ? r.keywords.filter(Boolean) : [];
-      if (!keywords.length) continue;
-      const matchedKeyword = commandMatch.matchedText;
-
-      if (!r.id) continue;
-      const cooldownClaim = await claimBotRuleCooldown(sid, r.id, { cooldownMs: Math.max(1000, Number(r.cooldown || 0)) }).catch(() => null);
-      if (!cooldownClaim?.claimed) continue;
-
-      console.log(`[Roulette Command] Matched rule: ${r.name || 'unnamed'} with keyword: ${matchedKeyword}`, {
-        ruleId: r.id,
-        commandCost: Math.max(0, Number(r.pointsCost || 0)),
-        pointsSkipped: true,
-        executionSource: 'roulette'
+    assertSafeTextPayload([commandText, context]);
+    const rules = await getRuntimeBotRulesWithDefaults(sid);
+    const template = context.commandTemplate ?? commandText;
+    const candidate = getCommandRuleMatches(String(template || '').trim(), rules)
+      .find(({ rule }) => rule && rule.enabled !== false && rule.id);
+    if (!candidate) return { executed: false, reason: 'command_not_found' };
+    const rule = candidate.rule;
+    const match = getCommandRuleMatches(String(commandText || '').trim(), [rule])[0]?.match;
+    if (!match) return { executed: false, reason: 'command_template_mismatch' };
+    return commandExecution.run(sid, `command:${rule.id}`, async () => {
+      const cooldown = await claimBotRuleCooldown(sid, rule.id, { cooldownMs: Math.max(1000, Number(rule.cooldown || 0)) });
+      if (!cooldown?.claimed) return { executed: true, skipped: true, reason: 'command_cooldown' };
+      const provider = String(chatPost?.provider || context.provider || 'chzzk').toLowerCase();
+      const post = chatPost || { ...makeBlueprintCommandChatPost(ownerUserIdFromSid(sid), sid, provider, username, userId), suppressResultChat: false };
+      const channelUid = context.channelUid || await resolveBlueprintCommandChannelUid(ownerUserIdFromSid(sid), sid, provider, context);
+      const args = match.argsText ? match.argsText.split(/\s+/).filter(Boolean) : [];
+      const command = { keyword: match.matchedText, text: commandText, ruleId: rule.id, ruleName: rule.name || null };
+      await emitBlueprintCommandEvent(sid, provider, {
+        type: 'command', cmd: match.matchedText, args, from: { userId, username }, at: Date.now(),
+        source: 'arubot-roulette', executionContext: {
+          source: 'roulette', shouldDeductPoints: false, rouletteExecution: true,
+          originalCommand: commandText, executedFromRoulette: true, noPointsDeducted: true,
+          originalUser: { userId, username },
+        },
       });
-
-      const responses = Array.isArray(r.responses) ? r.responses.filter(Boolean) : [];
-      let response = responses[Math.floor(Math.random() * responses.length)];
-
-      let allowExecute = true;
-      const commandCost = Math.max(0, Number(r.pointsCost || 0));
-
-      console.log(`[Roulette Command] Command cost: ${commandCost}, skipping points check due to roulette context`);
-
-
-      const vdRe = /\$\{\s*(?:video_donation|bgm_request)\s*\}/i;
-      const rlRe = /\$\{\s*roulette::([^}]+)\s*\}/i;
-
-      const memoPlan = prepareMemoVariablePlan(response, { ruleId: r.id });
-      response = memoPlan.text;
-      const counterPlan = prepareCounterVariablePlan(response);
-      let responseToSend = counterPlan.text;
-      let ruleUsed = false;
-      const argsText = commandMatch.argsText;
-
-      if (allowExecute && typeof responseToSend === 'string') {
-        const liveChangeResult = await executeCommandLiveChangeTokens(sid, responseToSend, {
-          provider: chatPostProvider || 'chzzk',
-          argsText,
-          canManageLive: () => resolveQueuedLiveManagePermission(sid, chatPost),
-        });
-        responseToSend = liveChangeResult.text;
-        if (liveChangeResult.executed.length > 0) ruleUsed = true;
+      const responses = (Array.isArray(rule.responses) ? rule.responses : []).filter(value => typeof value === 'string');
+      const response = responses[Math.floor(Math.random() * responses.length)] || '';
+      const result = await renderRouletteActionTemplate(sid, response, {
+        ...context, source: 'roulette-command', sid, provider, platform: provider, userId, username,
+        command, argsText: match.argsText, user: { userId, username }, chatPost: post,
+        channelUid, channel: { channelUid },
+      });
+      if (result.text && post.suppressResultChat !== true) {
+        await sendChatByPost(sid, post, '[룰렛 결과] ' + result.text, { timeout: 5000 });
       }
-
-      try {
-        responseToSend = await substituteAllPlaceholders(responseToSend, sid, userId, username, { provider: chatPostProvider || 'chzzk' });
-      } catch (e) {
-        console.error('[Roulette Command] Placeholder substitution failed:', e);
-      }
-
-      if (allowExecute && typeof responseToSend === 'string' && vdRe.test(responseToSend)) {
-        console.log('[Roulette Command] Processing video donation trigger (no points deduction)');
-        responseToSend = String(responseToSend).replace(/\$\{\s*(?:video_donation|bgm_request)\s*\}/ig, '').trim() || '룰렛 결과로 실행되었습니다. 포인트는 차감하지 않았습니다.';
-      }
-
-      if (typeof responseToSend === 'string' && rlRe.test(responseToSend)) {
-        console.log('[Roulette Command] Processing nested roulette trigger');
-        try {
-          const m = String(responseToSend).match(rlRe);
-          const name = m && m[1] ? String(m[1]).trim() : '';
-          responseToSend = String(responseToSend).replace(/\$\{\s*roulette::([^}]+)\s*\}/ig, '').trim();
-
-          if (name && allowExecute) {
-            try {
-              const accessToken = (isCimeChatPost || isYoutubeChatPost) ? null : await getValidAccessToken(sid);
-              const base = {
-                name,
-                userId: String(userId || ''),
-                username: String(username || ''),
-                chatPost: isCimeChatPost
-                  ? makeCimeChatPost(chatPost.ownerUserId, username, { suppressResultChat: false, liveManageActorId: chatPost?.liveManageActorId || null, counterUserId: chatPost?.counterUserId ?? userId })
-                  : isYoutubeChatPost
-                    ? makeYoutubeChatPost(chatPost.ownerUserId, chatPost.liveChatId, username, { suppressResultChat: false, counterUserId: chatPost?.counterUserId ?? userId })
-                    : makeChzzkChatPost(entry.sessionKey, accessToken, username, { suppressResultChat: false, liveManageActorId: chatPost?.liveManageActorId || null, counterUserId: chatPost?.counterUserId ?? userId })
-              };
-
-              console.log(`[Roulette Command] Enqueueing nested roulette: ${name}`);
-              await enqueueRouletteSpin(sid, { ...base, instant: false });
-
-            } catch (e) {
-              console.error('[Roulette Command] Nested roulette execution failed:', e);
-              responseToSend = '중첩 룰렛 실행 중 오류가 발생했습니다.';
-            }
-          }
-          ruleUsed = true;
-        } catch (e) {
-          console.error('[Roulette Command] Nested roulette processing failed:', e);
-          responseToSend = '중첩 룰렛 처리 중 오류가 발생했습니다.';
-        }
-      }
-
-      if (allowExecute) {
-        try {
-          const cmd = matchedKeyword || '';
-          const rest = commandMatch.argsText;
-          const args = rest.length ? rest.split(/\s+/).map(String) : [];
-
-          let ownerPid = null;
-          try {
-            const owner = await getOwnerInfoForSid(sid);
-            if (owner?.channelId) ownerPid = `user:${String(owner.channelId)}`;
-          } catch { }
-          if (!ownerPid && (isCimeChatPost || isYoutubeChatPost)) ownerPid = sid;
-
-          if (ownerPid) {
-            const payload = {
-              type: 'command',
-              cmd,
-              args,
-              from: { userId: userId, username: username },
-              at: Date.now(),
-              source: 'roulette',
-              executionContext: {
-                source: 'roulette',
-                shouldDeductPoints: false,
-                originalCommand: commandText,
-                rouletteExecution: true
-              }
-            };
-
-            try {
-              emitWarudoEvent(ownerPid, payload);
-              console.log(`[Roulette Command] Emitted WARUDO event with context:`, {
-                cmd,
-                args,
-                source: payload.source,
-                context: payload.executionContext
-              });
-            } catch (e) {
-              console.error('[Roulette Command] WARUDO event emission failed:', e);
-            }
-
-            try {
-              broadcastToDesktop(ownerPid, {
-                ...payload,
-                source: 'arubot-roulette',
-                metadata: {
-                  executedFromRoulette: true,
-                  noPointsDeducted: true,
-                  originalUser: { userId, username }
-                }
-              });
-              console.log(`[Roulette Command] Desktop broadcast sent with roulette metadata`);
-            } catch (e) {
-              console.error('[Roulette Command] Desktop broadcast failed:', e);
-            }
-          }
-        } catch (e) {
-          console.error('[Roulette Command] Command event processing failed:', e);
-        }
-      }
-
-      if (allowExecute && typeof responseToSend === 'string') {
-        const ownerUserId = ownerUserIdFromSid(sid);
-        const providerEntry = chatPostProvider === 'cime'
-          ? cimeSessionStore.get(ownerUserId)
-          : chatPostProvider === 'youtube'
-            ? youtubeSessionStore.get(ownerUserId)
-            : entry;
-        const rouletteCommandChannelUid = String(
-          chatPost?.channelUid
-          || chatPost?.channelId
-          || providerEntry?.channelId
-          || ''
-        ).trim() || null;
-        const actionResult = await executeAndStripActionVariableTokens(sid, responseToSend, {
-          source: 'roulette-command',
-          platform: chatPostProvider || 'chzzk',
-          command: { keyword: matchedKeyword || '', text: commandText, ruleId: r.id || null, ruleName: r.name || null },
-          user: { userId, username },
-          chatPost: (isCimeChatPost || isYoutubeChatPost)
-            ? chatPost
-            : makeChzzkChatPost(entry?.sessionKey || null, null, username, { liveManageActorId: chatPost?.liveManageActorId || null }),
-          channelUid: rouletteCommandChannelUid,
-          channel: { channelUid: rouletteCommandChannelUid },
-        });
-        if (actionResult.used) {
-          responseToSend = actionResult.text;
-          ruleUsed = true;
-        }
-      }
-
-      if (allowExecute && responseToSend && String(responseToSend).length > 0) {
-        try {
-          responseToSend = await resolveCommandCounterVariables(counterPlan, responseToSend, {
-            sid,
-            provider: chatPostProvider || 'chzzk',
-            userId: chatPost?.counterUserId ?? userId,
-          });
-          responseToSend = await resolveCommandMemoVariables(memoPlan, responseToSend, { sid });
-          if (!String(responseToSend || '').trim()) break;
-          const finalMsg = '[룰렛 결과] ' + String(responseToSend);
-          const post = (isCimeChatPost || isYoutubeChatPost) ? chatPost : makeChzzkChatPost(entry.sessionKey, await getValidAccessToken(sid), username);
-          await sendChatByPost(sid, post, finalMsg, { timeout: 5000 });
-          console.log('[Roulette Command] Response sent:', finalMsg);
-        } catch (e) {
-          console.error('[Roulette Command] Response send failed:', e?.response?.data || e?.message || e);
-        }
-      }
-
-      break;
-    }
-
-    console.log(`[Roulette Command] Command execution completed:`, {
-      command: commandText,
-      user: username,
-      userId: userId,
-      source: 'roulette',
-      pointsDeducted: false,
-      timestamp: new Date().toISOString()
+      await recordCommandExecutionLog(sid, {
+        executed: true, provider, channelUid, userId, username,
+        triggerName: match.matchedText, targetName: rule.name || null, ruleId: rule.id,
+        args, pointDelta: 0, source: 'roulette-command', features: result.features,
+        actionJobs: result.actionJobs, resultValue: result.text || null,
+      });
+      return { ...result, executed: true, pointsDeducted: false };
     });
-
-  } catch (e) {
-    console.error('[Roulette Command] Execution failed:', e);
-    throw e;
-  }
   });
 }
 
@@ -22207,6 +22036,7 @@ const BOT_VARIABLES = [
   { key: '${username}', label: '후원자 이름 별칭', description: '{donation.username}과 같은 후원자 이름입니다.', group: '후원', providers: BOT_VARIABLE_PROVIDERS, contexts: ['donation'] },
   { key: '${amount}', label: '후원 금액 별칭', description: '{donation.amount}와 같은 후원 금액입니다.', group: '후원', providers: BOT_VARIABLE_PROVIDERS, contexts: ['donation'] },
   { key: '${message}', label: '후원 메시지 별칭', description: '후원 메시지를 원문 그대로 표시하며 메시지 안의 특수 변수는 실행하지 않습니다.', group: '후원', providers: BOT_VARIABLE_PROVIDERS, contexts: ['donation'] },
+  { key: '{roulette.name}', label: '룰렛 이름', description: '현재 결과를 만든 룰렛 이름입니다.', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint'] },
   { key: '{roulette.result.label}', label: '룰렛 결과 이름', description: '룰렛 결과로 실행된 블루프린트의 당첨 항목 이름입니다.', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint'], caveat: '룰렛 결과가 블루프린트를 실행한 경우에만 값이 있습니다.' },
   { key: '{roulette.result.value}', label: '룰렛 결과 값', description: '룰렛 결과로 실행된 블루프린트의 당첨 항목 값입니다.', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint'], caveat: '룰렛 결과가 블루프린트를 실행한 경우에만 값이 있습니다.' },
   { key: '{node.rouletteRun.result.label}', label: '룰렛 노드 결과 이름', description: '블루프린트의 룰렛 실행 노드가 만든 결과 항목 이름입니다.', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint'], caveat: '룰렛 실행 노드가 먼저 실행된 뒤 사용할 수 있습니다.' },
@@ -22215,7 +22045,7 @@ const BOT_VARIABLES = [
   { key: '{node.pointsGet.points}', label: '포인트 조회 노드 결과', description: '블루프린트 포인트 조회 노드가 가져온 포인트입니다.', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint'], caveat: '포인트 조회 노드가 먼저 실행된 뒤 사용할 수 있습니다.' },
   { key: '{node.overlay.overlayId}', label: '오버레이 ID', description: '블루프린트 오버레이 표시 노드가 만든 오버레이 식별자입니다.', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint'], caveat: '오버레이 표시 노드가 먼저 실행된 뒤 사용할 수 있습니다.' },
   { key: '{flow.변수이름}', label: '임시 변수', description: '블루프린트 임시 변수 노드에서 저장한 값을 읽습니다. 예: {flow.bonusPoint}', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint'], caveat: '임시 변수 노드가 먼저 값을 저장한 뒤 사용할 수 있습니다.' },
-];
+].map(withRouletteVariableContext);
 
 app.get('/api/bot/variables', async (req, res) => {
   const sid = await getPartitionId(req, res);
@@ -27496,7 +27326,7 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
   const dur = timing.durationSec;
   const explicitDuration = requestedEndSec != null ? dur : null;
   const awaitDurationSync = shouldAwaitPvdDurationSync(media.provider, media.durationSec, explicitDuration);
-  const cost = Math.ceil(pps * dur);
+  const cost = context.source === 'roulette-result' && context.noPointCost === true ? 0 : Math.ceil(pps * dur);
   if (!channelUid) {
     const s = await getBotSettings(sid) || {};
     const uids = await resolveChzzkChannelUidsForSid(sid, s);
@@ -30438,6 +30268,7 @@ function registerRouletteRoutes() {
             // Try to resolve items/theme using validated sid from connection
             let theme = null;
             let items = null;
+            let wheelMetadata = { itemWeights: null, selectedItemIndex: null };
             try {
               const sid = validationResult.sid;
 
@@ -30468,7 +30299,8 @@ function registerRouletteRoutes() {
                 const def = defs.find(d => String(d.name).toLowerCase() === String(row.roulette_name || '').toLowerCase());
                 if (def) {
                   theme = def.theme || null;
-                  items = Array.isArray(def.items) ? def.items.map(it => String(it.label || '')).filter(Boolean) : null;
+                  wheelMetadata = getRouletteWheelMetadata(def, { label: row.result_label, value: row.result_value });
+                  items = wheelMetadata.items;
                 }
               }
             } catch (settingsError) {
@@ -30489,6 +30321,8 @@ function registerRouletteRoutes() {
               createdAt: row.created_at || null,
               theme,
               items,
+              itemWeights: wheelMetadata.itemWeights,
+              selectedItemIndex: wheelMetadata.selectedItemIndex,
               batchId: meta?.batchId || null,
               batchCount: meta?.batchCount || 1
             };
@@ -31042,7 +30876,8 @@ async function broadcastRouletteResult(token, eventMeta = {}) {
     }
 
     let theme = null;
-    let items = null;
+    let items = eventMeta.wheelMetadata?.items || null;
+    let wheelMetadata = eventMeta.wheelMetadata || { itemWeights: null, selectedItemIndex: null };
     try {
       if (sid) {
         const settings = await getBotSettings(sid) || {};
@@ -31050,7 +30885,8 @@ async function broadcastRouletteResult(token, eventMeta = {}) {
         const def = defs.find(d => String(d.name).toLowerCase() === String(row.roulette_name || '').toLowerCase());
         if (def) {
           theme = def.theme || null;
-          items = Array.isArray(def.items) ? def.items.map(it => String(it.label || '')).filter(Boolean) : null;
+          wheelMetadata = eventMeta.wheelMetadata || getRouletteWheelMetadata(def, { label: row.result_label, value: row.result_value });
+          items = wheelMetadata.items;
         }
       }
     } catch (error) {
@@ -31068,6 +30904,8 @@ async function broadcastRouletteResult(token, eventMeta = {}) {
       createdAt: eventMeta?.spinStartedAt ? new Date(eventMeta.spinStartedAt).toISOString() : (row.created_at || null),
       theme,
       items,
+      itemWeights: wheelMetadata.itemWeights,
+      selectedItemIndex: wheelMetadata.selectedItemIndex,
       spinId: eventMeta?.spinId || null,
       spinDurationMs: Number.isFinite(Number(eventMeta?.spinDurationMs)) ? Number(eventMeta.spinDurationMs) : ROULETTE_SPIN_MS,
       instant: eventMeta?.instant === true,
@@ -31075,6 +30913,7 @@ async function broadcastRouletteResult(token, eventMeta = {}) {
       batchId: meta?.batchId || null,
       batchCount: meta?.batchCount || 1
     };
+    if (eventMeta.rouletteSnapshot) Object.assign(message, eventMeta.rouletteSnapshot);
 
     let result;
     try {
@@ -31231,6 +31070,7 @@ function getRouletteDefsFromSettings(settings) {
     const defs = Array.isArray(settings?.rouletteDefs) ? settings.rouletteDefs : [];
     return defs
       .map(d => ({
+        id: d?.id || null,
         name: String(d?.name || '').trim() || '룰렛',
         type: (d?.type === 'probability' ? 'probability' : 'items'),
         items: Array.isArray(d?.items) ? d.items.map(it => ({

@@ -148,21 +148,30 @@ describe('shared execution budgets and lineage', () => {
     await expect(safety.run(sid, 'a', async () => { time += 600001; safety.consume('nodes'); }))
       .rejects.toMatchObject({ code: 'command_safety_deadline' });
   });
-  test('queue serialization and a new worker preserve cycle detection', async () => {
+  test('queue serialization and new workers preserve the five-roulette limit', async () => {
     let saved;
     await safety.run(sid, 'roulette:a', async () => { saved = JSON.parse(JSON.stringify(safety.capture(sid))); });
+    for (let count = 1; count < 5; count++) {
+      const worker = createCommandExecutionSafety({ now: () => time });
+      await worker.run(sid, 'roulette:a', async () => { saved = JSON.parse(JSON.stringify(worker.capture(sid))); }, saved);
+    }
     const restarted = createCommandExecutionSafety({ now: () => time });
-    await expect(restarted.run(sid, 'roulette:a', jest.fn(), saved)).rejects.toMatchObject({ code: 'command_safety_cycle' });
+    const effect = jest.fn();
+    await expect(restarted.run(sid, 'roulette:a', effect, saved)).rejects.toMatchObject({ code: 'command_safety_roulette_limit' });
+    expect(effect).not.toHaveBeenCalled();
     await restarted.run(sid, 'roulette:b', async () => {}, saved);
   });
   test('queued work never inherits a different job context from the worker loop', async () => {
     const saved = safety.capture(sid);
     await safety.run(sid, 'unrelated', () => safety.run(sid, 'unrelated', async () => {}, saved));
   });
-  test('an overlay acknowledgement restores the originating roulette ancestry', async () => {
+  test('overlay acknowledgements share the originating roulette execution count', async () => {
     let settled;
-    await safety.run(sid, 'roulette:a', async () => { settled = safety.bind(() => safety.run(sid, 'roulette:a', jest.fn())); });
-    await expect(settled()).rejects.toMatchObject({ code: 'command_safety_cycle' });
+    const effect = jest.fn();
+    await safety.run(sid, 'roulette:a', async () => { settled = safety.bind(() => safety.run(sid, 'roulette:a', effect)); });
+    for (let count = 1; count < 5; count++) await settled();
+    await expect(settled()).rejects.toMatchObject({ code: 'command_safety_roulette_limit' });
+    expect(effect).toHaveBeenCalledTimes(4);
   });
   test('expired and cross-channel continuations fail closed', async () => {
     const saved = safety.capture(sid);

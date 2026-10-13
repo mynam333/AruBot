@@ -79,7 +79,10 @@ describe('저장값 그대로 사용하는 명령어 느낌표 접두사 회귀 
   });
 
   test('CHZZK·YouTube·CIME·룰렛 결과 명령이 동일한 공통 매처를 사용한다', () => {
-    expect(serverIndex.match(/getCommandRuleMatches\(text, rules\)/g)?.length || 0).toBe(4);
+    expect(serverIndex.match(/getCommandRuleMatches\(text, rules\)/g)?.length || 0).toBe(3);
+    const roulette = serverIndex.slice(serverIndex.indexOf('async function executeRouletteResultCommand'), serverIndex.indexOf('// (no change) keeping existing /api/video-donation/now-playing above'));
+    expect(roulette).toContain("getCommandRuleMatches(String(template || '').trim(), rules)");
+    expect(roulette).toContain("getCommandRuleMatches(String(commandText || '').trim(), [rule])");
     expect(serverIndex).not.toContain('lower.startsWith(String(kw).toLowerCase())');
     expect(serverIndex).toContain("findCommandKeywordMatch(text, [normalizeAttendanceCommandKeyword(settings)])");
   });

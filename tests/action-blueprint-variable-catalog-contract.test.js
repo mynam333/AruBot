@@ -1,9 +1,7 @@
-const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
 const root = path.join(__dirname, '..');
-const serverIndex = fs.readFileSync(path.join(root, 'server', 'index.js'), 'utf8');
 
 function expectedKstDday(targetDate, timestamp = Date.now()) {
   const today = new Date(timestamp + (9 * 60 * 60 * 1000)).toISOString().slice(0, 10);
@@ -26,6 +24,7 @@ const BLUEPRINT_READ_CONTRACT = Object.freeze({
     '{donation.amount}': '2500',
     '{donation.message}': '후원 메시지',
     '{donation.username}': '후원자',
+    '{roulette.name}': '테스트 룰렛',
     '{roulette.result.label}': '당첨 항목',
     '{roulette.result.value}': '당첨 값',
   }),
@@ -60,22 +59,6 @@ const BLUEPRINT_READ_CONTRACT = Object.freeze({
   }),
 });
 
-function parseBotVariableCatalog(source) {
-  const start = source.indexOf('const BOT_VARIABLES = [');
-  const end = source.indexOf('\n];', start);
-  if (start < 0 || end < 0) throw new Error('BOT_VARIABLES catalog was not found');
-
-  return source.slice(start, end).split(/\r?\n/).flatMap((line) => {
-    const key = line.match(/\bkey:\s*'([^']+)'/)?.[1];
-    if (!key) return [];
-    const contextSource = line.match(/\bcontexts:\s*\[([^\]]*)\]/)?.[1];
-    const contexts = contextSource == null
-      ? null
-      : Array.from(contextSource.matchAll(/'([^']+)'/g), (match) => match[1]);
-    return [{ key, contexts }];
-  });
-}
-
 function contractEntries() {
   return Object.entries(BLUEPRINT_READ_CONTRACT).flatMap(([source, values]) => (
     Object.entries(values).map(([key, expected]) => ({ key, expected, source }))
@@ -83,7 +66,7 @@ function contractEntries() {
 }
 
 describe('action blueprint variable catalog contract', () => {
-  const catalog = parseBotVariableCatalog(serverIndex);
+  const catalog = require('./helpers/load-bot-variable-catalog.cjs')();
   const visibleInBlueprint = catalog.filter(({ contexts }) => contexts == null || contexts.includes('blueprint'));
   const expectedEntries = contractEntries();
 
@@ -126,6 +109,7 @@ describe('action blueprint variable catalog contract', () => {
           user: { userId: 'viewer-1', username: '테스트 시청자' },
           channelUid: 'channel-1',
           result: { label: '당첨 항목', value: '당첨 값' },
+          roulette: { name: '테스트 룰렛' },
           donation: { amount: 2500, message: '후원 메시지', username: '후원자' },
           attendance: { points: 75, date: '2026-08-13' },
         },

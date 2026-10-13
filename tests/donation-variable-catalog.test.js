@@ -2,10 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const read = (file) => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
-const server = read('server/index.js');
-const start = server.indexOf('const BOT_VARIABLE_PROVIDERS =');
-const end = server.indexOf("app.get('/api/bot/variables'", start);
-const catalog = new Function(`${server.slice(start, end)}; return BOT_VARIABLES;`)();
+const catalog = require('./helpers/load-bot-variable-catalog.cjs')();
 const visible = catalog.filter((item) => !item.contexts?.length || item.contexts.includes('donation'));
 
 test('donation help exposes all supported special and donor tokens', () => {

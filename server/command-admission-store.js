@@ -19,6 +19,7 @@ export function createCommandAdmissionStore({ withPgClient, now = Date.now }) {
           root_id text primary key, sid text not null, jobs integer not null,
           created_at timestamptz not null default clock_timestamp()
         )`);
+        await pg.query("alter table command_execution_budgets add column if not exists roulette_counts jsonb not null default '{}'::jsonb");
         await pg.query('create index if not exists command_execution_budgets_expiry on command_execution_budgets(created_at)');
         await pg.query('alter table command_execution_budgets enable row level security');
         await pg.query('commit');
@@ -75,5 +76,23 @@ export function createCommandAdmissionStore({ withPgClient, now = Date.now }) {
       return result.rows.length === 1;
     }, 0);
   }
-  return { claim, claimChainJob, ensureSchema };
+  async function claimRouletteExecution({ rootId, sid }, key) {
+    if (!sid || !/^[a-f0-9-]{36}$/i.test(rootId || '') || typeof key !== 'string' || !key.startsWith('roulette:') || key.length > 512) throw new Error('invalid_roulette_chain');
+    await ensureSchema();
+    return withPgClient(async (pg) => {
+      // One root-wide counter also covers sibling branches and different workers.
+      const result = await pg.query(`insert into command_execution_budgets as budget(root_id,sid,jobs,roulette_counts)
+        values ($1,$2,0,jsonb_build_object($3::text,1))
+        on conflict(root_id) do update
+          set roulette_counts = jsonb_set(budget.roulette_counts, array[$3::text],
+            to_jsonb(coalesce((budget.roulette_counts ->> $3::text)::integer,0) + 1))
+          where budget.sid = excluded.sid
+            and coalesce((budget.roulette_counts ->> $3::text)::integer,0) < 5
+            and budget.created_at > clock_timestamp() - interval '1 day'
+        returning root_id`, [rootId, sid, key]);
+      await cleanup(pg);
+      return result.rows.length === 1;
+    }, 0);
+  }
+  return { claim, claimChainJob, claimRouletteExecution, ensureSchema };
 }

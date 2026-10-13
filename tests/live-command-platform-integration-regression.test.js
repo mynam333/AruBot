@@ -41,11 +41,13 @@ describe('platform-specific live command integration regression', () => {
   test('executes or strips live action tokens in every command ingress path', () => {
     expect(server).toContain('async function executeCommandLiveChangeTokens');
     expect(server).toContain('canManageLive: context.canManageLive');
-    expect(server).toContain("provider: chatPostProvider || 'chzzk'");
+    expect(server).toContain("const provider = String(chatPost?.provider || context.provider || 'chzzk').toLowerCase()");
+    expect(server).toContain('executeLiveChange: (token, argsText, actionContext) => executeCommandLiveChangeTokens');
+    expect(server).toContain('provider: actionContext.provider, argsText,');
     expect(server).toMatch(/provider:\s*'chzzk',\s*argsText:\s*restForVd,\s*canManageLive/);
     expect(server).toMatch(/provider:\s*'cime',\s*argsText,\s*canManageLive/);
     expect(server).toMatch(/provider:\s*'youtube',\s*argsText,\s*canManageLive:\s*false/);
-    expect(server).toContain('canManageLive: () => resolveQueuedLiveManagePermission(sid, chatPost)');
+    expect(server).toContain('canManageLive: () => resolveQueuedLiveManagePermission(sid, actionContext.chatPost)');
     expect(server).toContain('liveManageActorId: resolvedUserId');
     expect(server).toContain('getCimeLiveActorRoleLevel(ownerUserId, entry.channelId, resolvedUserId, { force: true })');
     expect(server).not.toContain('chatPost?.canManageLive');

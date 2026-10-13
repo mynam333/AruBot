@@ -4,6 +4,7 @@ import { Plus, Trash2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { CommandVariableHelpButton } from './command-variable-help';
 import {
   createEditableRouletteItem,
   normalizeEditableRouletteItems,
@@ -69,14 +70,19 @@ export function RouletteItemsEditor({
                 placeholder="1"
               />
             </label>
-            <label className="grid min-w-0 gap-[clamp(0.4rem,0.8vw,0.6rem)] text-sm font-semibold">
-              실행 액션
-              <Input
-                value={item.value}
-                onChange={(event) => updateItem(item.id, { value: event.target.value })}
-                placeholder="비워두거나 ${action::이름}"
-              />
-            </label>
+            <div className="grid min-w-0 gap-[clamp(0.4rem,0.8vw,0.6rem)] text-sm font-semibold">
+              <label htmlFor={`${item.id}-action`}>실행 액션</label>
+              <div className="flex min-w-0 items-center gap-2">
+                <Input
+                  id={`${item.id}-action`}
+                  value={item.value}
+                  onChange={(event) => updateItem(item.id, { value: event.target.value })}
+                  placeholder="${roulette::룰렛이름}, ${blueprint::액션이름}"
+                  className="min-w-0 flex-1"
+                />
+                <CommandVariableHelpButton scope="roulette" onInsert={(key) => updateItem(item.id, { value: item.value + key })} />
+              </div>
+            </div>
             <Button
               type="button"
               variant="outline"
@@ -93,7 +99,7 @@ export function RouletteItemsEditor({
       </div>
 
       <div className="rounded-[var(--radius-control)] border bg-muted/45 p-[clamp(0.85rem,1.6vw,1.1rem)] text-sm leading-6 text-muted-foreground">
-        가중치가 높을수록 더 자주 뽑힙니다. 실행 액션은 비워둘 수 있고, 자동화 액션을 연결할 때만 입력하면 됩니다.
+        가중치가 높을수록 더 자주 뽑힙니다. 실행 액션은 선택 사항입니다.
       </div>
     </div>
   );
