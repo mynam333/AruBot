@@ -1445,7 +1445,7 @@ export function ActionBlueprintPage() {
   const [automationBusy, setAutomationBusy] = useState<string | null>(null);
   const [simulator, setSimulator] = useState({
     platform: 'chzzk',
-    username: '테스트 시청자',
+    username: '시청자 1',
     userId: 'test_viewer',
     points: '3000',
     message: '!테스트',
@@ -2052,8 +2052,8 @@ export function ActionBlueprintPage() {
   const simulatorContext = () => ({
     user: {
       userId: simulator.userId || 'test_viewer',
-      username: simulator.username || '테스트 시청자',
-      name: simulator.username || '테스트 시청자',
+      username: simulator.username || '시청자 1',
+      name: simulator.username || '시청자 1',
       points: Number(simulator.points || 0),
     },
     channel: { channelUid: 'simulator-channel' },

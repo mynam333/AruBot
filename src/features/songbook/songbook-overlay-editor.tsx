@@ -14,13 +14,13 @@ import styles from './songbook-overlay.module.css';
 
 type SavedOverlay = { config: SongbookOverlayConfig; revision: number; viewerPath: string };
 const samples = [
-  { id: 'sample-1', title: '밤편지', artist: '아이유', username: '달빛산책', videoId: 'BzYnNdJhZQw', keyShift: 0 },
-  { id: 'sample-2', title: '사건의 지평선', artist: '윤하', username: '별을따라', videoId: null, keyShift: -1 },
-  { id: 'sample-3', title: '한 페이지가 될 수 있게', artist: 'DAY6', username: '여름기록', videoId: null, keyShift: 0 },
-  { id: 'sample-4', title: '오래된 노래', artist: '스탠딩 에그', username: '작은쉼표', videoId: null, keyShift: 0 },
-  { id: 'sample-5', title: '너의 모든 순간', artist: '성시경', username: '초록소리', videoId: null, keyShift: 1 },
-  { id: 'sample-6', title: '다시 만난 세계', artist: '소녀시대', username: '푸른하루', videoId: null, keyShift: 0 },
-  { id: 'sample-7', title: '긴 노래 제목도 잘 보이도록 천천히 흐르는 신청곡 미리보기', artist: '예시 가수', username: '노래듣는사람', videoId: null, keyShift: 0 },
+  { id: 'sample-1', title: '밤편지', artist: '아이유', username: '시청자 1', videoId: 'BzYnNdJhZQw', keyShift: 0 },
+  { id: 'sample-2', title: '사건의 지평선', artist: '윤하', username: '시청자 2', videoId: null, keyShift: -1 },
+  { id: 'sample-3', title: '한 페이지가 될 수 있게', artist: 'DAY6', username: '시청자 3', videoId: null, keyShift: 0 },
+  { id: 'sample-4', title: '오래된 노래', artist: '스탠딩 에그', username: '시청자 4', videoId: null, keyShift: 0 },
+  { id: 'sample-5', title: '너의 모든 순간', artist: '성시경', username: '시청자 5', videoId: null, keyShift: 1 },
+  { id: 'sample-6', title: '다시 만난 세계', artist: '소녀시대', username: '시청자 6', videoId: null, keyShift: 0 },
+  { id: 'sample-7', title: '긴 노래 제목도 잘 보이도록 천천히 흐르는 신청곡 미리보기', artist: '예시 가수', username: '시청자 7', videoId: null, keyShift: 0 },
 ];
 
 export function SongbookOverlayEditor({ canWrite, requestsEnabled }: { canWrite: boolean; requestsEnabled: boolean }) {

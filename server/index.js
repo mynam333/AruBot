@@ -6544,7 +6544,7 @@ app.post('/api/roulette/test', rateLimiters.userWrite, async (req, res) => {
       (name && String(item?.name || '').trim().toLowerCase() === name.toLowerCase())
     ));
     if (!definition) return res.status(404).json({ error: '룰렛을 찾을 수 없습니다.' });
-    const result = await startRouletteSpin(sid, definition.name, 'arubot_test_viewer', '테스트 시청자', {
+    const result = await startRouletteSpin(sid, definition.name, 'arubot_test_viewer', '시청자 1', {
       instant: false,
       suppressResultChat: true,
       executeResultActions: false,
@@ -20934,8 +20934,8 @@ app.post('/api/action-blueprints/:id/test', rateLimiters.userWrite, async (req, 
       user: {
         ...(user || {}),
         userId: user.userId || req.body?.userId || 'test_viewer',
-        username: user.username || user.name || req.body?.username || '테스트 시청자',
-        name: user.name || user.username || req.body?.username || '테스트 시청자',
+        username: user.username || user.name || req.body?.username || '시청자 1',
+        name: user.name || user.username || req.body?.username || '시청자 1',
         points: user.points ?? req.body?.points ?? 3000
       },
       channel: { ...(channel || {}), channelUid: channel.channelUid || req.body?.channelUid || ownerUserId },

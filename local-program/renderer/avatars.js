@@ -100,7 +100,7 @@
   const testOptions = { source: 'draft', actorId: '', targetName: '' };
   const testInput = {
     userId: 'rehearsal-user-1',
-    name: '테스트',
+    name: '시청자 1',
     text: '!점프',
     kind: 'chat',
     role: 'everyone',
@@ -1228,7 +1228,7 @@
       if (command === 'test-crowd') {
         for (let i = 1; i <= 10; i++)
           state = await api.avatarCommand('test', {
-            name: `테스트 ${i}`,
+            name: `시청자 ${i}`,
             text: '!입장',
             config: structuredClone(draft),
             avatarId: draft.avatars[(i - 1) % draft.avatars.length].id,

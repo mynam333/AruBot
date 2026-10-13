@@ -595,7 +595,7 @@ class AvatarService {
       userId:
         text(payload.actorId, 128) ||
         (preview ? text(payload.name, 32) || '테스트' : 'rehearsal-user-1'),
-      name: text(payload.name, 32) || '테스트',
+      name: text(payload.name, 32) || '시청자 1',
       text: payload.text ?? '!입장',
       amount: Number(payload.amount) || 0,
       role: ['everyone', 'moderator', 'owner'].includes(payload.role)
