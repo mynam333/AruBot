@@ -57,3 +57,14 @@ test('only channel admin WebSockets inherit target; viewer token and public pred
   expect(a.http.apiWsUrl('/api/prediction/ws?channelUid=channel')).not.toContain('botOwner');
   expect(a.http.apiWsUrl('/api/drawing-donation/ws?token=overlay')).not.toContain('botOwner');
 });
+
+test.each(['command_conflict', 'stale_participation_revision', undefined, { untrusted: true }])('JSON result preserves only a string API error code (%p)', async code => {
+  const http = load('src/shared/api/http.ts', {
+    URL, DOMException, process: { env: {} }, require: () => ({}),
+    fetch: async () => ({ ok: false, status: 409, json: async () => ({ error: 'Conflict detail', code }) }),
+  });
+  const result = await http.readJsonResult('/api/marble/settings', { method: 'PUT', body: '{}' });
+  expect(result.ok).toBe(false);
+  expect(result.message).toBe('Conflict detail');
+  expect(result.code).toBe(typeof code === 'string' ? code : undefined);
+});

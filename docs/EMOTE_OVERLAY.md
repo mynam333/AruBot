@@ -53,6 +53,18 @@ OBS는 투명 배경 `/viewer/emotes/<token>`으로 실행한다. 인증 토큰�
 
 ## 데이터 근거
 
+### 치지직 기본 예시 (2026-10-13 확인)
+
+- 로컬 미리보기와 `POST /api/emote-overlay/test`는 `shared/emote-samples.js`의 동일한 실제 치지직 기본 팩 예시를 사용한다. PNG 6종과 원본 GIF 2종이며, 아루봇 로고·유니코드 이모지·생성 이미지는 기본 예시로 보내지 않는다. 사용자가 선택한 로컬 테스트 이미지는 그대로 사용할 수 있다.
+- [치지직 공개 웹사이트](https://chzzk.naver.com/)의 당시 [웹 클라이언트](https://ssl.pstatic.net/static/nng/glive/resource/p/static/js/index-VdvK-ysl.js)는 `/service/v1/channels/{channelId}/emoji-packs`를 조회한다. 공개 채널 `d35108d902dd1e445962ed2b4ad889f7`의 응답에서 잠기지 않은 기본 팩 `dp_1` / `CHZZK 이모티콘`을 확인했다. 쿠키·토큰 없이 일반 웹 요청 헤더로 HTTP 200 및 `code: 200`을 확인했으며, 구독자·채널 전용 팩은 사용하지 않았다. 이 웹 경로는 공식 공개 개발 API의 안정된 계약으로 취급하지 않는다.
+- 선택한 ID와 파일: `d_1/cha01.png`, `d_2/cha02.png`, `d_3/cha03.png`, `d_11/txt01.png`, `d_21/a_01.png`, `d_41/b_01.gif`, `d_42/b_02.gif`, `d_73/c_01.png`. 모두 `https://ssl.pstatic.net/static/nng/glive/icon/` 아래에 있으며, 실제 GET 응답의 HTTP 200, 이미지 MIME 타입, PNG/GIF 시그니처를 확인했다.
+- 실행 중에는 목록 API를 추가 호출하지 않는다. 고정된 8개 CDN 주소만 브라우저가 직접 읽고 일반 HTTP 캐시를 사용한다. 서버 프록시·이미지 복제 저장·로그인·추가 연결 설정이 필요 없다.
+- 기본 예시가 로드에 실패하면 검증된 다른 기본 PNG 주소로 최대 두 번 대체하고, 모두 실패하면 해당 개체와 물리·파편 자원을 제거한다. 이 동작은 서버가 표시한 테스트 항목에만 적용되며 실제 시청자 채팅 이미지는 다른 예시로 바꾸지 않는다. 이미지 URL이나 개수를 사용자 입력으로 받아 외부 목록을 무제한 조회하지 않는다.
+- 공개 응답 및 CDN 이미지 확인은 재배포 라이선스 확인을 의미하지 않는다. 이미지 저작권은 원 권리자에게 있으며 원본 CDN 표시만 사용한다. CDN 주소 변경·외부 표시 차단·오프라인 상황은 별도 점검이 필요하고, 로고나 가짜 이모티콘으로 숨기지 않는다.
+- 추가 배선이나 DB 마이그레이션은 필요 없다. 전용 테스트 89개, 대상 파일 ESLint, 관리 화면/오버레이의 메모리 내 번들 검사를 통과했다. 브라우저/OBS 실측과 전체 빌드는 이번 하위 작업에서 수행하지 않았다.
+
+### 채팅 데이터와 물리 엔진
+
 - [치지직 Session 문서](https://chzzk.gitbook.io/chzzk/chzzk-api/session): CHAT 이벤트의 `emojis` 식별자/URL 매핑.
 - [씨미 채팅 이벤트 문서](https://developers.ci.me/docs/events-chat): 본문 이모티콘 토큰과 `emojis` URL 매핑.
 - YouTube는 기존 수신기의 `receiverRaw.message` 이미지 항목을 이용하며 별도 채팅 수집 연결을 만들지 않는다.

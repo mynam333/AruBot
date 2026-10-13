@@ -51,9 +51,9 @@ describe('disconnected channel runtime regression', () => {
     const chzzkEnd = serverIndex.indexOf("app.get('/api/channel/cache-stats'", chzzkStart);
     const chzzkBody = serverIndex.slice(chzzkStart, chzzkEnd);
 
-    expect(youtubeBody).toContain("await deleteYoutubeAuthorizedData(ownerUserId, platformUserId, 'revoked')");
-    expect(youtubeDeleteBody).toContain('await deleteYoutubeStreamerChannel(owner)');
-    expect(youtubeDeleteBody).toContain("await deletePlatformAccount('youtube', owner)");
+    expect(youtubeBody).toContain("await deleteYoutubeAuthorizedData(ownerUserId, platformUserId, 'revoked', tokens)");
+    expect(youtubeDeleteBody).toContain("await deletePlatformAccount('youtube', owner, null, { expectedTokens, deleteStreamerChannel: true })");
+    expect(youtubeDeleteBody).toContain('if (deleted.skipped) return');
     expect(cimeBody).toContain('await deletePlatformTokens(\'cime\', ownerUserId)');
     expect(chzzkBody).toContain('await updateTokens(sid, null)');
   });

@@ -76,6 +76,8 @@ jobs:
           npm run test:avatars
           npm run test:wheel
           npm run test:emotes
+          npm run test:marble
+          npm run test:accounts
           npm run build
 
       - name: Create backend artifact

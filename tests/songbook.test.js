@@ -10,7 +10,8 @@ function load(file, names, extra = {}) {
   return context.module.exports;
 }
 const shared = load('shared/songbook.js', ['songbookVideoId', 'normalizeSongbookSong', 'normalizeSongbookSettings', 'normalizeSongbookQuery', 'publicSongbookSong', 'songbookError']);
-const { createSongbookStore } = load('server/songbook-store.js', ['createSongbookStore'], { ...shared, randomUUID, readFile: async () => '-- schema' });
+const commands = load('shared/songbook-commands.js', ['matchSongbookSongs']);
+const { createSongbookStore } = load('server/songbook-store.js', ['createSongbookStore'], { ...shared, ...commands, randomUUID, readFile: async () => '-- schema' });
 const { registerSongbookRoutes } = load('server/songbook-routes.js', ['registerSongbookRoutes']);
 const { botManagementRoutePolicy, canUseBotManagementRoute } = load('shared/bot-management-policy.js', ['botManagementRoutePolicy', 'canUseBotManagementRoute']);
 const songId = '11111111-1111-4111-8111-111111111111';
@@ -139,6 +140,67 @@ describe('songbook transactional requests', () => {
     const select = h.calls.find(call => call.sql.startsWith('select * from songbook_songs where'));
     expect(select.sql).toContain("data->>'visible'");
     expect(select.values.slice(0, 2)).toEqual(['owner', '%a!%!_!!%']);
+  });
+});
+
+describe('songbook chat requests share the website queue', () => {
+  const chat = { provider: 'chzzk', userId: 'chat-user', username: '채팅 시청자' };
+  test('unregistered chat viewer can request without creating an app account', async () => {
+    const h = storeHarness(sql => sql.startsWith('select id,data from songbook_songs') ? { rows: [songRow] } : undefined);
+    const result = await h.store.requestSongFromChat('owner', chat, '노래', requestId);
+    expect(result.username).toBe(chat.username);
+    const inserted = h.calls.find(call => call.sql.startsWith('insert into songbook_requests('));
+    expect(inserted.values[2]).toBeNull();
+    expect(inserted.values.slice(8)).toEqual(['chzzk', 'chat-user']);
+    expect(result.song).not.toHaveProperty('privateNote');
+    expect(h.calls.some(call => /(?:insert|update).*platform_accounts|insert into app_users/.test(call.sql))).toBe(false);
+    expect(h.calls.at(-1).sql).toBe('commit');
+  });
+  test('linked chat user shares website per-user limit', async () => {
+    const h = storeHarness(sql => {
+      if (sql.startsWith('select id,data from songbook_songs')) return { rows: [songRow] };
+      if (sql.startsWith('select distinct user_id from platform_accounts')) return { rows: [{ user_id: 'viewer' }] };
+      if (sql === "select * from songbook_requests where owner_user_id=$1 and status in ('pending','singing')") return { rows: [{ ...requestRow, song_id: 'other' }] };
+    }, { requests_enabled: true, per_user_limit: 1 });
+    await expect(h.store.requestSongFromChat('owner', chat, '노래', requestId)).rejects.toMatchObject({ status: 409 });
+    expect(h.calls.some(call => call.sql.startsWith('insert into songbook_requests('))).toBe(false);
+  });
+  test('redelivered chat event returns original receipt even after closing requests', async () => {
+    const h = storeHarness(sql => sql.includes('and chat_user_id=$3 and request_key=$4') ? { rows: [requestRow] } : undefined, { requests_enabled: false, per_user_limit: 1 });
+    await expect(h.store.requestSongFromChat('owner', chat, '노래', requestId)).resolves.toHaveProperty('id', requestId);
+    expect(h.calls.some(call => call.sql.startsWith('insert into songbook_requests('))).toBe(false);
+  });
+  test('website limit counts earlier unlinked chat requests after account linking', async () => {
+    const h = storeHarness(sql => {
+      if (sql.startsWith('select provider,platform_user_id')) return { rows: [{ provider: 'chzzk', platform_user_id: 'chat-user' }] };
+      if (sql === "select * from songbook_requests where owner_user_id=$1 and status in ('pending','singing')") return { rows: [{ ...requestRow, viewer_user_id: null, chat_provider: 'chzzk', chat_user_id: 'chat-user', song_id: 'other' }] };
+    }, { requests_enabled: true, per_user_limit: 1 });
+    await expect(h.store.requestSong('owner', 'viewer', { songId, requestKey: requestId })).rejects.toMatchObject({ status: 409 });
+  });
+  test.each(['', 'unknown_user', 'nickname:fake', 'bad id'])('rejects unstable chat identity %s', async userId => {
+    const h = storeHarness();
+    await expect(h.store.requestSongFromChat('owner', { ...chat, userId }, '노래', requestId)).rejects.toMatchObject({ status: 400 });
+    expect(h.calls).toHaveLength(0);
+  });
+  test('same nickname from another provider is not the same viewer', async () => {
+    const h = storeHarness(sql => {
+      if (sql.startsWith('select id,data from songbook_songs')) return { rows: [songRow] };
+      if (sql === "select * from songbook_requests where owner_user_id=$1 and status in ('pending','singing')") return { rows: [{ ...requestRow, viewer_user_id: null, chat_provider: 'youtube', chat_user_id: 'chat-user' }] };
+    }, { requests_enabled: true, per_user_limit: 1 });
+    await expect(h.store.requestSongFromChat('owner', chat, '노래', requestId)).resolves.toHaveProperty('id');
+  });
+  test('ambiguous matches never enqueue an arbitrary song', async () => {
+    const h = storeHarness(sql => sql.startsWith('select id,data from songbook_songs') ? { rows: [songRow, { ...songRow, id: 'other', data: { ...songRow.data, artist: '다른 가수' } }] } : undefined);
+    await expect(h.store.requestSongFromChat('owner', chat, '노래', requestId)).rejects.toMatchObject({ status: 409 });
+    expect(h.calls.some(call => call.sql.startsWith('insert into songbook_requests('))).toBe(false);
+  });
+  test('website viewer can cancel linked earlier chat request, but not unrelated chats', async () => {
+    const h = storeHarness(sql => {
+      if (sql.startsWith('select * from songbook_requests where owner_user_id=$1 and id=')) return { rows: [{ ...requestRow, viewer_user_id: null }] };
+      if (sql.startsWith('select id from songbook_requests')) return { rows: [{ id: requestId }] };
+    });
+    await expect(h.store.changeRequest('owner', requestId, 'cancelled', { viewerUserId: 'viewer' })).resolves.toHaveProperty('status', 'cancelled');
+    expect(h.calls.find(call => call.sql.startsWith('select id from songbook_requests')).sql).toContain('a.user_id=$2');
   });
 });
 

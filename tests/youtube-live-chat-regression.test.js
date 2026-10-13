@@ -253,7 +253,7 @@ describe('YouTube live chat integration regression', () => {
 
   test('YouTube consent can be revoked and stale authorization is revalidated', () => {
     expect(serverIndex).toContain('async function revokeYoutubeOAuthGrant');
-    expect(serverIndex).toContain("await deleteYoutubeAuthorizedData(ownerUserId, platformUserId, 'revoked')");
+    expect(serverIndex).toContain("await deleteYoutubeAuthorizedData(ownerUserId, platformUserId, 'revoked', tokens)");
     expect(serverIndex).toContain('async function validateYoutubeAuthorizations');
     expect(serverIndex).toContain("await markPlatformTokenValidated('youtube', ownerUserId)");
     expect(serverDb).toContain('last_validated_at timestamptz not null default now()');

@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { normalizeEmoteSettings, safeEmoteImageUrl } from '../shared/emote-overlay.js';
+import { isChzzkEmoteSampleUrl } from '../shared/emote-samples.js';
 
 const migration = new URL('./migrations/028_emote_overlay.sql', import.meta.url);
 const fail = (message, status = 400) => { throw Object.assign(new Error(message), { status }); };
@@ -72,7 +73,9 @@ export function createEmoteOverlayStore({ withPgClient, ensureIdentityTables }) 
       let items = (Array.isArray(event?.items) ? event.items : []).slice(0, 16).flatMap(item => {
         if (!item || (!test && !(['chzzk', 'cime', 'youtube'].includes(item.provider) && settings.providers[item.provider]))) return [];
         const url = test && item.url === '/files/logo.png' ? item.url : safeEmoteImageUrl(item.url);
-        return url ? [{ url, name: String(item.name || '이모티콘').slice(0, 80), provider: item.provider }] : [];
+        return url ? [{ url, name: String(item.name || '이모티콘').slice(0, 80), provider: item.provider,
+          ...(test && isChzzkEmoteSampleUrl(url) ? { sample: true } : {}),
+        }] : [];
       }).slice(0, settings.maxPerMessage);
       if (!items.length) return null;
       const duplicate = await pg.query('select id from emote_overlay_events where owner_user_id=$1 and event_key=$2', [owner, event.key]);

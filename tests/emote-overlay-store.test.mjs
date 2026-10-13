@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createEmoteOverlayStore } from '../server/emote-overlay-store.js';
 import { normalizeEmoteSettings } from '../shared/emote-overlay.js';
+import { createChzzkEmoteSamples } from '../shared/emote-samples.js';
 
 const token = `emo_${'a'.repeat(43)}`;
 const image = { url: 'https://ssl.pstatic.net/emotes/heart.webp', name: 'heart', provider: 'chzzk' };
@@ -175,6 +176,25 @@ test('admin sample bypasses provider/cooldown only, not enabled or aggregate lim
   await db.store.append('owner', event({ items: [sample] }), { test: true });
   assert.equal(await db.store.append('owner', event({ items: [sample] }), { test: true }), null);
   assert.equal(await db.store.append('owner', event({ items: [sample] }), { test: true }), null);
+});
+
+test('only curated admin samples retain the fallback marker, even when CHZZK chat is disabled', async t => {
+  const sample = createChzzkEmoteSamples(1)[0];
+  const unknown = { ...image, sample: true };
+  const normalChat = { ...sample };
+  delete normalChat.sample;
+  const db = fixture(t, [
+    locked(row({ config: settings({ providers: { chzzk: false } }) })), duplicate(), budget(),
+    { sql: /^insert into emote_overlay_events/, check(values) {
+      assert.deepEqual(JSON.parse(values[5]).items, [sample, image]);
+    }, rows: [savedEvent()] }, prune,
+    locked(row()), duplicate(), cooldown(), budget(),
+    { sql: /^insert into emote_overlay_events/, check(values) {
+      assert.deepEqual(JSON.parse(values[5]).items, [normalChat]);
+    }, rows: [savedEvent()] }, prune,
+  ]);
+  await db.store.append('owner', event({ items: [sample, unknown] }), { test: true });
+  await db.store.append('owner', event({ items: [sample] }));
 });
 
 test('failed append rolls back and propagates DB errors without stale success or automatic retry', async t => {

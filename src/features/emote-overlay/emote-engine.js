@@ -1,5 +1,6 @@
 import Matter from 'matter-js';
 import { normalizeEmoteSettings } from '../../../shared/emote-overlay.js';
+import { chzzkEmoteSampleFallbacks } from '../../../shared/emote-samples.js';
 
 const { Engine, Bodies, Body, Composite } = Matter;
 export const FIXED_STEP_MS = 1000 / 60;
@@ -499,6 +500,7 @@ export function createEmoteEngine(container, input, { onCount } = {}) {
       const node = element('div', { position: 'absolute', left: '0', top: '0', width: `${spec.size}px`, height: `${spec.size}px`, opacity: '0', willChange: 'transform, opacity' });
       node.dataset.emoteMode = spec.mode;
       const img = image(item.url);
+      const sourceImages = [img];
       const tileLayer = element('div', { position: 'absolute', inset: '0', display: 'none' });
       const particle = { spec, group, node, img, tileLayer, born: clock, ready: false, tiles: [], trails: [], history: [], body: null, world: null, previous: null, position: null };
       if (spec.mode === 'sticker' && (TILE_EFFECTS.has(config.sticker.enter) || TILE_EFFECTS.has(config.sticker.exit))) {
@@ -508,7 +510,9 @@ export function createEmoteEngine(container, input, { onCount } = {}) {
             const tile = element('div', { position: 'absolute', inset: '0',
               clipPath: `inset(${layout.y * 100}% ${(1 - layout.x - layout.width) * 100}% ${(1 - layout.y - layout.height) * 100}% ${layout.x * 100}%)`,
               transformOrigin: `${(layout.x + layout.width / 2) * 100}% ${(layout.y + layout.height / 2) * 100}%` });
-            tile.appendChild(image(item.url));
+            const tileImage = image(item.url);
+            sourceImages.push(tileImage);
+            tile.appendChild(tileImage);
             tileLayer.appendChild(tile);
             particle.tiles.push({ node: tile, layout });
           }
@@ -519,7 +523,9 @@ export function createEmoteEngine(container, input, { onCount } = {}) {
         const count = Math.min(spec.trail, MAX_TRAIL_BUDGET - trailCount);
         for (let index = 0; index < count; index++) {
           const trail = element('div', { position: 'absolute', width: `${spec.size}px`, height: `${spec.size}px`, opacity: '0' });
-          trail.appendChild(image(item.url));
+          const trailImage = image(item.url);
+          sourceImages.push(trailImage);
+          trail.appendChild(trailImage);
           group.appendChild(trail);
           particle.trails.push(trail);
         }
@@ -532,8 +538,17 @@ export function createEmoteEngine(container, input, { onCount } = {}) {
       particles.push(particle);
       if (spec.mode === 'rain' || spec.mode === 'launch') createPhysics(particle);
       img.onload = () => { particle.ready = true; if (!destroyed) render(); };
-      img.onerror = () => remove(particle);
-      if (img.complete && img.naturalWidth === 0) remove(particle);
+      // Only curated test samples may change image; never substitute a viewer's chat emote.
+      const fallbacks = item.sample === true ? chzzkEmoteSampleFallbacks(item.url) : [];
+      const imageFailed = () => {
+        const next = fallbacks.shift();
+        if (!next) { remove(particle); return; }
+        particle.ready = false;
+        for (const source of sourceImages) source.src = next;
+        if (img.complete && img.naturalWidth === 0) imageFailed();
+      };
+      img.onerror = imageFailed;
+      if (img.complete && img.naturalWidth === 0) imageFailed();
       admission.push(now);
       accepted++;
     }

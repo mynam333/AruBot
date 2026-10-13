@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EMOTE_ANIMATIONS, EMOTE_ORIGINS, normalizeEmoteSettings } from '../shared/emote-overlay.js';
+import { createChzzkEmoteSamples, chzzkEmoteSampleFallbacks } from '../shared/emote-samples.js';
 import {
   createEmoteEngine, createSeededRandom, createParticleSpec, getEmoteArea, getLaunchState,
   sampleFloatMotion, sampleStickerTransition, createFragmentLayout, sampleFragmentMotion,
@@ -409,6 +410,46 @@ test('image failures remove physics, fragments and trails and do not retain hand
     assert.equal(w.engine.stats().worlds, 0);
     assert.equal(w.callbacks.size, 0);
     assert.equal(img.onerror, null);
+    w.engine.destroy();
+  }
+});
+
+test('failed curated samples replace image, fragments and trails with real CHZZK images at most twice', () => {
+  const sample = createChzzkEmoteSamples(2)[1];
+  const fallbacks = chzzkEmoteSampleFallbacks(sample.url);
+  for (const mode of ['sticker', 'launch', 'rain']) {
+    const w = browser({ mode, sticker: { enter: 'dust' } });
+    w.engine.emit([sample]);
+    const img = w.walk().find(el => el.tagName === 'IMG' && el.onerror);
+    assert.equal(img.src, sample.url);
+    const before = w.engine.stats();
+    for (const fallback of fallbacks) {
+      img.onerror();
+      assert.equal(w.engine.stats().active, 1);
+      assert.equal(w.engine.stats().fragments, before.fragments);
+      assert.equal(w.engine.stats().trails, before.trails);
+      assert.ok(w.walk().filter(el => el.tagName === 'IMG').every(el => el.src === fallback));
+    }
+    img.onerror();
+    assert.equal(w.engine.stats().active, 0);
+    assert.equal(w.engine.stats().fragments, 0);
+    assert.equal(w.engine.stats().trails, 0);
+    assert.equal(w.engine.stats().worlds, 0);
+    assert.equal(img.onerror, null);
+    w.engine.destroy();
+  }
+});
+
+test('real chat emotes and custom preview images never turn into sample images on failure', () => {
+  const sample = createChzzkEmoteSamples(1)[0];
+  for (const image of [{ ...sample, sample: undefined }, { ...sample, url: 'blob:http://localhost/preview' },
+    { ...sample, url: 'https://cdn.example.com/viewer.gif' }]) {
+    const w = browser();
+    w.engine.emit([image]);
+    const img = w.walk().find(el => el.tagName === 'IMG' && el.onerror);
+    img.onerror();
+    assert.equal(w.engine.stats().active, 0);
+    assert.equal(img.src, image.url);
     w.engine.destroy();
   }
 });

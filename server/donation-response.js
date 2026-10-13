@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { assertSafeTextPayload } from '../shared/text-safety.js';
 import { isCommandSafetyError } from './command-execution-safety.js';
+import { prepareCounterVariablePlan } from './counter-variables.js';
+import { prepareMemoVariablePlan, resolveMemoVariablePlan } from './memo-variables.js';
 
 const SPECIAL_TOKEN_RE = /\$\{\s*(roulette|action|automation|blueprint)::([^{}]+)\s*\}/gi;
 const DONOR_TOKEN_RE = /\$\{\s*(username|amount|message)\s*\}|\{donation\.(username|amount|message)\}|\{user\.(name|username|nickname|id)\}/g;
@@ -11,6 +13,9 @@ export async function renderDonationResponse(template, context, dependencies) {
     substituteAllPlaceholders,
     executeAndStripActionVariableTokens,
     enqueueRouletteSpin,
+    resolveCommandCounterVariables,
+    readMemos,
+    resolveSongbookPublicUrl,
   } = dependencies;
   const { sid, provider, userId, username, amount, message, chatPost, channelUid, source, ruleId, ruleName } = context;
 
@@ -28,11 +33,16 @@ export async function renderDonationResponse(template, context, dependencies) {
       return '';
     });
 
+    const counterPlan = prepareCounterVariablePlan(plannedText);
+    // Donation messages can read named memos, never overwrite command memos.
+    const memoPlan = prepareMemoVariablePlan(counterPlan.text);
     const donation = { amount, message, username, currency: 'KRW' };
     const values = [];
     const prefix = `__donation_${randomUUID()}_`;
     // Restore data once, after read-only global rendering, including literal $ and braces.
-    const protectedText = plannedText.replace(DONOR_TOKEN_RE, (_token, legacyKey, donationKey, userKey) => {
+    const songbookToken = `${prefix}songbook__`;
+    const withSongbook = memoPlan.text.replace(/\$\{\s*songbook_url\s*\}/gi, songbookToken);
+    const protectedText = withSongbook.replace(DONOR_TOKEN_RE, (_token, legacyKey, donationKey, userKey) => {
       const value = userKey ? (userKey === 'id' ? userId : username) : donation[legacyKey || donationKey];
       values.push(String(value ?? ''));
       return `${prefix}${values.length - 1}__`;
@@ -49,6 +59,25 @@ export async function renderDonationResponse(template, context, dependencies) {
       rendered = await substituteAllPlaceholders(protectedText, sid, userId, username, { provider });
     } catch (error) {
       recordError('placeholders', error);
+    }
+    commandExecution.check();
+    if (counterPlan.used) {
+      try {
+        rendered = await resolveCommandCounterVariables(counterPlan, rendered, { sid, provider, userId });
+        features.push('counter');
+      } catch (error) {
+        recordError('counter', error);
+        for (const entry of counterPlan.entries) rendered = String(rendered).split(entry.sentinel).join('확인 불가');
+      }
+    }
+    if (String(rendered).includes(songbookToken)) {
+      let url = '노래책 링크를 확인할 수 없습니다.';
+      try { url = await resolveSongbookPublicUrl(sid, provider) || url; }
+      catch (error) { recordError('songbook_url', error); }
+      rendered = String(rendered).split(songbookToken).join(url);
+    }
+    if (memoPlan.entries.length) {
+      rendered = await resolveMemoVariablePlan(memoPlan, rendered, { readMemos: (keys) => readMemos(sid, keys) });
     }
     const text = String(rendered ?? '').replace(new RegExp(`${prefix}(\\d+)__`, 'g'), (token, index) => values[Number(index)] ?? token).trim();
     assertSafeTextPayload(text);

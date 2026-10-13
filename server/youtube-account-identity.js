@@ -96,6 +96,7 @@ async function transaction(pg, action) {
 
 async function lockOwner(pg, userId) {
   await pg.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`youtube-accounts:owner:${userId}`]);
+  await pg.query('select id from app_users where id=$1 for update', [userId]);
 }
 
 async function readAccounts(pg, userId) {

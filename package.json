@@ -42,6 +42,8 @@
     "db:provider-smoke": "node scripts/db-provider-smoke.js",
     "api:smoke": "node scripts/api-smoke.js",
     "audit:production": "node scripts/audit-production-dependencies.cjs",
+    "accounts:cleanup": "node scripts/cleanup-unlinked-accounts.js",
+    "test:accounts": "node --test tests/unlinked-account-cleanup.test.mjs tests/platform-token-guard.test.mjs tests/chzzk-token-persistence.test.mjs tests/account-local-files.test.mjs",
     "pm2:start": "pm2 start ecosystem.config.cjs --env production",
     "pm2:reload": "pm2 startOrReload ecosystem.config.cjs --env production --update-env",
     "pm2:stop": "pm2 stop arubot-api",
@@ -56,6 +58,7 @@
     "test:avatars:ui": "node --test tests/local-avatars-editor-v3.test.cjs",
     "test:wheel": "node --test tests/participation-wheel-core.test.mjs tests/participation-wheel-store.test.mjs tests/participation-wheel-runtime.test.mjs src/features/wheel/wheel-motion.test.mjs",
     "test:emotes": "node --test tests/emote-connection.test.mjs tests/emote-engine.test.mjs tests/emote-overlay-extractor.test.mjs tests/emote-overlay-runtime.test.mjs tests/emote-overlay-store.test.mjs tests/emote-overlay-routes.test.mjs",
+    "test:marble": "node --test tests/marble-engine.test.mjs tests/marble-store.test.mjs tests/marble-routes.test.mjs tests/marble-runtime.test.mjs tests/marble-postgres.test.mjs tests/marble-client.test.mjs src/features/marble/marble-presentation.test.mjs src/features/marble/marble-dice-motion.test.mjs",
     "test:watch": "jest --watch"
   },
   "dependencies": {
@@ -100,6 +103,7 @@
     "socket.io-client": "2.0.3",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.6.0",
+    "three": "0.186.1",
     "ws": "8.21.1",
     "youtube-chat": "^2.2.0"
   },
@@ -108,6 +112,7 @@
     "@types/jest": "^30.0.0",
     "@types/react": "^18.3.5",
     "@types/react-dom": "^18.3.0",
+    "@types/three": "0.186.0",
     "@typescript-eslint/eslint-plugin": "^8.62.1",
     "@typescript-eslint/parser": "^8.62.1",
     "autoprefixer": "^10.4.18",

@@ -51,6 +51,7 @@ function fakeDatabase(initial, failOn = null) {
       if (query === 'begin') snapshot = structuredClone(rows);
       else if (query === 'rollback') rows = snapshot;
       else if (query === 'commit' || query.includes('pg_advisory_xact_lock')) { /* transaction boundary */ }
+      else if (query === 'select id from app_users where id=$1 for update') { /* parent lock before account rows */ }
       else if (query.startsWith('select user_id from platform_accounts')) {
         return { rows: rows.filter((row) => row.provider === 'youtube' && row.platform_user_id === args[0]) };
       } else if (query.startsWith('select * from platform_accounts')) {

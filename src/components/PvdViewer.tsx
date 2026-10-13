@@ -50,6 +50,7 @@ type YouTubePlayer = {
   getVideoData?: () => { video_id?: string };
   loadModule?: (name: string) => void;
   loadVideoById?: (options: { videoId: string; startSeconds: number }) => void;
+  cueVideoById?: (options: string | { videoId: string; startSeconds: number }) => void;
   mute?: () => void;
   pauseVideo?: () => void;
   playVideo?: () => void;
@@ -169,6 +170,10 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
   const youtubeDurationReportedRef = useRef<{ itemId: string | null; durationSec: number } | null>(null);
   const externalTargetRef = useRef(0);
   const externalPausedRef = useRef(false);
+  const chzzkDonationPausedRef = useRef(false);
+  const serverQueuePausedRef = useRef(false);
+  const serverQueueIdleDeferredRef = useRef(false);
+  const serverQueueOtherPlayerRef = useRef(false);
   const tiktokPlayingSeenRef = useRef(false);
   const tiktokReadyAtRef = useRef(0);
   const tiktokPlayingStartedAtRef = useRef(0);
@@ -197,6 +202,21 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
   const idleControlVersionRef = useRef(0);
   const idleReportRef = useRef<() => void>(() => {});
   const idleControlRef = useRef<(command: Record<string, unknown>) => void>(() => {});
+
+  // A deferred or other-role queue head may be paused while this viewer's idle song must continue.
+  const isServerQueueBlockingPlayback = useCallback(() => (
+    serverQueuePausedRef.current && (playbackModeRef.current === 'donation'
+      || (!serverQueueIdleDeferredRef.current && !serverQueueOtherPlayerRef.current))
+  ), []);
+
+  const isPlaybackBlocked = useCallback(() => (
+    chzzkDonationPausedRef.current || isServerQueueBlockingPlayback() || isPlayerHidden()
+    || (playerRole === 'bgm' && (!bgmEnabledRef.current || !bgmOwnerRef.current))
+  ), [isPlayerHidden, isServerQueueBlockingPlayback, playerRole]);
+
+  const isIdlePlaybackBlocked = useCallback(() => (
+    isPlaybackBlocked() || idlePausedRef.current || !idleOwnerRef.current
+  ), [isPlaybackBlocked]);
 
   // Parse token from /pvd/:token
   useEffect(() => {
@@ -241,7 +261,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
     const mix = createPvdYouTubeMixPlayer({
       getApi: getYouTubeApi,
       getHost: () => mixDivRef.current,
-      isVisible: () => !isPlayerHidden() && idleOwnerRef.current,
+      isVisible: () => !isIdlePlaybackBlocked(),
       fetchSeed: async (signal) => {
         const response = await fetch(`${getViewerApiBase()}/api/video-donation/idle-playlist/next-by-token`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, signal,
@@ -263,6 +283,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
       onTrack: (track) => { idleTrackRef.current = track; idleReportRef.current(); },
       onBlocked: updateAutoplayBlocked,
       onBoundary: () => {
+        if (isIdlePlaybackBlocked()) return false;
         if (!deferredDonationRef.current) return false;
         idleAdvanceRef.current('end');
         return true;
@@ -273,7 +294,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
       mix.dispose();
       if (mixPlayerRef.current === mix) mixPlayerRef.current = null;
     };
-  }, [getViewerApiBase, getYouTubeApi, playerRole, token, isPlayerHidden, updateAutoplayBlocked]);
+  }, [getViewerApiBase, getYouTubeApi, playerRole, token, isIdlePlaybackBlocked, updateAutoplayBlocked]);
 
   const probeYouTubeDuration = useCallback((
     request: YouTubeDurationProbeRequest,
@@ -324,6 +345,38 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
       frame.contentWindow.postMessage({ ...message, 'x-tiktok-player': true }, 'https://www.tiktok.com');
     } catch {}
   }, []);
+
+  const applyServerPauseState = useCallback((payload: Record<string, unknown>) => {
+    const wasInterrupted = chzzkDonationPausedRef.current;
+    if (typeof payload.chzzkDonationPaused === 'boolean') {
+      chzzkDonationPausedRef.current = payload.chzzkDonationPaused;
+    }
+    if (Object.prototype.hasOwnProperty.call(payload, 'paused')) {
+      serverQueuePausedRef.current = payload.paused === true;
+    }
+    if (typeof payload.idleDeferred === 'boolean') serverQueueIdleDeferredRef.current = payload.idleDeferred;
+    if (Object.prototype.hasOwnProperty.call(payload, 'item')) {
+      const item = isUnknownRecord(payload.item) ? payload.item : null;
+      serverQueueOtherPlayerRef.current = !!item && (item.kind === 'bgm') !== (playerRole === 'bgm');
+    }
+    if (wasInterrupted !== chzzkDonationPausedRef.current) suppressUntilRef.current = Date.now() + 1000;
+    if (!chzzkDonationPausedRef.current && !isServerQueueBlockingPlayback()) return;
+
+    // Keep the live players and manual pause intent intact throughout the server lease.
+    suppressUntilRef.current = Date.now() + 1000;
+    if (playbackModeRef.current === 'idle') {
+      const position = mixActiveRef.current ? mixPlayerRef.current?.getCurrentTime() : playerRef.current?.getCurrentTime?.();
+      if (typeof position === 'number' && Number.isFinite(position)) {
+        idleResumeAtRef.current = position;
+        youtubePlaybackTargetRef.current.atSec = position;
+      }
+      idlePlayingRef.current = false;
+    }
+    mixPlayerRef.current?.setPaused(true);
+    try { playerRef.current?.pauseVideo?.(); } catch {}
+    try { externalVideoRef.current?.pause(); } catch {}
+    postToExternalPlayer({ type: 'pause' });
+  }, [isServerQueueBlockingPlayback, playerRole, postToExternalPlayer]);
 
   const buildExternalSrc = useCallback((item: VideoDonationItem, atSec: number, paused?: boolean) => {
     const provider = getItemProvider(item);
@@ -411,6 +464,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
 
   const emitControl = useCallback((op: 'pause' | 'play' | 'seek' | 'volume' | 'duration', atSec?: number, nextVolume?: number, durationSec?: number) => {
     if (!token) return;
+    if ((op === 'pause' || op === 'play' || op === 'seek') && (chzzkDonationPausedRef.current || serverQueuePausedRef.current)) return;
     const apiBase = getViewerApiBase();
     const body = { token, op, atSec, volume: nextVolume, durationSec, source: 'player', itemId: currentItemIdRef.current };
     fetch(`${apiBase}/api/video-donation/control-by-token`, {
@@ -438,12 +492,12 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
     }, 180);
   }, [emitControl]);
 
-  const applyPlaybackTarget = useCallback((targetSec: number, paused?: boolean, force?: boolean, strict?: boolean) => {
-    youtubePlaybackTargetRef.current = { atSec: Math.max(0, Math.floor(targetSec)), paused: paused === true };
+  const applyPlaybackTarget = useCallback((targetSec: number | null, paused?: boolean, force?: boolean, strict?: boolean) => {
+    const target = targetSec === null ? youtubePlaybackTargetRef.current.atSec : Math.max(0, Math.floor(targetSec));
+    youtubePlaybackTargetRef.current = { atSec: target, paused: paused === true };
     const player = playerRef.current;
     if (!player) return;
 
-    const target = Math.max(0, Math.floor(targetSec));
     let current = target;
     try {
       if (player.getCurrentTime) current = Number(player.getCurrentTime());
@@ -452,39 +506,39 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
     const drift = Math.abs(current - target);
     const forwardDrift = target - current;
     const backwardDrift = current - target;
-    const shouldSeek = strict === true
+    const shouldSeek = targetSec !== null && (strict === true
       ? (force === true || drift > 1.25)
       : force === true
       ? drift > PVD_FORCE_SYNC_THRESHOLD_SEC
-      : (forwardDrift > PVD_FORWARD_SYNC_THRESHOLD_SEC || backwardDrift > PVD_BACKWARD_SYNC_THRESHOLD_SEC);
+      : (forwardDrift > PVD_FORWARD_SYNC_THRESHOLD_SEC || backwardDrift > PVD_BACKWARD_SYNC_THRESHOLD_SEC));
     suppressUntilRef.current = Date.now() + 1000;
 
     try {
       if (shouldSeek && player.seekTo) player.seekTo(target, true);
-      lastTimeRef.current = target;
+      if (targetSec !== null) lastTimeRef.current = target;
     } catch {}
 
     try {
-      if (paused || isPlayerHidden()) {
+      if (paused || isPlaybackBlocked() || (playbackModeRef.current === 'idle' && isIdlePlaybackBlocked())) {
         player.pauseVideo && player.pauseVideo();
       } else {
         player.playVideo && player.playVideo();
       }
     } catch {}
-  }, [isPlayerHidden]);
+  }, [isIdlePlaybackBlocked, isPlaybackBlocked]);
 
-  const applyExternalPlaybackTarget = useCallback((targetSec: number, paused?: boolean) => {
+  const applyExternalPlaybackTarget = useCallback((targetSec: number | null, paused?: boolean) => {
     const provider = externalProviderRef.current;
-    const target = Math.max(0, Math.floor(Number(targetSec || 0)));
+    const target = targetSec === null ? externalTargetRef.current : Math.max(0, Math.floor(Number(targetSec || 0)));
     externalTargetRef.current = target;
     externalPausedRef.current = paused === true;
     suppressUntilRef.current = Date.now() + 1000;
-    lastTimeRef.current = target;
+    if (targetSec !== null) lastTimeRef.current = target;
     const video = externalVideoRef.current;
     if (video) {
       try {
-        if (Math.abs(Number(video.currentTime || 0) - target) > 1.25) video.currentTime = target;
-        if (paused || isPlayerHidden()) {
+        if (targetSec !== null && Math.abs(Number(video.currentTime || 0) - target) > 1.25) video.currentTime = target;
+        if (paused || isPlaybackBlocked()) {
           video.pause();
         } else {
           const result = video.play();
@@ -494,10 +548,10 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
       return;
     }
     if (provider === 'tiktok') {
-      postToExternalPlayer({ type: 'seekTo', value: target });
-      postToExternalPlayer({ type: paused || isPlayerHidden() ? 'pause' : 'play' });
+      if (targetSec !== null) postToExternalPlayer({ type: 'seekTo', value: target });
+      postToExternalPlayer({ type: paused || isPlaybackBlocked() ? 'pause' : 'play' });
     }
-  }, [postToExternalPlayer, isPlayerHidden]);
+  }, [postToExternalPlayer, isPlaybackBlocked]);
 
   const clearYouTubePlayerHost = useCallback(() => {
     try { playerDivRef.current?.replaceChildren(); } catch {}
@@ -577,6 +631,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
 
   const report = useCallback((cause: 'error' | 'end') => {
     if (!token || playbackModeRef.current !== 'donation') return;
+    if (chzzkDonationPausedRef.current || serverQueuePausedRef.current) return;
     const itemId = currentItemIdRef.current;
     const now = Date.now();
     const lastReport = lastReportRef.current;
@@ -619,7 +674,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
         const state = Number(data.value);
         const now = Date.now();
         if (state === 1) {
-          if (externalPausedRef.current || isPlayerHidden()) {
+          if (externalPausedRef.current || isPlaybackBlocked()) {
             postToExternalPlayer({ type: 'pause' });
             return;
           }
@@ -632,7 +687,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
           return;
         }
         if (state === 0) {
-          if (externalPausedRef.current || isPlayerHidden()) return;
+          if (externalPausedRef.current || isPlaybackBlocked()) return;
           const playedMs = tiktokPlayingStartedAtRef.current ? now - tiktokPlayingStartedAtRef.current : 0;
           const duration = Number(tiktokDurationRef.current || 0);
           const current = Number(lastTimeRef.current || 0);
@@ -643,13 +698,13 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
           } else if (tiktokEarlyEndRetryRef.current < 2) {
             tiktokEarlyEndRetryRef.current += 1;
             window.setTimeout(() => {
-              if (!externalPausedRef.current && !isPlayerHidden() && externalProviderRef.current === 'tiktok') postToExternalPlayer({ type: 'play' });
+              if (!externalPausedRef.current && !isPlaybackBlocked() && externalProviderRef.current === 'tiktok') postToExternalPlayer({ type: 'play' });
             }, 350);
           }
           return;
         }
         if (state === 2) {
-          if (!isPlayerHidden() && now - tiktokReadyAtRef.current > 1000 && now > suppressUntilRef.current && now - lastEmitRef.current > 300) {
+          if (!isPlaybackBlocked() && now - tiktokReadyAtRef.current > 1000 && now > suppressUntilRef.current && now - lastEmitRef.current > 300) {
             lastEmitRef.current = now;
             emitControl('pause', Math.floor(lastTimeRef.current));
           }
@@ -695,7 +750,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
         const errorCode = Number(isUnknownRecord(value) ? value.errorCode : value);
         if (errorCode === 3002) {
           window.setTimeout(() => {
-            if (!externalPausedRef.current && !isPlayerHidden() && externalProviderRef.current === 'tiktok') postToExternalPlayer({ type: 'play' });
+            if (!externalPausedRef.current && !isPlaybackBlocked() && externalProviderRef.current === 'tiktok') postToExternalPlayer({ type: 'play' });
           }, 500);
           return;
         }
@@ -705,7 +760,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
 
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [applyExternalPlaybackTarget, applyVolume, emitControl, postToExternalPlayer, report, isPlayerHidden]);
+  }, [applyExternalPlaybackTarget, applyVolume, emitControl, postToExternalPlayer, report, isPlaybackBlocked, isPlayerHidden]);
 
   const ensurePlayer = useCallback((videoId: string, start: number, opts?: PlaybackTarget) => {
     expectedYouTubeMediaIdRef.current = videoId;
@@ -737,7 +792,8 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
         return;
       }
 
-      const shouldAutoplay = youtubePlaybackTargetRef.current.paused || isPlayerHidden() ? 0 : 1;
+      const shouldAutoplay = youtubePlaybackTargetRef.current.paused || isPlaybackBlocked()
+        || (playbackModeRef.current === 'idle' && isIdlePlaybackBlocked()) ? 0 : 1;
       const playerVars = {
         autoplay: shouldAutoplay,
         start: target,
@@ -767,9 +823,13 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
           const t = activePlayer?.getCurrentTime ? Number(activePlayer.getCurrentTime()) : 0;
           lastTimeRef.current = t;
           const now = Date.now();
+          if (isPlaybackBlocked()) {
+            if (e?.data === YT.PlayerState.PLAYING) activePlayer?.pauseVideo?.();
+            return;
+          }
           if (playbackModeRef.current === 'idle') {
-            if (idlePausedRef.current || !idleOwnerRef.current || isPlayerHidden()) {
-              activePlayer?.pauseVideo?.();
+            if (isIdlePlaybackBlocked()) {
+              if (e?.data === YT.PlayerState.PLAYING) activePlayer?.pauseVideo?.();
               return;
             }
             const track = idlePlaylistRef.current.tracks.find((entry) => entry.mediaId === currentVidRef.current);
@@ -788,7 +848,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
           } else if (e && e.data === YT.PlayerState.PAUSED) {
             if (!isPlayerHidden() && now > suppressUntilRef.current && now - lastEmitRef.current > 300) { lastEmitRef.current = now; emitControl('pause', Math.floor(t)); }
           } else if (e && e.data === YT.PlayerState.PLAYING) {
-            if (youtubePlaybackTargetRef.current.paused || isPlayerHidden()) {
+            if (youtubePlaybackTargetRef.current.paused || isPlaybackBlocked()) {
               activePlayer?.pauseVideo?.();
               return;
             }
@@ -819,7 +879,12 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
       } else {
         try {
           suppressUntilRef.current = Date.now() + 1000;
-          playerRef.current.loadVideoById?.({ videoId, startSeconds: target });
+          if (!shouldAutoplay && playerRef.current.cueVideoById) {
+            playerRef.current.cueVideoById({ videoId, startSeconds: target });
+          } else {
+            playerRef.current.loadVideoById?.({ videoId, startSeconds: target });
+            if (!shouldAutoplay) playerRef.current.pauseVideo?.();
+          }
           setTimeout(() => applyYouTubeCaptions(captionsEnabled), 200);
         } catch {
           try { playerRef.current.destroy?.(); } catch {}
@@ -846,7 +911,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
         applyPlaybackTarget(latest.atSec, latest.paused, true);
       }, 250);
     }).catch(() => {});
-  }, [applyPlaybackTarget, applyVolume, applyYouTubeCaptions, captionsEnabled, createYouTubePlayerMount, emitControl, getYouTubeApi, isExpectedYouTubePlayerMedia, report, reportYouTubeDuration, isPlayerHidden, playerRole, updateAutoplayBlocked]);
+  }, [applyPlaybackTarget, applyVolume, applyYouTubeCaptions, captionsEnabled, createYouTubePlayerMount, emitControl, getYouTubeApi, isExpectedYouTubePlayerMedia, isIdlePlaybackBlocked, isPlaybackBlocked, report, reportYouTubeDuration, isPlayerHidden, playerRole, updateAutoplayBlocked]);
 
   const ensureExternalPlayer = useCallback((item: VideoDonationItem, opts?: PlaybackTarget) => {
     const seq = ++ensureSeqRef.current;
@@ -887,7 +952,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
 
     externalMediaKeyRef.current = key;
     lastTimeRef.current = target;
-    const viewerSrc = buildExternalSrc(item, target, opts?.paused);
+    const viewerSrc = buildExternalSrc(item, target, opts?.paused || isPlaybackBlocked());
     setExternalItem({
       ...item,
       viewerSrc,
@@ -903,7 +968,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
       applyVolume(volumeRef.current);
       applyExternalPlaybackTarget(externalTargetRef.current, externalPausedRef.current);
     }, 450);
-  }, [applyExternalPlaybackTarget, applyVolume, buildExternalSrc, clearYouTubePlayerHost, getItemProvider, getMediaKey]);
+  }, [applyExternalPlaybackTarget, applyVolume, buildExternalSrc, clearYouTubePlayerHost, getItemProvider, getMediaKey, isPlaybackBlocked]);
 
   const applyIdlePlaylistConfig = useCallback((value: unknown) => {
     const next = normalizePvdIdlePlaylist(value);
@@ -924,6 +989,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
   }, []);
 
   const startIdlePlayback = useCallback(() => {
+    if (isPlaybackBlocked()) return;
     const playlist = idlePlaylistRef.current;
     if (playlist.enabled && playlist.mode === 'recommended') {
       if (!mixActiveRef.current) stopPlayer();
@@ -933,8 +999,8 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
       setYoutubeActive(true);
       mixPlayerRef.current?.setVolume(volumeRef.current);
       mixPlayerRef.current?.setCaptions(captionsEnabled);
+      mixPlayerRef.current?.setPaused(isIdlePlaybackBlocked());
       mixPlayerRef.current?.start(playlist);
-      mixPlayerRef.current?.setPaused(idlePausedRef.current);
       return;
     }
     if (mixActiveRef.current) stopPlayer();
@@ -970,10 +1036,14 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
       && !!playerRef.current;
     playbackModeRef.current = 'idle';
     if (alreadyActive) {
+      youtubePlaybackTargetRef.current = {
+        atSec: Number(playerRef.current?.getCurrentTime?.() || idleResumeAtRef.current),
+        paused: idlePausedRef.current,
+      };
       applyYouTubeCaptions(captionsEnabled);
       applyVolume(volumeRef.current);
       try {
-        if (isPlayerHidden() || idlePausedRef.current || !idleOwnerRef.current) playerRef.current?.pauseVideo?.();
+        if (isIdlePlaybackBlocked()) playerRef.current?.pauseVideo?.();
         else playerRef.current?.playVideo?.();
       } catch {}
       return;
@@ -982,13 +1052,14 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
     idlePlayingRef.current = false;
     ensurePlayer(track.mediaId, 0, {
       atSec: Math.max(0, idleResumeAtRef.current),
-      paused: isPlayerHidden() || idlePausedRef.current || !idleOwnerRef.current,
+      paused: idlePausedRef.current,
       force: true,
       itemId: `idle:${track.id}`,
     });
-  }, [applyVolume, applyYouTubeCaptions, captionsEnabled, ensurePlayer, stopPlayer, isPlayerHidden]);
+  }, [applyVolume, applyYouTubeCaptions, captionsEnabled, ensurePlayer, stopPlayer, isIdlePlaybackBlocked, isPlaybackBlocked]);
 
   const activateDeferredDonation = useCallback((itemOverride?: VideoDonationItem | null) => {
+    if (isPlaybackBlocked()) return;
     const item = itemOverride || deferredDonationRef.current;
     const itemId = String(item?.id || '').trim();
     if (!token || !item || !itemId || deferredActivationItemIdRef.current === itemId) return;
@@ -1003,9 +1074,10 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
       if (deferredActivationItemIdRef.current === itemId) deferredActivationItemIdRef.current = null;
       void playbackSyncRef.current(true);
     });
-  }, [getViewerApiBase, token]);
+  }, [getViewerApiBase, isPlaybackBlocked, token]);
 
   const advanceIdlePlayback = useCallback((cause: 'end' | 'error') => {
+    if (isIdlePlaybackBlocked()) return;
     const playlist = idlePlaylistRef.current;
     const currentMediaId = idleCurrentMediaIdRef.current;
     const deferredItem = deferredDonationRef.current;
@@ -1062,7 +1134,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
       return;
     }
     startIdlePlayback();
-  }, [activateDeferredDonation, startIdlePlayback, stopPlayer]);
+  }, [activateDeferredDonation, isIdlePlaybackBlocked, startIdlePlayback, stopPlayer]);
 
   useEffect(() => {
     idleAdvanceRef.current = advanceIdlePlayback;
@@ -1093,6 +1165,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
 
   const applyServerPlaybackPayload = useCallback((payload: Record<string, unknown>, force = false) => {
     playbackPayloadVersionRef.current += 1;
+    applyServerPauseState(payload);
     if (payload.volume != null) applyVolume(Number(payload.volume));
     if (isUnknownRecord(payload.bgm)) bgmConfigRef.current = payload.bgm;
     const bgm = bgmConfigRef.current;
@@ -1106,6 +1179,14 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
     if (playerRole === 'bgm') {
       setBgmPaused(item ? payload.paused === true : idlePausedRef.current);
       setBgmStatus(!bgmEnabledRef.current ? 'BGM 사용 안 함' : otherPlayerItem ? '영상 후원 재생 중' : !bgmOwnerRef.current ? 'BGM 플레이어 연결 대기' : item ? (payload.paused ? 'BGM 일시정지' : 'BGM 신청곡') : '대기 BGM');
+    }
+    if (otherPlayerItem && playerRole === 'video') {
+      deferredDonationRef.current = null;
+      deferredActivationItemIdRef.current = null;
+      if (playbackModeRef.current === 'donation') stopPlayer();
+      if (playlist.enabled) startIdlePlayback();
+      else stopPlayer();
+      return;
     }
     if (otherPlayerItem || (playerRole === 'bgm' && (!bgmEnabledRef.current || (!bgmOwnerRef.current && !autoplayBlockedRef.current)))) {
       if (playerRole === 'bgm' && playbackModeRef.current === 'donation' && currentItemIdRef.current) {
@@ -1121,7 +1202,10 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
     if (item && (item.mediaProvider || item.videoId || item.embedUrl)) {
       if (payload.idleDeferred === true) {
         deferredDonationRef.current = item;
-        if (playlist.enabled && playbackModeRef.current === 'idle') return;
+        if (playlist.enabled && playbackModeRef.current === 'idle') {
+          startIdlePlayback();
+          return;
+        }
         if (!idleOwnerRef.current) return;
         activateDeferredDonation(item);
         return;
@@ -1131,9 +1215,10 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
     }
     deferredDonationRef.current = null;
     deferredActivationItemIdRef.current = null;
+    if (playbackModeRef.current === 'donation') stopPlayer();
     if (playlist.enabled) startIdlePlayback();
     else stopPlayer();
-  }, [activateDeferredDonation, applyIdlePlaylistConfig, applyVolume, captureIdlePosition, getViewerApiBase, playDonationItem, playerRole, startIdlePlayback, stopPlayer, token]);
+  }, [activateDeferredDonation, applyIdlePlaylistConfig, applyServerPauseState, applyVolume, captureIdlePosition, getViewerApiBase, playDonationItem, playerRole, startIdlePlayback, stopPlayer, token]);
 
   const toggleCaptions = useCallback(() => {
     const next = !captionsEnabled;
@@ -1223,8 +1308,8 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
       idlePausedRef.current = op === 'pause';
       if (playerRole === 'bgm') setBgmPaused(idlePausedRef.current);
       if (mixActiveRef.current) {
-        mixPlayerRef.current?.setPaused(idlePausedRef.current);
-        if (op === 'skip') mixPlayerRef.current?.skip();
+        mixPlayerRef.current?.setPaused(isIdlePlaybackBlocked());
+        if (op === 'skip' && !isIdlePlaybackBlocked()) mixPlayerRef.current?.skip();
       } else if (op === 'skip') advanceIdlePlayback('end');
       else if (op === 'pause') {
         youtubePlaybackTargetRef.current.paused = true;
@@ -1236,7 +1321,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
       idleReportRef.current();
     };
     return () => { idleControlRef.current = () => {}; };
-  }, [advanceIdlePlayback, playerRole, startIdlePlayback]);
+  }, [advanceIdlePlayback, isIdlePlaybackBlocked, playerRole, startIdlePlayback]);
 
   useEffect(() => {
     if (!token) return;
@@ -1260,7 +1345,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
             token, op: 'idle_status', playerRole, clientId: idleClientIdRef.current, sequence: ++idleSequenceRef.current,
             source: (window as Window & { obsstudio?: unknown }).obsstudio ? 'obs' : 'browser',
             mode: playbackModeRef.current, track: idleTrackRef.current,
-            playing: idlePlayingRef.current, paused: idlePausedRef.current || isPlayerHidden(),
+            playing: idlePlayingRef.current, paused: idlePausedRef.current || isPlaybackBlocked(),
             atSec: mixActiveRef.current ? mixPlayerRef.current?.getCurrentTime() : playerRef.current?.getCurrentTime?.(),
             controlVersion: idleControlVersionRef.current,
           }),
@@ -1293,7 +1378,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
       clearInterval(interval);
       idleReportRef.current = () => {};
     };
-  }, [getViewerApiBase, playerRole, startIdlePlayback, token, isPlayerHidden]);
+  }, [getViewerApiBase, playerRole, startIdlePlayback, token, isPlaybackBlocked]);
 
   // Page lifecycle handling: pause locally while hidden, then force-align to server on return.
   useEffect(() => {
@@ -1365,11 +1450,24 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
             handleDurationProbe(data, ws);
             return;
           }
-          if (data?.type === 'start') {
+          if (data?.type === 'start' || data?.type === 'state' || data?.type === 'init' || data?.type === 'now-playing') {
             applyServerPlaybackPayload(data, true);
           } else if (data?.type === 'control') {
             playbackPayloadVersionRef.current += 1;
             const op = String(data.op || '').toLowerCase();
+            applyServerPauseState(data);
+            if (op === 'chzzk-donation') {
+              if (playbackModeRef.current === 'idle') startIdlePlayback();
+              else if (playbackModeRef.current === 'donation') {
+                // Pause-only controls must not replace a pending seek with an unready player's zero position.
+                const at = typeof data.atSec === 'number' && Number.isFinite(data.atSec) ? data.atSec : null;
+                if (expectedYouTubeMediaIdRef.current === '__external__') {
+                  applyExternalPlaybackTarget(at, serverQueuePausedRef.current);
+                } else applyPlaybackTarget(at, serverQueuePausedRef.current);
+              } else if (!isPlaybackBlocked()) void resyncFromServer(true);
+              idleReportRef.current();
+              return;
+            }
             if (op === 'volume') {
               applyVolume(Number(data.volume));
               return;
@@ -1389,6 +1487,11 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
             }
             if (op === 'idle-control' && isUnknownRecord(data.command)) {
               idleControlRef.current(data.command);
+              return;
+            }
+            if ((op === 'play' || op === 'pause') && playbackModeRef.current !== 'donation') {
+              if (playbackModeRef.current === 'idle') startIdlePlayback();
+              else if (!isPlaybackBlocked()) void resyncFromServer(true);
               return;
             }
             if (playbackModeRef.current !== 'donation') return;
@@ -1412,13 +1515,13 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
       try { playerRef.current && playerRef.current.destroy && playerRef.current.destroy(); } catch {}
       playerRef.current = null;
     };
-  }, [activateDeferredDonation, applyExternalPlaybackTarget, applyIdlePlaylistConfig, applyPlaybackTarget, applyServerPlaybackPayload, applyVolume, getViewerApiBase, handleDurationProbe, playerRole, resyncFromServer, startIdlePlayback, stopPlayer, token, isPlayerHidden]);
+  }, [activateDeferredDonation, applyExternalPlaybackTarget, applyIdlePlaylistConfig, applyPlaybackTarget, applyServerPauseState, applyServerPlaybackPayload, applyVolume, getViewerApiBase, handleDurationProbe, isPlaybackBlocked, playerRole, resyncFromServer, startIdlePlayback, stopPlayer, token, isPlayerHidden]);
 
   // Low-frequency drift guard for viewers that stay connected but whose YouTube iframe stalls.
   useEffect(() => {
     if (!token) return;
     const id = setInterval(() => {
-      if (!isPlayerHidden() && playbackModeRef.current === 'donation' && playerRef.current) void resyncFromServer(false);
+      if (!isPlayerHidden() && (chzzkDonationPausedRef.current || (playbackModeRef.current === 'donation' && playerRef.current))) void resyncFromServer(false);
     }, 7500);
     return () => {
       try { clearInterval(id); } catch {}
@@ -1454,8 +1557,10 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
     if (op === 'play') {
       updateAutoplayBlocked(false);
       bgmReportRef.current();
-      try { playerRef.current?.playVideo?.(); } catch {}
-      if (mixActiveRef.current) mixPlayerRef.current?.setPaused(false);
+      if (!isPlaybackBlocked()) {
+        try { playerRef.current?.playVideo?.(); } catch {}
+        if (mixActiveRef.current) mixPlayerRef.current?.setPaused(false);
+      }
     }
     if (playbackModeRef.current === 'idle') {
       if (idleTrackRef.current && bgmOwnerRef.current) {
@@ -1468,8 +1573,8 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
       idlePausedRef.current = op === 'pause';
       setBgmPaused(idlePausedRef.current);
       if (mixActiveRef.current) {
-        mixPlayerRef.current?.setPaused(idlePausedRef.current);
-        if (op === 'skip') mixPlayerRef.current?.skip();
+        mixPlayerRef.current?.setPaused(isIdlePlaybackBlocked());
+        if (op === 'skip' && !isIdlePlaybackBlocked()) mixPlayerRef.current?.skip();
       } else if (op === 'skip') advanceIdlePlayback('end');
       else if (op === 'pause') playerRef.current?.pauseVideo?.();
       else startIdlePlayback();
@@ -1491,7 +1596,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
       <div ref={mixDivRef} data-youtube-mix-player style={{ position: 'fixed', inset: 0, bottom: playerRole === 'bgm' ? 96 : 0, display: mixActive ? 'block' : 'none' }} />
       {autoplayBlocked && mixActive && playerRole !== 'bgm' ? (
         <button type="button" aria-label="대기 음악 재생" title="대기 음악 재생"
-          onClick={() => { idlePausedRef.current = false; mixPlayerRef.current?.setPaused(false); }}
+          onClick={() => { idlePausedRef.current = false; mixPlayerRef.current?.setPaused(isIdlePlaybackBlocked()); }}
           style={{ position: 'fixed', zIndex: 10, left: '50%', top: '50%', transform: 'translate(-50%, -50%)', width: 56, height: 56, display: 'grid', placeItems: 'center', borderRadius: 8, color: 'white', background: '#222' }}>
           <Play size={28} />
         </button>
@@ -1503,7 +1608,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
               key={externalItem.mediaKey}
               ref={externalVideoRef}
               src={externalItem.viewerSrc}
-              autoPlay={!externalItem.paused}
+              autoPlay={!externalItem.paused && !isPlaybackBlocked()}
               playsInline
               controls={false}
               muted={volume <= 0}
@@ -1524,7 +1629,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
                 try {
                   event.currentTarget.volume = volumeRef.current / 100;
                   event.currentTarget.muted = volumeRef.current <= 0;
-                  if (externalPausedRef.current || isPlayerHidden()) {
+                  if (externalPausedRef.current || isPlaybackBlocked()) {
                     event.currentTarget.pause();
                   } else {
                     const result = event.currentTarget.play();
@@ -1533,7 +1638,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
                 } catch {}
               }}
               onPlay={(event) => {
-                if (externalPausedRef.current || isPlayerHidden()) event.currentTarget.pause();
+                if (externalPausedRef.current || isPlaybackBlocked()) event.currentTarget.pause();
               }}
               onEnded={() => report('end')}
               onError={() => report('error')}

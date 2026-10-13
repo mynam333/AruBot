@@ -10,6 +10,8 @@ function commandRuntime(overrides = {}) {
     prepareCounterVariablePlan: jest.fn((text) => ({ text, entries: [] })),
     resolveCommandMemoVariables: jest.fn(async (_plan, text) => text),
     resolveCommandCounterVariables: jest.fn(async (_plan, text) => text),
+    hasSongbookCommandToken: text => /\$\{\s*songbook_(?:request|url)\s*\}/i.test(text),
+    executeSongbookCommand: jest.fn(async text => text),
     resolveBlueprintCommandChannelUid: jest.fn(async () => 'channel'),
     makeBlueprintCommandChatPost: jest.fn(() => ({ suppressResultChat: true })),
     executeAndStripActionVariableTokens: jest.fn(async (_sid, text) => ({ text, used: false, jobs: [] })),
@@ -83,10 +85,10 @@ describe('connected blueprint command delivery', () => {
 
   test('does not execute special command effects during a connected test', async () => {
     const { run, bindings, rule } = commandRuntime();
-    rule.responses = ['${video_donation} ${bgm_request} ${roulette::paid} ${live.title_change} ${counter::user::count}'];
+    rule.responses = ['${video_donation} ${bgm_request} ${roulette::paid} ${live.title_change} ${counter::user::count} ${songbook_request}'];
     const result = await run(connected);
     expect(result.executed).toBe(true);
-    for (const name of ['enqueueVideoDonationFromArgs', 'enqueueRouletteSpin', 'executeCommandLiveChangeTokens', 'resolveCommandCounterVariables']) expect(bindings[name]).not.toHaveBeenCalled();
+    for (const name of ['enqueueVideoDonationFromArgs', 'enqueueRouletteSpin', 'executeCommandLiveChangeTokens', 'resolveCommandCounterVariables', 'executeSongbookCommand']) expect(bindings[name]).not.toHaveBeenCalled();
     expect(result.suppressedEffects).toEqual(expect.arrayContaining(['points', 'audience_chat', 'donations', 'counters']));
   });
 

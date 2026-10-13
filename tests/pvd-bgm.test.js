@@ -4,6 +4,7 @@ const loadServerFunctions = require('./helpers/load-server-functions.cjs');
 const bgm = loadSource('server/pvd-bgm.js');
 const timing = loadSource('server/video-donation-timing.js');
 const queueModel = loadSource('server/video-donation-queue.js');
+const { normalizeChzzkVideoDonationSettings } = loadSource('server/chzzk-video-donation.js');
 
 const bgmItem = () => ({ id: 'bgm-1', kind: 'bgm', startSec: 10, durationSec: 180, cost: 540 });
 const playback = loadServerFunctions(['createPvdPlaybackState', 'getPvdItemStartSec', 'getPvdQueueItemKey']);
@@ -137,6 +138,7 @@ test('video requests keep their own rate and idempotency key', async () => {
 test('backend settings reject simultaneous BGM and video idle music', async () => {
   const save = jest.fn();
   const route = loadServerFunctions.route('/api/video-donation/settings', {
+    normalizeChzzkVideoDonationSettings,
     getPartitionId: async () => 'sid', updateBotSettingsAtomically: async (_sid, updater) => save(await updater({})),
     normalizePvdVolume: Number, normalizePvdProviders: () => ({}), normalizePvdIdlePlaylist: (value) => value || {},
   }, 'post');

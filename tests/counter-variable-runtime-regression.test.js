@@ -21,7 +21,7 @@ describe('counter variable runtime integration', () => {
     expect(serverIndex).toContain("key: '${counter::user::변수명}'");
     expect(serverIndex).toContain("key: '${counter::global::변수명}'");
     expect(serverIndex.match(/group: '카운트'/g)).toHaveLength(2);
-    expect(serverIndex.match(/contexts: \['command'\], effect: 'increment'/g)).toHaveLength(2);
+    expect(serverIndex.match(/contexts: \['command', 'donation'\], effect: 'increment'/g)).toHaveLength(2);
     expect(serverIndex).toContain('첫 호출은 1');
   });
 

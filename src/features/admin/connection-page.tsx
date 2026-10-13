@@ -301,7 +301,12 @@ export function ConnectionPage() {
     const config = providerConfigs.find((item) => item.id === provider);
     if (!config) return;
     const platformUserId = account.platform_user_id || account.channel_id || '';
-    if (provider === 'youtube' && !window.confirm('YouTube 연결을 해제하면 Google OAuth 권한과 AruBot에 저장된 YouTube 연결 데이터가 삭제됩니다. YouTube에 있는 채널, 영상, 채팅 원본은 삭제되지 않습니다. 계속할까요?')) return;
+    const removesLastPlatform = provider === 'youtube' ? platforms.every(item => item.provider === 'youtube') : platforms.length === 1;
+    const warnings = [
+      removesLastPlatform ? '마지막 플랫폼 연결을 해제하면 아루봇 계정과 계정 소유 데이터가 삭제되고 로그아웃됩니다.' : '',
+      provider === 'youtube' ? 'Google OAuth 권한과 AruBot에 저장된 YouTube 연결 데이터가 삭제됩니다. YouTube에 있는 채널, 영상, 채팅 원본은 삭제되지 않습니다.' : '',
+    ].filter(Boolean);
+    if (warnings.length && !window.confirm(`${warnings.join('\n\n')}\n\n계속할까요?`)) return;
     const busyKey = `${provider}:${platformUserId || 'account'}`;
     setBusyAccount(busyKey);
     try {
@@ -313,6 +318,10 @@ export function ConnectionPage() {
       });
       const data = await response.json().catch(() => null);
       if (!response.ok) throw new Error(`${provider} revoke failed`);
+      if (data?.accountDeleted) {
+        window.location.assign('/');
+        return;
+      }
       if (Array.isArray(data?.platforms)) setPlatforms(data.platforms);
       toast.success(`${account.channel_name || config.label} 연결을 해제했습니다.`);
       refresh();
@@ -415,6 +424,7 @@ export function ConnectionPage() {
 
   const removeYoutubeChannel = async () => {
     if (!ownerControls) return;
+    if (!platforms.length && !window.confirm('이 등록을 해제한 뒤 다른 플랫폼 연결이 없으면 아루봇 계정과 계정 소유 데이터도 삭제됩니다. 계속할까요?')) return;
     setYoutubeBusy(true);
     try {
       const response = await fetch(apiUrl('/api/youtube/streamer-channel'), {
@@ -422,6 +432,11 @@ export function ConnectionPage() {
         credentials: 'include',
       });
       if (!response.ok) throw new Error('delete failed');
+      const data = await response.json();
+      if (data?.accountDeleted) {
+        window.location.assign('/');
+        return;
+      }
       toast.success('YouTube 채널 등록을 해제했습니다.');
       refresh();
     } catch {

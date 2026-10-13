@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createEmoteOverlayRuntime } from '../server/emote-overlay-runtime.js';
 import { normalizeEmoteSettings } from '../shared/emote-overlay.js';
+import { CHZZK_EMOTE_SAMPLES, createChzzkEmoteSamples, chzzkEmoteSampleFallbacks } from '../shared/emote-samples.js';
 
 const token = `emo_${'a'.repeat(43)}`;
 const path = `/viewer/emotes/${token}`;
@@ -190,14 +191,38 @@ test('save invalidates disabled cache and rotation wakes old and new subscribers
   assert.deepEqual(h.calls.clear, [{ owner: 'owner', rotate: true }]);
 });
 
-test('sample sends only five overlay images and reports disabled/limited cases', async t => {
+test('preview sample catalog contains bounded immutable CHZZK PNG/GIF references, not logos or generated images', () => {
+  assert.equal(CHZZK_EMOTE_SAMPLES.length, 8);
+  const items = createChzzkEmoteSamples();
+  assert.equal(new Set(items.map(item => item.url)).size, 8);
+  assert.ok(items.every(item => item.provider === 'chzzk' && item.sample === true));
+  assert.ok(items.every(item => /^https:\/\/ssl\.pstatic\.net\/static\/nng\/glive\/icon\/[\w]+\.(png|gif)$/.test(item.url)));
+  assert.ok(items.some(item => item.url.endsWith('.gif')));
+  assert.ok(items.some(item => item.url.endsWith('.png')));
+  items[0].url = 'changed';
+  assert.notEqual(createChzzkEmoteSamples()[0].url, 'changed');
+  assert.ok(Object.isFrozen(CHZZK_EMOTE_SAMPLES) && CHZZK_EMOTE_SAMPLES.every(Object.isFrozen));
+  assert.equal(createChzzkEmoteSamples(100000).length, 30);
+  assert.equal(createChzzkEmoteSamples(-1).length, 0);
+  assert.equal(createChzzkEmoteSamples(NaN).length, 8);
+  for (const sample of CHZZK_EMOTE_SAMPLES) {
+    const fallback = chzzkEmoteSampleFallbacks(sample.url);
+    assert.equal(fallback.length, 2);
+    assert.equal(new Set(fallback).size, 2);
+    assert.ok(fallback.every(url => url !== sample.url && CHZZK_EMOTE_SAMPLES.some(item => item.url === url)));
+  }
+  assert.deepEqual(chzzkEmoteSampleFallbacks('https://cdn.example.com/viewer.gif'), []);
+});
+
+test('sample sends five actual CHZZK overlay images from the same preview catalog and reports disabled/limited cases', async t => {
   const h = fixture(t);
   h.record.settings.enabled = false;
   await assert.rejects(h.runtime.test('owner'), { status: 409 });
   h.record.settings.enabled = true;
   assert.deepEqual(await h.runtime.test('owner'), { sent: 5 });
   assert.equal(h.calls.append[0].options.test, true);
-  assert.ok(h.calls.append[0].event.items.every(item => item.url === '/files/logo.png'));
+  assert.deepEqual(h.calls.append[0].event.items, createChzzkEmoteSamples(5));
+  assert.ok(h.calls.append[0].event.items.some(item => item.url.endsWith('.gif')));
   h.store.append = async () => null;
   await assert.rejects(h.runtime.test('owner'), { status: 429 });
 });

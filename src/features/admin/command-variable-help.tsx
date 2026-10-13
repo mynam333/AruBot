@@ -1,11 +1,12 @@
 'use client';
 
 import * as Dialog from '@radix-ui/react-dialog';
-import { CircleHelp, Copy, Loader2, Tags, X } from 'lucide-react';
-import { useEffect, useMemo, useState, useTransition } from 'react';
+import { CircleHelp, Copy, Loader2, Plus, Search, Tags, X } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { readJson } from '@/shared/api/http';
 
 type BotVariable = {
@@ -24,6 +25,7 @@ type VariablesResponse = {
 
 type CommandVariableHelpButtonProps = {
   scope?: VariableContext;
+  onInsert?: (key: string) => void;
 };
 
 type VariableContext = 'command' | 'attendance' | 'donation' | 'blueprint';
@@ -73,27 +75,33 @@ const SCOPE_COPY: Record<VariableContext, {
   },
 };
 
-export function CommandVariableHelpButton({ scope = 'command' }: CommandVariableHelpButtonProps) {
+export function CommandVariableHelpButton({ scope = 'command', onInsert }: CommandVariableHelpButtonProps) {
   const [open, setOpen] = useState(false);
   const [variables, setVariables] = useState<BotVariable[]>([]);
   const [failed, setFailed] = useState(false);
-  const [loaded, setLoaded] = useState(false);
-  const [isPending, startTransition] = useTransition();
+  const [isPending, setIsPending] = useState(false);
+  const [retry, setRetry] = useState(0);
+  const [query, setQuery] = useState('');
 
   useEffect(() => {
-    if (!open || loaded || isPending) return;
+    if (!open) return;
+    let active = true;
+    const controller = new AbortController();
     setFailed(false);
-    startTransition(async () => {
+    setIsPending(true);
+    void (async () => {
       try {
-        const data = await readJson<VariablesResponse>('/api/bot/variables');
-        setVariables(data?.variables || []);
+        const data = await readJson<VariablesResponse>('/api/bot/variables', { signal: controller.signal });
+        if (!Array.isArray(data?.variables)) throw new Error('variables_unavailable');
+        if (active) setVariables(data.variables);
       } catch {
-        setFailed(true);
+        if (active) { setFailed(true); setVariables([]); }
       } finally {
-        setLoaded(true);
+        if (active) setIsPending(false);
       }
-    });
-  }, [isPending, loaded, open]);
+    })();
+    return () => { active = false; controller.abort(); };
+  }, [open, retry]);
 
   const visibleVariables = useMemo(
     () => variables.filter((variable) => (
@@ -109,34 +117,50 @@ export function CommandVariableHelpButton({ scope = 'command' }: CommandVariable
 
   const groups = useMemo(() => {
     const map = new Map<string, BotVariable[]>();
+    const term = query.trim().toLocaleLowerCase();
     for (const variable of visibleVariables) {
+      if (term && ![variable.key, variable.label, variable.description, variable.group, variable.caveat].join(' ').toLocaleLowerCase().includes(term)) continue;
       const list = map.get(variable.group) || [];
       list.push(variable);
       map.set(variable.group, list);
     }
-    return Array.from(map.entries());
-  }, [visibleVariables]);
+    const entries = Array.from(map.entries());
+    if (scope === 'donation') {
+      const priority = ['특수 실행', '후원', '카운트', '메모'];
+      const rank = (group: string) => priority.includes(group) ? priority.indexOf(group) : priority.length;
+      entries.sort(([left], [right]) => rank(left) - rank(right));
+    }
+    return entries;
+  }, [query, scope, visibleVariables]);
 
   const scopeCopy = SCOPE_COPY[scope];
 
   const copyVariable = async (key: string) => {
-    await navigator.clipboard?.writeText(key).catch(() => undefined);
-    toast.success(`${key} 변수를 복사했습니다.`);
+    if (onInsert) {
+      onInsert(key);
+      setOpen(false);
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(key);
+      toast.success(`${key} 변수를 복사했습니다.`);
+    } catch { toast.error('변수를 복사하지 못했습니다.'); }
   };
 
   return (
-    <Dialog.Root open={open} onOpenChange={setOpen}>
-      <Dialog.Trigger asChild>
-        <Button
+    <Dialog.Root open={open} onOpenChange={(nextOpen) => {
+      if (nextOpen) { setIsPending(true); setFailed(false); setQuery(''); }
+      setOpen(nextOpen);
+    }}>
+      <Button asChild variant="outline" size="icon" className="shrink-0 bg-card/75">
+        <Dialog.Trigger
           type="button"
-          variant="outline"
-          size="icon"
           aria-label={scopeCopy.triggerLabel}
-          className="shrink-0 bg-card/75"
+          title={scopeCopy.triggerLabel}
         >
           <CircleHelp aria-hidden="true" className="h-[1em] w-[1em]" />
-        </Button>
-      </Dialog.Trigger>
+        </Dialog.Trigger>
+      </Button>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-[70] bg-foreground/24 backdrop-blur-[clamp(0.5rem,1.4vw,1rem)] data-[state=open]:animate-fade-in" />
           <Dialog.Content className="fixed left-1/2 top-1/2 z-[80] grid max-h-[min(92svh,54rem)] w-[min(94vw,58rem)] -translate-x-1/2 -translate-y-1/2 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-[var(--radius-panel)] border bg-card/96 shadow-lift outline-none backdrop-blur-2xl data-[state=open]:animate-modal-in">
@@ -157,11 +181,15 @@ export function CommandVariableHelpButton({ scope = 'command' }: CommandVariable
                   {scopeCopy.description}
                 </Dialog.Description>
               </div>
-              <Dialog.Close asChild>
-                <Button type="button" variant="outline" size="icon" aria-label="닫기" className="shrink-0 bg-card/75">
+              <Button asChild variant="outline" size="icon" className="shrink-0 bg-card/75">
+                <Dialog.Close type="button" aria-label="변수 목록 닫기">
                   <X aria-hidden="true" className="h-[1em] w-[1em]" />
-                </Button>
-              </Dialog.Close>
+                </Dialog.Close>
+              </Button>
+            </div>
+            <div className="relative mt-4">
+              <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input aria-label="변수 검색" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="이름, 변수, 기능 검색" className="pl-9" />
             </div>
           </div>
 
@@ -187,14 +215,14 @@ export function CommandVariableHelpButton({ scope = 'command' }: CommandVariable
                           key={item.key}
                           type="button"
                           onClick={() => copyVariable(item.key)}
-                          aria-label={`${item.label} ${item.key} 변수 복사`}
+                          aria-label={`${item.label} ${item.key} 변수 ${onInsert ? '삽입' : '복사'}`}
                           className="group grid min-w-0 gap-2 rounded-[var(--radius-card)] border bg-card/72 p-[clamp(0.85rem,1.5vw,1rem)] text-left transition hover:-translate-y-0.5 hover:border-primary/35 hover:bg-pastel-sky/35 hover:shadow-subtle"
                         >
                           <div className="flex min-w-0 items-start justify-between gap-3">
                             <code className="min-w-0 max-w-full break-all whitespace-normal rounded-[var(--radius-control)] bg-muted px-2.5 py-1 text-sm font-bold leading-6 text-foreground">
                               {item.key}
                             </code>
-                            <Copy aria-hidden="true" className="mt-1 h-4 w-4 shrink-0 text-muted-foreground transition group-hover:text-primary" />
+                            {onInsert ? <Plus aria-hidden="true" className="mt-1 h-4 w-4 shrink-0 text-primary" /> : <Copy aria-hidden="true" className="mt-1 h-4 w-4 shrink-0 text-muted-foreground transition group-hover:text-primary" />}
                           </div>
                           {item.providers?.length ? (
                             <div className="flex flex-wrap gap-1.5">
@@ -214,7 +242,10 @@ export function CommandVariableHelpButton({ scope = 'command' }: CommandVariable
               </div>
             ) : (
               <div className="grid min-h-[16rem] place-items-center rounded-[var(--radius-panel)] border bg-background/65 p-8 text-center text-sm leading-6 text-muted-foreground">
-                {failed ? '변수 목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.' : '표시할 변수가 없습니다.'}
+                <div className="grid justify-items-center gap-3">
+                  <p>{failed ? '변수 목록을 불러오지 못했습니다.' : query.trim() ? '검색 결과가 없습니다.' : '표시할 변수가 없습니다.'}</p>
+                  {failed ? <Button type="button" variant="outline" onClick={() => setRetry((value) => value + 1)}>다시 시도</Button> : null}
+                </div>
               </div>
             )}
           </div>

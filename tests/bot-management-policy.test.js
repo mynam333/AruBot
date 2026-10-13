@@ -176,6 +176,7 @@ describe('session-bound delegated request authorization', () => {
     await h.service.middleware(req('/api/bot/event-logs?botOwner=owner'), res, jest.fn());
     res.json({ logs: [{ id: 'event', metadata: { token: 'permanent', viewerToken: 'drawing', nested: { apiKey: 'secret', result: 'ok' } }, url: '/drawing-overlay/secret', details: 'https://example.test?token=secret' }] });
     expect(res.body.logs[0]).toEqual({ id: 'event', metadata: { nested: { result: 'ok' } }, url: '/drawing-overlay/[redacted]', details: 'https://example.test?token=[redacted]' });
+    expect(policy.redactBotManagerLogSecrets({ overlayUrl: 'https://chzzk.naver.com/video-donation/video@private-alert', videoDonationChzzkOverlaySecret: 'private-alert' })).toEqual({ overlayUrl: 'https://chzzk.naver.com/video-donation/video@[redacted]' });
   });
   test('site admins still cannot impersonate personal account authentication', async () => {
     const h = harness({ ownerUserId: 'owner', role: 'site_admin', scopes: ['*'] });

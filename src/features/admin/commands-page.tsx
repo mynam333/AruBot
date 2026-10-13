@@ -14,6 +14,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Pagination } from '@/components/ui/pagination';
 import { apiUrl, readJson } from '@/shared/api/http';
+import { commandEditVersion, songbookCommandKinds } from '../../../shared/songbook-commands';
 
 type BotRule = {
   id: string;
@@ -143,7 +144,9 @@ export function CommandsPage() {
       if (!endpoint || endpoint === '/api/bot/rules') load();
     };
     window.addEventListener('arubot:resource-refresh', refresh);
-    return () => window.removeEventListener('arubot:resource-refresh', refresh);
+    const focus = () => { if (!document.hidden) load(); };
+    window.addEventListener('focus', focus);
+    return () => { window.removeEventListener('arubot:resource-refresh', refresh); window.removeEventListener('focus', focus); };
   }, [load]);
 
   const filteredRules = useMemo(() => {
@@ -189,6 +192,7 @@ export function CommandsPage() {
     setBusyId(editingRule.id);
     try {
       await postJson('/api/bot/rules/upsert', {
+        ...(songbookCommandKinds(editingRule).length ? { expectedVersion: commandEditVersion(editingRule) } : {}),
         rule: {
           ...editingRule,
           name: form.name.trim() || primaryKeyword,

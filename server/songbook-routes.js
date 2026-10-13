@@ -26,6 +26,10 @@ export function registerSongbookRoutes(app, { store, getAdminOwner, getViewerUse
   app.patch('/api/songbook/settings', writeLimiter, wrap(async req => ({ settings: await store.updateSettings(await owner(req), req.body) })));
   app.get('/api/songbook/requests', wrap(async req => store.listRequests(await owner(req), { history: req.query.history === '1' })));
   app.patch('/api/songbook/requests/:id', writeLimiter, wrap(async req => ({ item: await store.changeRequest(await owner(req), req.params.id, req.body?.status, { expectedStatus: req.body?.expectedStatus }) })));
+  app.get('/api/songbook/overlay', wrap(async req => store.getOverlay(await owner(req))));
+  app.patch('/api/songbook/overlay', writeLimiter, wrap(async req => store.saveOverlay(await owner(req), req.body)));
+  app.post('/api/songbook/overlay/rotate', writeLimiter, wrap(async req => store.rotateOverlay(await owner(req))));
+  app.get('/api/overlays/songbook', wrap(async req => store.getOverlaySnapshot(req.query.token)));
 
   app.get('/api/public/:uid/songbook', wrap(async req => store.listSongs(await channel(req), req.query, { publicOnly: true })));
   app.get('/api/viewer/songbook/:uid/requests', wrap(async req => {

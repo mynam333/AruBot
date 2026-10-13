@@ -6,6 +6,7 @@ import { Edit3, Gift, Loader2, Plus, RefreshCw, Search, Settings2, Trash2 } from
 import { useCallback, useEffect, useMemo, useState, useTransition } from 'react';
 import { toast } from 'sonner';
 import { DonationRuleCreateDialog, DonationSettingsDialog } from '@/features/admin/admin-action-dialogs';
+import { CommandVariableHelpButton } from '@/features/admin/command-variable-help';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -328,14 +329,17 @@ export function DonationRulesPage() {
                 {form.enabled ? '사용 중' : '꺼짐'}
               </Button>
             </div>
-            <label className="grid gap-2 text-sm font-semibold">
-              반응 문구
-              <textarea disabled={!writable}
+            <div className="grid gap-2 text-sm font-semibold">
+              <div className="flex items-center justify-between gap-2">
+                <label htmlFor="donation-response-edit">반응 문구</label>
+                <CommandVariableHelpButton scope="donation" onInsert={writable ? (key) => setForm((current) => current ? { ...current, response: current.response + key } : current) : undefined} />
+              </div>
+              <textarea id="donation-response-edit" disabled={!writable}
                 value={form.response}
                 onChange={(event) => setForm({ ...form, response: event.target.value })}
                 className="box-border min-h-[clamp(7rem,18svh,11rem)] w-full min-w-0 max-w-full resize-y rounded-[var(--radius-control)] border bg-background/80 px-[clamp(0.85rem,1.6vw,1.1rem)] py-[clamp(0.85rem,1.6vw,1.1rem)] text-sm leading-7 outline-none focus:border-primary/45 focus:ring-2 focus:ring-ring"
               />
-            </label>
+            </div>
             <div className="flex flex-wrap justify-end gap-2">
               <Button type="button" variant="ghost" onClick={closeEdit}>취소</Button>
               <Button type="button" onClick={saveEdit} disabled={!writable || (busyId === editingRule.id)}>

@@ -4,7 +4,7 @@ let retainedRequestOwner: string | null = null;
 
 export type BotManagementModule =
   | 'dashboard' | 'connection' | 'commands' | 'macros' | 'points'
-  | 'predictions' | 'roulette' | 'wheel' | 'video' | 'drawing'
+  | 'predictions' | 'roulette' | 'wheel' | 'marble' | 'video' | 'drawing'
   | 'donations' | 'automations' | 'actions' | 'logs' | 'settings' | 'songbook' | 'emotes';
 
 export type BotChannel = {

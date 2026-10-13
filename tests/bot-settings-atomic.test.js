@@ -3,6 +3,7 @@ const path = require('node:path');
 const ts = require('typescript');
 const loadServerFunctions = require('./helpers/load-server-functions.cjs');
 const { assertBotManagerEffects } = require('./helpers/load-source.cjs')('shared/bot-management-policy.js');
+const { normalizeChzzkVideoDonationSettings } = require('./helpers/load-source.cjs')('server/chzzk-video-donation.js');
 
 const source = ts.createSourceFile('supabase.js', fs.readFileSync(path.join(__dirname, '../server/supabase.js'), 'utf8'), ts.ScriptTarget.Latest, true);
 const names = ['patchBotSettings', 'updateBotSettingsAtomically'];
@@ -34,6 +35,7 @@ function harness(initial = {}, extra = {}) {
     ...functions,
     getPartitionId: async () => sid,
     getBotSettings: jest.fn(async () => clone(initial)),
+    getBotSettingsStrict: jest.fn(async () => clone(state)),
     normalizeDrawingDonationSettings: (value) => value,
     normalizeDonationRuleForStorage: (value) => ({ ...value }),
     assertBotManagerEffects,
@@ -41,6 +43,12 @@ function harness(initial = {}, extra = {}) {
     normalizeBlockedBotUsers: (value) => value || [],
     buildBotUserBlockKeys: (value) => new Set([value.toLowerCase()]),
     normalizePvdVolume: Number,
+    normalizeChzzkVideoDonationSettings,
+    chzzkVideoRuntime: { configure: jest.fn() },
+    getChzzkVideoDonationPublicSettings: (_sid, settings) => {
+      const config = normalizeChzzkVideoDonationSettings(settings);
+      return { pauseEnabled: config.pauseEnabled, queueEnabled: config.queueEnabled, configured: Boolean(config.overlayUrl) };
+    },
     normalizePvdProviders: (value) => value || [],
     normalizePvdIdlePlaylist: (value) => value || {},
     getPvdIdlePlaylistForViewer: (value) => value,
@@ -189,6 +197,52 @@ test('invalid settings roll back without overwriting current settings', async ()
   expect(res.statusCode).toBe(400);
   expect(h.read()).toEqual(before);
   expect(h.queries.at(-1).sql).toBe('rollback');
+});
+
+test('CHZZK video toggles share atomic settings and omit the stored secret from the response', async () => {
+  const url = 'https://chzzk.naver.com/video-donation/video@private-alert-key';
+  const h = harness({ videoDonationChzzkOverlaySecret: url, videoDonationChzzkPauseEnabled: true, videoDonationChzzkQueueEnabled: false });
+  const res = await h.run('/api/video-donation/settings', { chzzkVideoDonation: { queueEnabled: true } });
+  expect(res.statusCode).toBe(200);
+  expect(h.read()).toMatchObject({ videoDonationChzzkOverlaySecret: url, videoDonationChzzkPauseEnabled: true, videoDonationChzzkQueueEnabled: true });
+  expect(res.body.chzzkVideoDonation).toEqual({ configured: true, pauseEnabled: true, queueEnabled: true });
+  expect(JSON.stringify(res.body)).not.toContain('private-alert-key');
+  expect(h.bindings.chzzkVideoRuntime.configure).toHaveBeenCalledWith(sid, h.read());
+});
+
+test.each([
+  { pauseEnabled: true },
+  { queueEnabled: true, overlayUrl: 'https://example.com/video-donation/video@secret' },
+  { overlayUrl: 'http://127.0.0.1/private' },
+])('invalid CHZZK configuration is rejected before saving: %j', async (config) => {
+  const h = harness({ botEnabled: true });
+  const res = await h.run('/api/video-donation/settings', { chzzkVideoDonation: config });
+  expect(res.statusCode).toBe(400);
+  expect(h.read()).toEqual({ botEnabled: true });
+  expect(h.bindings.chzzkVideoRuntime.configure).not.toHaveBeenCalled();
+});
+
+test('explicit CHZZK URL deletion disables both options without touching other settings', async () => {
+  const h = harness({ videoDonationChzzkOverlaySecret: 'https://chzzk.naver.com/video-donation/video@secret', videoDonationChzzkPauseEnabled: true, songbook: { enabled: true } });
+  const res = await h.run('/api/video-donation/settings', { chzzkVideoDonation: { overlayUrl: '', pauseEnabled: false, queueEnabled: false } });
+  expect(res.statusCode).toBe(200);
+  expect(h.read()).toMatchObject({ videoDonationChzzkOverlaySecret: '', videoDonationChzzkPauseEnabled: false, videoDonationChzzkQueueEnabled: false, songbook: { enabled: true } });
+});
+
+test('settings lookup failure cannot disable an active CHZZK connection', async () => {
+  const h = harness({}, { getBotSettingsStrict: jest.fn(async () => { throw new Error('database unavailable'); }) });
+  const res = await h.run('/api/video-donation/settings', {}, 'get');
+  expect(res.statusCode).toBe(500);
+  const { getPvdViewerSettingsForSid } = loadServerFunctions(['getPvdViewerSettingsForSid'], h.bindings);
+  await expect(getPvdViewerSettingsForSid(sid)).rejects.toThrow('database unavailable');
+  const nowPlaying = loadServerFunctions.route('/api/video-donation/now-playing', {
+    ...h.bindings, pvdTokenToSid: new Map([['viewer-token', sid]]),
+  }, 'get');
+  await nowPlaying({ query: { token: 'viewer-token' } }, {
+    status(code) { expect(code).toBe(500); return this; }, json() {},
+  });
+  expect(h.bindings.chzzkVideoRuntime.configure).not.toHaveBeenCalled();
+  expect(h.bindings.getBotSettings).not.toHaveBeenCalled();
 });
 
 test.each([

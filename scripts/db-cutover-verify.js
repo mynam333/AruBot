@@ -19,6 +19,11 @@ const REQUIRED_TABLES = [
   'roulette_sessions',
   'participation_wheels',
   'participation_wheel_requests',
+  'marble_rooms',
+  'marble_requests',
+  'marble_invites',
+  'marble_participation',
+  'marble_source_requests',
   'migration_log',
   'channel_tokens',
 ];

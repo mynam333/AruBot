@@ -21,6 +21,7 @@ import {
   normalizeEmoteSettings,
 } from '../../../shared/emote-overlay';
 import { EmoteStage, type EmoteStageHandle } from './emote-stage';
+import { createChzzkEmoteSamples } from '../../../shared/emote-samples';
 import type { EmoteImage, EmoteSettings } from './types';
 import styles from './emote-overlay-page.module.css';
 
@@ -212,8 +213,8 @@ export function EmoteOverlayPage() {
   const preview = () => {
     const amount = Math.max(1, Math.min(30, Math.round(Number(sampleCount) || 8)));
     setSampleCount(String(amount)); setPaused(false); stage.current?.pause(false);
-    const item = sample || { url: '/files/logo.png', name: 'AruBot', provider: 'test' };
-    stage.current?.emit(Array.from({ length: amount }, () => ({ ...item })), normalized, Math.floor(Math.random() * 0xffffffff));
+    const items = sample ? Array.from({ length: amount }, () => ({ ...sample })) : createChzzkEmoteSamples(amount);
+    stage.current?.emit(items, normalized, Math.floor(Math.random() * 0xffffffff));
   };
   const copyAddress = async () => {
     try { await navigator.clipboard.writeText(address); toast.success('OBS 이모티콘 오버레이 주소를 복사했습니다.'); }
@@ -255,7 +256,7 @@ export function EmoteOverlayPage() {
             <div className="flex min-w-0 items-center gap-2"><Input type="number" aria-label="미리보기 이모티콘 개수" min={1} max={30} step={1} value={sampleCount} onChange={event => setSampleCount(event.target.value)} onBlur={() => setSampleCount(String(Math.max(1, Math.min(30, Math.round(Number(sampleCount) || 8)))))} className="w-16 px-2 text-center" /><Button variant="secondary" onClick={preview}><Play className="h-4 w-4" />미리보기</Button></div>
             <div className="flex gap-1"><Tooltip content={paused ? '미리보기 재개' : '미리보기 일시정지'}><Button size="icon" variant="outline" aria-label={paused ? '미리보기 재개' : '미리보기 일시정지'} aria-pressed={paused} onClick={() => setPaused(value => !value)}>{paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}</Button></Tooltip><Tooltip content="미리보기 비우기"><Button size="icon" variant="outline" aria-label="미리보기 비우기" onClick={() => stage.current?.clear()}><Trash2 className="h-4 w-4" /></Button></Tooltip></div>
           </div>
-          <div className="flex min-w-0 flex-wrap items-center gap-2"><input ref={fileInput} type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif" className="hidden" aria-label="미리보기 이미지 선택" onChange={event => { chooseSample(event.target.files?.[0]); event.target.value = ''; }} /><Button variant="ghost" size="sm" onClick={() => fileInput.current?.click()}><ImagePlus className="h-4 w-4" />테스트 이미지</Button>{sample ? <><span className="min-w-0 max-w-[180px] truncate text-xs text-muted-foreground" title={sample.name}>{sample.name}</span><Tooltip content="기본 이미지로 되돌리기"><Button size="icon" variant="ghost" aria-label="기본 이미지로 되돌리기" onClick={removeSample}><X className="h-4 w-4" /></Button></Tooltip></> : <span className="text-xs text-muted-foreground">AruBot</span>}</div>
+          <div className="flex min-w-0 flex-wrap items-center gap-2"><input ref={fileInput} type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif" className="hidden" aria-label="미리보기 이미지 선택" onChange={event => { chooseSample(event.target.files?.[0]); event.target.value = ''; }} /><Button variant="ghost" size="sm" onClick={() => fileInput.current?.click()}><ImagePlus className="h-4 w-4" />테스트 이미지</Button>{sample ? <><span className="min-w-0 max-w-[180px] truncate text-xs text-muted-foreground" title={sample.name}>{sample.name}</span><Tooltip content="치지직 기본 이모티콘으로 되돌리기"><Button size="icon" variant="ghost" aria-label="치지직 기본 이모티콘으로 되돌리기" onClick={removeSample}><X className="h-4 w-4" /></Button></Tooltip></> : <span className="text-xs text-muted-foreground">치지직 기본 이모티콘 · PNG/GIF</span>}</div>
         </section>
 
         <section className="min-w-0 space-y-3 border-t pt-5" aria-label="OBS 연결">

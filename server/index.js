@@ -1,4 +1,6 @@
 import express from 'express';
+import { cleanupUnlinkedAccounts } from './supabase.js';
+import { deleteAccountAutomationSoundFiles } from './account-local-files.js';
 import { createLocalAvatarRelay, normalizeChzzkAvatarEvent } from './local-avatar-relay.js';
 import { createLocalAvatarNotificationClient, publishLocalAvatarNotification } from './supabase.js';
 import { createRequestProtection, rejectUnsafeTextInput } from './request-protection.js';
@@ -29,6 +31,10 @@ import { createPlatformProfileService } from './platform-profiles.js';
 import { createChzzkInfoClient, chzzkChannelIdentityMatches, chzzkNonNegativeNumber } from './chzzk-info.js';
 import { createPvdIdlePlaybackStore } from './pvd-idle-playback.js';
 import { createBgmPlayerPresence, getPvdBgmSettings, insertPvdRequest, updateBgmPlaybackAvailability } from './pvd-bgm.js';
+import { normalizeChzzkVideoDonationSettings } from './chzzk-video-donation.js';
+import { createChzzkVideoRuntime } from './chzzk-video-runtime.js';
+import { setChzzkPlaybackBlocked } from './pvd-chzzk-pause.js';
+import { chzzkVideoStore } from './supabase.js';
 import { executeAndStripLiveChangeTokens, filterLiveInfoByProvider, selectCategorySearchResult } from './live-command-actions.js';
 import { canManageLiveSettings, createLiveManagerRoleResolver, getLiveRoleLevel } from './live-command-permissions.js';
 import { buildYoutubeLiveInfoFallback, buildYoutubeLiveLookupContext, buildYoutubeOfflineLiveInfo } from './youtube-live-info.js';
@@ -37,6 +43,8 @@ import { appendVideoDonationQueueCount, countNonDurableVideoDonationItems, count
 import { createPvdQueueDisplay } from './pvd-queue-display.js';
 import { songbookStore } from './supabase.js';
 import { registerSongbookRoutes } from './songbook-routes.js';
+import { createSongbookCommandExecutor } from './songbook-command-runtime.js';
+import { commandEditVersion, hasSongbookCommandToken, songbookTriggerConflict } from '../shared/songbook-commands.js';
 import { emoteOverlayStore } from './supabase.js';
 import { createEmoteOverlayRuntime } from './emote-overlay-runtime.js';
 import { registerEmoteOverlayRoutes } from './emote-overlay-routes.js';
@@ -56,6 +64,9 @@ import { resolvePvdYouTubeMetadata } from './pvd-youtube-metadata-fallback.js';
 import { createRouletteBroadcastDelivery } from './roulette-broadcast-delivery.js';
 import { createParticipationWheelRuntime, registerParticipationWheelRoutes } from './participation-wheel-runtime.js';
 import { getParticipationWheel, updateParticipationWheel, actParticipationWheel, enterParticipationWheel } from './supabase.js';
+import { marbleStore } from './supabase.js';
+import { registerMarbleRoutes } from './marble-routes.js';
+import { createMarbleRuntime, assertMarbleCommandAvailable, marbleRuleConflict } from './marble-runtime.js';
 import {
   parseChzzkLivePlaybackUrl,
   parseCimeLivePlaybackUrl,
@@ -140,6 +151,11 @@ const participationWheelRuntime = createParticipationWheelRuntime({
   recordEvent: recordBotEventLogSafe,
   admitCommand: (input) => admitChatCommand(input.sid, input.provider, input.userId),
 });
+const marbleRuntime = createMarbleRuntime({
+  store: marbleStore, resolveOwner: ownerUserIdFromSid, getBotSettings,
+  recordEvent: recordBotEventLogSafe,
+  admitCommand: (input) => admitChatCommand(input.sid, input.provider, input.userId),
+});
 app.set('trust proxy', String(process.env.ARUBOT_TRUSTED_PROXIES || 'loopback').split(',').map((value) => value.trim()).filter(Boolean));
 app.set('json replacer', createSafeJsonReplacer());
 const requestProtection = createRequestProtection({ trustProxy: app.get('trust proxy fn') });
@@ -156,6 +172,17 @@ const runtimeReadinessState = {
 const PROCESS_ROLE = process.env.ARUBOT_PROCESS_ROLE || 'api-runtime';
 const youtubeBotOAuthPendingStore = new Map(); // ownerUserId -> { tokens, channels, identity, manualChannelRequired, createdAt }
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'https://arubot.yuaru.com';
+const executeSongbookCommand = createSongbookCommandExecutor({
+  store: songbookStore,
+  getPublicUrl: (owner, provider) => resolveSongbookPublicUrl(`user:${owner}`, provider),
+});
+
+async function resolveSongbookPublicUrl(sid, provider) {
+  const uid = await resolveStreamerUidForSid(sid, provider);
+  if (!uid) return null;
+  const qualified = uid.startsWith(`${provider}:`) ? uid : `${provider}:${uid}`;
+  return new URL(`/c/${encodeURIComponent(qualified)}/songbook`, FRONTEND_ORIGIN).href;
+}
 const BACKEND_ORIGIN = process.env.BACKEND_ORIGIN || 'https://arubotapi.yuaru.com';
 const SERVER_STARTED_AT = new Date().toISOString();
 const RELEASE_SHA = process.env.ARUBOT_RELEASE_SHA || process.env.RELEASE_SHA || 'local';
@@ -4083,6 +4110,9 @@ app.post('/api/video-donation/control-by-token', async (req, res) => {
     if (!['pause', 'play', 'seek'].includes(op)) return res.status(400).json({ error: 'invalid op' });
     // Player state events report playback, but cannot override an explicit pause.
     const playbackState = pvdPlaybackState.get(sid);
+    if (req.body?.source === 'player' && playbackState?.chzzkBlocked && (op === 'play' || op === 'pause')) {
+      return res.json({ ok: true, ignored: true, paused: true, chzzkDonationPaused: true, atSec: getCurrentAtSec(sid) });
+    }
     if (op === 'play' && req.body?.source === 'player' && playbackState?.paused === true) {
       const atSec = getCurrentAtSec(sid);
       await broadcastPvdControl(sid, { op: 'pause', paused: true, atSec });
@@ -6723,6 +6753,7 @@ app.post('/api/video-donation/delete', async (req, res) => {
     const wasIdleDeferred = removingHead && pvdPlaybackState.get(sid)?.idleDeferred === true;
     const [removedItem] = q.splice(idx, 1);
     await settleDurableRuntimeItem(removedItem, { status: 'deleted', refunded: false });
+    if (removedItem?.source === 'chzzk-donation') void chzzkVideoRuntime.notifyPlayback(sid, removedItem, 'end');
     if (removingHead) {
       try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
       await broadcastPvdStart(sid, { deferForIdle: wasIdleDeferred });
@@ -6782,6 +6813,7 @@ app.post('/api/video-donation/delete-refund', async (req, res) => {
     // Remove from queue
     q.splice(idx, 1);
     await settleDurableRuntimeItem(item, { status: 'deleted', refunded: true });
+    if (item?.source === 'chzzk-donation') void chzzkVideoRuntime.notifyPlayback(sid, item, 'end');
     if (removingHead) {
       try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
       await broadcastPvdStart(sid, { deferForIdle: wasIdleDeferred });
@@ -6856,6 +6888,10 @@ async function dispatchDurableRuntimeJob(job) {
   const runtimeItem = { ...item, runtimeJobId: job.id };
 
   if (job.jobType === 'video-donation') {
+    if (runtimeItem.source === 'chzzk-donation') {
+      const currentJob = await getDurableRuntimeJob(job.id);
+      if (currentJob?.status !== 'processing' || currentJob.lockedBy !== DURABLE_RUNTIME_WORKER_ID) return { complete: false };
+    }
     const queue = getVideoQueue(job.sid);
     if (!queue.some((queued) => queued?.runtimeJobId === job.id)) {
       const shouldStartPlayback = insertPvdRequest(queue, runtimeItem, pvdPlaybackState.get(job.sid), getCurrentAtSec(job.sid));
@@ -6887,6 +6923,7 @@ async function runDurableRuntimeWorker() {
   if (durableRuntimeWorkerRunning) return false;
   durableRuntimeWorkerRunning = true;
   try {
+    await renewChzzkVideoQueueJobs();
     const jobs = await claimDurableRuntimeJobs({
       workerId: DURABLE_RUNTIME_WORKER_ID,
       limit: 25,
@@ -6996,6 +7033,91 @@ const TIKTOK_DURATION_SYNC_WAIT_MS = 20 * 1000;
 // baseStartMs is the wall-clock time when the current item started at item.startSec.
 const pvdPlaybackState = new Map(); // sid -> { baseStartMs: number, paused: boolean, pausedAtSec: number|null }
 
+const chzzkVideoRuntime = createChzzkVideoRuntime({
+  async enqueue(sid, event, idempotencyKey) {
+    const id = crypto.randomUUID();
+    const item = {
+      id, runtimeJobId: id, kind: 'video', source: 'chzzk-donation', chzzkDonationId: event.donationId,
+      ts: Date.now(), mediaProvider: event.provider, mediaId: event.mediaId, mediaUrl: event.url,
+      embedUrl: event.provider === 'youtube' ? `https://www.youtube.com/embed/${event.mediaId}` : `https://chzzk.naver.com/embed/clip/${event.mediaId}`,
+      thumbnailUrl: event.provider === 'youtube' ? `https://i.ytimg.com/vi/${event.mediaId}/hqdefault.jpg` : null,
+      videoId: event.provider === 'youtube' ? event.mediaId : null,
+      title: event.title || '치지직 영상 후원', startSec: event.startSec,
+      durationSec: event.durationSec, requestedEndSec: event.startSec + event.durationSec,
+      requestedPlaySec: event.durationSec, maxDurationSec: event.durationSec,
+      cost: 0, donationAmount: event.amount, userId: event.userId || null, username: event.username || '익명', status: 'queued',
+    };
+    assertSafeTextPayload({ title: item.title, username: item.username });
+    const result = await enqueueDurableRuntimeJob({ id, sid, jobType: 'video-donation', idempotencyKey, payload: { item }, maxAttempts: 100 });
+    if (result.created) await runDurableRuntimeWorker();
+  },
+  async remove(sid, donationId) {
+    await chzzkVideoStore.cancel(sid, donationId);
+    const queue = getVideoQueue(sid);
+    const previous = queue[0];
+    for (let i = queue.length - 1; i >= 0; i--) {
+      if (queue[i].source === 'chzzk-donation' && queue[i].chzzkDonationId === donationId) queue.splice(i, 1);
+    }
+    if (previous !== queue[0]) {
+      void chzzkVideoRuntime.notifyPlayback(sid, previous, 'end');
+      await broadcastPvdStart(sid);
+    }
+    else await notifyPvdAdminSubscribers(sid, 'chzzk_skipped');
+  },
+  async resolveDuration(sid, event) {
+    const media = await resolvePvdMedia(event.url, { videoDonationProviders: { youtube: true, chzzk_clip: true } }, { allowSearch: false, durationProbeSid: sid });
+    return Math.max(0, Number(media.durationSec) - event.startSec);
+  },
+  async setPaused(sid, paused) {
+    const state = pvdPlaybackState.get(sid);
+    const item = getVideoQueue(sid)[0];
+    setChzzkPlaybackBlocked(state, item, paused);
+    await broadcastPvdControl(sid, { op: 'chzzk-donation', paused: Boolean(item && state?.paused), idleDeferred: state?.idleDeferred === true, chzzkDonationPaused: paused });
+    await broadcastPvdStart(sid);
+  },
+});
+
+function getChzzkVideoDonationPublicSettings(sid, settings) {
+  const config = normalizeChzzkVideoDonationSettings(settings);
+  return { pauseEnabled: config.pauseEnabled, queueEnabled: config.queueEnabled, configured: Boolean(config.overlayUrl), ...chzzkVideoRuntime.status(sid) };
+}
+
+let chzzkVideoReconcileRunning = false;
+const chzzkVideoConfiguredSids = new Set();
+async function reconcileChzzkVideoConnections() {
+  if (chzzkVideoReconcileRunning) return;
+  chzzkVideoReconcileRunning = true;
+  try {
+    const rows = await chzzkVideoStore.listConfigured();
+    const next = new Set(rows.map((row) => row.sid));
+    for (const sid of chzzkVideoConfiguredSids) if (!next.has(sid)) chzzkVideoRuntime.close(sid);
+    chzzkVideoConfiguredSids.clear();
+    for (const row of rows) {
+      try { chzzkVideoRuntime.configure(row.sid, row.settings); chzzkVideoConfiguredSids.add(row.sid); }
+      catch { console.warn('[CHZZK video] Invalid saved configuration'); }
+    }
+  } catch { console.warn('[CHZZK video] Connection reconciliation unavailable; retrying'); }
+  finally { chzzkVideoReconcileRunning = false; }
+}
+setTimeout(() => { void reconcileChzzkVideoConnections(); }, 1500).unref?.();
+setInterval(() => { void reconcileChzzkVideoConnections(); }, 15000).unref?.();
+
+async function renewChzzkVideoQueueJobs() {
+  const entries = [...videoDonationQueues.entries()];
+  const ids = entries.flatMap(([, queue]) => queue.filter((item) => item.source === 'chzzk-donation').map((item) => item.runtimeJobId)).filter(Boolean);
+  if (!ids.length) return;
+  const active = new Set(await chzzkVideoStore.renew(ids, DURABLE_RUNTIME_WORKER_ID));
+  for (const [sid, queue] of entries) {
+    const previous = queue[0];
+    let changed = false;
+    for (let i = queue.length - 1; i >= 0; i--) {
+      if (queue[i].source === 'chzzk-donation' && !active.has(queue[i].runtimeJobId)) { queue.splice(i, 1); changed = true; }
+    }
+    if (previous !== queue[0]) await broadcastPvdStart(sid);
+    else if (changed) await notifyPvdAdminSubscribers(sid, 'chzzk_queue_reconciled');
+  }
+}
+
 function normalizePvdVolume(value, fallback = 100) {
   const n = Number(value);
   if (!Number.isFinite(n)) return Math.max(0, Math.min(100, Math.round(Number(fallback || 100))));
@@ -7008,11 +7130,13 @@ async function getPvdVolumeForSid(sid) {
 }
 
 async function getPvdViewerSettingsForSid(sid) {
-  const settings = await getBotSettings(sid).catch(() => ({})) || {};
+  const settings = await getBotSettingsStrict(sid);
+  chzzkVideoRuntime.configure(sid, settings);
   return {
     volume: normalizePvdVolume(settings.videoDonationVolume ?? 100),
     idlePlaylist: getPvdIdlePlaylistForViewer(settings.videoDonationIdlePlaylist),
     bgm: getPvdBgmViewerSettings(settings),
+    chzzkDonationPaused: chzzkVideoRuntime.paused(sid),
   };
 }
 
@@ -7078,6 +7202,7 @@ async function popCurrentVideoDonationItem(sid, options = {}) {
     }
   }
   if (popped) {
+    if (popped.source === 'chzzk-donation') void chzzkVideoRuntime.notifyPlayback(sid, popped, 'end');
     await settleDurableRuntimeItem(popped, {
       status: String(options.cause || 'completed'),
       refunded: options.refundOnError === true && String(options.cause || '').toLowerCase() === 'error',
@@ -7335,6 +7460,15 @@ async function controlPvdPlaybackForSid(sid, op, requestedAtSec) {
   if (!Number.isFinite(atSec) || atSec < 0) atSec = getCurrentAtSec(sid);
   const safeAtSec = Math.max(0, Math.floor(atSec));
 
+  if (state.chzzkBlocked) {
+    if (op === 'play' || op === 'pause') {
+      state.chzzkResumePaused = op === 'pause';
+      if (state.bgmBlocked) state.bgmResumePaused = op === 'pause';
+    }
+    if (op === 'seek') state.pausedAtSec = safeAtSec;
+    await broadcastPvdStart(sid);
+    return { ok: true, paused: true, chzzkDonationPaused: true, atSec: state.pausedAtSec };
+  }
   if (state.bgmBlocked) {
     if (op === 'play' || op === 'pause') state.bgmResumePaused = op === 'pause';
     if (op === 'seek') state.pausedAtSec = safeAtSec;
@@ -7393,6 +7527,7 @@ async function broadcastPvdStart(sid, options = {}) {
       if (q[0].kind === 'bgm') {
         updateBgmPlaybackAvailability(pvdPlaybackState.get(sid), q[0], viewerSettings.bgm?.enabled === true && bgmPlayerPresence.current(sid)?.readyItemId === q[0].id);
       }
+      setChzzkPlaybackBlocked(pvdPlaybackState.get(sid), q[0], viewerSettings.chzzkDonationPaused === true);
     } else {
       pvdPlaybackState.delete(sid);
     }
@@ -7410,6 +7545,7 @@ async function broadcastPvdStart(sid, options = {}) {
       volume: viewerSettings.volume,
       idlePlaylist: viewerSettings.idlePlaylist,
       bgm: viewerSettings.bgm,
+      chzzkDonationPaused: viewerSettings.chzzkDonationPaused,
       serverNow: Date.now()
     };
 
@@ -7429,6 +7565,7 @@ async function broadcastPvdStart(sid, options = {}) {
     // Reschedule timer for new head
     try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
     scheduleNextPvdAutoPop(sid);
+    if (q[0]?.source === 'chzzk-donation' && !state?.paused) void chzzkVideoRuntime.notifyPlayback(sid, q[0], 'play');
     return message;
 
   } catch (error) {
@@ -7446,6 +7583,7 @@ async function broadcastPvdStart(sid, options = {}) {
         startedAt: q[0] ? state?.baseStartMs || null : null,
         paused: q[0] ? state?.paused === true : null,
         idleDeferred: q[0] ? state?.idleDeferred === true : false,
+        chzzkDonationPaused: chzzkVideoRuntime.paused(sid),
         volume
       });
       for (const ws of Array.from(set)) {
@@ -7631,7 +7769,7 @@ app.get('/api/video-donation/settings', async (req, res) => {
   try {
     const sid = await getPartitionId(req, res);
     if (!sid) return res.status(401).json({ error: 'Login required' });
-    const settings = await getBotSettings(sid) || {};
+    const settings = await getBotSettingsStrict(sid);
     const pps = Math.max(0, Number(settings.videoDonationPointsPerSecond ?? 1));
     const enabled = settings.videoDonationAcceptEnabled === true;
     const maxDur = Math.max(1, Number(settings.videoDonationMaxDurationSec ?? 600));
@@ -7639,8 +7777,10 @@ app.get('/api/video-donation/settings', async (req, res) => {
     const volume = normalizePvdVolume(settings.videoDonationVolume ?? 100);
     const providers = normalizePvdProviders(settings.videoDonationProviders);
     const idlePlaylist = normalizePvdIdlePlaylist(settings.videoDonationIdlePlaylist);
+    chzzkVideoRuntime.configure(sid, settings);
     return res.json({ pointsPerSecond: pps, acceptEnabled: enabled, maxDurationSec: maxDur, perUserLimit, volume, providers, idlePlaylist,
       bgm: { ...getPvdBgmSettings(settings), idlePlaylist: normalizePvdIdlePlaylist(settings.bgmIdlePlaylist) },
+      chzzkVideoDonation: getChzzkVideoDonationPublicSettings(sid, settings),
     });
   } catch (e) {
     console.error('[pvd:settings:get] error', e?.message || e);
@@ -7819,7 +7959,11 @@ app.post('/api/video-donation/settings', async (req, res) => {
     const volume = normalizePvdVolume(body.volume ?? 100);
     let idlePlaylist;
     let bgm;
-    await updateBotSettingsAtomically(sid, (settings) => {
+    const savedSettings = await updateBotSettingsAtomically(sid, (settings) => {
+      const chzzk = normalizeChzzkVideoDonationSettings(settings, body.chzzkVideoDonation);
+      if ((chzzk.pauseEnabled || chzzk.queueEnabled) && !chzzk.overlayUrl) {
+        throw Object.assign(new Error('치지직 영상후원 링크를 입력해 주세요.'), { statusCode: 400 });
+      }
       const providers = normalizePvdProviders(body.providers || body.videoDonationProviders || settings.videoDonationProviders);
       const hasIdlePlaylistInput = Object.prototype.hasOwnProperty.call(body, 'idlePlaylist');
       const idleSource = hasIdlePlaylistInput ? body.idlePlaylist : settings.videoDonationIdlePlaylist;
@@ -7861,8 +8005,12 @@ app.post('/api/video-donation/settings', async (req, res) => {
         bgmAcceptEnabled: bgm.acceptEnabled === true,
         bgmPointsPerSecond: bgm.pointsPerSecond,
         bgmIdlePlaylist: bgm.idlePlaylist,
+        videoDonationChzzkPauseEnabled: chzzk.pauseEnabled,
+        videoDonationChzzkQueueEnabled: chzzk.queueEnabled,
+        videoDonationChzzkOverlaySecret: chzzk.overlayUrl,
       };
     });
+    chzzkVideoRuntime.configure(sid, savedSettings);
     const viewerIdlePlaylist = getPvdIdlePlaylistForViewer(idlePlaylist);
     await Promise.all([
       broadcastPvdControl(sid, { op: 'volume', volume }).catch(() => null),
@@ -7872,7 +8020,7 @@ app.post('/api/video-donation/settings', async (req, res) => {
       await activateDeferredPvdPlayback(sid);
     }
     await broadcastPvdStart(sid);
-    return res.json({ ok: true, idlePlaylist, bgm });
+    return res.json({ ok: true, idlePlaylist, bgm, chzzkVideoDonation: getChzzkVideoDonationPublicSettings(sid, savedSettings) });
   } catch (e) {
     if (e?.statusCode === 400) return res.status(400).json({ error: e.message });
     console.error('[pvd:settings:post] error', e?.message || e);
@@ -8108,17 +8256,15 @@ app.get('/api/video-donation/now-playing', async (req, res) => {
     }
     if (!sid) return res.status(404).json({ error: 'token not found' });
 
-    let settings = {};
-    try {
-      settings = await getBotSettings(sid) || {};
-      if (!settings.videoDonationViewerToken || settings.videoDonationViewerToken !== token) {
-        return res.status(404).json({ error: 'token not found' });
-      }
-    } catch { }
-
+    const settings = await getBotSettingsStrict(sid);
+    if (!settings.videoDonationViewerToken || settings.videoDonationViewerToken !== token) {
+      return res.status(404).json({ error: 'token not found' });
+    }
+    chzzkVideoRuntime.configure(sid, settings);
     const q = getVideoQueue(sid);
     if (q[0]) await refreshChzzkClipPlaybackForItem(q[0]);
     const state = pvdPlaybackState.get(sid) || null;
+    setChzzkPlaybackBlocked(state, q[0], chzzkVideoRuntime.paused(sid));
     res.set('Cache-Control', 'no-store, max-age=0');
     return res.json({
       item: q[0] || null,
@@ -8132,6 +8278,7 @@ app.get('/api/video-donation/now-playing', async (req, res) => {
       durationProbes: pvdDurationProbeCoordinator.listPending(sid),
       idlePlaylist: getPvdIdlePlaylistForViewer(settings.videoDonationIdlePlaylist),
       bgm: getPvdBgmViewerSettings(settings),
+      chzzkDonationPaused: chzzkVideoRuntime.paused(sid),
       serverNow: Date.now()
     });
   } catch (e) {
@@ -9689,6 +9836,10 @@ async function executeBlueprintCommandNode({
     provider: selectedPlatform,
     userId,
   }) || '').trim();
+  response = await executeSongbookCommand(response, { owner: ownerUserId, provider: selectedPlatform,
+    userId: context.user?.userId || context.user?.id || '', username, argsText,
+    eventId: run.id ? `${run.id}:${node.id || 'command'}` : null, keyword: commandMatch.matchedText,
+    allowed: hasSongbookCommandToken(selectedResponse), template: selectedResponse });
   response = String(await resolveCommandMemoVariables(memoPlan, response, { sid }) || '').trim();
 
   await recordCommandExecutionLog(sid, {
@@ -14984,6 +15135,7 @@ const PRIVACY_RETENTION_CLEANUP_INTERVAL_MS = Math.max(
 );
 const PRIVACY_RETENTION_CLEANUP_ENABLED = String(process.env.ARUBOT_PRIVACY_RETENTION_CLEANUP || 'true').trim().toLowerCase() !== 'false';
 let privacyRetentionCleanupRunning = false;
+let unlinkedAccountCleanupCursor = '';
 
 async function applyDrawingRetentionResult(result) {
   const sids = new Set();
@@ -15010,6 +15162,16 @@ async function runPrivacyRetentionCleanup(reason = 'scheduled') {
   try {
     const result = await cleanupPrivacyRetentionData();
     await applyDrawingRetentionResult(result);
+    const unlinked = await cleanupUnlinkedAccounts({ dryRun: false, limit: 50, after: unlinkedAccountCleanupCursor,
+      onDeleted: async (owner) => {
+        clearDeletedAccountRuntimeState(owner);
+        invalidatePublicChannelIdentityCaches(owner);
+        invalidatePublicPointPolicyCache(`user:${owner}`);
+      },
+    });
+    unlinkedAccountCleanupCursor = unlinked.hasMore ? unlinked.after : '';
+    console.log('[Privacy] Unlinked account cleanup:', { scanned: unlinked.scanned, deleted: unlinked.deleted,
+      skipped: unlinked.skipped, failed: unlinked.failed.length, hasMore: unlinked.hasMore });
     console.log('[Privacy] Retention cleanup completed:', {
       reason,
       deleted: result.deleted,
@@ -17908,6 +18070,7 @@ async function getValidCimeAccessToken(ownerUserId) {
   if (isNaN(expiresAt.getTime()) || expiresAt <= now) {
     if (!tokens.refreshToken) throw new Error('No CIME refresh token stored');
     const platformUserId = tokens.platformUserId;
+    const previousTokens = tokens;
     const body = {
       grantType: 'refresh_token',
       clientId: CIME_CLIENT_ID,
@@ -17926,7 +18089,9 @@ async function getValidCimeAccessToken(ownerUserId) {
       expiresAt: computeExpiresAt(payload.expiresIn || 86400),
       scope: payload.scope || tokens.scope
     };
-    await upsertPlatformTokens('cime', ownerUserId, platformUserId, tokens);
+    if (!await upsertPlatformTokens('cime', ownerUserId, platformUserId, tokens, { expectedTokens: previousTokens })) {
+      throw new Error('CIME connection changed during token refresh');
+    }
   }
   return tokens.accessToken;
 }
@@ -17954,7 +18119,7 @@ async function getValidYoutubeAccessToken(ownerUserId, { trackUse = true } = {})
       error.provider = 'youtube';
       error.reauthRequired = true;
       error.status = 401;
-      await deleteYoutubeAuthorizedData(ownerUserId, tokens.platformUserId, 'authorization_invalid').catch(() => null);
+      await deleteYoutubeAuthorizedData(ownerUserId, tokens.platformUserId, 'authorization_invalid', tokens).catch(() => null);
       throw error;
     }
     const platformUserId = tokens.platformUserId;
@@ -17973,12 +18138,15 @@ async function getValidYoutubeAccessToken(ownerUserId, { trackUse = true } = {})
       error.status = e?.response?.status || 500;
       error.reauthRequired = isYoutubeReauthRequired({ status: error.status, message });
       if (error.reauthRequired) {
-        await deleteYoutubeAuthorizedData(ownerUserId, tokens.platformUserId, 'authorization_invalid').catch(() => null);
+        await deleteYoutubeAuthorizedData(ownerUserId, tokens.platformUserId, 'authorization_invalid', tokens).catch(() => null);
       }
       throw error;
     }
+    const previousTokens = tokens;
     tokens = normalizeGoogleTokenPayload(payload, tokens);
-    await upsertPlatformTokens('youtube', ownerUserId, platformUserId, tokens);
+    if (!await upsertPlatformTokens('youtube', ownerUserId, platformUserId, tokens, { expectedTokens: previousTokens })) {
+      throw new Error('YouTube connection changed during token refresh');
+    }
   }
   if (trackUse) await touchPlatformTokenUsed('youtube', ownerUserId).catch(() => null);
   return tokens.accessToken;
@@ -18842,17 +19010,18 @@ async function revokeYoutubeOAuthGrant(tokens) {
   }
 }
 
-async function deleteYoutubeAuthorizedData(ownerUserId, platformUserId = null, reason = 'youtube_authorization_removed') {
+async function deleteYoutubeAuthorizedData(ownerUserId, platformUserId = null, reason = 'youtube_authorization_removed', expectedTokens = null) {
   const owner = String(ownerUserId || '').replace(/^user:/, '').trim();
   if (!owner) return { tokensDeleted: 0, accountsDeleted: 0, streamerChannelDeleted: false };
-  const streamerChannelDeleted = await deleteYoutubeStreamerChannel(owner).catch(() => false);
-  const deleted = await deletePlatformAccount('youtube', owner);
+  const deleted = await deletePlatformAccount('youtube', owner, null, { expectedTokens, deleteStreamerChannel: true });
+  if (deleted.skipped) return { ...deleted, accountDeleted: false };
   invalidatePublicChannelIdentityCaches(owner, [
     platformUserId,
     platformUserId ? `youtube:${platformUserId}` : null,
   ]);
   disconnectProviderRuntimeState(owner, 'youtube', platformUserId, reason);
-  return { ...deleted, streamerChannelDeleted };
+  const accountCleanup = await cleanupAccountIfUnlinked(owner);
+  return { ...deleted, accountDeleted: accountCleanup.accountDeleted === true };
 }
 
 app.post('/api/auth/youtube/revoke', async (req, res) => {
@@ -18866,12 +19035,14 @@ app.post('/api/auth/youtube/revoke', async (req, res) => {
     if (tokens) {
       revokeResult = await revokeYoutubeOAuthGrant(tokens);
     }
-    const deleted = await deleteYoutubeAuthorizedData(ownerUserId, platformUserId, 'revoked');
-    const platforms = await listPlatformAccounts(ownerUserId).catch(() => []);
-    return res.json({ ok: true, platforms, revoked: revokeResult, deleted });
+    const deleted = await deleteYoutubeAuthorizedData(ownerUserId, platformUserId, 'revoked', tokens);
+    if (deleted.skipped) return res.status(409).json({ error: 'YouTube connection changed. Please review the current connection and retry.' });
+    const platforms = await listPlatformAccounts(ownerUserId);
+    if (deleted.accountDeleted) clearManagedCookie(res, 'sid');
+    return res.json({ ok: true, platforms, revoked: revokeResult, deleted, accountDeleted: deleted.accountDeleted });
   } catch (e) {
-    console.warn('[YouTube] OAuth revoke failed; local Authorized Data retained for retry:', e?.response?.data || e?.message || e);
-    return res.status(502).json({ error: 'Failed to revoke YouTube authorization. Local YouTube data was retained; please retry.' });
+    console.warn('[YouTube] Authorization removal could not be completed:', e?.response?.data || e?.message || e);
+    return res.status(502).json({ error: 'Could not finish removing the YouTube connection. Please check its current status and retry.' });
   }
 });
 
@@ -19029,14 +19200,16 @@ app.post('/api/auth/cime/revoke', async (req, res) => {
       }
       await deletePlatformTokens('cime', ownerUserId);
     }
-    try { await deletePlatformAccount('cime', ownerUserId, platformUserId); } catch { }
+    await deletePlatformAccount('cime', ownerUserId, platformUserId);
     invalidatePublicChannelIdentityCaches(ownerUserId, [
       platformUserId,
       platformUserId ? `cime:${platformUserId}` : null,
     ]);
     const runtime = disconnectProviderRuntimeState(ownerUserId, 'cime', platformUserId, 'revoked');
-    const platforms = await listPlatformAccounts(ownerUserId).catch(() => []);
-    return res.json({ ok: true, platforms, runtime });
+    const accountCleanup = await cleanupAccountIfUnlinked(ownerUserId);
+    const platforms = await listPlatformAccounts(ownerUserId);
+    if (accountCleanup.accountDeleted) clearManagedCookie(res, 'sid');
+    return res.json({ ok: true, platforms, runtime, accountDeleted: accountCleanup.accountDeleted === true });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to revoke CIME tokens' });
   }
@@ -19867,7 +20040,9 @@ app.delete('/api/youtube/streamer-channel', rateLimiters.userWrite, async (req, 
       previousStreamerChannel?.youtubeChannelId ? `youtube:${previousStreamerChannel.youtubeChannelId}` : null,
     ]);
     const runtime = disconnectProviderRuntimeState(ownerUserId, 'youtube', null, 'streamer_channel_deleted');
-    return res.json({ ok: true, runtime });
+    const accountCleanup = await cleanupAccountIfUnlinked(ownerUserId);
+    if (accountCleanup.accountDeleted) clearManagedCookie(res, 'sid');
+    return res.json({ ok: true, runtime, accountDeleted: accountCleanup.accountDeleted === true });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to delete YouTube streamer channel' });
   }
@@ -20145,13 +20320,7 @@ function disconnectProviderRuntimeState(ownerUserId, provider, platformUserId = 
 }
 
 function deleteAutomationSoundDirectory(ownerUserId) {
-  const target = path.resolve(automationSoundDir(ownerUserId));
-  const root = path.resolve(AUTOMATION_USER_FILE_ROOT);
-  const normalizedTarget = target.toLowerCase();
-  const normalizedRoot = root.toLowerCase();
-  if (!normalizedTarget.startsWith(`${normalizedRoot}${path.sep.toLowerCase()}`)) return false;
-  fs.rmSync(target, { recursive: true, force: true });
-  return true;
+  return deleteAccountAutomationSoundFiles(ownerUserId, { root: AUTOMATION_USER_FILE_ROOT });
 }
 
 async function prepareAccountRuntimeDeletion(ownerUserId) {
@@ -20219,6 +20388,17 @@ function clearDeletedAccountRuntimeState(ownerUserId) {
     console.warn('[Privacy] Automation sound directory cleanup failed:', error?.message || error);
   }
   return { sid, soundFilesDeleted };
+}
+
+async function cleanupAccountIfUnlinked(ownerUserId) {
+  const result = await deleteAccountData(ownerUserId, { reason: 'last_platform_disconnected', requireNoPlatforms: true });
+  if (!result.ok) throw new Error('Unlinked account cleanup unavailable');
+  if (result.accountDeleted) {
+    clearDeletedAccountRuntimeState(ownerUserId);
+    invalidatePublicChannelIdentityCaches(ownerUserId);
+    invalidatePublicPointPolicyCache(`user:${ownerUserId}`);
+  }
+  return result;
 }
 
 function isAlreadyRevokedOAuthError(error) {
@@ -21777,6 +21957,18 @@ app.delete('/api/automations/assets/sounds/:fileId', rateLimiters.userWrite, asy
 const emoteOverlayRuntime = createEmoteOverlayRuntime({ store: emoteOverlayStore });
 registerEmoteOverlayRoutes(app, { runtime: emoteOverlayRuntime, getOwner: getCurrentSessionUserId, writeLimiter: rateLimiters.userWrite, promoteStream: requestProtection.promoteStream });
 
+registerMarbleRoutes(app, {
+  store: marbleStore, getAdminOwner: getCurrentSessionUserId, getViewerUser: getSessionActorUserId,
+  writeLimiter: rateLimiters.userWrite, onChange: owner => marbleRuntime.invalidate(owner),
+  validateCommands: async (owner, settings) => {
+    const sid = `user:${owner}`;
+    const rules = await getBotRules(sid);
+    const bot = await getBotSettings(sid);
+    const wheel = await getParticipationWheel(sid);
+    assertMarbleCommandAvailable(settings, { rules, bot, wheel });
+  },
+});
+
 registerSongbookRoutes(app, {
   store: songbookStore, getAdminOwner: getCurrentSessionUserId, getViewerUser: getSessionActorUserId,
   resolveChannel: resolveVerifiedPublicChannelIdentity, normalizeUid: normalizePublicChannelUid,
@@ -21943,8 +22135,10 @@ app.post('/api/bot/settings', rateLimiters.userWrite, async (req, res) => {
 const BOT_VARIABLE_PROVIDERS = ['chzzk', 'cime', 'youtube'];
 const BOT_VARIABLES = [
   { key: '${memo}', label: '명령어 메모', description: '이 명령어에 저장된 메모를 표시합니다. 스트리머 또는 채팅 관리자가 인자를 입력하면 새 메모로 저장합니다.', group: '메모', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command'], caveat: '예: 응답을 오늘의 공지: ${memo}로 설정한 뒤 !공지 내일 8시에 만나요로 저장하고 !공지로 조회합니다. 일반 시청자는 인자가 있어도 조회만 합니다. 저장 내용은 최대 4,000자이며 특수 변수로 실행하지 않습니다.' },
-  { key: '${memo::메모이름}', label: '이름 있는 메모', description: '같은 채널에서 같은 이름의 메모를 여러 명령어가 공유합니다. 스트리머·채팅 관리자는 인자로 수정하고, 인자가 없으면 저장된 내용을 표시합니다.', group: '메모', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command'], caveat: '메모이름을 바꿔 사용하세요. 예: ${memo::공지}. 다른 스트리머의 메모와 분리되며 봇 재시작 후에도 유지됩니다. 같은 응답에 여러 메모가 있으면 입력한 인자를 모두 동일하게 저장합니다.' },
+  { key: '${memo::메모이름}', label: '이름 있는 메모', description: '같은 채널에서 같은 이름의 메모를 공유합니다. 후원 반응에서는 저장된 내용만 읽고, 스트리머·채팅 관리자의 명령어 인자로만 수정합니다.', group: '메모', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command', 'donation'], caveat: '예: ${memo::공지}. 후원 메시지로 메모를 덮어쓰지 않으며, 메모 안의 특수 변수도 실행하지 않습니다. 다른 스트리머의 메모와 분리되며 봇 재시작 후에도 유지됩니다.' },
   { key: '${bgm_request}', label: 'BGM 신청 실행', group: '특수 실행', description: 'YouTube 곡을 BGM 대기열에 넣고 BGM 초당 요금으로 포인트를 차감합니다.', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command'], caveat: 'BGM과 BGM 신청을 모두 켜야 합니다. 사용법: <주소 또는 검색어> [<시작초>] [<종료초>]. 시간은 초 또는 분:초 형식이며 영상 후원과 최대 길이 설정을 공유합니다. 영상 후원이 들어오면 멈추고 종료 후 이어 재생합니다.' },
+  { key: '${songbook_request}', label: '노래책 노래 신청', group: '특수 실행', description: '명령어 뒤의 곡명 또는 가수와 곡명으로 노래책 대기열에 신청합니다.', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command'], caveat: '신청 접수 여부와 인당 한도가 적용됩니다. 여러 곡이 검색되면 선택 안내를 보냅니다. 인자가 없으면 신청 방법을 안내합니다.' },
+  { key: '${songbook_url}', label: '시청자 노래책 주소', group: '채널', description: '현재 채널의 시청자 노래책 페이지 주소입니다.', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command', 'donation'] },
   { key: '{user.name}', label: '시청자 이름', description: '채팅을 보낸 시청자의 표시 이름입니다.', group: '시청자', providers: BOT_VARIABLE_PROVIDERS },
   { key: '{user.id}', label: '시청자 ID', description: '채팅을 보낸 시청자의 플랫폼/아루봇 식별자입니다.', group: '시청자', providers: BOT_VARIABLE_PROVIDERS },
   { key: '{user.username}', label: '시청자 이름', description: '시청자 이름과 같은 값입니다.', group: '시청자', providers: BOT_VARIABLE_PROVIDERS },
@@ -21968,12 +22162,12 @@ const BOT_VARIABLES = [
   { key: '{live.channel}', label: '방송 채널', description: '현재 방송 채널 이름 또는 식별자입니다.', group: '방송', providers: BOT_VARIABLE_PROVIDERS },
   { key: '{channel.followers}', label: '팔로워 수', description: '확인 가능한 현재 채널 팔로워 수입니다.', group: '채널', providers: ['chzzk', 'cime'], caveat: '씨미는 프로필 동기화로 저장된 공개 수치를 사용합니다.' },
   { key: '${dday::2026-08-14}', label: 'D-Day 일수', description: '입력한 날짜와 KST 기준 오늘의 차이를 일수로 표시합니다.', group: '날짜', providers: BOT_VARIABLE_PROVIDERS, caveat: '날짜를 YYYY-MM-DD 형식으로 바꿔 사용하세요. 미래 날짜는 양수, 오늘은 0, 지난 날짜는 음수입니다.' },
-  { key: '${counter::user::변수명}', label: '시청자별 카운트', description: '명령어를 호출한 시청자마다 별도로 값을 1 올린 뒤, 증가한 숫자를 이 위치에 표시합니다.', group: '카운트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command'], effect: 'increment', caveat: '변수명을 원하는 이름으로 바꿔 사용하세요. 첫 호출은 1이며, 같은 응답에 동일 변수를 여러 번 넣어도 한 번만 증가합니다. 응답 하나에는 서로 다른 카운트를 최대 16개까지 사용할 수 있습니다. 예: ${counter::user::도전}' },
-  { key: '${counter::global::변수명}', label: '전체 합산 카운트', description: '이 스트리머의 모든 시청자 호출을 변수명별로 합산해 값을 1 올린 뒤, 증가한 숫자를 이 위치에 표시합니다.', group: '카운트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command'], effect: 'increment', caveat: '변수명을 원하는 이름으로 바꿔 사용하세요. 첫 호출은 1이며, 시청자별 카운트와 전체 합산 카운트는 서로 독립적으로 저장됩니다. 응답 하나에는 서로 다른 카운트를 최대 16개까지 사용할 수 있습니다. 예: ${counter::global::도전}' },
+  { key: '${counter::user::변수명}', label: '시청자별 카운트', description: '명령어 호출자 또는 후원자마다 별도로 값을 1 올린 뒤, 증가한 숫자를 표시합니다.', group: '카운트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command', 'donation'], effect: 'increment', caveat: '예: ${counter::user::후원횟수}. 첫 호출은 1이며, 같은 반응에 동일 변수를 여러 번 넣어도 한 번만 증가합니다. 반응 하나당 최대 16개입니다. 익명 등 후원자 ID를 확인할 수 없으면 증가하지 않고 확인 불가로 표시합니다.' },
+  { key: '${counter::global::변수명}', label: '전체 합산 카운트', description: '이 스트리머의 명령어 호출과 후원 반응을 변수명별로 합산해 값을 1 올린 뒤, 증가한 숫자를 표시합니다.', group: '카운트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command', 'donation'], effect: 'increment', caveat: '예: ${counter::global::후원횟수}. 같은 반응에 동일 변수를 여러 번 넣어도 한 번만 증가합니다. 시청자별 카운트와 독립적으로 저장되며, 반응 하나당 최대 16개입니다. 후원 규칙 여러 개가 실행되면 규칙별로 증가합니다.' },
   { key: '${live.title_change}', label: '방송 제목 변경', description: '명령어 뒤에 입력한 전체 문장으로 현재 플랫폼의 방송 제목을 변경합니다.', group: '특수 실행', providers: ['chzzk', 'cime'], contexts: ['command'], caveat: '스트리머 또는 매니저만 실행할 수 있으며 채팅에는 출력되지 않습니다. 명령어 인자가 없으면 실행하지 않고, 제거 후 응답이 비어 있으면 채팅도 보내지 않습니다.' },
   { key: '${live.game_change}', label: '방송 카테고리 변경', description: '명령어 뒤에 입력한 전체 문장으로 현재 플랫폼의 카테고리를 검색해 변경합니다.', group: '특수 실행', providers: ['chzzk', 'cime'], contexts: ['command'], caveat: '스트리머 또는 매니저만 실행할 수 있으며 채팅에는 출력되지 않습니다. 명령어 인자가 없으면 실행하지 않고, 제거 후 응답이 비어 있으면 채팅도 보내지 않습니다.' },
   { key: '${video_donation}', label: '영상 후원 신청 실행', description: '명령어 인자로 받은 주소를 영상 후원 대기열에 넣고 실제 재생 구간만큼 포인트를 차감합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command'], caveat: '사용법: <주소> [<시작초>] [<종료초>] · 시작초와 종료초는 초 또는 분:초(예: 1:23 = 83초) 형식으로 입력합니다. 시작초 기본값은 0초이며, 종료초를 생략하면 영상 마지막까지 재생합니다. 설정된 최대 재생 시간은 항상 적용되며, 이 변수는 채팅에 출력되지 않습니다.' },
-  { key: '${roulette::룰렛이름}', label: '룰렛 실행', description: '지정한 룰렛을 실행하고 결과를 채팅/오버레이 흐름에 반영합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command', 'attendance', 'donation'], caveat: '룰렛 이름 또는 ID를 :: 뒤에 입력하세요. 신규 출석과 후원 반응에서는 무료로 1회 실행됩니다. 예: ${roulette::오늘의 벌칙}' },
+  { key: '${roulette::룰렛이름}', label: '룰렛 실행', description: '지정한 룰렛을 실행하고 결과를 채팅/오버레이 흐름에 반영합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command', 'attendance', 'donation'], caveat: '룰렛 이름 또는 ID를 :: 뒤에 입력하세요. 신규 출석과 후원 반응에서는 무료로 1회 실행됩니다. 후원 반응에 여러 룰렛을 넣으면 첫 번째만 실행합니다. 예: ${roulette::오늘의 벌칙}' },
   { key: '${action::액션이름}', label: '블루프린트 실행', description: '게시된 실행 액션 블루프린트를 명령어 응답, 출석 메시지 또는 후원 반응에서 실행합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command', 'attendance', 'donation'], caveat: '채팅으로 출력되지 않고 액션이 실행됩니다. 액션 이름, slug 또는 ID를 사용할 수 있습니다. 후원자의 메시지에 적힌 특수 변수는 실행되지 않습니다.' },
   { key: '${automation::액션이름}', label: '블루프린트 실행 별칭', description: '${action::...}과 같은 방식으로 게시된 실행 액션을 실행합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command', 'attendance', 'donation'] },
   { key: '${blueprint::액션이름}', label: '블루프린트 실행 별칭', description: '${action::...}과 같은 방식으로 게시된 실행 액션을 실행합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command', 'attendance', 'donation'] },
@@ -21985,6 +22179,9 @@ const BOT_VARIABLES = [
   { key: '{donation.amount}', label: '후원 금액', description: '후원 반응 또는 후원 이벤트로 실행된 블루프린트에서 사용할 수 있는 후원 금액입니다.', group: '후원', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint', 'donation'] },
   { key: '{donation.message}', label: '후원 메시지', description: '후원자가 입력한 원문 메시지입니다.', group: '후원', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint', 'donation'] },
   { key: '{donation.username}', label: '후원자 이름', description: '후원자의 표시 이름입니다.', group: '후원', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint', 'donation'] },
+  { key: '${username}', label: '후원자 이름 별칭', description: '{donation.username}과 같은 후원자 이름입니다.', group: '후원', providers: BOT_VARIABLE_PROVIDERS, contexts: ['donation'] },
+  { key: '${amount}', label: '후원 금액 별칭', description: '{donation.amount}와 같은 후원 금액입니다.', group: '후원', providers: BOT_VARIABLE_PROVIDERS, contexts: ['donation'] },
+  { key: '${message}', label: '후원 메시지 별칭', description: '후원 메시지를 원문 그대로 표시하며 메시지 안의 특수 변수는 실행하지 않습니다.', group: '후원', providers: BOT_VARIABLE_PROVIDERS, contexts: ['donation'] },
   { key: '{roulette.result.label}', label: '룰렛 결과 이름', description: '룰렛 결과로 실행된 블루프린트의 당첨 항목 이름입니다.', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint'], caveat: '룰렛 결과가 블루프린트를 실행한 경우에만 값이 있습니다.' },
   { key: '{roulette.result.value}', label: '룰렛 결과 값', description: '룰렛 결과로 실행된 블루프린트의 당첨 항목 값입니다.', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint'], caveat: '룰렛 결과가 블루프린트를 실행한 경우에만 값이 있습니다.' },
   { key: '{node.rouletteRun.result.label}', label: '룰렛 노드 결과 이름', description: '블루프린트의 룰렛 실행 노드가 만든 결과 항목 이름입니다.', group: '룰렛/블루프린트', providers: BOT_VARIABLE_PROVIDERS, contexts: ['blueprint'], caveat: '룰렛 실행 노드가 먼저 실행된 뒤 사용할 수 있습니다.' },
@@ -22174,6 +22371,16 @@ app.post('/api/bot/rules/upsert', async (req, res) => {
   if (!rule || !rule.id) return res.status(400).json({ error: 'rule with id is required' });
 
   try {
+    const rules = await getBotRules(sid);
+    if (req.body.expectedVersion !== undefined && commandEditVersion(rules.find(item => item.id === rule.id) || null) !== req.body.expectedVersion) {
+      return res.status(409).json({ error: '다른 곳에서 명령어가 변경되었거나 삭제되었습니다. 다시 불러온 후 수정해 주세요.' });
+    }
+    const conflict = songbookTriggerConflict(rule, rules);
+    if (conflict) return res.status(409).json({ error: `이미 사용 중인 명령어입니다: ${conflict.name || conflict.keywords?.[0] || conflict.id}` });
+    const marble = await marbleStore.configuration(ownerUserIdFromSid(sid));
+    if (marble?.settings.points.enabled && marbleRuleConflict(rule, marble.settings.points.command)) {
+      return res.status(409).json({ error: `주루마블에서 사용 중인 명령어입니다: ${marble.settings.points.command}` });
+    }
     if (rule.rouletteDefs && Array.isArray(rule.rouletteDefs)) {
       for (const def of rule.rouletteDefs) {
         if (def.type === 'probability' && Array.isArray(def.items)) {
@@ -22206,6 +22413,10 @@ app.post('/api/bot/rules/delete', async (req, res) => {
   const { id } = req.body || {};
   if (!id) return res.status(400).json({ error: 'id is required' });
   try {
+    if (req.body.expectedVersion !== undefined) {
+      const rules = await getBotRules(sid);
+      if (commandEditVersion(rules.find(item => item.id === id) || null) !== req.body.expectedVersion) return res.status(409).json({ error: '명령어가 변경되었습니다. 다시 불러온 후 삭제해 주세요.' });
+    }
     await deleteBotRule(sid, id);
     const runtimeRevision = markRuntimeConfigurationChanged(sid, 'bot_rule_deleted');
     return res.json({ ok: true, runtimeRevision });
@@ -22443,6 +22654,10 @@ function formatPredictionBetError(error) {
 registerParticipationWheelRoutes(app, {
   getPartitionId, getWheel: getParticipationWheel, updateWheel: updateParticipationWheel,
   actWheel: actParticipationWheel, getBotRules, getBotSettings,
+  getReservedCommands: async sid => {
+    const marble = await marbleStore.configuration(ownerUserIdFromSid(sid));
+    return marble?.settings.points.enabled ? [marble.settings.points.command.toLowerCase()] : [];
+  },
   runtime: participationWheelRuntime, recordEvent: recordBotEventLogSafe, writeMiddleware: rateLimiters.userWrite,
 });
 
@@ -23380,15 +23595,7 @@ app.get('/api/auth/chzzk/token', async (req, res) => {
               try { await migrateSidToUserPid(sidToken, userId); } catch { }
               sid = `user:${userId}`;
               await rotateAuthenticatedSession(req, res, userId);
-              // Ensure tokens are saved under user pid as well
-              try {
-                await upsertTokens(sid, {
-                  accessToken: tokens.accessToken,
-                  refreshToken: tokens.refreshToken,
-                  tokenType: tokens.tokenType || 'Bearer',
-                  expiresAt: tokens.expiresAt,
-                });
-              } catch { }
+              tokens = await getTokens(sid);
             }
           } catch { }
         }
@@ -23411,13 +23618,14 @@ app.get('/api/auth/chzzk/token', async (req, res) => {
       });
       const rPayload = (r?.data && r.data.content) ? r.data.content : r?.data || {};
       const { accessToken, refreshToken, tokenType, expiresIn } = rPayload;
+      const expectedTokens = tokens;
       tokens = {
         accessToken,
         refreshToken: refreshToken || tokens.refreshToken,
         tokenType: tokenType || 'Bearer',
         expiresAt: computeExpiresAt(expiresIn || 86400)
       };
-      await updateTokens(sid, tokens);
+      await updateTokens(sid, tokens, { expectedTokens });
     }
 
     // Ensure we have a session mapped for current cookie sid token
@@ -23469,14 +23677,14 @@ app.post('/api/auth/chzzk/revoke', async (req, res) => {
     }
 
     if (ownerUserId) {
-      const accounts = await listPlatformAccounts(ownerUserId).catch(() => []);
+      const accounts = await listPlatformAccounts(ownerUserId);
       const chzzkAccount = requestedPlatformUserId
         ? accounts.find((account) => String(account.provider || '').toLowerCase() === 'chzzk' && String(account.platform_user_id || '') === requestedPlatformUserId)
         : accounts.find((account) => String(account.provider || '').toLowerCase() === 'chzzk');
       if (sid && tokens && requestedPlatformUserId && chzzkAccount && String(chzzkAccount.platform_user_id || '') === requestedPlatformUserId) {
-        try { await updateTokens(sid, null); } catch { }
+        await updateTokens(sid, null);
       }
-      try { await deletePlatformAccount('chzzk', ownerUserId, requestedPlatformUserId || chzzkAccount?.platform_user_id || null); } catch { }
+      await deletePlatformAccount('chzzk', ownerUserId, requestedPlatformUserId || chzzkAccount?.platform_user_id || null);
       invalidatePublicChannelIdentityCaches(ownerUserId, [
         requestedPlatformUserId,
         chzzkAccount?.platform_user_id,
@@ -23486,8 +23694,10 @@ app.post('/api/auth/chzzk/revoke', async (req, res) => {
         chzzkAccount?.channel_id ? `chzzk:${chzzkAccount.channel_id}` : null,
       ]);
       const runtime = disconnectProviderRuntimeState(ownerUserId, 'chzzk', requestedPlatformUserId || chzzkAccount?.platform_user_id || null, 'revoked');
-      const platforms = await listPlatformAccounts(ownerUserId).catch(() => []);
-      return res.json({ ok: true, platforms, runtime });
+      const accountCleanup = await cleanupAccountIfUnlinked(ownerUserId);
+      const platforms = await listPlatformAccounts(ownerUserId);
+      if (accountCleanup.accountDeleted) clearManagedCookie(res, 'sid');
+      return res.json({ ok: true, platforms, runtime, accountDeleted: accountCleanup.accountDeleted === true });
     }
 
     if (sid) closeChzzkProviderRuntimeSession(ownerUserIdFromSid(sid), 'revoked');
@@ -24300,14 +24510,12 @@ app.post('/api/auth/chzzk/session/attach', async (req, res) => {
           refreshToken = rPayload.refreshToken || refreshToken;
           tokenType = rPayload.tokenType || tokenType;
           // Persist refreshed tokens back to their original sid so rest of system stays consistent
-          try {
-            await updateTokens(originSid, {
-              accessToken,
-              refreshToken,
-              tokenType,
-              expiresAt: computeExpiresAt(rPayload.expiresIn || 86400),
-            });
-          } catch { }
+          await updateTokens(originSid, {
+            accessToken,
+            refreshToken,
+            tokenType,
+            expiresAt: computeExpiresAt(rPayload.expiresIn || 86400),
+          }, { expectedTokens: tempTokens });
           // Retry users/me
           try {
             const content2 = await callUsersMe();
@@ -24353,13 +24561,14 @@ async function getValidAccessToken(sid) {
     });
     const rPayload = (r?.data && r.data.content) ? r.data.content : r?.data || {};
     const { accessToken, refreshToken, tokenType, expiresIn } = rPayload;
+    const expectedTokens = tokens;
     tokens = {
       accessToken,
       refreshToken: refreshToken || tokens.refreshToken,
       tokenType: tokenType || 'Bearer',
       expiresAt: computeExpiresAt(expiresIn || 86400)
     };
-    await updateTokens(sid, tokens);
+    await updateTokens(sid, tokens, { expectedTokens });
   }
   return tokens.accessToken;
 }
@@ -24730,7 +24939,11 @@ async function ensureSession(sid, channelId) {
           if (!botDisabled) {
             try {
               const channelUid = await resolveStreamerUidForSid(sid);
-              const wheelReply = !isBotSelf ? await participationWheelRuntime.chat({
+              const marbleReply = !isBotSelf ? await marbleRuntime.chat({
+                sid, channelUid, userId: resolvedUserId, username: resolvedUsername,
+                provider: 'chzzk', text, event: msg,
+              }) : { handled: false };
+              const wheelReply = marbleReply.handled ? marbleReply : !isBotSelf ? await participationWheelRuntime.chat({
                 sid, channelUid, userId: resolvedUserId, username: resolvedUsername,
                 provider: 'chzzk', text, event: msg,
               }) : { handled: false };
@@ -25181,6 +25394,9 @@ async function ensureSession(sid, channelId) {
                       userId: counterUserId,
                     }) || '').trim()
                   : stripUnplannedCounterVariables(finalMsg).trim();
+                finalMsg = await executeSongbookCommand(finalMsg, { owner: ownerUserIdFromSid(sid), provider: 'chzzk',
+                  userId: counterUserId, username: resolvedUsername, argsText: restForVd,
+                  eventId: replyKey, keyword: matchedKeyword, allowed: allowExecute && hasSongbookCommandToken(response), template: response });
                 finalMsg = allowExecute
                   ? await resolveCommandMemoVariables(memoPlan, finalMsg, {
                       sid,
@@ -25255,6 +25471,10 @@ async function ensureSession(sid, channelId) {
           const donorName = String(ev.user || '?듬챸');
           const donorId = String(ev.id || '');
           const donorMessage = String(ev.message || '');
+          await marbleRuntime.donation({
+            sid, provider: 'chzzk', event: msg, userId: donorId, username: donorName,
+            text: donorMessage, amount, currency: 'KRW',
+          }).catch((error) => console.warn('[Marble] CHZZK donation:', error?.message || error));
           await participationWheelRuntime.donation({
             sid, provider: 'chzzk', event: msg, userId: donorId, username: donorName,
             text: donorMessage, amount, currency: 'KRW',
@@ -26144,7 +26364,10 @@ async function sendYoutubeChat(ownerUserId, liveChatId, message) {
 async function renderDonationRuleResponse(rule, context) {
   const result = await renderDonationResponse(rule.response, {
     ...context, ruleId: rule.id || null, ruleName: rule.name || null,
-  }, { commandExecution, substituteAllPlaceholders, executeAndStripActionVariableTokens, enqueueRouletteSpin });
+  }, {
+    commandExecution, substituteAllPlaceholders, executeAndStripActionVariableTokens, enqueueRouletteSpin,
+    resolveCommandCounterVariables, readMemos: (sid, keys) => memoVariableStore.read(sid, keys), resolveSongbookPublicUrl,
+  });
   for (const failure of result.errors) {
     console.warn(`[Donation Response] ${context.provider} ${failure.phase} failed:`, failure.error?.message || failure.error);
   }
@@ -26167,6 +26390,10 @@ async function processYoutubeDonationAutomation(entry, ev) {
     const donorId = String(ev.userId || `youtube-donor:${donorName}`);
     const donorMessage = String(ev.message || '');
 
+    await marbleRuntime.donation({
+      sid, provider: 'youtube', event: ev, userId: donorId, username: donorName,
+      text: donorMessage, amount, currency: ev.currency,
+    }).catch((error) => console.warn('[Marble] YouTube donation:', error?.message || error));
     await participationWheelRuntime.donation({
       sid, provider: 'youtube', event: ev, userId: donorId, username: donorName,
       text: donorMessage, amount, currency: ev.currency,
@@ -26315,7 +26542,11 @@ async function processYoutubeChatAutomation(entry, ev) {
 
     if (isBotSelf || settings.botEnabled === false) return;
     try {
-      const wheelReply = await participationWheelRuntime.chat({
+      const marbleReply = await marbleRuntime.chat({
+        sid, channelUid: entry.channelId, userId: resolvedUserId, username: resolvedUsername,
+        provider: 'youtube', text, event: ev,
+      });
+      const wheelReply = marbleReply.handled ? marbleReply : await participationWheelRuntime.chat({
         sid, channelUid: entry.channelId, userId: resolvedUserId, username: resolvedUsername,
         provider: 'youtube', text, event: ev,
       });
@@ -26575,6 +26806,9 @@ async function processYoutubeChatAutomation(entry, ev) {
               userId: counterUserId,
             }) || '').trim()
           : stripUnplannedCounterVariables(cleaned).trim();
+        cleaned = await executeSongbookCommand(cleaned, { owner: ownerUserId, provider: 'youtube',
+          userId: counterUserId, username: resolvedUsername, argsText,
+          eventId: replyKey, keyword: matchedKeyword, allowed: allowExecute && hasSongbookCommandToken(response), template: response });
         cleaned = allowExecute
           ? await resolveCommandMemoVariables(memoPlan, cleaned, {
               sid,
@@ -27492,7 +27726,11 @@ async function processCimeChatAutomation(entry, ev) {
 
     if (settings.botEnabled === false) return;
     try {
-      const wheelReply = await participationWheelRuntime.chat({
+      const marbleReply = !isBotSelf ? await marbleRuntime.chat({
+        sid, channelUid: pointChannelUid || entry.channelId, userId: resolvedUserId, username: resolvedUsername,
+        provider: 'cime', text, event: ev,
+      }) : { handled: false };
+      const wheelReply = marbleReply.handled ? marbleReply : await participationWheelRuntime.chat({
         sid, channelUid: pointChannelUid || entry.channelId, userId: resolvedUserId, username: resolvedUsername,
         provider: 'cime', text, event: ev,
       });
@@ -27771,6 +28009,9 @@ async function processCimeChatAutomation(entry, ev) {
               userId: counterUserId,
             }) || '').trim()
           : stripUnplannedCounterVariables(cleaned).trim();
+        cleaned = await executeSongbookCommand(cleaned, { owner: ownerUserId, provider: 'cime',
+          userId: counterUserId, username: resolvedUsername, argsText,
+          eventId: replyKey, keyword: matchedKeyword, allowed: allowExecute && hasSongbookCommandToken(response), template: response });
         cleaned = allowExecute
           ? await resolveCommandMemoVariables(memoPlan, cleaned, {
               sid,
@@ -27825,6 +28066,10 @@ async function processCimeDonationAutomation(entry, ev) {
     const donorId = String(ev.userId || `donor:${donorName}`);
     const donorMessage = String(ev.message || '');
 
+    await marbleRuntime.donation({
+      sid, provider: 'cime', event: ev, userId: donorId, username: donorName,
+      text: donorMessage, amount, currency: 'KRW',
+    }).catch((error) => console.warn('[Marble] CIME donation:', error?.message || error));
     await participationWheelRuntime.donation({
       sid, provider: 'cime', event: ev, userId: donorId, username: donorName,
       text: donorMessage, amount, currency: 'KRW',
@@ -28856,9 +29101,13 @@ async function validateYoutubeAuthorizations(reason = 'scheduled') {
       if (youtubeAuthorizationIsInactive(user)) {
         try {
           const tokens = await getPlatformTokens('youtube', ownerUserId);
+          if (!tokens || !youtubeAuthorizationIsInactive(tokens)) {
+            summary.deferred += 1;
+            return;
+          }
           await revokeYoutubeOAuthGrant(tokens);
-          await deleteYoutubeAuthorizedData(ownerUserId, user?.platformUserId || null, 'authorization_inactive');
-          summary.deleted += 1;
+          const deleted = await deleteYoutubeAuthorizedData(ownerUserId, user?.platformUserId || null, 'authorization_inactive', tokens);
+          summary[deleted.skipped ? 'deferred' : 'deleted'] += 1;
         } catch (error) {
           summary.deferred += 1;
           console.warn('[YouTube] Inactive authorization revocation deferred:', ownerUserId, error?.response?.data || error?.message || error);
@@ -28868,16 +29117,23 @@ async function validateYoutubeAuthorizations(reason = 'scheduled') {
       const lastValidatedAt = new Date(user?.lastValidatedAt || 0).getTime();
       if (Number.isFinite(lastValidatedAt) && Date.now() - lastValidatedAt < YOUTUBE_AUTH_VALIDATION_MAX_AGE_MS) return;
       summary.checked += 1;
+      let validationTokens = null;
       try {
         const accessToken = await getValidYoutubeAccessToken(ownerUserId, { trackUse: false });
+        const currentTokens = await getPlatformTokens('youtube', ownerUserId);
+        if (!currentTokens || currentTokens.accessToken !== accessToken) {
+          summary.deferred += 1;
+          return;
+        }
+        validationTokens = currentTokens;
         await validateStoredYoutubeAuthorization({ ...user, accessToken });
         await markPlatformTokenValidated('youtube', ownerUserId);
         summary.valid += 1;
       } catch (error) {
-        if (isYoutubeReauthRequired(error)) {
-          await deleteYoutubeAuthorizedData(ownerUserId, user?.platformUserId || null, 'authorization_invalid');
-          summary.deleted += 1;
-          console.warn('[YouTube] Deleted Authorized Data after failed consent validation:', ownerUserId);
+        if (isYoutubeReauthRequired(error) && validationTokens) {
+          const deleted = await deleteYoutubeAuthorizedData(ownerUserId, user?.platformUserId || null, 'authorization_invalid', validationTokens);
+          summary[deleted.skipped ? 'deferred' : 'deleted'] += 1;
+          if (!deleted.skipped) console.warn('[YouTube] Deleted Authorized Data after failed consent validation:', ownerUserId);
           return;
         }
         summary.deferred += 1;
@@ -29006,6 +29262,7 @@ function closeWebSocketServer(webSocketServer) {
 
 async function gracefulShutdown(signal, { exitCode = 0 } = {}) {
   if (gracefulShutdownPromise) return gracefulShutdownPromise;
+  chzzkVideoRuntime.closeAll();
   gracefulShutdownPromise = (async () => {
     runtimeReadinessState.shuttingDown = true;
     console.log(`[Server] Received ${signal}, starting graceful shutdown...`);
@@ -29773,6 +30030,7 @@ function registerPvdRoutes() {
         if (q[0] && state && !pvdPlaybackState.has(sid)) {
           pvdPlaybackState.set(sid, state);
         }
+        setChzzkPlaybackBlocked(state, q[0], viewerSettings.chzzkDonationPaused === true);
         const payload = {
           type: 'start',
           channelId,
@@ -29786,6 +30044,7 @@ function registerPvdRoutes() {
           volume: viewerSettings.volume,
           idlePlaylist: viewerSettings.idlePlaylist,
           bgm: viewerSettings.bgm,
+          chzzkDonationPaused: viewerSettings.chzzkDonationPaused,
           serverNow: Date.now()
         };
         ws.send(JSON.stringify(payload), { compress: false });

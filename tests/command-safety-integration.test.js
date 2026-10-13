@@ -122,7 +122,7 @@ test.each(['youtube', 'cime'])('%s rejects a real matched paid command before co
     getBotSettings: async () => ({ botEnabled: true, attendanceCommandOnly: false }),
     refreshYoutubeLiveStatus: async () => ({ live: false }), refreshCimeLiveStatus: async () => false,
     isLikelyYoutubeSelfEcho: () => false, isLikelyCimeBotSelfEcho: async () => false,
-    participationWheelRuntime: { chat: async () => ({ handled: false }) }, handlePredictionBetCommand: async () => null,
+    participationWheelRuntime: { chat: async () => ({ handled: false }) }, marbleRuntime: { chat: async () => ({ handled: false }) }, handlePredictionBetCommand: async () => null,
     getRuntimeBotRulesWithDefaults: async () => [{ id: 'paid', keywords: ['!paid'], enabled: true, pointsCost: 100 }],
     ...load('server/command-keyword.js', { '../shared/text-safety.js': load('shared/text-safety.js') }),
     admitChatCommand, claimBotRuleCooldown, deductChannelPointsIfEnough,

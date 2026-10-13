@@ -57,9 +57,14 @@ describe('action blueprint node editor regressions', () => {
     expect(fxEditor).toContain("onChange('widthUnit', unit)");
     expect(fxEditor).toContain("onChange('heightUnit', unit)");
     expect(blueprintPage).toContain("xUnit: '%'");
-    expect(fxOverlay).toContain('...fxPlacementStyle(item)');
+    expect(fxOverlay).toContain('...fxPlacementStyle(item, viewport)');
     expect(fxPlacement.fxPlacementStyle({ x: 50, xUnit: 'px', width: 30, widthUnit: '%' }))
       .toMatchObject({ left: '50px', width: '30%' });
+    expect(fxPlacement.fxPlacementStyle({
+      x: 50, xUnit: 'px', y: 75, yUnit: '%',
+      width: 30, widthUnit: '%', height: 200, heightUnit: 'px',
+    }, { width: 1920, height: 1080 }))
+      .toEqual({ left: '50px', top: '75%', width: '30%', height: '200px' });
     expect(serverIndex).toContain('const xUnit = normalizeFxLengthUnit(input.xUnit ?? input.leftUnit)');
     expect(serverIndex).toContain('widthUnit');
   });

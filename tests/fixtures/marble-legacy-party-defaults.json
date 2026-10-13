@@ -1,0 +1,157 @@
+{
+  "cards": [
+    {
+      "id": "card-1",
+      "title": "황금 방어권",
+      "text": "희귀 보상! 방어권 두 장을 받아요. 이후 원하는 미션에서 한 장씩 사용할 수 있어요.",
+      "color": "#d4a52b",
+      "effects": [
+        {
+          "type": "shield"
+        },
+        {
+          "type": "shield"
+        }
+      ],
+      "icon": "shield",
+      "eventKind": "reward"
+    },
+    {
+      "id": "card-2",
+      "title": "금주령 3분",
+      "text": "지금부터 3분은 술 대신 물과 안주만! 시청자와 편하게 대화하며 술자리에 잠시 휴식 규칙을 적용해요.",
+      "color": "#d4a52b",
+      "effects": [
+        {
+          "type": "timer",
+          "value": 180
+        }
+      ],
+      "icon": "water",
+      "eventKind": "rule"
+    },
+    {
+      "id": "card-3",
+      "title": "안주 월드컵",
+      "text": "최애 안주 후보 네 개를 말해요. 2분 동안 두 번의 준결승과 결승으로 오늘의 우승 안주를 정해요. 채팅 의견을 보고 스트리머가 승자를 골라요.",
+      "color": "#d4a52b",
+      "effects": [
+        {
+          "type": "timer",
+          "value": 120
+        }
+      ],
+      "icon": "snack",
+      "eventKind": "game"
+    },
+    {
+      "id": "card-4",
+      "title": "술자리 청문회",
+      "text": "2분 동안 시청자에게 예·아니요로 답할 수 있는 질문을 받아요. 스트리머가 다섯 개를 골라 짧게 답한 뒤, 그중 하나만 자세히 해명해요. 사생활 질문은 제외!",
+      "color": "#d4a52b",
+      "effects": [
+        {
+          "type": "timer",
+          "value": 120
+        }
+      ],
+      "icon": "talk",
+      "eventKind": "game"
+    },
+    {
+      "id": "card-5",
+      "title": "취향 예측 게임",
+      "text": "술이나 안주 두 가지를 제시하고 마음속으로 하나를 골라요. 시청자의 예측을 받은 뒤 90초 안에 내 선택과 이유를 공개해요. 투표 집계 없이 채팅을 직접 보고 진행해요.",
+      "color": "#d4a52b",
+      "effects": [
+        {
+          "type": "timer",
+          "value": 90
+        }
+      ],
+      "icon": "talk",
+      "eventKind": "game"
+    },
+    {
+      "id": "card-6",
+      "title": "안주 초성 퀴즈",
+      "text": "좋아하는 안주 하나를 마음속으로 고르고 초성만 말해요. 90초 동안 채팅으로 정답을 받아요. 중간에 힌트 한 번, 종료 시 정답 공개! 정답 판정은 직접 해요.",
+      "color": "#d4a52b",
+      "effects": [
+        {
+          "type": "timer",
+          "value": 90
+        }
+      ],
+      "icon": "mission",
+      "eventKind": "game"
+    },
+    {
+      "id": "card-7",
+      "title": "술자리 이야기 릴레이",
+      "text": "채팅에서 장소·물건·상황을 하나씩 직접 골라요. 2분 안에 세 단어가 모두 들어가는 짧고 엉뚱한 술자리 이야기를 만들어 들려줘요.",
+      "color": "#d4a52b",
+      "effects": [
+        {
+          "type": "timer",
+          "value": 120
+        }
+      ],
+      "icon": "talk",
+      "eventKind": "game"
+    },
+    {
+      "id": "card-8",
+      "title": "거꾸로 대답 1분",
+      "text": "1분 동안 예·아니요 질문에 반대로 대답해요. 좋아하면 “아니요”, 싫어하면 “예”! 음식이나 취향처럼 가벼운 질문만 받고, 시간이 끝나면 가장 헷갈린 답 하나를 바로잡아요.",
+      "color": "#d4a52b",
+      "effects": [
+        {
+          "type": "timer",
+          "value": 60
+        }
+      ],
+      "icon": "speech",
+      "eventKind": "rule"
+    }
+  ],
+  "tiles": [
+    {
+      "id": "tile-9",
+      "title": "황금 카드",
+      "text": "시청자 미니게임, 특별 규칙, 희귀 보상 중 하나를 펼쳐요.",
+      "color": "#d4a52b",
+      "effects": [
+        {
+          "type": "card"
+        }
+      ],
+      "icon": "card"
+    },
+    {
+      "id": "tile-18",
+      "title": "금지어 3분",
+      "text": "3분 동안 “아니”, “진짜”, “근데” 금지! 평소처럼 채팅과 대화해요. 한 번이라도 말했으면 마지막에 TMI 하나를 추가 공개해요.",
+      "color": "#e56b73",
+      "effects": [
+        {
+          "type": "timer",
+          "value": 180
+        }
+      ],
+      "icon": "forbidden"
+    },
+    {
+      "id": "tile-21",
+      "title": "황금 카드",
+      "text": "시청자 미니게임, 특별 규칙, 희귀 보상 중 하나를 펼쳐요.",
+      "color": "#d4a52b",
+      "effects": [
+        {
+          "type": "card"
+        }
+      ],
+      "icon": "card"
+    }
+  ]
+}

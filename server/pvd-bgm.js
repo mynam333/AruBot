@@ -14,7 +14,7 @@ export function insertPvdRequest(queue, item, state, atSec = 0) {
   else {
     const firstBgm = queue.findIndex((entry) => entry.kind === 'bgm');
     if (firstBgm === 0 && state) {
-      previous.resumePlayback = { atSec, paused: state.bgmBlocked ? state.bgmResumePaused === true : state.paused === true };
+      previous.resumePlayback = { atSec, paused: state.bgmBlocked ? state.bgmResumePaused === true : state.chzzkBlocked ? state.chzzkResumePaused === true : state.paused === true };
     }
     queue.splice(firstBgm < 0 ? queue.length : firstBgm, 0, item);
   }
@@ -25,12 +25,12 @@ export function updateBgmPlaybackAvailability(state, item, available, now = Date
   if (item?.kind !== 'bgm' || !state || state.bgmBlocked === !available) return false;
   const start = Math.max(0, Number(item.startSec) || 0);
   if (!available) {
-    state.bgmResumePaused = state.paused === true;
+    state.bgmResumePaused = state.chzzkBlocked ? state.chzzkResumePaused === true : state.paused === true;
     state.pausedAtSec = state.paused ? state.pausedAtSec : start + Math.max(0, (now - state.baseStartMs) / 1000);
     state.paused = true;
   } else {
     state.baseStartMs = now - Math.max(0, Number(state.pausedAtSec ?? start) - start) * 1000;
-    state.paused = state.bgmResumePaused === true;
+    state.paused = state.chzzkBlocked === true || state.bgmResumePaused === true;
     if (!state.paused) state.pausedAtSec = null;
   }
   state.bgmBlocked = !available;

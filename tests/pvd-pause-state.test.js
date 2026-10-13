@@ -1,4 +1,5 @@
 const loadServerFunctions = require('./helpers/load-server-functions.cjs');
+const { setChzzkPlaybackBlocked } = require('./helpers/load-source.cjs')('server/pvd-chzzk-pause.js');
 
 function setupServer() {
   const sid = 'test';
@@ -8,6 +9,8 @@ function setupServer() {
   const states = new Map([[sid, state]]);
   const broadcasts = [];
   const bindings = {
+    setChzzkPlaybackBlocked,
+    chzzkVideoRuntime: { paused: () => false },
     getVideoQueue: () => queue, pvdPlaybackState: states,
     getPvdViewerSettingsForSid: async () => ({ volume: 100, idlePlaylist: { enabled: true, tracks: [] } }),
     refreshChzzkClipPlaybackForItem: async () => {},

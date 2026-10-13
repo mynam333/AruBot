@@ -7,6 +7,7 @@ export const BOT_MANAGER_SCOPE_GROUPS = Object.freeze([
   { key: 'predictions', label: '예측 베팅', description: '예측 개설, 종료와 정산' },
   { key: 'roulette', label: '룰렛', description: '룰렛 항목과 실행' },
   { key: 'wheel', label: '돌림판', description: '참여 설정, 항목과 추첨' },
+  { key: 'marble', label: '주루마블', description: '게임판, 참가자, 초대와 게임 진행' },
   { key: 'video', label: '영상 후원 · BGM', description: '재생 설정과 대기열 제어' },
   { key: 'songbook', label: '노래책', description: '곡 정보와 노래 신청 관리' },
   { key: 'emotes', label: '이모티콘 오버레이', description: '이모티콘 효과와 OBS 주소 관리' },
@@ -78,7 +79,8 @@ export function botManagementRoutePolicy(method, pathname) {
   if (/^\/api\/predictions(?:\/(?:active|create|[^/]+\/(?:lock|cancel|settle)))?$/.test(path)) return rule('predictions');
   if (/^\/api\/roulette\/(?:definitions(?:\/(?:upsert|delete))?|test|logs)$/.test(path)) return rule('roulette');
   if (/^\/api\/wheel(?:\/(?:settings|action))?$/.test(path)) return rule('wheel');
-  if (/^\/api\/songbook(?:\/(?:songs(?:\/[^/]+)?|settings|requests(?:\/[^/]+)?))?$/.test(path)) return rule('songbook');
+  if (/^\/api\/marble(?:\/(?:settings|layout|action|users|invites(?:\/[^/]+)?|overlay\/rotate))?$/.test(path)) return rule('marble');
+  if (/^\/api\/songbook(?:\/(?:songs(?:\/[^/]+)?|settings|requests(?:\/[^/]+)?|overlay(?:\/rotate)?))?$/.test(path)) return rule('songbook');
   if (/^\/api\/emote-overlay(?:\/(?:settings|clear|rotate|test))?$/.test(path)) return rule('emotes');
   if (/^\/api\/video-donation\/(?:settings|queue|reorder|delete|delete-refund|pop|control|request|resolve-title|idle-playlist\/(?:resolve|recommend)|admin\/ws)$/.test(path)) return rule('video');
   if (/^\/api\/drawing-donation\/(?:settings|queue|items\/[^/]+|originals\/[^/]+|approve|reject|delete|delete-refund|moderate-block|reorder|admin\/ws)$/.test(path)) return rule('drawing');
@@ -109,6 +111,7 @@ export function redactBotManagerLogSecrets(value) {
     if (SECRET_KEY.test(key)) return undefined;
     if (typeof item !== 'string') return item;
     return item.replace(/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/gi, 'Bearer [redacted]')
+      .replace(/(\/video-donation\/video@)[A-Za-z0-9_-]+/g, '$1[redacted]')
       .replace(/([?&](?:token|access_token|api_key|key|secret)=)[^&#\s"<>]+/gi, '$1[redacted]')
       .replace(/(\/(?:drawing-overlay|pvd|fx|viewer\/(?:bgm|pvd|requests|emotes))\/)[A-Za-z0-9_%.-]+/g, '$1[redacted]');
   }));
@@ -150,6 +153,7 @@ export function assertBotManagerEffects(value, access, { rouletteValues = false 
       if (/\$\{\s*(?:action|automation|blueprint)::[^}]+\}/i.test(item)) required.add('actions');
       if (/\$\{\s*roulette::[^}]+\}/i.test(item)) { required.add('roulette'); required.add('actions'); }
       if (/\$\{\s*(?:video_donation|bgm_request)\s*\}/i.test(item)) required.add('video');
+      if (/\$\{\s*songbook_request\s*\}/i.test(item)) required.add('songbook');
       if (/\$\{\s*live\.(?:title_change|game_change)\s*\}/i.test(item)) required.add('connection');
     } else if (Array.isArray(item)) {
       for (const child of item) pending.push(child);

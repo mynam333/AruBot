@@ -134,13 +134,13 @@ export function createParticipationWheelRuntime({ getWheel, enterWheel, recordEv
   return { chat, donation, invalidate };
 }
 
-export function registerParticipationWheelRoutes(app, { getPartitionId, getWheel, updateWheel, actWheel, getBotRules, getBotSettings, runtime, recordEvent = async () => {}, writeMiddleware = (_req, _res, next) => next() }) {
+export function registerParticipationWheelRoutes(app, { getPartitionId, getWheel, updateWheel, actWheel, getBotRules, getBotSettings, runtime, getReservedCommands = async () => [], recordEvent = async () => {}, writeMiddleware = (_req, _res, next) => next() }) {
   async function checkCommands(sid, settings) {
     const aliases = wheelCommandAliases(settings);
     if (new Set(aliases).size !== aliases.length) throw Object.assign(new Error('채팅과 포인트 명령어는 서로 달라야 합니다.'), { status: 400 });
     const rules = await getBotRules(sid);
     const bot = await getBotSettings(sid);
-    const occupied = new Set([...RESERVED_COMMANDS, String(bot?.attendanceCommandKeyword || '!출석').toLowerCase(),
+    const occupied = new Set([...RESERVED_COMMANDS, ...await getReservedCommands(sid), String(bot?.attendanceCommandKeyword || '!출석').toLowerCase(),
       ...(rules || []).filter((rule) => rule.enabled !== false).flatMap((rule) => Array.isArray(rule.keywords) ? rule.keywords : [])
         .map((keyword) => String(keyword).toLowerCase())]);
     const conflict = aliases.find((alias) => occupied.has(alias));

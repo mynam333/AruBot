@@ -16,6 +16,10 @@ import { createSongbookStore } from './songbook-store.js';
 import { createEmoteOverlayStore } from './emote-overlay-store.js';
 import { createCommandAdmissionStore } from './command-admission-store.js';
 import { createMemoVariableStore } from './memo-variable-store.js';
+import { createChzzkVideoStore } from './chzzk-video-store.js';
+import { createMarbleStore } from './marble-store.js';
+import { lockUnlinkedAccount, cleanupUnlinkedAccountBatch } from './unlinked-account-cleanup.js';
+import { platformTokenSnapshotMatches } from './platform-token-guard.js';
 const { Client, Pool } = pkg;
 
 export const botManagementStore = createBotManagementStore({ withPgClient, ensureIdentityTables: ensurePlatformIdentityTables });
@@ -23,6 +27,8 @@ export const songbookStore = createSongbookStore({ withPgClient, ensureIdentityT
 export const emoteOverlayStore = createEmoteOverlayStore({ withPgClient, ensureIdentityTables: ensurePlatformIdentityTables });
 export const commandAdmissionStore = createCommandAdmissionStore({ withPgClient });
 export const memoVariableStore = createMemoVariableStore({ withPgClient });
+export const chzzkVideoStore = createChzzkVideoStore({ withPgClient });
+export const marbleStore = createMarbleStore({ withPgClient, ensureIdentityTables: ensurePlatformIdentityTables, deductChannelPointsIfEnoughWithClient });
 
 export const {
   getParticipationWheel, updateParticipationWheel, actParticipationWheel, enterParticipationWheel,
@@ -3358,9 +3364,22 @@ export async function deleteAccountData(ownerUserId, options = {}) {
   const drawingObjectKeys = [];
 
   await withPgClient(async (pg) => {
-    const scope = await collectAccountPrivacyScope(pg, owner);
     await pg.query('begin');
     try {
+      if (options.requireNoPlatforms) {
+        const skipReason = await lockUnlinkedAccount(pg, owner, options.unlinkedBefore);
+        if (skipReason || options.dryRun) {
+          Object.assign(summary, { accountDeleted: false, ...(skipReason ? { skipReason } : { eligible: true }) });
+          await pg.query('commit');
+          return;
+        }
+      }
+      // An unlinked account's old platform ID/name may now belong to somebody
+      // else. Automatic cleanup only uses explicit owner IDs and internal SIDs.
+      const scope = options.requireNoPlatforms ? {
+        owner, ownerSid: `user:${owner}`, ownerPids: [owner, `user:${owner}`],
+        identityKeys: [`user:${owner}`, makeArubotViewerUuid(owner)], channelAliases: [`user:${owner}`],
+      } : await collectAccountPrivacyScope(pg, owner);
       await deleteRowsByColumnValues(pg, summary, 'public.prediction_bets', [
         { column: 'user_id', values: scope.identityKeys },
       ]);
@@ -3373,6 +3392,22 @@ export async function deleteAccountData(ownerUserId, options = {}) {
       ]);
       await deleteRowsByColumnValues(pg, summary, 'public.participation_wheels', [
         { column: 'sid', values: scope.channelAliases },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.marble_invites', [
+        { column: 'owner_user_id', values: [scope.owner] },
+        { column: 'member_user_id', values: [scope.owner] },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.marble_requests', [
+        { column: 'owner_user_id', values: [scope.owner] },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.marble_source_requests', [
+        { column: 'owner_user_id', values: [scope.owner] },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.marble_participation', [
+        { column: 'source_user_id', values: [scope.owner] },
+      ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.marble_rooms', [
+        { column: 'owner_user_id', values: [scope.owner] },
       ]);
       if (await tableExistsPg(pg, 'public.drawing_donation_items')) {
         drawingObjectKeys.push(...await collectDrawingDonationKeysWhere(
@@ -3431,6 +3466,10 @@ export async function deleteAccountData(ownerUserId, options = {}) {
       await deleteRowsByColumnValues(pg, summary, 'public.automation_jobs', [
         { column: 'owner_user_id', values: [scope.owner] },
       ]);
+      await deleteRowsByColumnValues(pg, summary, 'public.durable_runtime_jobs', [
+        { column: 'owner_user_id', values: [scope.owner] },
+        { column: 'sid', values: scope.channelAliases },
+      ]);
       await deleteRowsByColumnValues(pg, summary, 'public.automation_connections', [
         { column: 'owner_user_id', values: [scope.owner] },
       ]);
@@ -3468,6 +3507,8 @@ export async function deleteAccountData(ownerUserId, options = {}) {
         { column: 'account_user_id', values: [scope.owner] },
         { column: 'channel_id', values: scope.channelAliases },
       ]);
+      if (options.requireNoPlatforms) await deleteRowsWhere(pg, summary, 'public.sessions',
+        'user_id=$1 and (account_user_id is null or account_user_id=$1)', [owner]);
       await deleteRowsByColumnValues(pg, summary, 'public.tokens', [
         { column: 'sid', values: scope.channelAliases },
       ]);
@@ -3519,12 +3560,14 @@ export async function deleteAccountData(ownerUserId, options = {}) {
         { column: 'id', values: [scope.owner] },
       ]);
       await pg.query('commit');
+      summary.accountDeleted = true;
     } catch (error) {
       try { await pg.query('rollback'); } catch {}
       throw error;
     }
   }, 0);
 
+  if (summary.accountDeleted === false) return summary;
   const objectDelete = await deleteDrawingDonationObjectKeys(drawingObjectKeys).catch((error) => {
     console.warn('[Privacy] Drawing donation object cleanup failed:', error?.message || error);
     return { deleted: 0, skipped: uniqueNonEmpty(drawingObjectKeys).length };
@@ -3533,6 +3576,12 @@ export async function deleteAccountData(ownerUserId, options = {}) {
   summary.objectKeysSkipped = objectDelete.skipped || 0;
   invalidatePublicPointTableOwnerIndex();
   return summary;
+}
+
+export async function cleanupUnlinkedAccounts(options = {}) {
+  if (!getDbUrl()) throw new Error('Database unavailable for account cleanup');
+  await ensurePlatformIdentityTables();
+  return cleanupUnlinkedAccountBatch({ withPgClient, deleteAccountData }, options);
 }
 
 function retentionDays(value, fallbackDays) {
@@ -4781,6 +4830,17 @@ async function tableHasColumn(table, column) {
 
 
 // Tokens
+const chzzkTokenObservations = new WeakMap();
+
+function matchChzzkTokenObservation(query, observed) {
+  query = query.eq('sid', observed.sid);
+  for (const column of ['access_token', 'refresh_token', 'token_type', 'expires_at']) {
+    query = observed[column] == null ? query.is(column, null) : query.eq(column, observed[column]);
+  }
+  return query;
+}
+
+// Initial OAuth login and explicit SID migration only; refreshes use updateTokens with an observation.
 export async function upsertTokens(sid, { accessToken, refreshToken, tokenType, expiresAt }) {
   ensure();
   const row = {
@@ -4817,22 +4877,25 @@ export async function getTokens(sid) {
   if (error || !data || !data.access_token) return null;
   const accessToken = revealSecret(data.access_token);
   const refreshToken = revealSecret(data.refresh_token);
-  if (accessToken === data.access_token || refreshToken === data.refresh_token) {
-    const nextAccessToken = protectSecret(accessToken);
-    const nextRefreshToken = protectSecret(refreshToken);
-    if (nextAccessToken !== data.access_token || nextRefreshToken !== data.refresh_token) {
-      await supabase.from('tokens')
-        .update({ access_token: nextAccessToken, refresh_token: nextRefreshToken })
-        .eq('sid', sid)
-        .then(() => null);
-    }
+  let observed = { ...data, sid };
+  const nextAccessToken = accessToken === data.access_token ? protectSecret(accessToken) : data.access_token;
+  const nextRefreshToken = refreshToken === data.refresh_token ? protectSecret(refreshToken) : data.refresh_token;
+  if (nextAccessToken !== data.access_token || nextRefreshToken !== data.refresh_token) {
+    const migrated = await matchChzzkTokenObservation(supabase.from('tokens')
+      .update({ access_token: nextAccessToken, refresh_token: nextRefreshToken }), observed)
+      .select('access_token, refresh_token, token_type, expires_at').maybeSingle();
+    if (migrated.error) throw migrated.error;
+    if (migrated.data) observed = { ...migrated.data, sid };
   }
-  return {
+  const tokens = {
     accessToken,
     refreshToken,
     tokenType: data.token_type,
     expiresAt: data.expires_at,
   };
+  // Do not expose stored ciphertext in JSON, object spreads, or caller-visible properties.
+  chzzkTokenObservations.set(tokens, observed);
+  return tokens;
 }
 
 // List all sids that currently have tokens stored
@@ -4843,18 +4906,39 @@ export async function listAllSidsWithTokens() {
   return data.map(r => String(r.sid)).filter(Boolean);
 }
 
-export async function updateTokens(sid, tokensOrNull) {
+export async function updateTokens(sid, tokensOrNull, { expectedTokens } = {}) {
   ensure();
-  if (!tokensOrNull) {
-    const del = await supabase.from('tokens').delete().eq('sid', sid);
+  if (tokensOrNull === null) {
+    let del = await supabase.from('tokens').delete().eq('sid', sid);
     if (del.error && String(del.error.message || '').includes("table 'public.tokens'")) {
       await ensureTokensTableExists();
-      await supabase.from('tokens').delete().eq('sid', sid);
+      del = await supabase.from('tokens').delete().eq('sid', sid);
     }
+    if (del.error) throw del.error;
     return;
   }
+  const observed = chzzkTokenObservations.get(expectedTokens);
+  if (!observed || observed.sid !== sid) {
+    throw Object.assign(new Error('Refresh requires the original getTokens snapshot for this SID'), {
+      code: 'chzzk_token_snapshot_required', status: 409,
+    });
+  }
+  if (!tokensOrNull || typeof tokensOrNull.accessToken !== 'string' || !tokensOrNull.accessToken.trim()) {
+    throw Object.assign(new Error('CHZZK refresh did not return an access token'), { code: 'chzzk_invalid_refresh_tokens', status: 502 });
+  }
   const { accessToken, refreshToken, tokenType, expiresAt } = tokensOrNull;
-  await upsertTokens(sid, { accessToken, refreshToken, tokenType, expiresAt });
+  const result = await matchChzzkTokenObservation(supabase.from('tokens').update({
+    access_token: protectSecret(accessToken),
+    refresh_token: protectSecret(refreshToken),
+    token_type: tokenType,
+    expires_at: expiresAt,
+  }), observed).select('sid').maybeSingle();
+  if (result.error) throw result.error;
+  if (!result.data) {
+    throw Object.assign(new Error('CHZZK credentials changed or were revoked during refresh'), {
+      code: 'chzzk_token_changed', status: 409,
+    });
+  }
 }
 
 let platformIdentityTablesReadyPromise = null;
@@ -5753,6 +5837,8 @@ export async function upsertPlatformIdentity(provider, profile, preferredUserId 
   let userId = preferredUserId ? String(preferredUserId).replace(/^user:/, '') : null;
   let account = null;
   await withPgClient(async (pg) => {
+    await pg.query('begin');
+    try {
     const existing = await pg.query(
       `select user_id from platform_accounts where provider = $1 and platform_user_id = $2 limit 1`,
       [p, platformUserId]
@@ -5802,7 +5888,12 @@ export async function upsertPlatformIdentity(provider, profile, preferredUserId 
       ]
     );
     account = upserted.rows[0] || null;
-  });
+    await pg.query('commit');
+    } catch (error) {
+      await pg.query('rollback').catch(() => {});
+      throw error;
+    }
+  }, 0);
   invalidatePublicPointTableOwnerIndex();
   return { userId, account };
 }
@@ -6426,11 +6517,33 @@ export async function upsertPlatformTokens(provider, userId, platformUserId, {
   consentGrantedAt = null,
   consentConfirmedAt = null,
   lastUsedAt = null,
-}) {
+}, options = {}) {
   const p = normalizeProvider(provider);
   if (!p || !userId || !platformUserId || !accessToken) throw new Error('provider, userId, platformUserId and accessToken are required');
   await ensurePlatformIdentityTables();
-  await withPgClient(async (pg) => {
+  return withPgClient(async (pg) => {
+    if (options.expectedTokens) {
+      await pg.query('begin');
+      try {
+        const owner = String(userId).replace(/^user:/, '');
+        await pg.query('select id from app_users where id=$1 for update', [owner]);
+        const current = await pg.query(`select pt.*,(select max(last_login_at) from platform_accounts
+          where provider=pt.provider and user_id=pt.user_id) as identity_updated_at
+          from platform_tokens pt where provider=$1 and user_id=$2 for update`, [p, owner]);
+        if (!platformTokenSnapshotMatches(current.rows[0], options.expectedTokens, revealSecret)) {
+          await pg.query('commit');
+          return false;
+        }
+        await pg.query(`update platform_tokens set access_token=$3, refresh_token=$4, token_type=$5,
+          expires_at=$6, scope=$7, last_validated_at=now(), updated_at=now() where provider=$1 and user_id=$2`,
+        [p, owner, protectSecret(accessToken), protectSecret(refreshToken || null), tokenType || 'Bearer', expiresAt || null, scope || null]);
+        await pg.query('commit');
+        return true;
+      } catch (error) {
+        await pg.query('rollback').catch(() => {});
+        throw error;
+      }
+    }
     await pg.query(
       `insert into platform_tokens
         (provider, user_id, platform_user_id, access_token, refresh_token, token_type, expires_at, scope,
@@ -6463,7 +6576,8 @@ export async function upsertPlatformTokens(provider, userId, platformUserId, {
         lastUsedAt,
       ]
     );
-  });
+    return true;
+  }, 0);
 }
 
 export async function getPlatformTokens(provider, userId) {
@@ -6473,8 +6587,9 @@ export async function getPlatformTokens(provider, userId) {
   return withPgClient(async (pg) => {
     const { rows } = await pg.query(
       `select provider, user_id, platform_user_id, access_token, refresh_token, token_type, expires_at, scope,
-              consent_granted_at, consent_confirmed_at, last_used_at, last_validated_at
-       from platform_tokens
+              consent_granted_at, consent_confirmed_at, last_used_at, last_validated_at,
+              (select max(last_login_at) from platform_accounts where provider=pt.provider and user_id=pt.user_id) as identity_updated_at
+       from platform_tokens pt
        where provider = $1 and user_id = $2
        limit 1`,
       [p, String(userId).replace(/^user:/, '')]
@@ -6489,8 +6604,8 @@ export async function getPlatformTokens(provider, userId) {
       if (nextAccessToken !== row.access_token || nextRefreshToken !== row.refresh_token) {
         await pg.query(
           `update platform_tokens set access_token = $1, refresh_token = $2, updated_at = now()
-           where provider = $3 and user_id = $4`,
-          [nextAccessToken, nextRefreshToken, p, String(userId).replace(/^user:/, '')]
+           where provider = $3 and user_id = $4 and access_token=$5 and refresh_token is not distinct from $6`,
+          [nextAccessToken, nextRefreshToken, p, String(userId).replace(/^user:/, ''), row.access_token, row.refresh_token]
         );
       }
     }
@@ -6506,7 +6621,8 @@ export async function getPlatformTokens(provider, userId) {
       consentGrantedAt: row.consent_granted_at,
       consentConfirmedAt: row.consent_confirmed_at,
       lastUsedAt: row.last_used_at,
-      lastValidatedAt: row.last_validated_at
+      lastValidatedAt: row.last_validated_at,
+      identityUpdatedAt: row.identity_updated_at,
     };
   });
 }
@@ -6597,13 +6713,30 @@ export async function deletePlatformTokens(provider, userId) {
   });
 }
 
-export async function deletePlatformAccount(provider, userId, platformUserId = null) {
+export async function deletePlatformAccount(provider, userId, platformUserId = null, options = {}) {
   const p = normalizeProvider(provider);
   if (!p || !userId) return { tokensDeleted: 0, accountsDeleted: 0 };
   if (!getDbUrl()) return { tokensDeleted: 0, accountsDeleted: 0 };
   await ensurePlatformIdentityTables();
   const deleted = await withPgClient(async (pg) => {
     const normalizedUserId = String(userId).replace(/^user:/, '');
+    await pg.query('begin');
+    try {
+    await pg.query('select id from app_users where id=$1 for update', [normalizedUserId]);
+    if (options.expectedTokens) {
+      const current = await pg.query(`select pt.*,(select max(last_login_at) from platform_accounts
+        where provider=pt.provider and user_id=pt.user_id) as identity_updated_at
+        from platform_tokens pt where provider=$1 and user_id=$2 for update`, [p, normalizedUserId]);
+      if (!platformTokenSnapshotMatches(current.rows[0], options.expectedTokens, revealSecret)) {
+        await pg.query('commit');
+        return { tokensDeleted: 0, accountsDeleted: 0, skipped: 'authorization_changed' };
+      }
+    }
+    let streamerChannelDeleted = false;
+    if (p === 'youtube' && options.deleteStreamerChannel && await tableExistsPg(pg, 'public.youtube_streamer_channels')) {
+      const channel = await pg.query('delete from youtube_streamer_channels where owner_user_id=$1', [normalizedUserId]);
+      streamerChannelDeleted = channel.rowCount > 0;
+    }
     const tokenResult = platformUserId
       ? await pg.query(
         `delete from platform_tokens
@@ -6626,11 +6759,17 @@ export async function deletePlatformAccount(provider, userId, platformUserId = n
          where provider = $1 and user_id = $2`,
         [p, normalizedUserId]
       );
+    await pg.query('commit');
     return {
       tokensDeleted: tokenResult.rowCount || 0,
-      accountsDeleted: accountResult.rowCount || 0
+      accountsDeleted: accountResult.rowCount || 0,
+      streamerChannelDeleted,
     };
-  });
+    } catch (error) {
+      await pg.query('rollback').catch(() => {});
+      throw error;
+    }
+  }, 0);
   invalidatePublicPointTableOwnerIndex();
   return deleted;
 }
@@ -6901,6 +7040,8 @@ export async function upsertYoutubeStreamerChannel(ownerUserId, channel) {
   await ensureYoutubeCentralBotTables();
   let identityChanged = false;
   const streamerChannel = await withPgClient(async (pg) => {
+    await pg.query('begin');
+    try {
     const previous = await pg.query(
       `select youtube_channel_id
          from youtube_streamer_channels
@@ -6953,8 +7094,13 @@ export async function upsertYoutubeStreamerChannel(ownerUserId, channel) {
       ]
     );
     identityChanged = String(previous.rows?.[0]?.youtube_channel_id || '') !== String(rows[0]?.youtube_channel_id || '');
+    await pg.query('commit');
     return normalizeYoutubeStreamerChannelRow(rows[0]);
-  });
+    } catch (error) {
+      await pg.query('rollback').catch(() => {});
+      throw error;
+    }
+  }, 0);
   if (identityChanged) invalidatePublicPointTableOwnerIndex();
   return streamerChannel;
 }

@@ -4,12 +4,16 @@ import test from 'node:test';
 import { renderDonationResponse } from '../server/donation-response.js';
 import { CommandSafetyError, createCommandExecutionSafety, isCommandSafetyError } from '../server/command-execution-safety.js';
 import { assertSafeTextPayload } from '../shared/text-safety.js';
+import { resolveCounterVariablePlan } from '../server/counter-variables.js';
 
 const providers = ['chzzk', 'youtube', 'cime'];
 const sources = { chzzk: 'donation-rule', youtube: 'youtube-super-chat-rule', cime: 'cime-donation-rule' };
 
 function fixture(provider = 'chzzk', overrides = {}) {
   const calls = { actions: [], roulettes: [], placeholders: [] };
+  const counterCalls = [], memoCalls = [], urlCalls = [];
+  const counts = new Map();
+  const memos = new Map([['name:공지', '오늘 8시 방송']]);
   const commandExecution = createCommandExecutionSafety();
   const context = {
     sid: 'user:owner', provider, userId: 'donor-id', username: 'Donor', amount: 3000,
@@ -23,6 +27,17 @@ function fixture(provider = 'chzzk', overrides = {}) {
   };
   const dependencies = {
     commandExecution,
+    resolveCommandCounterVariables: async (plan, text, context) => (await resolveCounterVariablePlan(plan, text, {
+      ...context,
+      incrementCounter: async (entry) => {
+        counterCalls.push({ sid: context.sid, ...entry });
+        const key = JSON.stringify([context.sid, entry.scope, entry.name, entry.subject]);
+        counts.set(key, (counts.get(key) || 0) + 1);
+        return counts.get(key);
+      },
+    })).text,
+    readMemos: async (sid, keys) => { memoCalls.push({ sid, keys }); return new Map(keys.map((key) => [key, memos.get(key)])); },
+    resolveSongbookPublicUrl: async (...args) => { urlCalls.push(args); return 'https://example.test/c/channel/songbook'; },
     substituteAllPlaceholders: async (text, ...args) => {
       calls.placeholders.push({ text, args });
       return text.replace('{live.title}', 'Live title').replace('{user.points}', '42');
@@ -36,7 +51,7 @@ function fixture(provider = 'chzzk', overrides = {}) {
       calls.roulettes.push({ sid, item, chain: commandExecution.capture(sid) });
     },
   };
-  return { context, dependencies, calls, render: (text) => renderDonationResponse(text, context, dependencies) };
+  return { context, dependencies, calls, counterCalls, memoCalls, urlCalls, memos, render: (text) => renderDonationResponse(text, context, dependencies) };
 }
 
 for (const provider of providers) {
@@ -105,6 +120,68 @@ test('legacy donation values, donation aliases, and normal read-only variables s
   assert.deepEqual(result.features, []);
   assert.equal(f.calls.actions.length, 0);
   assert.equal(f.calls.roulettes.length, 0);
+});
+
+for (const provider of providers) {
+  test(`${provider}: counters, named memo, songbook URL and effects work in one trusted donation response`, async () => {
+    const f = fixture(provider);
+    const template = '${username}: ${counter::user::후원}/${counter::user::후원}/${counter::global::전체} ${memo::공지} ${songbook_url} ${blueprint::thanks} ${roulette::Wheel}';
+    const result = await f.render(template);
+    assert.equal(result.text, 'Donor: 1/1/1 오늘 8시 방송 https://example.test/c/channel/songbook');
+    assert.deepEqual(result.features, ['counter', 'roulette', 'action']);
+    assert.deepEqual(f.counterCalls, [
+      { sid: 'user:owner', scope: 'user', name: '후원', subject: `${provider}:donor-id` },
+      { sid: 'user:owner', scope: 'global', name: '전체', subject: null },
+    ]);
+    assert.deepEqual(f.memoCalls, [{ sid: 'user:owner', keys: ['name:공지'] }]);
+    assert.deepEqual(f.urlCalls, [['user:owner', provider]]);
+    assert.match((await f.render(template)).text, /^Donor: 2\/2\/2 /);
+  });
+}
+
+test('donor and memo data cannot increment counters, read another memo or execute nested effects', async () => {
+  const injected = '${counter::global::injected} ${memo::private} ${songbook_url} ${blueprint::bad}';
+  const f = fixture('chzzk', { message: injected, username: injected });
+  f.memos.set('name:공지', injected);
+  const result = await f.render('${message}|${username}|${memo::공지}|${counter::global::trusted}');
+  assert.equal(result.text, `${injected}|${injected}|${injected}|1`);
+  assert.deepEqual(f.counterCalls.map((entry) => entry.name), ['trusted']);
+  assert.deepEqual(f.memoCalls, [{ sid: 'user:owner', keys: ['name:공지'] }]);
+  assert.deepEqual(f.urlCalls, []);
+  assert.equal(f.calls.actions.length, 0);
+  assert.equal(f.calls.roulettes.length, 0);
+});
+
+test('donation input never writes named memos and cannot read command-scoped memos', async () => {
+  const f = fixture('chzzk', { message: '!공지 덮어쓰기', ruleId: 'command-id' });
+  const result = await f.render('${memo} ${memo::공지} ${memo::공지}');
+  assert.equal(result.text, '오늘 8시 방송 오늘 8시 방송');
+  assert.deepEqual(f.memoCalls, [{ sid: 'user:owner', keys: ['name:공지'] }]);
+  assert.equal(f.memos.get('name:공지'), '오늘 8시 방송');
+});
+
+test('anonymous donor cannot mutate a shared user counter but global counter remains available', async () => {
+  const f = fixture('chzzk', { userId: null });
+  const result = await f.render('${counter::user::후원}/${counter::global::전체}');
+  assert.equal(result.text, '확인 불가/1');
+  assert.deepEqual(f.counterCalls.map((entry) => entry.scope), ['global']);
+});
+
+test('counter and memo lookups fail without leaking sentinels or blocking trusted actions', async () => {
+  const f = fixture();
+  f.dependencies.resolveCommandCounterVariables = async () => { throw new Error('counter unavailable'); };
+  f.dependencies.readMemos = async () => { throw new Error('memo unavailable'); };
+  const result = await f.render('${counter::global::후원} ${memo::공지} ${action::thanks}');
+  assert.equal(result.text, '확인 불가 메모를 불러오지 못했습니다.');
+  assert.equal(f.calls.actions.length, 1);
+  assert.equal(result.errors[0].phase, 'counter');
+});
+
+test('lookup data cannot choose a counter name or memo key', async () => {
+  const f = fixture();
+  await f.render('${counter::global::${message}} ${memo::${message}}');
+  assert.equal(f.counterCalls.length, 0);
+  assert.equal(f.memoCalls.length, 0);
 });
 
 test('donor-only injected special tokens never schedule any effects', async () => {
@@ -306,7 +383,7 @@ test('existing executor shares the donation action budget across tokens', async 
 for (const provider of providers) {
   test(`${provider}: actual handler block wires context, features log, and chat suppression`, async () => {
     const f = fixture(provider);
-    const deps = { renderDonationResponse, ...f.dependencies };
+    const deps = { renderDonationResponse, ...f.dependencies, memoVariableStore: { read: f.dependencies.readMemos } };
     const wrappers = new Function(...Object.keys(deps), `${wrapperSource}; return { renderDonationRuleResponse, donationResponseTargetName };`)(...Object.values(deps));
     const marker = "const { text: built, features: donationFeatures } = await renderDonationRuleResponse(r, {";
     const blocks = [...serverSource.matchAll(new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'))];

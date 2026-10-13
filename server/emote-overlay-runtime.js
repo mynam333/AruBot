@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { extractChatEmotes } from './emote-extractor.js';
+import { createChzzkEmoteSamples } from '../shared/emote-samples.js';
 
 export function createEmoteOverlayRuntime({ store, logger = console, now = Date.now }) {
   const cache = new Map();
@@ -64,7 +65,7 @@ export function createEmoteOverlayRuntime({ store, logger = console, now = Date.
   async function test(owner) {
     const row = await store.get(owner, { create: true });
     if (!row.settings.enabled) throw Object.assign(new Error('먼저 이모티콘 오버레이를 켜고 저장해 주세요.'), { status: 409 });
-    const event = { key: `test:${randomUUID()}`, actor: 'admin-test', items: Array.from({ length: 5 }, () => ({ url: '/files/logo.png', name: 'AruBot 테스트', provider: 'sample' })) };
+    const event = { key: `test:${randomUUID()}`, actor: 'admin-test', items: createChzzkEmoteSamples(5) };
     const result = await store.append(owner, event, { test: true, epoch: row.epoch, expiresAt: now() + 8000 });
     if (!result) throw Object.assign(new Error('현재 표시 한도에 도달했습니다. 잠시 후 다시 테스트해 주세요.'), { status: 429 });
     wake(row.viewerPath); return { sent: result.items.length };

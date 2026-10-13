@@ -34,7 +34,7 @@ describe('카운트 변수 관리 UI 회귀 방지', () => {
     const donationStart = actionDialogs.indexOf('export function DonationRuleCreateDialog');
     const donationEnd = actionDialogs.indexOf('export function', donationStart + 1);
     expect(actionDialogs.slice(donationStart, donationEnd)).toContain(
-      '<CommandVariableHelpButton scope="donation" />'
+      '<CommandVariableHelpButton scope="donation" onInsert='
     );
 
     const configFieldsStart = blueprintPage.indexOf('function ConfigFields');

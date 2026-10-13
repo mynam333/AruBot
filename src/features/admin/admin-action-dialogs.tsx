@@ -7,21 +7,25 @@ import * as Switch from '@radix-ui/react-switch';
 import {
   Check,
   Clapperboard,
+  Eye,
+  EyeOff,
   Gift,
   Loader2,
   MessageSquare,
   Plus,
+  RefreshCw,
   ChevronRight,
   Settings,
   Sparkles,
   Trash2,
   X,
 } from 'lucide-react';
-import { useMemo, useState, useTransition } from 'react';
+import { useId, useMemo, useRef, useState, useTransition } from 'react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Tooltip } from '@/components/ui/tooltip';
 import { RouletteThemeSwatch } from '@/components/rouletteThemeSwatch';
 import { CommandVariableHelpButton } from '@/features/admin/command-variable-help';
 import { parseCommandTriggers } from '@/features/admin/command-triggers';
@@ -97,6 +101,7 @@ type ActionDialogFrameProps = ActionDialogButtonProps & {
   children: React.ReactNode;
   submitLabel?: string;
   pending?: boolean;
+  disabled?: boolean;
   onSubmit: (close: () => void) => void;
   onOpen?: () => void;
   headerAction?: React.ReactNode;
@@ -139,6 +144,31 @@ function normalizeCommand(value: string) {
   return value.trim();
 }
 
+const CHZZK_CONNECTION_STATUS_LABELS = new Map([
+  ['connecting', '연결 중'],
+  ['connected', '연결됨'],
+  ['retrying', '재연결 중'],
+  ['disabled', '사용 안 함'],
+]);
+const CHZZK_PUBLIC_CONNECTION_ERRORS = [
+  '재생 상태 동기화 실패',
+  '치지직 영상후원 처리 실패 · 자동 재시도 중',
+  '치지직 연결 실패 · 자동 재연결 중',
+  '치지직 영상후원 대기 한도 초과',
+  '치지직 스킵 동기화 실패',
+  '치지직 재생 상태 알림 실패',
+];
+
+function readChzzkConnection(value?: { status?: string; error?: string | null }) {
+  // Never render arbitrary backend errors that could contain the private URL.
+  return {
+    label: CHZZK_CONNECTION_STATUS_LABELS.get(value?.status ?? '') ?? '상태 확인 필요',
+    error: value?.error
+      ? CHZZK_PUBLIC_CONNECTION_ERRORS.includes(value.error) ? value.error : '치지직 연결 오류가 발생했습니다. 연결 URL을 확인해 주세요.'
+      : '',
+  };
+}
+
 function ActionDialogFrame({
   module,
   readOnlyView = false,
@@ -149,6 +179,7 @@ function ActionDialogFrame({
   children,
   submitLabel = '저장하기',
   pending = false,
+  disabled = false,
   onSubmit,
   onOpen,
   headerAction,
@@ -221,7 +252,7 @@ function ActionDialogFrame({
           </div>
 
           <div className="arubot-modal-scroll grid min-h-0 gap-[clamp(1rem,2vw,1.35rem)] overflow-y-auto p-[clamp(1.25rem,3vw,2rem)]">
-            <fieldset disabled={!writable} className="contents">{children}</fieldset>
+            <fieldset disabled={!writable || disabled} className="contents">{children}</fieldset>
           </div>
 
           <div className="flex flex-col-reverse gap-[clamp(0.65rem,1.2vw,0.875rem)] border-t bg-background/64 p-[clamp(1rem,2.4vw,1.5rem)] sm:flex-row sm:items-center sm:justify-end">
@@ -230,7 +261,7 @@ function ActionDialogFrame({
                 취소
               </Button>
             </Dialog.Close>
-            <Button type="button" disabled={!writable || pending} onClick={() => { if (writable) onSubmit(() => setOpen(false)); }}>
+            <Button type="button" disabled={!writable || pending || disabled} onClick={() => { if (writable && !disabled) onSubmit(() => setOpen(false)); }}>
               {pending ? <Loader2 className="h-[1em] w-[1em] animate-spin" /> : <Check className="h-[1em] w-[1em]" />}
               {submitLabel}
             </Button>
@@ -495,13 +526,44 @@ export function VideoDonationSettingsDialog({ variant = 'secondary', label = '�
   const [bgmAcceptEnabled, setBgmAcceptEnabled] = useState(false);
   const [bgmPointsPerSecond, setBgmPointsPerSecond] = useState('1');
   const [bgmIdlePlaylist, setBgmIdlePlaylist] = useState<VideoDonationIdlePlaylist>(() => createDefaultVideoDonationIdlePlaylist());
-  const [isPending, startTransition] = useTransition();
+  const [chzzkVideoDonation, setChzzkVideoDonation] = useState({ pauseEnabled: false, queueEnabled: false, configured: false });
+  const [chzzkOverlayUrl, setChzzkOverlayUrl] = useState<string | undefined>();
+  const [chzzkUrlRevealed, setChzzkUrlRevealed] = useState(false);
+  const [chzzkConnection, setChzzkConnection] = useState(() => readChzzkConnection());
+  const [chzzkStatusRefreshing, setChzzkStatusRefreshing] = useState(false);
+  const chzzkStatusVersion = useRef(0);
+  const [settingsState, setSettingsState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [isPending, setIsPending] = useState(false);
+  const loadVersion = useRef(0);
+  const chzzkUrlId = useId();
+  const chzzkUrlRemoving = chzzkOverlayUrl === '';
+  const chzzkUrlEntered = chzzkOverlayUrl?.trim() || '';
+  let chzzkUrlValid = false;
+  try {
+    const url = new URL(chzzkUrlEntered);
+    chzzkUrlValid = url.protocol === 'https:'
+      && url.hostname === 'chzzk.naver.com'
+      && !url.username && !url.password && !url.port && !url.hash
+      // Check the raw authority too: URL normalizes an explicit :443 to an empty port.
+      && /^https:\/\/chzzk\.naver\.com\/video-donation\/video@[A-Za-z0-9_-]+(?:\?[^\s#]*)?$/.test(chzzkUrlEntered);
+  } catch {
+    // The server performs CHZZK-specific URL validation on save.
+  }
+  const chzzkCanEnable = !chzzkUrlRemoving && (chzzkVideoDonation.configured || chzzkUrlValid);
 
   const load = async () => {
+    const version = ++loadVersion.current;
+    ++chzzkStatusVersion.current;
+    setChzzkStatusRefreshing(false);
+    setChzzkConnection(readChzzkConnection());
+    setSettingsState('loading');
+    setChzzkOverlayUrl(undefined);
+    setChzzkUrlRevealed(false);
     try {
       const response = await fetch(apiUrl('/api/video-donation/settings'), { credentials: 'include', cache: 'no-store' });
-      if (!response.ok) return;
+      if (!response.ok) throw new Error('request_failed');
       const payload = await response.json();
+      if (version !== loadVersion.current) return;
       setEnabled(payload.acceptEnabled === true);
       setPointsPerSecond(String(payload.pointsPerSecond ?? 1));
       setMaxDurationMinutes(String(Math.max(1, Math.round(Number(payload.maxDurationSec || 600) / 60))));
@@ -518,31 +580,71 @@ export function VideoDonationSettingsDialog({ variant = 'secondary', label = '�
       setBgmAcceptEnabled(payload.bgm?.acceptEnabled === true);
       setBgmPointsPerSecond(String(payload.bgm?.pointsPerSecond ?? 1));
       setBgmIdlePlaylist(normalizeVideoDonationIdlePlaylist(payload.bgm?.idlePlaylist));
+      setChzzkVideoDonation({
+        pauseEnabled: payload.chzzkVideoDonation?.pauseEnabled === true,
+        queueEnabled: payload.chzzkVideoDonation?.queueEnabled === true,
+        configured: payload.chzzkVideoDonation?.configured === true,
+      });
+      setChzzkConnection(readChzzkConnection(payload.chzzkVideoDonation));
+      setSettingsState('ready');
     } catch {
-      // Existing values remain editable when loading fails.
+      if (version !== loadVersion.current) return;
+      setSettingsState('error');
+      toast.error('설정을 불러오지 못했어요. 창을 다시 열어 주세요.');
     }
   };
 
-  const submit = (close: () => void) => {
-    startTransition(async () => {
-      try {
-        await postJson('/api/video-donation/settings', {
-          acceptEnabled: enabled,
-          pointsPerSecond: Math.max(0, Number(pointsPerSecond || 0)),
-          maxDurationSec: Math.max(1, Number(maxDurationMinutes || 1)) * 60,
-          perUserLimit: Math.max(0, Number(perUserLimit || 0)),
-          volume: Math.max(0, Math.min(100, Math.round(Number(volume || 0)))),
-          providers,
-          idlePlaylist,
-          bgm: { enabled: bgmEnabled, acceptEnabled: bgmAcceptEnabled, pointsPerSecond: Number(bgmPointsPerSecond), idlePlaylist: bgmIdlePlaylist },
-        });
-        toast.success('영상 후원 설정을 저장했어요.');
-        refreshResource('/api/video-donation/queue');
-        close();
-      } catch (error) {
-        toast.error(getApiErrorMessage(error, '영상 후원 설정을 저장하지 못했어요.'));
-      }
-    });
+  const refreshChzzkStatus = async () => {
+    if (settingsState !== 'ready' || chzzkStatusRefreshing || isPending) return;
+    const version = ++chzzkStatusVersion.current;
+    setChzzkStatusRefreshing(true);
+    try {
+      const response = await fetch(apiUrl('/api/video-donation/settings'), { credentials: 'include', cache: 'no-store' });
+      if (!response.ok) throw new Error('request_failed');
+      const payload = await response.json();
+      if (version !== chzzkStatusVersion.current) return;
+      setChzzkConnection(readChzzkConnection(payload.chzzkVideoDonation));
+    } catch {
+      if (version !== chzzkStatusVersion.current) return;
+      setChzzkConnection((current) => ({ ...current, error: '연결 상태를 불러오지 못했어요. 다시 새로고침해 주세요.' }));
+    } finally {
+      if (version === chzzkStatusVersion.current) setChzzkStatusRefreshing(false);
+    }
+  };
+
+  const submit = async (close: () => void) => {
+    if (settingsState !== 'ready' || isPending) return;
+    if (chzzkUrlEntered && !chzzkUrlValid) return toast.warning('올바른 치지직 영상후원 URL을 입력해 주세요.');
+    if (!chzzkUrlRemoving && !chzzkCanEnable && (chzzkVideoDonation.pauseEnabled || chzzkVideoDonation.queueEnabled)) {
+      return toast.warning('치지직 영상후원 URL을 입력해 주세요.');
+    }
+    setIsPending(true);
+    try {
+      await postJson('/api/video-donation/settings', {
+        acceptEnabled: enabled,
+        pointsPerSecond: Math.max(0, Number(pointsPerSecond || 0)),
+        maxDurationSec: Math.max(1, Number(maxDurationMinutes || 1)) * 60,
+        perUserLimit: Math.max(0, Number(perUserLimit || 0)),
+        volume: Math.max(0, Math.min(100, Math.round(Number(volume || 0)))),
+        providers,
+        idlePlaylist,
+        bgm: { enabled: bgmEnabled, acceptEnabled: bgmAcceptEnabled, pointsPerSecond: Number(bgmPointsPerSecond), idlePlaylist: bgmIdlePlaylist },
+        chzzkVideoDonation: {
+          pauseEnabled: !chzzkUrlRemoving && chzzkVideoDonation.pauseEnabled,
+          queueEnabled: !chzzkUrlRemoving && chzzkVideoDonation.queueEnabled,
+          ...(chzzkOverlayUrl !== undefined ? { overlayUrl: chzzkOverlayUrl.trim() } : {}),
+        },
+      });
+      setChzzkOverlayUrl(undefined);
+      setChzzkUrlRevealed(false);
+      toast.success('영상 후원 설정을 저장했어요.');
+      refreshResource('/api/video-donation/queue');
+      close();
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, '영상 후원 설정을 저장하지 못했어요.'));
+    } finally {
+      setIsPending(false);
+    }
   };
 
   return (
@@ -555,6 +657,7 @@ export function VideoDonationSettingsDialog({ variant = 'secondary', label = '�
       description="시청자가 포인트로 영상을 신청하고 방송 화면에 자연스럽게 이어지도록 비용과 길이를 정합니다."
       submitLabel="설정 저장"
       pending={isPending}
+      disabled={settingsState !== 'ready' || isPending}
       onSubmit={submit}
       onOpen={load}
       variant={variant}
@@ -562,6 +665,11 @@ export function VideoDonationSettingsDialog({ variant = 'secondary', label = '�
       className={className}
       testId="video-donation-settings-trigger"
     >
+      {settingsState !== 'ready' ? (
+        <p role={settingsState === 'error' ? 'alert' : 'status'} className="text-sm text-muted-foreground">
+          {settingsState === 'error' ? '설정을 불러오지 못했어요. 창을 닫고 다시 열어 주세요.' : '설정을 불러오는 중입니다.'}
+        </p>
+      ) : null}
       <SwitchRow checked={enabled} onCheckedChange={setEnabled} label="영상 후원 받기" />
       <div className="grid min-w-0 gap-[clamp(0.75rem,1.5vw,1rem)] rounded-[var(--radius-card)] border bg-background/62 p-[clamp(1rem,2vw,1.25rem)] md:grid-cols-[repeat(2,minmax(0,1fr))]">
         <SwitchRow
@@ -585,6 +693,118 @@ export function VideoDonationSettingsDialog({ variant = 'secondary', label = '�
           label="CIME 클립 받기"
         />
       </div>
+      <section className="grid min-w-0 gap-4 border-t py-5" aria-label="치지직 영상후원 연동">
+        <h3 className="text-base font-semibold">치지직 영상후원 연동</h3>
+        <div className="grid min-w-0 gap-2">
+          <label htmlFor={chzzkUrlId} className="text-sm font-semibold">치지직 영상후원 URL</label>
+          <div className="flex min-w-0 items-center gap-2">
+            <Input
+              id={chzzkUrlId}
+              type={chzzkUrlRevealed ? 'text' : 'password'}
+              autoComplete="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              inputMode="url"
+              value={chzzkOverlayUrl ?? ''}
+              onChange={(event) => {
+                const value = event.target.value;
+                setChzzkOverlayUrl(value.trim() ? value : chzzkUrlRemoving ? '' : undefined);
+              }}
+              placeholder={chzzkVideoDonation.configured && !chzzkUrlRemoving ? 'URL 저장됨 · 변경할 새 URL 입력' : '치지직 영상후원 URL 입력'}
+              className="min-w-0 flex-1"
+            />
+            <Tooltip content={chzzkUrlRevealed ? '입력한 URL 숨기기' : '입력한 URL 보기'}>
+              <span className="inline-flex shrink-0">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="shrink-0"
+                  disabled={!chzzkUrlEntered}
+                  aria-label={chzzkUrlRevealed ? '입력한 URL 숨기기' : '입력한 URL 보기'}
+                  aria-pressed={chzzkUrlRevealed}
+                  onClick={() => setChzzkUrlRevealed((value) => !value)}
+                >
+                  {chzzkUrlRevealed ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </Button>
+              </span>
+            </Tooltip>
+          </div>
+          {chzzkVideoDonation.configured ? (
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span role="status" className="text-xs text-muted-foreground">
+                {chzzkUrlRemoving ? '저장 시 연결 URL이 삭제됩니다.' : 'URL 저장됨'}
+              </span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  if (chzzkUrlRemoving) {
+                    setChzzkOverlayUrl(undefined);
+                  } else {
+                    setChzzkOverlayUrl('');
+                    setChzzkUrlRevealed(false);
+                  }
+                }}
+              >
+                <Trash2 className="h-4 w-4" />
+                {chzzkUrlRemoving ? 'URL 삭제 취소' : '저장된 URL 삭제'}
+              </Button>
+            </div>
+          ) : null}
+          <div className="flex min-w-0 items-center justify-between gap-2">
+            <p role="status" className="min-w-0 break-keep text-xs text-muted-foreground">
+              저장된 설정의 연결 상태: {chzzkConnection.label}
+            </p>
+            <Tooltip content="치지직 연결 상태 새로고침">
+              <span className="inline-flex shrink-0">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="shrink-0"
+                  aria-label="치지직 연결 상태 새로고침"
+                  disabled={chzzkStatusRefreshing}
+                  onClick={refreshChzzkStatus}
+                >
+                  <RefreshCw className={cn('h-4 w-4', chzzkStatusRefreshing && 'animate-spin motion-reduce:animate-none')} />
+                </Button>
+              </span>
+            </Tooltip>
+          </div>
+          {chzzkConnection.error ? <p role="alert" className="break-keep text-xs leading-5 text-destructive">{chzzkConnection.error}</p> : null}
+        </div>
+        <div className="grid gap-4">
+          {([
+            { key: 'pauseEnabled', label: '치지직 영상후원 중 AruBot 영상·BGM 일시정지' },
+            { key: 'queueEnabled', label: '치지직 영상후원을 AruBot 대기열에 추가' },
+          ] as const).map(({ key, label: toggleLabel }) => (
+            <label key={key} className="flex min-h-[var(--control-height)] min-w-0 items-center justify-between gap-3">
+              <span className="min-w-0 break-keep text-sm font-semibold">{toggleLabel}</span>
+              <Switch.Root
+                checked={!chzzkUrlRemoving && chzzkVideoDonation[key]}
+                onCheckedChange={(value) => setChzzkVideoDonation((current) => ({ ...current, [key]: value }))}
+                disabled={chzzkUrlRemoving || (!chzzkCanEnable && !chzzkVideoDonation[key])}
+                aria-label={toggleLabel}
+                className="relative h-[1.75rem] w-[3.25rem] shrink-0 rounded-full border bg-muted transition disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:border-primary/35 data-[state=checked]:bg-primary/75"
+              >
+                <Switch.Thumb className="block h-[1.35rem] w-[1.35rem] translate-x-[0.2rem] rounded-full bg-card shadow-subtle transition data-[state=checked]:translate-x-[1.55rem]" />
+              </Switch.Root>
+            </label>
+          ))}
+        </div>
+        {!chzzkUrlRemoving && chzzkVideoDonation.pauseEnabled && chzzkVideoDonation.queueEnabled ? (
+          <p role="note" className="break-keep text-xs leading-5 text-muted-foreground">
+            두 기능을 함께 켜면 AruBot 대기열 재생이 우선하며, 치지직 연동 일시정지는 적용되지 않습니다.
+          </p>
+        ) : null}
+        {!chzzkUrlRemoving && chzzkVideoDonation.queueEnabled ? (
+          <p role="note" className="break-keep text-sm leading-6 text-amber-800 dark:text-amber-200">
+            치지직 기본 영상후원 소스는 OBS에서 제거해 중복 재생을 방지해 주세요.
+          </p>
+        ) : null}
+      </section>
       <fieldset disabled={bgmEnabled} className="min-w-0 disabled:opacity-50">
         <VideoDonationIdlePlaylistEditor value={idlePlaylist} onChange={setIdlePlaylist} />
       </fieldset>
@@ -753,7 +973,7 @@ export function DonationRuleCreateDialog({ variant = 'secondary', label = '반�
       submitLabel="반응 추가"
       pending={isPending}
       onSubmit={submit}
-      headerAction={<CommandVariableHelpButton scope="donation" />}
+      headerAction={<CommandVariableHelpButton scope="donation" onInsert={(key) => setResponse((value) => value + key)} />}
       variant={variant}
       label={label}
       className={className}

@@ -2,7 +2,7 @@ import { getBotManagementOwner } from '@/shared/lib/bot-management-context';
 
 function scopedManagementUrl(url: string, websocket = false) {
   if (typeof window === 'undefined') return url;
-  if (!/^\/(?:dashboard|streamer|connection|commands|macros|points|predictions|roulette|wheels|video-donations|drawing-donations|donations|automations|actions|logs|settings|variables|diagnostics|bot-managers|songbook|emote-overlay)(?:\/|$)/.test(window.location.pathname)) return url;
+  if (!/^\/(?:dashboard|streamer|connection|commands|macros|points|predictions|roulette|wheels|marble|video-donations|drawing-donations|donations|automations|actions|logs|settings|variables|diagnostics|bot-managers|songbook|emote-overlay)(?:\/|$)/.test(window.location.pathname)) return url;
   const owner = getBotManagementOwner();
   if (!owner) return url;
   const parsed = new URL(url, window.location.origin);
@@ -93,7 +93,7 @@ export async function readJson<T>(path: string, init?: RequestInit): Promise<T |
 
 export type JsonResult<T> =
   | { ok: true; data: T; status: number }
-  | { ok: false; data: null; status: number | null; message: string };
+  | { ok: false; data: null; status: number | null; message: string; code?: string };
 
 export async function readJsonResult<T>(path: string, init?: RequestInit): Promise<JsonResult<T>> {
   const dedupe = canDedupeJsonRead(init);
@@ -110,12 +110,13 @@ export async function readJsonResult<T>(path: string, init?: RequestInit): Promi
         cache: init?.cache ?? 'no-store',
       });
       if (!response.ok) {
-        const body = await response.json().catch(() => null) as { error?: string; message?: string } | null;
+        const body = await response.json().catch(() => null) as { error?: string; message?: string; code?: string } | null;
         return {
           ok: false,
           data: null,
           status: response.status,
           message: body?.message || body?.error || `요청 실패 (${response.status})`,
+          ...(typeof body?.code === 'string' ? { code: body.code } : {}),
         };
       }
       return { ok: true, data: await response.json() as T, status: response.status };
