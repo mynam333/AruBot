@@ -138,6 +138,14 @@ let updateState = {
   error: null,
 };
 let pendingInstallerUpdate = null;
+let updateCheckPromise = null;
+let updateDownloadPromise = null;
+let updateInstallPromise = null;
+let electronUpdateReady = false;
+let restartAfterUpdate = false;
+let installerScheduled = false;
+let updateQuitRequested = false;
+let appQuitting = false;
 let stats = {
   claimed: 0,
   completed: 0,
@@ -350,7 +358,7 @@ function readJson(fileName, fallback) {
   try {
     const fullPath = dataPath(fileName);
     if (!fs.existsSync(fullPath)) return fallback;
-    return JSON.parse(fs.readFileSync(fullPath, 'utf8'));
+    return JSON.parse(fs.readFileSync(fullPath, 'utf8').replace(/^\uFEFF/, ''));
   } catch {
     return fallback;
   }
@@ -370,7 +378,7 @@ function deleteJson(fileName) {
 function loadPendingUpdate() {
   const pending = readJson('pending-update.json', null);
   if (!pending?.installerPath || !pending?.latestVersion) return null;
-  if (!fs.existsSync(pending.installerPath)) {
+  if (!fs.existsSync(pending.installerPath) || !/^[a-f0-9]{64}$/i.test(pending.sha256 || '')) {
     deleteJson('pending-update.json');
     return null;
   }
@@ -385,6 +393,8 @@ function loadPendingUpdate() {
     updateAvailable: true,
     downloaded: true,
     readyToApply: true,
+    manualInstaller: true,
+    electronUpdater: false,
     error: null,
     progress: null,
   });
@@ -459,7 +469,7 @@ function inspectLastUpdateApplyResult() {
   }
 
   const exitCode = result.exitCode == null ? null : Number(result.exitCode);
-  const installerAvailable = !!result.installerPath && fs.existsSync(result.installerPath);
+  const installerAvailable = !!result.installerPath && fs.existsSync(result.installerPath) && /^[a-f0-9]{64}$/i.test(result.sha256 || '');
   if (installerAvailable) {
     pendingInstallerUpdate = {
       latestVersion: result.latestVersion,
@@ -617,6 +627,7 @@ function getUpdaterFeedUrl() {
 }
 
 function configureAutoUpdater() {
+  // One shared download promise coordinates startup and user-initiated updates.
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
   autoUpdater.autoRunAppAfterInstall = true;
@@ -658,8 +669,10 @@ function checkForUpdatesWithElectronUpdater() {
     autoUpdater.once('update-available', onAvailable);
     autoUpdater.once('update-not-available', onNotAvailable);
     autoUpdater.once('error', onError);
-    configureAutoUpdater();
-    autoUpdater.checkForUpdates().catch((error) => finish(null, error));
+    try {
+      configureAutoUpdater();
+      autoUpdater.checkForUpdates().catch((error) => finish(null, error));
+    } catch (error) { finish(null, error); }
   });
 }
 
@@ -693,13 +706,14 @@ function downloadUpdateWithElectronUpdater() {
     autoUpdater.on('download-progress', onProgress);
     autoUpdater.once('update-downloaded', onDownloaded);
     autoUpdater.once('error', onError);
-    autoUpdater.downloadUpdate().catch((error) => finish(null, error));
+    try { autoUpdater.downloadUpdate().catch((error) => finish(null, error)); }
+    catch (error) { finish(null, error); }
   });
 }
 
 async function fetchUpdateManifest() {
   const manifestUrl = resolveManifestUrl();
-  const response = await fetch(manifestUrl, { cache: 'no-store' });
+  const response = await fetch(manifestUrl, { cache: 'no-store', signal: AbortSignal.timeout(30000) });
   if (!response.ok) throw new Error(`업데이트 정보를 불러오지 못했습니다. HTTP ${response.status}`);
   const manifest = await response.json();
   const currentVersion = app.getVersion();
@@ -720,12 +734,13 @@ async function fetchUpdateManifest() {
 }
 
 async function downloadInstaller(update) {
-  const response = await fetch(update.downloadUrl, { cache: 'no-store' });
+  if (!/^[a-f0-9]{64}$/i.test(update.sha256 || '')) throw new Error('설치 파일의 SHA-256 정보가 없어 자동 설치할 수 없습니다.');
+  const response = await fetch(update.downloadUrl, { cache: 'no-store', signal: AbortSignal.timeout(15 * 60 * 1000) });
   if (!response.ok) throw new Error(`설치 파일 다운로드 실패: HTTP ${response.status}`);
   const buffer = Buffer.from(await response.arrayBuffer());
   if (update.sha256) {
     const hash = crypto.createHash('sha256').update(buffer).digest('hex');
-    if (hash !== update.sha256) throw new Error('다운로드한 설치 파일의 무결성 확인에 실패했습니다.');
+    if (hash !== update.sha256.toLowerCase()) throw new Error('다운로드한 설치 파일의 무결성 확인에 실패했습니다.');
   }
   const updateDir = tempUpdatePath('');
   fs.mkdirSync(updateDir, { recursive: true });
@@ -756,7 +771,8 @@ function getCurrentInstallDirectory() {
   return installDir;
 }
 
-function scheduleSilentInstallerOnQuit() {
+function scheduleSilentInstallerOnQuit({ restart = false } = {}) {
+  if (installerScheduled) return true;
   const pending = pendingInstallerUpdate;
   if (!pending?.installerPath || process.platform !== 'win32') return false;
   if (!fs.existsSync(pending.installerPath)) {
@@ -779,6 +795,7 @@ function scheduleSilentInstallerOnQuit() {
     `$previousVersion = ${quotePowerShellString(app.getVersion())}`,
     `$sha256 = ${quotePowerShellString(pending.sha256 || '')}`,
     `$exePath = ${quotePowerShellString(app.getPath('exe') || process.execPath || '')}`,
+    `$restartAfterInstall = $${restart ? 'true' : 'false'}`,
     'function Write-UpdateResult([string] $status, [object] $exitCode, [string] $message) {',
     '  $payload = [ordered]@{',
     '    status = $status',
@@ -801,19 +818,22 @@ function scheduleSilentInstallerOnQuit() {
     '    Write-UpdateResult "missing-installer" $null "installer file does not exist"',
     '    return',
     '  }',
-    '  $argumentLine = "/S /currentuser"',
+    '  $hashStream = [System.IO.File]::OpenRead($installer)',
+    '  $hasher = [System.Security.Cryptography.SHA256]::Create()',
+    '  try { $actualHash = [System.BitConverter]::ToString($hasher.ComputeHash($hashStream)).Replace("-", "") }',
+    '  finally { $hashStream.Dispose(); $hasher.Dispose() }',
+    '  if (-not $sha256 -or $actualHash -ine $sha256) { throw "installer checksum mismatch" }',
+    '  $argumentLine = "/S /currentuser --updated"',
     '  if ($installDir) { $argumentLine = "$argumentLine /D=$installDir" }',
-    '  $process = Start-Process -FilePath $installer -ArgumentList $argumentLine -WindowStyle Hidden -Wait -PassThru',
+    '  $process = Start-Process -FilePath $installer -ArgumentList $argumentLine -WindowStyle Hidden -Wait -PassThru -ErrorAction Stop',
+    '  Write-UpdateResult "finished" $process.ExitCode "installer finished"',
     '  $launchPath = $exePath',
     '  if ((-not $launchPath -or -not (Test-Path -LiteralPath $launchPath)) -and $installDir -and (Test-Path -LiteralPath $installDir)) {',
     '    $candidate = Get-ChildItem -LiteralPath $installDir -Filter "*.exe" -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "AruBot|Local" } | Select-Object -First 1',
     '    if ($candidate) { $launchPath = $candidate.FullName }',
     '  }',
-    '  if ($process.ExitCode -eq 0 -and $launchPath -and (Test-Path -LiteralPath $launchPath)) {',
-    '    Start-Process -FilePath $launchPath -WorkingDirectory (Split-Path -Parent $launchPath) -WindowStyle Normal | Out-Null',
-    '    Write-UpdateResult "finished-and-launched" $process.ExitCode "installer finished and app launched"',
-    '  } else {',
-    '    Write-UpdateResult "finished" $process.ExitCode "installer finished"',
+    '  if ($restartAfterInstall -and $process.ExitCode -eq 0 -and $launchPath -and (Test-Path -LiteralPath $launchPath)) {',
+    '    Start-Process -FilePath $launchPath -WorkingDirectory (Split-Path -Parent $launchPath) -WindowStyle Normal -ErrorAction Stop | Out-Null',
     '  }',
     '} catch {',
     '  Write-UpdateResult "failed" $null $_.Exception.Message',
@@ -822,7 +842,8 @@ function scheduleSilentInstallerOnQuit() {
     '}',
     '',
   ].join('\r\n');
-  fs.writeFileSync(helperPath, script, 'utf8');
+  // Windows PowerShell 5 needs a BOM to preserve Korean installation paths.
+  fs.writeFileSync(helperPath, '\uFEFF' + script, 'utf8');
   const child = spawn('powershell.exe', [
     '-NoProfile',
     '-ExecutionPolicy',
@@ -836,9 +857,135 @@ function scheduleSilentInstallerOnQuit() {
     stdio: 'ignore',
     windowsHide: true,
   });
+  installerScheduled = true;
+  child.once('error', (error) => {
+    installerScheduled = false;
+    addLog('error', '업데이트 설치 예약 실패', error.message);
+  });
   child.unref();
   return true;
 }
+
+function checkForLocalUpdates() {
+  if (updateDownloadPromise || updateState.readyToApply || updateState.status === 'installing') return Promise.resolve({ ...updateState });
+  if (updateCheckPromise) return updateCheckPromise;
+  updateCheckPromise = (async () => {
+    setUpdateState({ status: 'checking', checking: true, error: null, progress: null });
+    try {
+      let result;
+      if (app.isPackaged) {
+        try { result = await checkForUpdatesWithElectronUpdater(); }
+        catch (error) { addLog('error', '인앱 업데이트 확인 실패. manifest 방식으로 확인합니다.', error.message || String(error)); }
+      }
+      if (!result) result = await fetchUpdateManifest();
+      setUpdateState({ latestVersion: result.latestVersion, updateAvailable: result.updateAvailable,
+        electronUpdater: result.electronUpdater === true, status: result.updateAvailable ? 'available' : 'idle', checking: false,
+        downloaded: false, readyToApply: false, manualInstaller: false, error: null });
+      addLog(result.updateAvailable ? 'info' : 'success', result.updateAvailable ? `새 버전 ${result.latestVersion}을 찾았습니다.` : '최신 버전을 사용 중입니다.');
+      return { ...result, ...updateState };
+    } catch (error) {
+      setUpdateState({ status: 'error', checking: false, error: error.message || String(error) });
+      throw error;
+    }
+  })().finally(() => { updateCheckPromise = null; });
+  return updateCheckPromise;
+}
+
+function prepareLocalUpdate() {
+  if (updateDownloadPromise) return updateDownloadPromise;
+  if (updateState.readyToApply) return Promise.resolve({ ...updateState });
+  const checking = checkForLocalUpdates();
+  updateDownloadPromise = (async () => {
+    try {
+      let update = await checking;
+      if (!update.updateAvailable || appQuitting) return update;
+      setUpdateState({ status: 'downloading', checking: false, error: null, progress: null });
+      if (app.isPackaged && update.electronUpdater) {
+        try {
+          const info = await downloadUpdateWithElectronUpdater();
+          electronUpdateReady = true;
+          clearPendingInstallerUpdate();
+          setUpdateState({ status: 'ready', latestVersion: info.version || update.latestVersion,
+            downloaded: true, readyToApply: true, manualInstaller: false, progress: null, error: null });
+          addLog('success', '업데이트 다운로드가 끝났습니다. 프로그램을 종료하면 자동으로 설치됩니다.');
+          return { ...updateState };
+        } catch (error) {
+          autoUpdater.autoInstallOnAppQuit = false;
+          addLog('error', '인앱 업데이트 다운로드 실패. 예비 다운로드 방식으로 전환합니다.', error.message || String(error));
+        }
+      }
+      if (!app.isPackaged || process.platform !== 'win32') throw new Error('자동 설치는 설치된 Windows 프로그램에서 지원합니다.');
+      if (!update.downloadUrl) update = await fetchUpdateManifest();
+      if (!update.updateAvailable) {
+        setUpdateState({ latestVersion: update.latestVersion, updateAvailable: false, electronUpdater: false,
+          status: 'idle', checking: false, progress: null });
+        return { ...updateState };
+      }
+      if (appQuitting) return { ...updateState };
+      setUpdateState({ status: 'downloading', latestVersion: update.latestVersion, error: null, progress: null });
+      const installerPath = await downloadInstaller(update);
+      persistPendingInstallerUpdate(update, installerPath);
+      electronUpdateReady = false;
+      autoUpdater.autoInstallOnAppQuit = false;
+      setUpdateState({ status: 'ready', downloaded: true, readyToApply: true, manualInstaller: true,
+        electronUpdater: false, progress: null, error: null });
+      addLog('success', '업데이트 다운로드가 끝났습니다. 프로그램을 종료하면 자동으로 설치됩니다.');
+      return { ...updateState };
+    } catch (error) {
+      setUpdateState({ status: 'error', checking: false, error: error.message || String(error), progress: null });
+      throw error;
+    }
+  })().finally(() => { updateDownloadPromise = null; });
+  return updateDownloadPromise;
+}
+
+async function runStartupUpdate() {
+  if (!app.isPackaged || appQuitting) return;
+  try { await prepareLocalUpdate(); }
+  catch (error) { addLog('error', '자동 업데이트 다운로드 실패. 업데이트 화면에서 다시 시도할 수 있습니다.', error.message || String(error)); }
+}
+
+function installLocalUpdate() {
+  if (updateInstallPromise) return updateInstallPromise;
+  if (updateQuitRequested) return Promise.resolve({ ...updateState });
+  updateInstallPromise = (async () => {
+    const update = await prepareLocalUpdate();
+    if (!update.readyToApply || appQuitting) return update;
+    const { response } = await dialog.showMessageBox(mainWindow, {
+      type: 'question', title: '업데이트 설치', message: `새 버전 ${update.latestVersion}을 설치하고 다시 시작할까요?`,
+      detail: '로컬 프로그램과 연결된 오버레이가 잠시 중단됩니다. 저장하지 않은 설정을 먼저 저장해 주세요.',
+      buttons: ['설치 후 다시 시작', '나중에'], defaultId: 1, cancelId: 1, noLink: true,
+    });
+    if (response !== 0 || appQuitting) return { ...updateState };
+    if (!electronUpdateReady && (!pendingInstallerUpdate || !fs.existsSync(pendingInstallerUpdate.installerPath))) {
+      clearPendingInstallerUpdate();
+      setUpdateState({ status: 'error', readyToApply: false, downloaded: false, error: '설치 파일이 없어졌습니다. 업데이트를 다시 내려받아 주세요.' });
+      throw new Error(updateState.error);
+    }
+    restartAfterUpdate = true;
+    updateQuitRequested = true;
+    setUpdateState({ status: 'installing', error: null });
+    // Let IPC deliver its response before the main window is closed.
+    setImmediate(() => {
+      try {
+        if (electronUpdateReady) autoUpdater.quitAndInstall(true, true);
+        else app.quit();
+      } catch (error) { handleUpdateInstallError(error); }
+    });
+    return { ...updateState };
+  })().finally(() => { updateInstallPromise = null; });
+  return updateInstallPromise;
+}
+
+function handleUpdateInstallError(error) {
+  if (!updateQuitRequested) return;
+  updateQuitRequested = false;
+  restartAfterUpdate = false;
+  setUpdateState({ status: 'error', error: error.message || String(error) });
+  addLog('error', '업데이트 설치 실패', error.message || String(error));
+}
+
+autoUpdater.on('error', handleUpdateInstallError);
 
 async function apiFetch(pathname, options = {}) {
   const token = normalizeLocalProgramToken(config.token);
@@ -2621,79 +2768,8 @@ ipcMain.handle('dashboard:open', async () => {
   await shell.openExternal(getSafeExternalHttpUrl(config.dashboardUrl || DEFAULT_DASHBOARD_URL));
   return true;
 });
-ipcMain.handle('update:check', async () => {
-  setUpdateState({ status: 'checking', checking: true, error: null, progress: null });
-  try {
-    const manifestUpdate = await fetchUpdateManifest();
-    if (app.isPackaged) {
-      try {
-        const updaterResult = await checkForUpdatesWithElectronUpdater();
-        const latestVersion = updaterResult.latestVersion || manifestUpdate.latestVersion;
-        const result = { ...manifestUpdate, ...updaterResult, latestVersion };
-        setUpdateState({
-          status: result.updateAvailable ? 'available' : 'idle',
-          checking: false,
-          latestVersion,
-          updateAvailable: result.updateAvailable,
-          downloaded: false,
-          readyToApply: false,
-          error: null,
-        });
-        addLog(result.updateAvailable ? 'info' : 'success', result.updateAvailable ? `새 버전 ${latestVersion}을 찾았습니다.` : '최신 버전을 사용 중입니다.');
-        return result;
-      } catch (error) {
-        addLog('error', '인앱 업데이트 확인 실패. manifest 방식으로 확인합니다.', error.message || String(error));
-      }
-    }
-    setUpdateState({
-      status: manifestUpdate.updateAvailable ? 'available' : 'idle',
-      checking: false,
-      latestVersion: manifestUpdate.latestVersion,
-      updateAvailable: manifestUpdate.updateAvailable,
-      downloaded: false,
-      readyToApply: false,
-      error: null,
-    });
-    addLog(manifestUpdate.updateAvailable ? 'info' : 'success', manifestUpdate.updateAvailable ? `새 버전 ${manifestUpdate.latestVersion}을 찾았습니다.` : '최신 버전을 사용 중입니다.');
-    return manifestUpdate;
-  } catch (error) {
-    setUpdateState({ status: 'error', checking: false, error: error.message || String(error) });
-    throw error;
-  }
-});
-ipcMain.handle('update:install', async () => {
-  const update = await fetchUpdateManifest();
-  if (!update.updateAvailable) return { ...update, opened: false };
-  if (app.isPackaged) {
-    setUpdateState({ status: 'downloading', checking: false, updateAvailable: true, latestVersion: update.latestVersion, downloaded: false, readyToApply: false, error: null, progress: null });
-    try {
-      await checkForUpdatesWithElectronUpdater();
-      const info = await downloadUpdateWithElectronUpdater();
-      setUpdateState({ status: 'ready', downloaded: true, readyToApply: true, progress: null, error: null });
-      addLog('success', '업데이트 다운로드가 끝났습니다. 프로그램을 종료하면 현재 설치 위치에 조용히 적용됩니다.');
-      return { ...update, electronUpdater: true, opened: false, downloaded: true, readyToApply: true, info };
-    } catch (error) {
-      setUpdateState({ status: 'error', error: error.message || String(error), progress: null });
-      addLog('error', '인앱 업데이트 준비 실패. 숨김 설치 예약 방식으로 전환합니다.', error.message || String(error));
-    }
-  }
-  if (process.platform === 'win32') {
-    addLog('info', `업데이트 ${update.latestVersion} 다운로드를 시작합니다.`);
-    const installerPath = await downloadInstaller(update);
-    const pending = persistPendingInstallerUpdate(update, installerPath);
-    setUpdateState({ status: 'ready', checking: false, latestVersion: update.latestVersion, updateAvailable: true, downloaded: true, readyToApply: true, progress: null, error: null });
-    addLog('success', pending.installDir
-      ? `업데이트 파일을 내려받았습니다. 프로그램을 종료하면 현재 설치 위치에 조용히 적용됩니다: ${pending.installDir}`
-      : '업데이트 파일을 내려받았습니다. 프로그램을 종료하면 설치 화면 없이 적용됩니다.');
-    return { ...update, opened: false, downloaded: true, readyToApply: true, manualInstaller: true, installDir: pending.installDir || null };
-  }
-  addLog('info', `업데이트 ${update.latestVersion} 다운로드를 시작합니다.`);
-  const installerPath = await downloadInstaller(update);
-  const pending = persistPendingInstallerUpdate(update, installerPath);
-  setUpdateState({ status: 'ready', checking: false, latestVersion: update.latestVersion, updateAvailable: true, downloaded: true, readyToApply: true, progress: null, error: null });
-  addLog('success', '업데이트 파일을 내려받았습니다. 프로그램을 종료하면 설치 화면 없이 적용됩니다.');
-  return { ...update, opened: false, downloaded: true, readyToApply: true, manualInstaller: true, installDir: pending.installDir || null };
-});
+ipcMain.handle('update:check', () => checkForLocalUpdates());
+ipcMain.handle('update:install', () => installLocalUpdate());
 
 app.whenReady().then(() => {
   if (!singleInstance) return;
@@ -2720,6 +2796,7 @@ app.whenReady().then(() => {
   const lastUpdateResult = inspectLastUpdateApplyResult();
   if (!lastUpdateResult) loadPendingUpdate();
   createWindow();
+  setTimeout(() => { void runStartupUpdate(); }, 2500).unref();
   if (config.autoStart && config.token) {
     setTimeout(() => {
       startAgent().catch((error) => addLog('error', '자동 시작 실패', error.message || String(error)));
@@ -2731,10 +2808,14 @@ app.whenReady().then(() => {
 });
 
 app.on('will-quit', () => {
+  appQuitting = true;
   void fxAssetServer.close();
   void pngtuberService?.stop();
   if (avatarService) { try { avatarService.flush(); } catch (error) { addLog('error', '아바타 저장 실패', error.message); } }
-  scheduleSilentInstallerOnQuit();
+  if (!electronUpdateReady) {
+    try { scheduleSilentInstallerOnQuit({ restart: restartAfterUpdate }); }
+    catch (error) { addLog('error', '업데이트 설치 예약 실패', error.message || String(error)); }
+  }
   stopAgent();
 });
 app.on('window-all-closed', () => {

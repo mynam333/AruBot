@@ -51,6 +51,9 @@ jobs:
       - name: Verify local PNGTuber runtime
         run: npm run test:pngtuber
 
+      - name: Verify local update lifecycle
+        run: npx jest --runInBand tests/local-program-updates.test.js
+
       - name: Install local editor test browser
         run: npx playwright install chromium
 

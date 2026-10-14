@@ -65,6 +65,7 @@ const pageMeta = {
 
 let latestState = null;
 let latestUpdate = null;
+let updateActionPending = false;
 let remoteState = { rules: [], rouletteDefs: [], videoQueue: [], videoPlayback: {}, drawingQueue: [] };
 let vtubeDiscovery = { models: [], hotkeys: [] };
 let obsDiscovery = { scenes: [], sources: [], filters: [] };
@@ -164,32 +165,42 @@ function escapeHtml(value) {
     .replaceAll("'", '&#039;');
 }
 
+function renderUpdateState(update = {}) {
+  latestUpdate = update;
+  const busy = updateActionPending || ['checking', 'downloading', 'installing'].includes(update.status);
+  $('#checkUpdateButton').disabled = busy;
+  $('#installUpdateButton').disabled = busy || (!update.updateAvailable && !update.readyToApply);
+  $('#installUpdateButton').textContent = update.readyToApply ? '설치 후 다시 시작' : '업데이트 내려받기';
+  if (update.latestVersion) $('#latestVersionText').textContent = update.latestVersion;
+  if (update.status === 'installing') {
+    $('#updateStatusText').textContent = '프로그램을 종료하고 업데이트를 설치한 뒤 자동으로 다시 시작합니다.';
+  } else if (update.status === 'error' && update.error) {
+    $('#updateStatusText').textContent = `업데이트 실패: ${update.error}`;
+  } else if (update.readyToApply) {
+    $('#updateStatusText').textContent = '다운로드 완료 · 프로그램 종료 시 자동 설치';
+  } else if (update.status === 'downloading') {
+    $('#updateStatusText').textContent = update.progress?.percent != null
+      ? `업데이트 다운로드 중 · ${Math.round(Number(update.progress.percent || 0))}%`
+      : '업데이트를 다운로드하고 있습니다.';
+  } else if (update.status === 'checking') {
+    $('#updateStatusText').textContent = '업데이트 정보를 확인하고 있습니다.';
+  } else if (update.updateAvailable) {
+    $('#updateStatusText').textContent = `새 버전 ${update.latestVersion}이 있습니다.`;
+  } else if (update.latestVersion) {
+    $('#updateStatusText').textContent = '최신 버전을 사용 중입니다.';
+  }
+}
+
 function renderState(state) {
   latestState = state;
   const cfg = state.config || {};
-  const update = state.update || {};
   $('#statusCard').classList.toggle('online', !!state.running);
   $('#statusText').textContent = state.running ? '실행 중' : '대기 중';
   $('#heartbeatText').textContent = state.stats?.lastHeartbeatAt ? `마지막 연결 ${fmtTime(state.stats.lastHeartbeatAt)}` : '아직 연결되지 않음';
   $('#completedCount').textContent = String(state.stats?.completed || 0);
   $('#failedCount').textContent = String(state.stats?.failed || 0);
   $('#currentVersionText').textContent = state.version || '확인 중';
-  if (update.latestVersion) $('#latestVersionText').textContent = update.latestVersion;
-  if (typeof update.updateAvailable === 'boolean') {
-    $('#installUpdateButton').disabled = !update.updateAvailable || !!update.readyToApply || update.status === 'downloading';
-  }
-  if (update.status === 'downloading' && update.progress?.percent != null) {
-    $('#updateStatusText').textContent = `업데이트를 다운로드하고 있습니다. ${Math.round(Number(update.progress.percent || 0))}%`;
-    $('#installUpdateButton').disabled = true;
-  } else if (update.status === 'ready' || update.readyToApply) {
-    $('#updateStatusText').textContent = '업데이트 파일이 준비됐습니다. 프로그램을 종료한 뒤 다시 열면 새 버전으로 시작합니다.';
-    $('#installUpdateButton').disabled = true;
-  } else if (update.status === 'installing') {
-    $('#updateStatusText').textContent = '업데이트를 조용히 적용하고 있습니다.';
-    $('#installUpdateButton').disabled = true;
-  } else if (update.status === 'error' && update.error) {
-    $('#updateStatusText').textContent = `업데이트 확인에 실패했습니다. ${update.error}`;
-  }
+  renderUpdateState(state.update || {});
   $('#encryptionState').textContent = state.encryptionAvailable ? 'OS 보호' : '기본 보호';
   $('#vtubeState').textContent = cfg.hasVtubeAuthToken ? '인증됨' : '미인증';
   $('#soundFolderText').textContent = cfg.fxFolder || cfg.soundFolder || '선택된 폴더 없음';
@@ -556,35 +567,30 @@ $('#runDiagnosticsButton').addEventListener('click', () => run(async () => {
 }));
 
 $('#checkUpdateButton').addEventListener('click', () => run(async () => {
-  await window.aruLocal.saveConfig(collectConfig());
-  $('#checkUpdateButton').disabled = true;
-  $('#updateStatusText').textContent = '업데이트 정보를 확인하고 있습니다.';
+  updateActionPending = true;
+  renderUpdateState({ ...(latestUpdate || {}), status: 'checking' });
   try {
-    latestUpdate = await window.aruLocal.checkUpdate();
-    $('#latestVersionText').textContent = latestUpdate.latestVersion || '확인 실패';
-    $('#installUpdateButton').disabled = !latestUpdate.updateAvailable;
-    $('#updateStatusText').textContent = latestUpdate.updateAvailable
-      ? `새 버전 ${latestUpdate.latestVersion}이 준비됐습니다. 방송 전에 바로 업데이트할 수 있어요.`
-      : '최신 버전을 사용 중입니다.';
+    renderUpdateState(await window.aruLocal.checkUpdate());
+  } catch (error) {
+    renderUpdateState({ ...(latestUpdate || {}), status: 'error', error: error.message || String(error) });
+    throw error;
   } finally {
-    $('#checkUpdateButton').disabled = false;
+    updateActionPending = false;
+    renderUpdateState(latestUpdate);
   }
 }));
 
 $('#installUpdateButton').addEventListener('click', () => run(async () => {
-  await window.aruLocal.saveConfig(collectConfig());
-  $('#installUpdateButton').disabled = true;
-  $('#updateStatusText').textContent = '업데이트를 프로그램 안에서 다운로드하고 있습니다.';
+  updateActionPending = true;
+  renderUpdateState(latestUpdate || {});
   try {
-    latestUpdate = await window.aruLocal.installUpdate();
-    $('#latestVersionText').textContent = latestUpdate.latestVersion || '확인 완료';
-    $('#updateStatusText').textContent = latestUpdate.readyToApply
-      ? '업데이트 파일이 준비됐습니다. 프로그램을 종료한 뒤 다시 열면 새 버전으로 시작합니다.'
-      : latestUpdate.opened
-      ? '업데이트 설치 파일을 열었습니다.'
-      : '이미 최신 버전을 사용 중입니다.';
+    renderUpdateState(await window.aruLocal.installUpdate());
+  } catch (error) {
+    renderUpdateState({ ...(latestUpdate || {}), status: 'error', error: error.message || String(error) });
+    throw error;
   } finally {
-    $('#installUpdateButton').disabled = !latestUpdate?.updateAvailable || !!latestUpdate?.readyToApply || !!latestUpdate?.downloaded;
+    updateActionPending = false;
+    renderUpdateState(latestUpdate);
   }
 }));
 

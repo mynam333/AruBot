@@ -128,7 +128,7 @@ $env:ARUBOT_LOCAL_DOWNLOAD_BASE_URL="https://github.com/OWNER/REPO/releases/down
 npm run local:release:external
 ```
 
-이 모드는 `dist/local-program`에 생성된 `.exe`, `.exe.blockmap`, `latest.yml`, `latest.json`을 GitHub Release asset으로 올리고, `public/downloads/local-program/latest.json`만 Vercel에 배포하는 방식입니다. 로컬 프로그램의 업데이트 버튼도 이 manifest를 읽어 GitHub의 설치 파일을 내려받고 SHA-256을 검증한 뒤 다음 종료 시 설치 화면 없이 조용히 적용합니다.
+이 모드는 `dist/local-program`에 생성된 `.exe`, `.exe.blockmap`, `latest.yml`, `latest.json`을 GitHub Release asset으로 올리고, `public/downloads/local-program/latest.json`만 Vercel에 배포하는 방식입니다. 설치된 로컬 프로그램은 시작 시 자동으로 새 버전을 확인하고 백그라운드에서 다운로드합니다. 다운로드가 완료되면 일반 종료 시 조용히 설치하며, 프로그램을 다시 실행하지는 않습니다. 업데이트 화면에서 `설치 후 다시 시작`을 선택하고 확인하면 설치 후 자동으로 재실행합니다. `업데이트 내려받기`를 직접 누른 경우에도 다운로드 후 같은 확인창이 표시됩니다.
 
 다운로드 페이지(`/downloads/local-program`)는 동적 페이지입니다. `LOCAL_PROGRAM_MANIFEST_URL` 또는 `NEXT_PUBLIC_LOCAL_PROGRAM_MANIFEST_URL`을 설정하면 Vercel 배포를 다시 하지 않아도 해당 외부 manifest를 `no-store`로 읽어 최신 설치 파일 링크를 보여줍니다.
 
@@ -195,4 +195,4 @@ npm run build
 - 영상 후원 뷰어는 페이지 가시성 변화와 플레이어 버퍼링을 고려해 상태 복구 로직을 강화했습니다.
 - CHZZK와 CIME 시청자 계정은 플랫폼 계정 테이블을 통해 하나의 내부 사용자로 연결하고, YouTube는 방송 채널 OAuth로 Live Chat 송수신을 연결합니다.
 - Supabase 마이그레이션은 `server/migrations`의 순서대로 적용합니다.
-- 로컬 프로그램 업데이트는 `public/downloads/local-program/latest.json`의 버전과 SHA-256을 확인한 뒤 새 설치 파일을 임시 폴더에 다운로드합니다. 자동 업데이트 메타 파일이 준비된 환경에서는 Electron updater가 종료 시 조용히 적용하고, fallback 경로에서도 설치 마법사를 띄우지 않는 숨김 설치로 처리합니다. 배포 도메인이 `https://arubot.vercel.app`가 아니라면 로컬 프로그램의 업데이트 정보 주소를 실제 프론트엔드 도메인의 `/downloads/local-program/latest.json`로 바꿔 주세요.
+- 로컬 프로그램 업데이트는 기본 GitHub Releases 주소의 `latest.yml`을 Electron updater로 확인합니다. 이 경로가 실패하면 같은 릴리스의 `latest.json`을 사용하며, SHA-256이 있는 설치 파일만 내려받아 설치 직전에도 무결성을 확인합니다. 다운로드 중에는 봇과 오버레이를 종료하지 않으며, 개발 실행에서는 자동 업데이트를 시작하지 않습니다. 업데이트 확인·다운로드 실패는 업데이트 화면에서 다시 시도할 수 있습니다. 배포 주소를 바꾸려면 빌드 시 `ARUBOT_LOCAL_UPDATE_MANIFEST_URL`을 설정하고 같은 경로에 `latest.yml`과 `latest.json`을 함께 게시하세요.
