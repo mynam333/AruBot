@@ -254,9 +254,10 @@ function normalizeColumnName(column) {
 
 function buildColumnExpression(column, values, forOrder = false) {
   const name = normalizeColumnName(column);
-  const jsonMatch = name.match(/^([A-Za-z_][A-Za-z0-9_]*)->>'([^']+)'$/);
+  // PostgREST callers use unquoted JSON keys; keep both forms parameterized.
+  const jsonMatch = name.match(/^([A-Za-z_][A-Za-z0-9_]*)->>(?:'([^']+)'|([A-Za-z_][A-Za-z0-9_]*))$/);
   if (jsonMatch) {
-    const keyParam = values.push(jsonMatch[2]);
+    const keyParam = values.push(jsonMatch[2] ?? jsonMatch[3]);
     return `${quoteIdent(jsonMatch[1])}->>$${keyParam}`;
   }
   if (!/^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$/.test(name)) {
