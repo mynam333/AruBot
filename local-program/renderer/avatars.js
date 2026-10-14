@@ -94,6 +94,8 @@
   }
   const history = { undo: [], redo: [] };
   const filters = { avatars: '', rules: '', enabled: '', trigger: '', viewers: '', sort: 'number' };
+  const viewerAssignments = new Map();
+  let viewerPage = 0;
   const monitorOptions = { view: 'zoom', follow: '' };
   const newRuleIds = new Set();
   const localDiagnostics = [];
@@ -501,10 +503,21 @@
   function renderViewers() {
     if (!q('avViewers')) return;
     const host = q('avViewers');
-    if (!q('avViewerRows')) host.innerHTML = `<div class="av-form"><label>참여자 검색<input type="search" data-filter="viewers" value="${esc(filters.viewers)}"></label><label>정렬<select data-filter="sort">${options({ number: '참여 번호', name: '이름', wins: '승리 횟수' }, filters.sort)}</select></label></div><div class="av-table-scroll"><table class="av-table"><thead><tr><th>참여자</th><th>캐릭터</th><th>승리</th><th>관리</th></tr></thead><tbody id="avViewerRows"></tbody></table></div><p id="avViewerEmpty" class="av-meta"></p><h3>차단 / 시간제 제외</h3><p class="av-meta">차단은 해제 또는 기록 삭제까지 유지 · 일반 프로필은 90일 보관</p><div id="avBlockedRows"></div>`;
+    if (!q('avViewerRows')) host.innerHTML = `<div class="av-form"><label>참여자 검색<input type="search" data-filter="viewers" value="${esc(filters.viewers)}"></label><label>정렬<select data-filter="sort">${options({ number: '참여 번호', name: '이름', wins: '승리 횟수' }, filters.sort)}</select></label></div><div class="av-table-scroll"><table class="av-table"><thead><tr><th>참여자</th><th>캐릭터</th><th>승리</th><th>관리</th></tr></thead><tbody id="avViewerRows"></tbody></table></div><p id="avViewerEmpty" class="av-meta"></p><h3>차단 / 시간제 제외</h3><p class="av-meta">캐릭터 지정·차단은 해제 또는 기록 삭제까지 유지 · 일반 프로필은 90일 보관</p><div id="avBlockedRows"></div>`;
     const rows = q('avViewerRows'), active = document.activeElement;
     const existing = new Map([...rows.children].map((row) => [row.dataset.viewerRow, row]));
-    const actors = [...state.snapshot.actors].sort((a, b) => filters.sort === 'name' ? a.name.localeCompare(b.name) : filters.sort === 'wins' ? b.wins - a.wins : (a.number || 0) - (b.number || 0));
+    if (!q('avViewerPaging')) q('avViewerEmpty').insertAdjacentHTML('afterend', `<div id="avViewerPaging" class="av-actions">${button('이전', 'viewer-prev')}${button('다음', 'viewer-next')}</div>`);
+    const viewers = state.viewers || state.snapshot.actors;
+    const viewerIds = new Set(viewers.map((a) => a.id));
+    const avatarIds = new Set(state.config.avatars.map((a) => a.id));
+    for (const [id, avatarId] of viewerAssignments) {
+      if (!viewerIds.has(id) || (avatarId && !avatarIds.has(avatarId))) viewerAssignments.delete(id);
+    }
+    const matching = [...viewers]
+      .filter((a) => `#${a.number} ${a.name}`.toLocaleLowerCase().includes(filters.viewers.toLocaleLowerCase()))
+      .sort((a, b) => filters.sort === 'name' ? a.name.localeCompare(b.name) : filters.sort === 'wins' ? b.wins - a.wins : (a.number || Infinity) - (b.number || Infinity) || (b.seen || 0) - (a.seen || 0));
+    viewerPage = Math.min(viewerPage, Math.max(0, Math.ceil(matching.length / 50) - 1));
+    const actors = matching.slice(viewerPage * 50, (viewerPage + 1) * 50);
     let visible = 0;
     const keepOrder = rows.contains(active);
     for (const a of actors) {
@@ -515,8 +528,22 @@
         rows.append(row);
       }
       existing.delete(a.id);
-      row.querySelector('[data-cell="name"]').textContent = `#${a.number ?? '?'} ${a.name}`;
-      row.querySelector('[data-cell="avatar"]').textContent = state.config.avatars.find((v) => v.id === a.avatar)?.name || a.avatar;
+      row.querySelector('[data-cell="name"]').textContent = `${a.number ? `#${a.number}` : '퇴장'} ${a.name}`;
+      row.querySelector('[data-cell="name"]').title = a.id;
+      const cell = row.querySelector('[data-cell="avatar"]');
+      if (!cell.querySelector('select')) cell.innerHTML = `<div class="av-viewer-avatar"><select data-viewer-avatar aria-label="시청자 지정 캐릭터"></select>${button('지정 저장', 'assign-avatar', `data-id="${esc(a.id)}"`)}<span class="av-meta" data-assignment-status></span></div>`;
+      const select = cell.querySelector('select');
+      const avatarOptions = JSON.stringify(state.config.avatars.map((v) => [v.id, v.name]));
+      if (select.dataset.options !== avatarOptions) {
+        select.innerHTML = `<option value="">지정 없음</option>${state.config.avatars.map((v) => `<option value="${esc(v.id)}">${esc(v.name)}</option>`).join('')}`;
+        select.dataset.options = avatarOptions;
+      }
+      const assignment = viewerAssignments.has(a.id) ? viewerAssignments.get(a.id) : a.avatarAssignment || '';
+      select.value = assignment;
+      const pending = assignment !== (a.avatarAssignment || '');
+      cell.querySelector('[data-av="assign-avatar"]').disabled = busy || !pending;
+      cell.querySelector('[data-assignment-status]').textContent = pending ? '저장 대기' : a.avatarAssignment ? '고정 지정됨' : '시청자 선택 사용';
+      row.querySelector('[data-mode="remove"]').disabled = a.active === false;
       row.querySelector('[data-cell="wins"]').textContent = a.wins ?? 0;
       const targeting = row.querySelector('[data-mode="targeting"]');
       const allowed = a.targeting !== false && a.allowTargeting !== false;
@@ -528,7 +555,10 @@
       if (!keepOrder) rows.append(row);
     }
     for (const row of existing.values()) row.remove();
-    q('avViewerEmpty').textContent = visible ? `${visible}명` : '일치하는 참여자가 없습니다.';
+    q('avViewerEmpty').textContent = visible ? `${viewerPage * 50 + 1}-${viewerPage * 50 + visible} / ${matching.length}명` : '일치하는 참여자가 없습니다.';
+    q('avViewerPaging').hidden = matching.length <= 50;
+    q('avViewerPaging').querySelector('[data-av="viewer-prev"]').disabled = viewerPage === 0;
+    q('avViewerPaging').querySelector('[data-av="viewer-next"]').disabled = (viewerPage + 1) * 50 >= matching.length;
     const blockedHost = q('avBlockedRows'), blockedRows = new Map([...blockedHost.children].map((row) => [row.dataset.blockedRow, row]));
     for (const a of state.blocked || []) {
       let row = blockedRows.get(a.id);
@@ -906,6 +936,19 @@
       state = await api.avatarCommand('moderate', { id: target.dataset.id, action, minutes, options: { minutes, allowed: target.dataset.allowed === 'true' } });
       updateStatus(); renderViewers(); return true;
     }
+    if (command === 'assign-avatar') {
+      const id = target.dataset.id;
+      const avatarId = target.closest('[data-viewer-row]').querySelector('[data-viewer-avatar]').value;
+      state = await api.avatarCommand('assign-avatar', { id, avatarId });
+      viewerAssignments.delete(id);
+      renderViewers();
+      notice(avatarId ? '시청자 캐릭터 지정을 저장했습니다.' : '캐릭터 지정을 해제했습니다.');
+      return true;
+    }
+    if (command === 'viewer-prev' || command === 'viewer-next') {
+      viewerPage = Math.max(0, viewerPage + (command === 'viewer-next' ? 1 : -1));
+      renderViewers(); return true;
+    }
     return false;
   }
   async function save() {
@@ -920,12 +963,21 @@
     await persistDraft();
   }
   function updateField(event) {
+    if (event.target.hasAttribute('data-viewer-avatar')) {
+      const id = event.target.closest('[data-viewer-row]').dataset.viewerRow;
+      const saved = (state.viewers || state.snapshot.actors).find((a) => a.id === id)?.avatarAssignment || '';
+      if (event.target.value === saved) viewerAssignments.delete(id);
+      else viewerAssignments.set(id, event.target.value);
+      renderViewers();
+      return;
+    }
     if (event.target.dataset.monitor) {
       monitorOptions[event.target.dataset.monitor] = event.target.value;
       updateStatus(); return;
     }
     if (event.target.dataset.filter) {
       filters[event.target.dataset.filter] = event.target.value;
+      viewerPage = 0;
       if (tab === 'viewers') renderViewers(); else filterLists();
       return;
     }
@@ -991,7 +1043,7 @@
   }
   root.addEventListener('focusout', () => { editGroup = ''; });
   window.addEventListener('beforeunload', (event) => {
-    if (!dirty) return;
+    if (!dirty && !viewerAssignments.size) return;
     void persistDraft().catch(() => {});
     event.preventDefault();
     event.returnValue = false;

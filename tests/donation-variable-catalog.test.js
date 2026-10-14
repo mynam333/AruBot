@@ -8,6 +8,7 @@ const visible = catalog.filter((item) => !item.contexts?.length || item.contexts
 test('donation help exposes all supported special and donor tokens', () => {
   expect(visible.filter((item) => item.key.startsWith('${')).map((item) => item.key).sort()).toEqual([
     '${roulette::룰렛이름}', '${action::액션이름}', '${blueprint::액션이름}', '${automation::액션이름}',
+    '${pngtuber::happy::5}',
     '${counter::user::변수명}', '${counter::global::변수명}', '${memo::메모이름}', '${songbook_url}',
     '${dday::2026-08-14}', '${username}', '${amount}', '${message}',
   ].sort());

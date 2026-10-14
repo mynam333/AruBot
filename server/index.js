@@ -89,6 +89,7 @@ import { getKstCalendarDate, resolveAttendanceDate } from './attendance-calendar
 import { DEFAULT_ATTENDANCE_MESSAGE, renderAttendanceTemplate } from './attendance-message.js';
 import { executeAttendanceSpecialOperations, extractAttendanceSpecialVariables } from './attendance-special-variables.js';
 import { renderDonationResponse, dispatchDonationRuleDesktop } from './donation-response.js';
+import { executePngtuberActionTokens, getPngtuberActionTokenCounts } from './pngtuber-actions.js';
 import { createDonationTestHandler } from './donation-test.js';
 import { prepareCounterVariablePlan, resolveCounterVariablePlan, stripUnplannedCounterVariables } from './counter-variables.js';
 import { memoVariableStore } from './supabase.js';
@@ -9723,7 +9724,7 @@ async function executeBlueprintCommandNode({
   }
 
   if (connectedTest) {
-    // Only device delivery and blueprint action tokens are allowed in a test.
+    // Only device delivery and response action tokens are allowed in a test.
     // Do not route synthetic users through live command effects or counters.
     const delivery = await emitBlueprintCommandEvent(sid, selectedPlatform, {
       type: 'command', cmd: commandMatch.matchedText, args,
@@ -9736,6 +9737,7 @@ async function executeBlueprintCommandNode({
     });
     const actionResult = await executeAndStripActionVariableTokens(sid, memoPlan.text, {
       ...context, source: 'manual_test', testMode: 'connected', dryRun: false,
+      responseTemplate: selectedResponse,
       noPointCost: true, requirePublishedBlueprint: true, platform: selectedPlatform,
       trigger: { ...(context.trigger || {}), message: command, keyword: commandMatch.matchedText, platform: selectedPlatform },
       command: { keyword: commandMatch.matchedText, text: command, ruleId: rule.id || null },
@@ -9842,6 +9844,7 @@ async function executeBlueprintCommandNode({
 
   const actionResult = await executeAndStripActionVariableTokens(sid, response, {
     ...context,
+    responseTemplate: selectedResponse,
     source: 'blueprint-command',
     platform: selectedPlatform,
     trigger: {
@@ -9907,20 +9910,28 @@ async function executeBlueprintCommandNode({
 }
 
 async function queueBlueprintAutomationJob(ownerUserId, job, context = {}) {
-  if (context.testMode === 'connected') {
+  const pngtuber = job.jobType === 'pngtuber.show';
+  if (context.testMode === 'connected' || pngtuber) {
     const agents = await listAutomationLocalAgents(ownerUserId);
-    if (!agents.some((agent) => agent.status === 'online' && !agent.revokedAt)) {
-      const error = new Error('blueprint_local_agent_offline');
+    const onlineAgents = agents.filter((agent) => agent.status === 'online' && !agent.revokedAt);
+    if (!onlineAgents.length) {
+      const error = new Error(pngtuber ? 'pngtuber_local_agent_offline' : 'blueprint_local_agent_offline');
       error.code = error.message;
       throw error;
     }
-    // The protocol has no expiry. Avoid replaying a claimed test job after a
-    // stalled agent recovers, and preserve test provenance in the job log.
+    if (pngtuber && !onlineAgents.some((agent) => agent.capabilities?.pngtuber === true)) {
+      const error = new Error('pngtuber_local_agent_upgrade_required');
+      error.code = error.message;
+      throw error;
+    }
+  }
+  if (context.testMode === 'connected') {
+    // Most job types have no expiry. Keep test retries bounded and preserve provenance.
     job = { ...job, maxAttempts: 1, payload: { ...job.payload, testMode: 'connected' } };
   }
   const queued = await queueAutomationJob(ownerUserId, job);
   if (!queued?.id) {
-    const error = new Error('blueprint_job_not_queued');
+    const error = new Error(pngtuber ? 'pngtuber_job_not_queued' : 'blueprint_job_not_queued');
     error.code = error.message;
     throw error;
   }
@@ -11745,12 +11756,44 @@ function stripActionVariableTokens(text) {
   return String(text || '').replace(/\$\{\s*(?:action|automation|blueprint)::([^}]+)\s*\}/ig, '').trim();
 }
 
+async function executeResponseActions(sid, text, context = {}) {
+  return commandExecution.scope(sid, async () => {
+    assertSafeTextPayload([text, context]);
+    const source = String(text || '');
+    if (!/\$\{\s*(?:pngtuber|짚톡)(?=::|\s*\})/i.test(source)) {
+      const hasActionToken = /\$\{\s*(?:action|automation|blueprint)::([^}]+)\s*\}/i.test(source);
+      if (!hasActionToken) return { text: source, used: false, jobs: [] };
+      const jobs = await executeActionVariableTokens(sid, source, context);
+      return { text: stripActionVariableTokens(source), used: true, jobs };
+    }
+    // Only saved tokens authorize a reaction; rendered viewer data cannot add or change one.
+    const authorizedTokens = getPngtuberActionTokenCounts(context.responseTemplate);
+    const ownerUserId = ownerUserIdFromSid(sid);
+    const jobs = [];
+    const parts = [];
+    let offset = 0;
+    const tokens = /\$\{\s*(?:(?:action|automation|blueprint)::[^}]+|(?:pngtuber|짚톡)(?=::|\s*\})[^}]*)\}/gi;
+    for (const match of source.matchAll(tokens)) {
+      parts.push(source.slice(offset, match.index));
+      if (/^\$\{\s*(?:pngtuber|짚톡)/i.test(match[0])) {
+        const result = await executePngtuberActionTokens(match[0], context, {
+          ownerUserId, commandExecution, authorizedTokens,
+          queueJob: (job) => queueBlueprintAutomationJob(ownerUserId, job, context),
+        });
+        parts.push(result.text);
+        jobs.push(...result.jobs);
+      } else {
+        jobs.push(...await executeActionVariableTokens(sid, match[0], context));
+      }
+      offset = match.index + match[0].length;
+    }
+    parts.push(source.slice(offset));
+    return { text: parts.join('').trim(), used: jobs.length > 0, jobs };
+  });
+}
+
 async function executeAndStripActionVariableTokens(sid, text, context = {}) {
-  const source = String(text || '');
-  const hasActionToken = /\$\{\s*(?:action|automation|blueprint)::([^}]+)\s*\}/i.test(source);
-  if (!hasActionToken) return { text: source, used: false, jobs: [] };
-  const jobs = await executeActionVariableTokens(sid, source, context);
-  return { text: stripActionVariableTokens(source), used: true, jobs };
+  return executeResponseActions(sid, text, context);
 }
 
 function openApiList(response) {
@@ -12917,6 +12960,7 @@ async function recordPredictionEventLogs(sid, prediction, context = {}) {
 
 async function recordCommandExecutionLog(sid, context = {}) {
   if (!context.executed) return;
+  const pngtuberFailed = Array.isArray(context.actionJobs) && context.actionJobs.some(job => job?.kind === 'pngtuber' && job.ok === false);
   const statsUpdate = updateBotStats(sid, { messagesProcessed: 0, commandsHandled: 1 }).catch((error) => {
     console.warn('[Bot Stats] command increment skipped:', error?.message || error);
     return null;
@@ -12933,7 +12977,7 @@ async function recordCommandExecutionLog(sid, context = {}) {
     pointAfter: context.pointAfter ?? null,
     triggerName: context.triggerName || null,
     targetName: context.targetName || null,
-    status: context.status || 'success',
+    status: context.status || (pngtuberFailed ? 'failed' : 'success'),
     summary: context.summary || `${context.triggerName || '명령어'} 실행${context.targetName ? ` · ${context.targetName}` : ''}`,
     resultLabel: context.resultLabel || null,
     resultValue: context.resultValue || null,
@@ -12947,6 +12991,7 @@ async function recordCommandExecutionLog(sid, context = {}) {
         runId: job.runId || job.result?.run?.id || job.run?.id || null,
         jobId: job.job?.id || job.jobId || null,
         kind: job.kind || null,
+        ...(job.kind === 'pngtuber' ? { jobType: job.jobType, reactionId: job.reactionId || null, durationSec: job.durationSec ?? null } : {}),
         ok: job.ok ?? null,
         error: job.error || job.result?.error || null,
         errorCode: job.errorCode || job.result?.errorCode || null,
@@ -17283,6 +17328,9 @@ function normalizeFxColor(value, fallback = '#00ff00') {
 }
 
 function normalizeFxPayload(input = {}) {
+  const assetId = String(input.assetId || input.fileId || input.name || '').replaceAll('\\', '/');
+  const safeAssetId = assetId.length <= 4096 && !/[:\0]/.test(assetId)
+    && assetId.split('/').every((part) => part && part !== '.' && part !== '..') ? assetId : '';
   const kind = String(input.kind || input.type || input.assetKind || 'image').toLowerCase();
   const normalizedKind = FX_ASSET_KINDS.has(kind) ? kind : 'image';
   const xUnit = normalizeFxLengthUnit(input.xUnit ?? input.leftUnit);
@@ -17295,7 +17343,7 @@ function normalizeFxPayload(input = {}) {
     id: String(input.id || `fx_${Date.now().toString(36)}_${crypto.randomBytes(3).toString('hex')}`),
     deliveryId: typeof input.deliveryId === 'string' ? input.deliveryId.slice(0, 120) : '',
     kind: normalizedKind,
-    assetId: path.basename(String(input.assetId || input.fileId || input.name || '')),
+    assetId: safeAssetId,
     assetName: String(input.assetName || input.fileName || input.name || '').slice(0, 120),
     assetUrl: typeof input.assetUrl === 'string' ? input.assetUrl.slice(0, 4096) : '',
     youtubeUrl: typeof input.youtubeUrl === 'string' ? input.youtubeUrl.slice(0, 2048) : '',
@@ -20927,14 +20975,16 @@ app.post('/api/automations/local-agent/discovery-sync', requireAutomationLocalAg
 
 app.post('/api/automations/local-agent/jobs/claim', requireAutomationLocalAgent, async (req, res) => {
   try {
-    await touchAutomationLocalAgent(req.automationLocalAgent.id, req.body?.capabilities || {});
+    const capabilities = req.body?.capabilities || {};
+    await touchAutomationLocalAgent(req.automationLocalAgent.id, capabilities);
     const jobs = await claimAutomationJobsForAgent(req.automationLocalAgent, req.body?.limit || 5);
     const safeJobs = [];
     for (const job of jobs) {
-      const textError = inspectTextPayload(job);
-      if (textError) {
+      const jobError = inspectTextPayload(job)
+        || ((job.jobType || job.job_type) === 'pngtuber.show' && capabilities.pngtuber !== true ? 'pngtuber_local_agent_upgrade_required' : null);
+      if (jobError) {
         await completeAutomationJobForAgent(req.automationLocalAgent, job.id, {
-          status: 'failed', errorMessage: textError,
+          status: 'failed', errorMessage: jobError,
         });
       } else {
         safeJobs.push(job);
@@ -21535,7 +21585,7 @@ app.post('/api/automations/sounds/test', rateLimiters.userWrite, async (req, res
   try {
     const ownerUserId = await getCurrentSessionUserId(req);
     if (!ownerUserId) return res.status(401).json({ error: 'Login required' });
-    const fileId = path.basename(String(req.body?.fileId || req.body?.name || ''));
+    const fileId = normalizeFxPayload({ fileId: req.body?.fileId || req.body?.name }).assetId;
     if (!fileId) return res.status(400).json({ error: 'fileId is required' });
     await queueAutomationJob(ownerUserId, {
       jobType: 'fx.play',
@@ -22022,6 +22072,7 @@ const BOT_VARIABLES = [
   { key: '${live.game_change}', label: '방송 카테고리 변경', description: '명령어 뒤에 입력한 전체 문장으로 현재 플랫폼의 카테고리를 검색해 변경합니다.', group: '특수 실행', providers: ['chzzk', 'cime'], contexts: ['command'], caveat: '스트리머 또는 매니저만 실행할 수 있으며 채팅에는 출력되지 않습니다. 명령어 인자가 없으면 실행하지 않고, 제거 후 응답이 비어 있으면 채팅도 보내지 않습니다.' },
   { key: '${video_donation}', label: '영상 후원 신청 실행', description: '명령어 인자로 받은 주소를 영상 후원 대기열에 넣고 실제 재생 구간만큼 포인트를 차감합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command'], caveat: '사용법: <주소> [<시작초>] [<종료초>] · 시작초와 종료초는 초 또는 분:초(예: 1:23 = 83초) 형식으로 입력합니다. 시작초 기본값은 0초이며, 종료초를 생략하면 영상 마지막까지 재생합니다. 설정된 최대 재생 시간은 항상 적용되며, 이 변수는 채팅에 출력되지 않습니다.' },
   { key: '${roulette::룰렛이름}', label: '룰렛 실행', description: '지정한 룰렛을 실행하고 결과를 채팅/오버레이 흐름에 반영합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command', 'attendance', 'donation'], caveat: '룰렛 이름 또는 ID를 :: 뒤에 입력하세요. 신규 출석과 후원 반응에서는 무료로 1회 실행됩니다. 후원 반응에 여러 룰렛을 넣으면 첫 번째만 실행합니다. 예: ${roulette::오늘의 벌칙}' },
+  { key: '${pngtuber::happy::5}', label: '짚톡 이미지 반응', description: '로컬 프로그램에 저장한 커스텀 반응을 ID 또는 고유 이름으로 실행합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command', 'donation'], caveat: '예: ${pngtuber::happy::5}는 5초, ${pngtuber::happy}는 로컬에 저장된 기본 시간입니다. ${짚톡::happy::5}도 지원합니다. 시간은 0.1~300초의 숫자이며 빈 값·잘못된 값은 실패 처리합니다. ID/이름은 최대 80자이며 URL·파일 경로는 사용할 수 없습니다. 짚톡을 지원하는 최신 로컬 프로그램이 온라인이어야 하며 60초 내 전달되지 않은 작업은 만료됩니다. 변수는 채팅에 표시되지 않습니다. 기존 명령어 비용만 적용하며 반응 자체에 추가 요금은 없습니다.' },
   { key: '${action::액션이름}', label: '블루프린트 실행', description: '게시된 실행 액션 블루프린트를 명령어 응답, 출석 메시지 또는 후원 반응에서 실행합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command', 'attendance', 'donation'], caveat: '채팅으로 출력되지 않고 액션이 실행됩니다. 액션 이름, slug 또는 ID를 사용할 수 있습니다. 후원자의 메시지에 적힌 특수 변수는 실행되지 않습니다.' },
   { key: '${automation::액션이름}', label: '블루프린트 실행 별칭', description: '${action::...}과 같은 방식으로 게시된 실행 액션을 실행합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command', 'attendance', 'donation'] },
   { key: '${blueprint::액션이름}', label: '블루프린트 실행 별칭', description: '${action::...}과 같은 방식으로 게시된 실행 액션을 실행합니다.', group: '특수 실행', providers: BOT_VARIABLE_PROVIDERS, contexts: ['command', 'attendance', 'donation'] },
@@ -24906,6 +24957,7 @@ async function ensureSession(sid, channelId) {
             // Choose a response
             const responses = Array.isArray(r.responses) ? r.responses.filter(Boolean) : [];
             let response = responses[Math.floor(Math.random() * responses.length)];
+            const responseTemplate = response;
 
             // Points cost enforcement per command (default 0)
             let allowExecute = true;
@@ -25156,6 +25208,7 @@ async function ensureSession(sid, channelId) {
 
             if (allowExecute && typeof responseToSend === 'string') {
               const actionResult = await executeAndStripActionVariableTokens(sid, responseToSend, {
+                responseTemplate,
                 source: 'chat-command',
                 platform: 'chzzk',
                 command: { keyword: matchedKeyword || '', text, ruleId: r.id || null, ruleName: r.name || null },
@@ -26401,6 +26454,7 @@ async function processYoutubeChatAutomation(entry, ev) {
 
       const responses = Array.isArray(r.responses) ? r.responses.filter(Boolean) : [];
       let response = responses[Math.floor(Math.random() * responses.length)] || '';
+      const responseTemplate = response;
       let allowExecute = true;
       const commandCost = Math.max(0, Number(r.pointsCost || 0));
       const isRouletteRule = responses.some((s) => typeof s === 'string' && /\$\{\s*roulette::/i.test(s));
@@ -26561,6 +26615,7 @@ async function processYoutubeChatAutomation(entry, ev) {
 
       if (allowExecute) {
         const actionResult = await executeAndStripActionVariableTokens(sid, cleaned, {
+          responseTemplate,
           source: 'youtube-live-chat-command',
           platform: 'youtube',
           command: { keyword: matchedKeyword || '', text, ruleId: r.id || null, ruleName: r.name || null },
@@ -27604,6 +27659,7 @@ async function processCimeChatAutomation(entry, ev) {
 
       const responses = Array.isArray(r.responses) ? r.responses.filter(Boolean) : [];
       let response = responses[Math.floor(Math.random() * responses.length)] || '';
+      const responseTemplate = response;
       let allowExecute = true;
       const commandCost = Math.max(0, Number(r.pointsCost || 0));
       const isRouletteRule = responses.some((s) => typeof s === 'string' && /\$\{\s*roulette::/i.test(s));
@@ -27765,6 +27821,7 @@ async function processCimeChatAutomation(entry, ev) {
       }
       if (allowExecute) {
         const actionResult = await executeAndStripActionVariableTokens(sid, cleaned, {
+          responseTemplate,
           source: 'cime-chat-command',
           platform: 'cime',
           command: { keyword: matchedKeyword || '', text, ruleId: r.id || null, ruleName: r.name || null },

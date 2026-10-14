@@ -13,6 +13,33 @@ const MEDIA_TYPES = {
   '.m4a': 'audio/mp4', '.flac': 'audio/flac',
 };
 
+function normalizeAssetId(value) {
+  const id = String(value || '').replaceAll('\\', '/');
+  if (!id || /[:\0]/.test(id) || id.split('/').some((part) => !part || part === '.' || part === '..')) return '';
+  return MEDIA_TYPES[path.extname(id).toLowerCase()] ? id : '';
+}
+
+function* listFxAssetIds(folder, onError = () => {}) {
+  if (!folder) return;
+  let root;
+  try { root = fs.realpathSync(folder); }
+  catch (error) { onError(error); return; }
+  const pending = [''];
+  while (pending.length) {
+    const relative = pending.pop();
+    let entries;
+    try { entries = fs.readdirSync(path.join(root, relative), { withFileTypes: true }); }
+    catch (error) { onError(error); continue; }
+    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      // Junctions and symbolic links must not escape the root or create scan cycles.
+      if (entry.isSymbolicLink()) continue;
+      const id = relative ? `${relative}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) pending.push(id);
+      else if (entry.isFile() && normalizeAssetId(id)) yield id;
+    }
+  }
+}
+
 function parseRange(header, size) {
   if (!header) return null;
   const match = /^bytes=(\d*)-(\d*)$/.exec(header);
@@ -51,10 +78,9 @@ function createFxAssetServer({ getFolder, getAllowedOrigins = () => [], onError 
   }
 
   async function preloadAssets() {
-    const entries = await fs.promises.readdir(String(getFolder() || '')).catch(() => []);
     const assets = [];
     let bytes = 0;
-    for (const name of entries) {
+    for (const name of listFxAssetIds(String(getFolder() || ''), onError)) {
       const mime = MEDIA_TYPES[path.extname(name).toLowerCase()];
       if (!mime || mime.startsWith('video/')) continue;
       const fullPath = getAssetPath(name);
@@ -69,15 +95,17 @@ function createFxAssetServer({ getFolder, getAllowedOrigins = () => [], onError 
   }
 
   function getAssetPath(assetId) {
-    const name = String(assetId || '');
-    if (!name || /[\\/:\0]/.test(name) || !MEDIA_TYPES[path.extname(name).toLowerCase()]) return '';
+    const name = normalizeAssetId(assetId);
+    if (!name) return '';
     const folder = String(getFolder() || '').trim();
     if (!folder) return '';
     try {
       const root = fs.realpathSync(folder);
       const fullPath = fs.realpathSync(path.join(root, name));
       // Resolve symlinks/junctions before checking the configured folder boundary.
-      if (path.dirname(fullPath) !== root || !MEDIA_TYPES[path.extname(fullPath).toLowerCase()] || !fs.statSync(fullPath).isFile()) return '';
+      const relative = path.relative(root, fullPath);
+      if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)
+        || !MEDIA_TYPES[path.extname(fullPath).toLowerCase()] || !fs.statSync(fullPath).isFile()) return '';
       return fullPath;
     } catch { return ''; }
   }
@@ -229,7 +257,7 @@ function createFxAssetServer({ getFolder, getAllowedOrigins = () => [], onError 
     if (!fullPath) throw new Error('FX 파일을 찾을 수 없습니다. 로컬 프로그램의 FX 폴더와 파일 이름을 확인해 주세요.');
     const port = await start();
     const url = new URL(`http://127.0.0.1:${port}/fx-asset`);
-    url.searchParams.set('id', String(assetId));
+    url.searchParams.set('id', normalizeAssetId(assetId));
     url.searchParams.set('k', sign(fullPath));
     const { size, mtimeMs } = fs.statSync(fullPath);
     url.searchParams.set('v', `${size}-${mtimeMs}`);
@@ -281,4 +309,4 @@ async function resolveFxAssetUrl(payload, getAssetUrl) {
   return getAssetUrl(assetId);
 }
 
-module.exports = { createFxAssetServer, resolveFxAssetUrl, parseRange };
+module.exports = { createFxAssetServer, resolveFxAssetUrl, parseRange, listFxAssetIds };

@@ -151,7 +151,7 @@ export function assertBotManagerEffects(value, access, { rouletteValues = false 
     if (++visited > 100000) throw Object.assign(new Error('설정 항목이 너무 많습니다.'), { status: 400 });
     const item = pending.pop();
     if (typeof item === 'string') {
-      if (/\$\{\s*(?:action|automation|blueprint)::[^}]+\}/i.test(item)) required.add('actions');
+      if (/\$\{\s*(?:action|automation|blueprint|pngtuber|짚톡)::[^}]+\}/i.test(item)) required.add('actions');
       if (/\$\{\s*roulette::[^}]+\}/i.test(item)) { required.add('roulette'); required.add('actions'); }
       if (/\$\{\s*(?:video_donation|bgm_request)\s*\}/i.test(item)) required.add('video');
       if (/\$\{\s*songbook_request\s*\}/i.test(item)) required.add('songbook');

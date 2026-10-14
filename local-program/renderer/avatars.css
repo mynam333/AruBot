@@ -469,6 +469,9 @@
 .av-table th:nth-child(2) { width: 18%; }
 .av-table th:nth-child(3) { width: 10%; }
 .av-table th:nth-child(4) { width: 50%; }
+.av-viewer-avatar { display: grid; gap: 6px; min-width: 0; }
+.av-viewer-avatar select { width: 100%; min-width: 0; text-overflow: ellipsis; }
+.av-viewer-avatar button { justify-self: start; }
 .av-timeout {
   display: grid;
   gap: 4px;

@@ -189,6 +189,42 @@ test('keyed participant polling preserves focus and timeout edits', async (t) =>
   assert.equal(await page.evaluate(() => window.__originalRow === document.querySelector('[data-viewer-row]')), true);
 });
 
+test('viewer assignments preserve unsaved selections, save offline profiles and support release', async (t) => {
+  const { page, config } = await mount(t);
+  await page.evaluate(async () => {
+    window.__state.viewers = [{ id: 'saved-viewer', name: '시청자 1', avatar: window.__state.config.defaultAvatar, avatarAssignment: '', active: false, wins: 0 }];
+    const command = window.aruLocal.avatarCommand;
+    window.aruLocal.avatarCommand = async (name, payload) => {
+      if (name === 'assign-avatar') {
+        if (window.__assignmentFails) throw new Error('disk full');
+        window.__state.viewers[0].avatarAssignment = payload.avatarId;
+      }
+      return command(name, payload);
+    };
+    await window.__polls[0]();
+  });
+  await tab(page, 'viewers');
+  const select = page.locator('[data-viewer-avatar]');
+  await select.selectOption(config.avatars[1].id);
+  await page.evaluate(async () => { await window.__polls[0](); });
+  assert.equal(await select.inputValue(), config.avatars[1].id);
+  assert.equal(await page.locator('[data-assignment-status]').textContent(), '저장 대기');
+  await page.evaluate(() => { window.__assignmentFails = true; });
+  await click(page, 'assign-avatar');
+  assert.equal(await select.inputValue(), config.avatars[1].id);
+  await page.evaluate(() => { window.__assignmentFails = false; });
+  await click(page, 'assign-avatar');
+  assert.equal(await page.locator('[data-assignment-status]').textContent(), '고정 지정됨');
+  await select.selectOption('');
+  await click(page, 'assign-avatar');
+  assert.equal(await page.locator('[data-assignment-status]').textContent(), '시청자 선택 사용');
+  assert.equal(await page.locator('[data-mode="remove"]').isDisabled(), true);
+  if (process.env.AVATAR_SCREENSHOT_DIR) {
+    fs.mkdirSync(process.env.AVATAR_SCREENSHOT_DIR, { recursive: true });
+    await page.screenshot({ path: path.join(process.env.AVATAR_SCREENSHOT_DIR, 'viewer-assignment.png'), fullPage: true });
+  }
+});
+
 test('game commands carry complete options and 980px editor stays bounded', async (t) => {
   const { page } = await mount(t);
   await tab(page, 'games'); await page.locator('[data-field="gameSettings.recruitSeconds"]').fill('9'); await click(page, 'preview-race');

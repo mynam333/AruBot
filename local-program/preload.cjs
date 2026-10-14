@@ -1,6 +1,13 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('aruLocal', {
+  pngtuberState: () => ipcRenderer.invoke('pngtuber:state'),
+  pngtuberSave: (config) => ipcRenderer.invoke('pngtuber:save', config),
+  pngtuberImport: () => ipcRenderer.invoke('pngtuber:import'),
+  pngtuberDiscover: () => ipcRenderer.invoke('pngtuber:discover'),
+  pngtuberTrigger: (payload) => ipcRenderer.invoke('pngtuber:trigger', payload),
+  pngtuberCommand: (command) => ipcRenderer.invoke('pngtuber:command', command),
+  pngtuberCopy: (kind, payload) => ipcRenderer.invoke('pngtuber:copy', kind, payload),
   avatarState: () => ipcRenderer.invoke('avatars:state'),
   avatarSave: (config) => ipcRenderer.invoke('avatars:save', config),
   avatarCommand: (command, payload) => ipcRenderer.invoke('avatars:command', command, payload),

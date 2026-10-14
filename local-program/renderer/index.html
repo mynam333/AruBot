@@ -6,6 +6,7 @@
     <title>AruBot 로컬 프로그램</title>
     <link rel="stylesheet" href="./styles.css" />
     <link rel="stylesheet" href="./avatars.css" />
+    <link rel="stylesheet" href="./pngtuber.css" />
   </head>
   <body>
     <div class="app">
@@ -19,6 +20,7 @@
         </div>
         <nav class="nav">
           <button class="nav-item" type="button" data-page="avatars"><span>아바타</span><small>캐릭터와 채팅 반응</small></button>
+          <button class="nav-item" type="button" data-page="pngtuber"><span>짚톡</span><small>마이크와 이미지 반응</small></button>
           <button class="nav-item active" type="button" data-page="connect">
             <span>연결</span>
             <small>토큰과 실행 상태</small>
@@ -90,6 +92,9 @@
 
         <section class="page" id="page-avatars" data-page="avatars">
           <div id="avatarStudio"></div>
+        </section>
+        <section class="page" id="page-pngtuber" data-page="pngtuber">
+          <div id="pngtuberEditor"></div>
         </section>
         <section class="page active" id="page-connect" data-page="connect">
           <div class="page-grid connect-grid">
@@ -449,5 +454,6 @@
     <script src="./renderer.js"></script>
     <script src="./avatar-icons.js"></script>
     <script src="./avatars.js"></script>
+    <script src="./pngtuber.js"></script>
   </body>
 </html>

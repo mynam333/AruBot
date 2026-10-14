@@ -311,6 +311,7 @@ class AvatarService {
     }
   }
   state() {
+    const scopeKey = this.engine.key('');
     return {
       config: this.storage.config,
       url: this.url,
@@ -326,6 +327,13 @@ class AvatarService {
         (ws) => !ws.preview && !ws.rehearsal && !ws.monitor,
       ).length,
       snapshot: this.engine.snapshot(),
+      viewers: Object.entries(this.engine.profiles)
+        .filter(([id, p]) => this.engine.actors.has(id) || p.scopeKey === scopeKey)
+        .map(([id, p]) => ({ id, name: p.name, avatar: p.avatarAssignment || p.avatar,
+          avatarAssignment: p.avatarAssignment || '', wins: p.wins || 0,
+          targeting: p.targeting !== false, allowTargeting: p.allowTargeting !== false,
+          number: this.engine.actors.get(id)?.number || null,
+          active: this.engine.actors.has(id), seen: p.seen || 0 })),
       stats: this.engine.stats,
       recent: this.engine.recent,
       diagnostics: this.engine.diagnostics || [],
@@ -334,6 +342,7 @@ class AvatarService {
       job: this.storage.job ? { ...this.storage.job } : null,
       retention: {
         profilesDays: 90,
+        avatarAssignments: 'until-cleared-or-forgotten',
         blocked: 'until-unblocked-or-forgotten',
         timeouts: 'until-expired',
       },
@@ -430,6 +439,26 @@ class AvatarService {
     boundedJson(payload);
     if (command === 'backup-cancel' || command === 'cancel-backup') {
       this.storage.cancelBackup(payload.id);
+      return this.state();
+    }
+    if (command === 'assign-avatar') {
+      if (this.profileRestorePending) throw new Error('시청자 기록 복원이 끝난 뒤 다시 저장해 주세요.');
+      const profile = this.engine.profiles[payload.id];
+      const actor = this.engine.actors.get(payload.id);
+      if (!profile || (!actor && profile.scopeKey !== this.engine.key(''))) throw new Error('현재 채널의 시청자를 찾을 수 없습니다.');
+      const avatarId = payload.avatarId;
+      if (typeof avatarId !== 'string' || (avatarId && !this.storage.config.avatars.some((v) => v.id === avatarId)))
+        throw new Error('저장된 캐릭터를 선택해 주세요.');
+      const previous = profile.avatarAssignment;
+      profile.avatarAssignment = avatarId;
+      try { this.storage.saveProfiles(this.engine.profiles); }
+      catch (error) {
+        if (previous === undefined) delete profile.avatarAssignment;
+        else profile.avatarAssignment = previous;
+        throw error;
+      }
+      this.engine.dirty = false;
+      if (actor) actor.animationStartedAt = this.engine.now();
       return this.state();
     }
     if (command === 'prune')

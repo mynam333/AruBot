@@ -4,7 +4,7 @@ import { isCommandSafetyError } from './command-execution-safety.js';
 import { prepareCounterVariablePlan } from './counter-variables.js';
 import { prepareMemoVariablePlan } from './memo-variables.js';
 
-const EFFECT_RE = /\$\{\s*(?:(roulette|action|automation|blueprint)::([^{}]+)|(video_donation|bgm_request|songbook_request|songbook_url|live\.title_change|live\.game_change))\s*\}/gi;
+const EFFECT_RE = /\$\{\s*(?:(roulette|action|automation|blueprint)::([^{}]+)|(video_donation|bgm_request|songbook_request|songbook_url|live\.title_change|live\.game_change)|(pngtuber|짚톡)(?=::|\s*\})[^}]*)\s*\}/gi;
 const INPUT_EFFECTS = new Set(['video_donation', 'bgm_request', 'songbook_request', 'live.title_change', 'live.game_change']);
 
 export async function renderRouletteResultTemplate(template, context, dependencies) {
@@ -18,9 +18,9 @@ export async function renderRouletteResultTemplate(template, context, dependenci
     const operations = [];
     const source = String(template || '');
     // Plan executable tokens before any viewer names, memo values or other data is rendered.
-    const plannedText = source.replace(EFFECT_RE, (token, kind, target, plainKind) => {
+    const plannedText = source.replace(EFFECT_RE, (token, kind, target, plainKind, pngtuber) => {
       const slot = `${prefix}effect_${operations.length}__`;
-      operations.push({ kind: String(kind || plainKind).toLowerCase(), target: target?.trim(), token, slot });
+      operations.push({ kind: String(kind || plainKind || pngtuber).toLowerCase(), target: target?.trim(), token, slot });
       return slot;
     });
     if (operations.length > 16) commandExecution.reject('actions_limit');
@@ -59,8 +59,9 @@ export async function renderRouletteResultTemplate(template, context, dependenci
         if (op.kind === 'roulette') {
           await enqueueRouletteSpin(sid, { name: op.target, userId, username, chatPost: context.chatPost,
             instant: false, eventContext: { source: 'roulette-result', triggerName: context.roulette?.name || context.command?.keyword || null, pointDelta: 0 } });
-        } else if (['action', 'automation', 'blueprint'].includes(op.kind)) {
-          const result = await executeAndStripActionVariableTokens(sid, op.token, context);
+        } else if (['action', 'automation', 'blueprint', 'pngtuber', '짚톡'].includes(op.kind)) {
+          const actionContext = ['pngtuber', '짚톡'].includes(op.kind) ? { ...context, responseTemplate: op.token } : context;
+          const result = await executeAndStripActionVariableTokens(sid, op.token, actionContext);
           actionJobs.push(...(result.jobs || []));
           for (const job of result.jobs || []) {
             if (job?.ok === false || job?.result?.ok === false) {

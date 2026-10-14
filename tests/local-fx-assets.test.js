@@ -4,7 +4,7 @@ const path = require('path');
 const http = require('http');
 const ts = require('typescript');
 const { WebSocket } = require('ws');
-const { createFxAssetServer, resolveFxAssetUrl } = require('../local-program/fx-assets.cjs');
+const { createFxAssetServer, resolveFxAssetUrl, listFxAssetIds } = require('../local-program/fx-assets.cjs');
 
 const origin = 'https://arubot.yuaru.com';
 const bytes = Buffer.from('0123456789');
@@ -108,6 +108,38 @@ test('does not follow a directory junction outside the configured media folder',
   fs.writeFileSync(path.join(outside, 'secret.png'), bytes);
   fs.symlinkSync(outside, path.join(folder, 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
   await expect(service.getAssetUrl('linked/secret.png')).rejects.toThrow();
+  expect([...listFxAssetIds(folder)]).not.toContain('linked/secret.png');
+});
+
+test('recursive discovery and playback preserve duplicate filenames, Unicode paths, and nested ranges', async () => {
+  fs.mkdirSync(path.join(folder, '효과 #1', '깊은 폴더'), { recursive: true });
+  fs.writeFileSync(path.join(folder, '효과 #1', 'clip.webm'), 'nested');
+  fs.writeFileSync(path.join(folder, '효과 #1', '깊은 폴더', 'sound.mp3'), bytes);
+  const ids = [...listFxAssetIds(folder)];
+  expect(ids).toEqual(expect.arrayContaining(['clip.webm', '효과 #1/clip.webm', '효과 #1/깊은 폴더/sound.mp3']));
+  expect(ids).not.toContain('secret.txt');
+  const nested = await service.getAssetUrl('효과 #1\\clip.webm');
+  expect(new URL(nested).searchParams.get('id')).toBe('효과 #1/clip.webm');
+  expect(await (await fetch(nested)).text()).toBe('nested');
+  expect(await (await fetch(await service.getAssetUrl('clip.webm'))).text()).toBe('0123456789');
+  const sound = await service.getAssetUrl('효과 #1/깊은 폴더/sound.mp3');
+  expect(await (await fetch(sound, { headers: { Range: 'bytes=2-5' } })).text()).toBe('2345');
+  for (const invalid of ['효과 #1/../clip.webm', '/clip.webm', '효과 #1//clip.webm'])
+    await expect(service.getAssetUrl(invalid)).rejects.toThrow();
+  const refreshed = await resolveFxAssetUrl({ assetUrl: nested }, service.getAssetUrl);
+  expect(new URL(refreshed).searchParams.get('id')).toBe('효과 #1/clip.webm');
+});
+
+test('FX execution retains its relative path through the local job and cloud push', async () => {
+  fs.mkdirSync(path.join(folder, 'nested'));
+  fs.writeFileSync(path.join(folder, 'nested', 'clip.webm'), 'nested-content');
+  const apiFetch = jest.fn(async (_url, options) => {
+    const { payload } = JSON.parse(options.body);
+    expect(payload.assetId).toBe('nested/clip.webm');
+    expect(await (await fetch(payload.assetUrl)).text()).toBe('nested-content');
+    return { sent: 1 };
+  });
+  await expect(loadProcessJob(apiFetch)({ job_type: 'fx.play', payload: { assetId: 'nested/clip.webm' } })).resolves.toMatchObject({ ok: true });
 });
 
 test('folder changes invalidate previous capabilities and deleted files return 404', async () => {
@@ -251,6 +283,8 @@ test('versioned media is cached and editing a local file changes its cache key',
 });
 
 test('local viewer gets authenticated preloading, immediate FX and heartbeat replies', async () => {
+  fs.mkdirSync(path.join(folder, 'nested'));
+  fs.writeFileSync(path.join(folder, 'nested', 'sound.mp3'), bytes);
   service = createFxAssetServer({ getFolder: () => folder, getViewerKey: () => 'a'.repeat(64) });
   const port = await service.start();
   const socket = new WebSocket(`ws://127.0.0.1:${port}/fx-viewer/ws?k=${'a'.repeat(64)}`, { origin: `http://127.0.0.1:${port}` });
@@ -261,7 +295,10 @@ test('local viewer gets authenticated preloading, immediate FX and heartbeat rep
   }));
   try {
     const manifest = await preload;
-    expect(manifest.assets.map((asset) => asset.kind).sort()).toEqual(['image', 'sound']);
+    expect(manifest.assets.map((asset) => asset.kind).sort()).toEqual(['image', 'sound', 'sound']);
+    const nested = manifest.assets.find((asset) => new URL(asset.assetUrl).searchParams.get('id') === 'nested/sound.mp3');
+    expect(nested).toBeDefined();
+    expect(await (await fetch(nested.assetUrl)).text()).toBe('0123456789');
     expect(manifest.assets.every((asset) => asset.assetUrl.startsWith(`http://127.0.0.1:${port}/fx-asset`))).toBe(true);
     const received = new Promise((resolve) => socket.once('message', (raw) => resolve(JSON.parse(String(raw)))));
     expect(service.publish('fx:play', { deliveryId: 'one', positionMode: 'random' })).toBe(1);

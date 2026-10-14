@@ -57,6 +57,8 @@
     "test:drawing": "node --test tests/drawing-v2.test.mjs tests/drawing-selection.test.mjs tests/drawing-local-storage.test.mjs tests/drawing-archive.test.mjs tests/drawing-retention.test.mjs",
     "test:avatars": "node --test tests/local-avatars.test.cjs tests/local-avatars-engine-v3.test.cjs tests/local-avatars-engine-review.test.cjs tests/local-avatars-service-v3.test.cjs tests/local-avatars-overlay-v3.test.cjs tests/local-avatar-relay.test.mjs",
     "test:avatars:ui": "node --test tests/local-avatars-editor-v3.test.cjs",
+    "test:pngtuber": "node --test tests/local-pngtuber-core.test.cjs tests/local-pngtuber-service.test.cjs tests/local-pngtuber-integration.test.cjs",
+    "test:pngtuber:ui": "node --test tests/local-pngtuber-editor.test.cjs",
     "test:wheel": "node --test tests/participation-wheel-core.test.mjs tests/participation-wheel-store.test.mjs tests/participation-wheel-runtime.test.mjs src/features/wheel/wheel-motion.test.mjs",
     "test:emotes": "node --test tests/emote-connection.test.mjs tests/emote-engine.test.mjs tests/emote-overlay-extractor.test.mjs tests/emote-overlay-runtime.test.mjs tests/emote-overlay-store.test.mjs tests/emote-overlay-routes.test.mjs",
     "test:marble": "node --test tests/marble-engine.test.mjs tests/marble-store.test.mjs tests/marble-routes.test.mjs tests/marble-runtime.test.mjs tests/marble-postgres.test.mjs tests/marble-client.test.mjs src/features/marble/marble-presentation.test.mjs src/features/marble/marble-dice-motion.test.mjs",

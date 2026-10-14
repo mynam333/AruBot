@@ -127,6 +127,12 @@ class AvatarEngine {
     );
     this.configRevision++;
     this.config = config;
+    for (const profile of Object.values(this.profiles)) {
+      if (profile.avatarAssignment && !config.avatars.some((v) => v.id === profile.avatarAssignment)) {
+        delete profile.avatarAssignment;
+        this.dirty = true;
+      }
+    }
     if (groundChanged) this.setWalls();
     for (const a of this.actors.values()) {
       if (!config.avatars.some((v) => v.id === a.profile.avatar)) {
@@ -310,6 +316,7 @@ class AvatarEngine {
     if (!this.config.avatars.some((a) => a.id === profile.avatar))
       profile.avatar = this.config.defaultAvatar;
     if (!event.test) {
+      profile.scopeKey = this.key('');
       this.profiles[key] = profile;
       this.dirty = true;
       const keys = Object.keys(this.profiles);
@@ -318,6 +325,7 @@ class AvatarEngine {
           .filter(
             (k) =>
               !this.actors.has(k) &&
+              !this.profiles[k].avatarAssignment &&
               !this.profiles[k].blocked &&
               !(this.profiles[k].blockedUntil > this.wallNow()),
           )
@@ -1505,7 +1513,7 @@ class AvatarEngine {
         id: a.id,
         number: a.number,
         name: a.profile.name,
-        avatar: a.profile.avatar,
+        avatar: this.config.avatars.some((v) => v.id === a.profile.avatarAssignment) ? a.profile.avatarAssignment : a.profile.avatar,
         color: a.profile.color,
         size:
           this.config.size *

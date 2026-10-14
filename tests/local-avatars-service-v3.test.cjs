@@ -63,6 +63,56 @@ const png = (color = '#ff000080') =>
     .png()
     .toBuffer();
 
+test('viewer avatar assignment persists, overrides viewer choice, and can be released offline', async (t) => {
+  const service = fixture(t).service();
+  await service.storage.ready;
+  service.engine.setScope('channel-one');
+  const event = { userId: 'viewer-1', name: '시청자 1' };
+  const actor = service.engine.join(event, true, false);
+  const [first, second] = service.storage.config.avatars;
+  assert.ok(second);
+  service.command('assign-avatar', { id: actor.id, avatarId: second.id });
+  assert.equal(service.engine.snapshot().actors[0].avatar, second.id);
+  actor.profile.avatar = first.id;
+  assert.equal(service.engine.snapshot().actors[0].avatar, second.id);
+  service.engine.remove(actor.id);
+  assert.equal(service.state().viewers[0].active, false);
+  const stored = new AvatarStorage(service.storage.root);
+  await stored.ready;
+  const engine = new AvatarEngine(stored.config, stored.profiles);
+  engine.setScope('channel-one');
+  engine.join({ ...event, name: '바뀐 닉네임' }, true, false);
+  assert.equal(engine.snapshot().actors[0].avatar, second.id);
+  service.command('assign-avatar', { id: actor.id, avatarId: '' });
+  service.engine.join(event, true, false);
+  assert.equal(service.engine.snapshot().actors[0].avatar, first.id);
+  service.engine.setScope('channel-two');
+  assert.equal(service.state().viewers.length, 0);
+  assert.throws(() => service.command('assign-avatar', { id: actor.id, avatarId: second.id }), /현재 채널/);
+});
+
+test('assigned viewers survive normal retention, failed saves roll back, and deleted avatars fall back', async (t) => {
+  const service = fixture(t).service();
+  await service.storage.ready;
+  const actor = service.engine.join({ userId: 'saved', name: '시청자 1' }, true, false);
+  const chosen = service.storage.config.avatars[1].id;
+  const original = service.storage.saveProfiles;
+  service.storage.saveProfiles = () => { throw new Error('disk full'); };
+  assert.throws(() => service.command('assign-avatar', { id: actor.id, avatarId: chosen }), /disk full/);
+  assert.equal(actor.profile.avatarAssignment, undefined);
+  service.storage.saveProfiles = original;
+  assert.throws(() => service.command('assign-avatar', { id: actor.id, avatarId: 'missing' }), /저장된 캐릭터/);
+  service.command('assign-avatar', { id: actor.id, avatarId: chosen });
+  actor.profile.seen = Date.now() - 100 * 86400000;
+  const profiles = service.storage.cleanProfiles(service.engine.profiles);
+  assert.equal(profiles[actor.id].avatarAssignment, chosen);
+  assert.equal(profiles[actor.id].scopeKey, service.engine.key(''));
+  const config = { ...service.engine.config, enabled: true, avatars: service.engine.config.avatars.filter((v) => v.id !== chosen) };
+  service.engine.setConfig(config);
+  assert.equal(actor.profile.avatarAssignment, undefined);
+  assert.equal(service.engine.snapshot().actors[0].avatar, config.defaultAvatar);
+});
+
 test('port collision keeps saved config, old HTTP output and WebSocket alive', async (t) => {
   const service = fixture(t).service();
   await service.save({ ...service.storage.config, port: await freePort() });

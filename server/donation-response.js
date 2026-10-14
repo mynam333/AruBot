@@ -4,7 +4,7 @@ import { isCommandSafetyError } from './command-execution-safety.js';
 import { prepareCounterVariablePlan } from './counter-variables.js';
 import { prepareMemoVariablePlan, resolveMemoVariablePlan } from './memo-variables.js';
 
-const SPECIAL_TOKEN_RE = /\$\{\s*(roulette|action|automation|blueprint)::([^{}]+)\s*\}/gi;
+const SPECIAL_TOKEN_RE = /\$\{\s*(?:(roulette|action|automation|blueprint)::([^{}]+)|(pngtuber|짚톡)(?=::|\s*\})[^}]*)\s*\}/gi;
 const DONOR_TOKEN_RE = /\$\{\s*(username|amount|message)\s*\}|\{donation\.(username|amount|message)\}|\{user\.(name|username|nickname|id)\}/g;
 
 export function dispatchDonationRuleDesktop(rule, context, { broadcastToDesktop, onError = () => {} }) {
@@ -49,10 +49,14 @@ export async function renderDonationResponse(template, context, dependencies) {
   return commandExecution.run(sid, `donation:${provider}:${ruleId || ruleName || 'response'}`, async () => {
     assertSafeTextPayload([template, context]);
     const actionTokens = [];
+    let hasPngtuber = false;
     let rouletteName = null;
     // Only the saved template can authorize execution, never rendered donor data.
-    const plannedText = String(template || '').trim().replace(SPECIAL_TOKEN_RE, (token, type, target) => {
-      if (type.toLowerCase() === 'roulette') {
+    const plannedText = String(template || '').trim().replace(SPECIAL_TOKEN_RE, (token, type, target, pngtuber) => {
+      if (pngtuber) {
+        hasPngtuber = true;
+        actionTokens.push(token);
+      } else if (type.toLowerCase() === 'roulette') {
         if (rouletteName === null) rouletteName = target.trim();
       } else if (target.trim()) {
         actionTokens.push(token);
@@ -130,6 +134,7 @@ export async function renderDonationResponse(template, context, dependencies) {
       features.push('action');
       try {
         const result = await executeAndStripActionVariableTokens(sid, actionTokens.join('\n'), {
+          ...(hasPngtuber ? { responseTemplate: actionTokens.join('\n') } : {}),
           source,
           platform: provider,
           requirePublishedBlueprint: true,

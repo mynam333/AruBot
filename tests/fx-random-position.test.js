@@ -46,6 +46,10 @@ test('server preserves the mode on normalization and on unspecified position upd
   expect(normalizeFxPayload({ positionMode: 'random' }).positionMode).toBe('random');
   expect(normalizeFxPayload({}).positionMode).toBe('fixed');
   expect(normalizeFxPayload({ deliveryId: 'fx_job_1' }).deliveryId).toBe('fx_job_1');
+  expect(normalizeFxPayload({ assetId: 'effects/깊은 폴더/clip.webm' }).assetId).toBe('effects/깊은 폴더/clip.webm');
+  expect(normalizeFxPayload({ assetId: 'effects\\clip.webm' }).assetId).toBe('effects/clip.webm');
+  for (const assetId of ['../clip.webm', 'effects/../clip.webm', '/clip.webm', 'C:\\private\\clip.webm'])
+    expect(normalizeFxPayload({ assetId }).assetId).toBe('');
   broadcastFxEventToSid('user:a', 'fx:play', { positionMode: 'random' });
   broadcastFxEventToSid('user:a', 'fx:update', { text: 'updated' });
   expect(sent[0].payload.positionMode).toBe('random');

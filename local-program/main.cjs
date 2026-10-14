@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, clipboard } = require('electron');
 const { AvatarService } = require('./avatars/service.cjs');
-const { createFxAssetServer, resolveFxAssetUrl } = require('./fx-assets.cjs');
+const { PngTuberService } = require('./pngtuber/service.cjs');
+const { createFxAssetServer, resolveFxAssetUrl, listFxAssetIds } = require('./fx-assets.cjs');
 const { autoUpdater } = require('electron-updater');
 const { spawn } = require('child_process');
 const path = require('path');
@@ -84,6 +85,8 @@ const DEFAULT_CONFIG = {
 let mainWindow = null;
 let avatarService = null;
 let avatarStartupError = '';
+let pngtuberService = null;
+let pngtuberStartupError = '';
 const singleInstance = app.requestSingleInstanceLock();
 if (!singleInstance) app.quit();
 app.on('second-instance', () => {
@@ -1272,23 +1275,33 @@ const OBS_ACTIONS = [
 async function openObsSocket(options = {}) {
   const endpoint = getObsEndpoint(options.endpoint);
   const password = String(options.password ?? config.obsPassword ?? '').trim();
-  const ws = await openWs(endpoint, Math.max(1500, Math.min(30000, Number(options.timeoutMs || 7000))), 'OBS 연결 시간이 초과되었습니다.', 'obswebsocket.json');
-  const hello = await waitObsMessage(ws, (message) => message?.op === 0, options.timeoutMs || 7000);
-  const auth = hello?.d?.authentication;
-  const identify = { op: 1, d: { rpcVersion: 1 } };
-  if (auth?.challenge && auth?.salt) {
-    if (!password) {
-      try { ws.close(); } catch {}
-      throw new Error('OBS WebSocket 비밀번호가 필요합니다.');
+  let helloPromise;
+  const ws = await openWs(endpoint, Math.max(1500, Math.min(30000, Number(options.timeoutMs || 7000))), 'OBS 연결 시간이 초과되었습니다.', 'obswebsocket.json', (socket) => {
+    // OBS can send Hello in the same network frame as the WebSocket upgrade.
+    helloPromise = waitObsMessage(socket, (message) => message?.op === 0, options.timeoutMs || 7000);
+    void helloPromise.catch(() => {});
+  });
+  try {
+    const hello = await helloPromise;
+    const auth = hello?.d?.authentication;
+    const identify = { op: 1, d: { rpcVersion: 1 } };
+    if (Number.isSafeInteger(options.eventSubscriptions) && options.eventSubscriptions >= 0) {
+      identify.d.eventSubscriptions = options.eventSubscriptions;
     }
-    identify.d.authentication = makeObsAuth(password, auth.salt, auth.challenge);
+    if (auth?.challenge && auth?.salt) {
+      if (!password) throw new Error('OBS WebSocket 비밀번호가 필요합니다.');
+      identify.d.authentication = makeObsAuth(password, auth.salt, auth.challenge);
+    }
+    ws.send(JSON.stringify(identify));
+    const identified = await waitObsMessage(ws, (message) => message?.op === 2, options.timeoutMs || 7000);
+    return { ws, endpoint, negotiatedRpcVersion: identified?.d?.negotiatedRpcVersion || 1 };
+  } catch (error) {
+    try { ws.close(); } catch {}
+    throw error;
   }
-  ws.send(JSON.stringify(identify));
-  const identified = await waitObsMessage(ws, (message) => message?.op === 2, options.timeoutMs || 7000);
-  return { ws, endpoint, negotiatedRpcVersion: identified?.d?.negotiatedRpcVersion || 1 };
 }
 
-function openWs(endpoint, timeoutMs, timeoutMessage, protocols) {
+function openWs(endpoint, timeoutMs, timeoutMessage, protocols, onOpen) {
   return new Promise((resolve, reject) => {
     const ws = protocols ? new WebSocket(endpoint, protocols) : new WebSocket(endpoint);
     const timer = setTimeout(() => {
@@ -1297,6 +1310,7 @@ function openWs(endpoint, timeoutMs, timeoutMessage, protocols) {
     }, timeoutMs);
     ws.once('open', () => {
       clearTimeout(timer);
+      onOpen?.(ws);
       resolve(ws);
     });
     ws.once('error', (error) => {
@@ -1640,18 +1654,17 @@ function makeFxPreviewDataUrl(fullPath, kind) {
 function scanFxAssets() {
   const folder = getFxFolder();
   if (!folder || !fs.existsSync(folder)) return { source: 'fx_assets', assets: [], folderConfigured: !!folder, fetchedAt: new Date().toISOString() };
-  const root = path.resolve(folder);
-  const assets = fs.readdirSync(root, { withFileTypes: true })
-    .filter((entry) => entry.isFile())
-    .map((entry) => {
-      const kind = getFxKindForFile(entry.name);
+  const assets = [...listFxAssetIds(folder, (error) => addLog('error', 'FX 하위 폴더 검색 실패', error.message))]
+    .map((id) => {
+      const kind = getFxKindForFile(id);
       if (!kind) return null;
-      const fullPath = getFxAssetPath(entry.name);
+      const fullPath = getFxAssetPath(id);
       if (!fullPath) return null;
-      const stat = fs.statSync(fullPath);
+      let stat;
+      try { stat = fs.statSync(fullPath); } catch { return null; }
       return {
-        id: entry.name,
-        name: entry.name,
+        id,
+        name: id,
         kind,
         size: stat.size,
         updatedAt: stat.mtime.toISOString(),
@@ -1763,6 +1776,25 @@ async function processJob(job) {
   const payload = job.payload || {};
   addLog('info', `작업 실행: ${type}`);
 
+  if (type === 'pngtuber.show') {
+    if (!pngtuberService) throw new Error(pngtuberStartupError || '짚톡이 아직 준비되지 않았습니다.');
+    if (payload.expiresAt != null && (!Number.isFinite(Number(payload.expiresAt)) || Date.now() >= Number(payload.expiresAt))) {
+      throw new Error('짚톡 실행 요청이 만료되었습니다.');
+    }
+    const result = await pngtuberService.trigger(payload, job.id);
+    if (result?.ok === false) {
+      const reasons = {
+        disabled: '로컬 프로그램에서 짚톡을 켜 주세요.',
+        'unknown-reaction': '저장된 짚톡 반응을 찾을 수 없습니다.',
+        'ambiguous-reaction': '반응 이름이 중복됩니다. 반응 ID를 사용해 주세요.',
+        'queue-full': '짚톡 반응 대기열이 가득 찼습니다.',
+        expired: '짚톡 실행 요청이 만료되었습니다.',
+        'invalid-duration': '짚톡 표시 시간은 0.1초부터 300초까지입니다.',
+      };
+      throw new Error(reasons[result.reason] || '짚톡 실행 요청이 올바르지 않습니다.');
+    }
+    return result;
+  }
   if (type === 'tits.discover') {
     return { discovery: await discoverTits() };
   }
@@ -1810,7 +1842,7 @@ async function processJob(job) {
   }
   if (type === 'fx.play' || type === 'blueprint.fx' || type === 'sound.play' || type === 'blueprint.sound') {
     const kind = String(payload.kind || payload.assetKind || (type.includes('sound') ? 'sound' : 'image')).toLowerCase();
-    const assetId = path.basename(String(payload.assetId || payload.fileId || payload.name || ''));
+    const assetId = String(payload.assetId || payload.fileId || payload.name || '').replaceAll('\\', '/');
     const assetUrl = await resolveFxAssetUrl({ ...payload, assetId }, fxAssetServer.getAssetUrl);
     if (kind !== 'video' || !payload.youtubeUrl) {
       if (!assetId && !assetUrl) throw new Error('실행할 FX 에셋이 없습니다.');
@@ -1964,6 +1996,7 @@ async function claimAndProcessJobs() {
           vtubeStudioAuthenticated: !!config.vtubeAuthToken,
           obs: true,
           obsPasswordConfigured: !!config.obsPassword,
+          pngtuber: true,
           fxAssets: !!getFxFolder(),
           soundFolder: !!config.soundFolder,
           tts: true,
@@ -2018,6 +2051,7 @@ async function heartbeat() {
         vtubeStudioAuthenticated: !!config.vtubeAuthToken,
         obs: true,
         obsPasswordConfigured: !!config.obsPassword,
+        pngtuber: true,
         fxAssets: !!getFxFolder(),
         soundFolder: !!config.soundFolder,
         tts: true,
@@ -2091,6 +2125,7 @@ function sendSocketHeartbeat() {
       vtubeStudioAuthenticated: !!config.vtubeAuthToken,
       obs: true,
       obsPasswordConfigured: !!config.obsPassword,
+      pngtuber: true,
       fxAssets: !!getFxFolder(),
       soundFolder: !!config.soundFolder,
       tts: true,
@@ -2265,6 +2300,7 @@ async function runLocalDiagnostics() {
             vtubeStudioAuthenticated: !!config.vtubeAuthToken,
             obs: true,
             obsPasswordConfigured: !!config.obsPassword,
+            pngtuber: true,
             fxAssets: !!getFxFolder(),
             soundFolder: !!config.soundFolder,
             tts: true,
@@ -2336,8 +2372,8 @@ function createWindow() {
   mainWindow.webContents.on('will-prevent-unload', (event) => {
     const response = dialog.showMessageBoxSync(mainWindow, {
       type: 'question', buttons: ['계속 편집', '나가기'], defaultId: 0, cancelId: 0,
-      message: '저장하지 않은 아바타 편집 내용이 있습니다.',
-      detail: '저장하려면 계속 편집을 선택하세요. 복구 초안은 마지막 자동 기록 상태로 유지됩니다.',
+      message: '저장하지 않은 편집 내용이 있습니다.',
+      detail: '저장하려면 계속 편집을 선택하세요.',
     });
     if (response === 1) event.preventDefault();
   });
@@ -2345,6 +2381,47 @@ function createWindow() {
 }
 
 ipcMain.handle('state:get', () => getPublicState());
+function requirePngTuberService(event) {
+  if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) throw new Error('짚톡 제어 권한이 없습니다.');
+  if (!pngtuberService) throw new Error(pngtuberStartupError || '짚톡을 초기화하는 중입니다.');
+  return pngtuberService;
+}
+
+function pngtuberCopyText(service, kind, payload = {}) {
+  const state = service.state();
+  if (kind === 'url') {
+    if (!state.url) throw new Error('짚톡 출력 서버가 아직 준비되지 않았습니다.');
+    return state.url;
+  }
+  if (kind !== 'variable') throw new Error('지원하지 않는 복사 항목입니다.');
+  const reaction = state.config.reactions.find((item) => item.id === payload?.reactionId);
+  if (!reaction) throw new Error('먼저 커스텀 이미지를 저장해 주세요.');
+  if (payload.durationSec == null || payload.durationSec === '') return `\${pngtuber::${reaction.id}}`;
+  const duration = Number(payload.durationSec);
+  if (!Number.isFinite(duration) || duration < 0.1 || duration > 300) throw new Error('표시 시간은 0.1~300초로 입력해 주세요.');
+  return `\${pngtuber::${reaction.id}::${duration}}`;
+}
+
+ipcMain.handle('pngtuber:state', (event) => requirePngTuberService(event).state());
+ipcMain.handle('pngtuber:save', (event, next) => requirePngTuberService(event).save(next));
+ipcMain.handle('pngtuber:discover', (event) => requirePngTuberService(event).discoverInputs());
+ipcMain.handle('pngtuber:trigger', (event, payload) => requirePngTuberService(event).trigger(payload));
+ipcMain.handle('pngtuber:command', (event, command) => requirePngTuberService(event).command(command));
+ipcMain.handle('pngtuber:copy', (event, kind, payload) => {
+  clipboard.writeText(pngtuberCopyText(requirePngTuberService(event), kind, payload));
+  return true;
+});
+ipcMain.handle('pngtuber:import', async (event) => {
+  const service = requirePngTuberService(event);
+  const selected = await dialog.showOpenDialog(mainWindow, {
+    title: '짚톡 이미지', properties: ['openFile'],
+    filters: [{ name: '이미지', extensions: ['png', 'gif', 'webp', 'jpg', 'jpeg'] }],
+  });
+  if (selected.canceled || !selected.filePaths?.[0]) return null;
+  requirePngTuberService(event);
+  return service.importAsset(selected.filePaths[0]);
+});
+
 function requireAvatarService(event) {
   if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) throw new Error('아바타 제어 권한이 없습니다.');
   if (!avatarService) throw new Error(avatarStartupError || '아바타를 초기화하는 중입니다.');
@@ -2404,7 +2481,12 @@ ipcMain.handle('avatars:backup', async (event, restore, options = {}) => {
   return state;
 });
 ipcMain.handle('config:save', (_event, next) => {
+  const previousObsEndpoint = config.obsEndpoint;
+  const previousObsPassword = config.obsPassword;
   const state = saveConfig(next || {});
+  if (pngtuberService && (config.obsEndpoint !== previousObsEndpoint || config.obsPassword !== previousObsPassword)) {
+    Promise.resolve().then(() => pngtuberService.reconnect()).catch((error) => addLog('error', '짚톡 OBS 재연결 실패', error.message));
+  }
   addLog('success', '설정을 저장했습니다.');
   if (normalizeLocalProgramToken(config.token)) {
     setTimeout(() => {
@@ -2623,6 +2705,18 @@ app.whenReady().then(() => {
     avatarService = new AvatarService(dataPath('avatars'), { onError: (error) => addLog('error', '아바타 오류', error.message) });
     avatarService.start().catch((error) => addLog('error', '아바타 출력 서버 시작 실패', error.message));
   } catch (error) { avatarStartupError = error.message; addLog('error', '아바타 초기화 실패', error.message); }
+  try {
+    pngtuberService = new PngTuberService(dataPath('pngtuber'), {
+      // Meter events are high-volume and must be subscribed explicitly.
+      openObs: () => openObsSocket({ eventSubscriptions: (1 << 16) | (1 << 3) | (1 << 1) }),
+      requestObs: sendObsRequest,
+      onError: (error) => addLog('error', '짚톡 오류', error.message),
+    });
+    pngtuberService.start().catch((error) => {
+      pngtuberStartupError = error.message;
+      addLog('error', '짚톡 출력 서버 시작 실패', error.message);
+    });
+  } catch (error) { pngtuberStartupError = error.message; addLog('error', '짚톡 초기화 실패', error.message); }
   const lastUpdateResult = inspectLastUpdateApplyResult();
   if (!lastUpdateResult) loadPendingUpdate();
   createWindow();
@@ -2638,6 +2732,7 @@ app.whenReady().then(() => {
 
 app.on('will-quit', () => {
   void fxAssetServer.close();
+  void pngtuberService?.stop();
   if (avatarService) { try { avatarService.flush(); } catch (error) { addLog('error', '아바타 저장 실패', error.message); } }
   scheduleSilentInstallerOnQuit();
   stopAgent();

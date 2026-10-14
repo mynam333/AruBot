@@ -179,12 +179,15 @@ class AvatarStorage {
         0,
         Number(p.blockedUntil ?? p.timeoutUntil) || 0,
       );
-      const protectedProfile = p.blocked === true || timeoutUntil > Date.now();
+      const avatarAssignment = typeof p.avatarAssignment === 'string' && /^[a-zA-Z0-9_-]{1,64}$/.test(p.avatarAssignment) ? p.avatarAssignment : '';
+      const protectedProfile = p.blocked === true || timeoutUntil > Date.now() || !!avatarAssignment;
       if (!protectedProfile && Date.now() - Number(p.seen || 0) > 90 * 86400000)
         continue;
       const cleaned = {
         name: text(p.name, 48),
         avatar: String(p.avatar || '').slice(0, 64),
+        avatarAssignment,
+        scopeKey: /^[a-f0-9]{64}$/.test(p.scopeKey) ? p.scopeKey : '',
         color: /^#[0-9a-f]{6}$/i.test(p.color) ? p.color : '#ffffff',
         scale: Math.min(1.6, Math.max(0.5, Number(p.scale) || 1)),
         hidden: p.hidden === true,
@@ -198,7 +201,7 @@ class AvatarStorage {
       };
       (protectedProfile ? restricted : normal).push([key, cleaned]);
     }
-    // Moderation retention is independent of the ordinary 90-day/profile-count budget.
+    // Explicit assignments and moderation are retained until deliberately cleared.
     for (const [key, p] of [
       ...normal.sort((a, b) => a[1].seen - b[1].seen).slice(-LIMITS.profiles),
       ...restricted,
@@ -232,7 +235,7 @@ class AvatarStorage {
     const json = JSON.stringify(cleaned);
     if (Buffer.byteLength(json) > 4 * 1024 * 1024)
       throw new Error(
-        '개인 기록 보관 한도를 초과했습니다. 차단 기록을 검토한 뒤 명시적으로 삭제해 주세요.',
+        '개인 기록 보관 한도를 초과했습니다. 캐릭터 지정·차단 기록을 검토한 뒤 불필요한 기록을 삭제해 주세요.',
       );
     atomicWrite(path.join(this.root, 'profiles.json'), json);
     this.profiles = cleaned;

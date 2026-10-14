@@ -4,7 +4,7 @@ export function withRouletteVariableContext(variable) {
   let note = '';
   let description = variable.description;
   let caveat = variable.caveat;
-  if (/^\$\{(?:roulette|action|automation|blueprint)::/.test(key)) {
+  if (/^\$\{(?:roulette|action|automation|blueprint|pngtuber|짚톡)::/.test(key)) {
     note = '룰렛에서는 당첨 확정 후 실행하며 추가 명령어 비용을 차감하지 않습니다. 한 결과당 특수 실행은 최대 16개입니다. 같은 실행 묶음에서 동일 룰렛은 최초 실행 포함 최대 5회이며, 분기하거나 다른 룰렛을 거쳐도 합산합니다. 명령어·블루프린트 순환은 즉시 중단합니다. 기존 로컬 프로그램·오버레이 연결을 사용합니다.';
   } else if (key === '${video_donation}' || key === '${bgm_request}') {
     note = '룰렛에서는 변수 뒤에 주소 또는 검색어와 재생 구간을 적습니다. 예: ${video_donation} https://youtu.be/영상ID 0:00 1:00. 등록된 명령어를 실행한 경우 해당 명령어의 인자를 사용합니다. 룰렛 보상은 포인트를 차감하지 않지만 기능 활성화·차단·최대 길이 제한은 유지됩니다.';
