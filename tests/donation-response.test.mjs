@@ -380,11 +380,13 @@ test('existing executor shares the donation action budget across tokens', async 
   assert.deepEqual(runs, ['first']);
 });
 
-for (const provider of providers) {
-  test(`${provider}: actual handler block wires context, features log, and chat suppression`, async () => {
+for (const { provider, ingressEnabled } of providers.flatMap(provider =>
+  [false, true].map(ingressEnabled => ({ provider, ingressEnabled })))) {
+  test(`${provider} (${ingressEnabled ? 'ingress' : 'legacy'}): actual handler block wires context, features log, and chat suppression`, async () => {
     const f = fixture(provider);
     const desktop = [];
     const deps = { renderDonationResponse, dispatchDonationRuleDesktop, assertSafeTextPayload,
+      chatIngress: { enabled: ingressEnabled }, runtimeBackgroundInFlight: 0,
       broadcastToDesktop: (...args) => { desktop.push(args); return 1; },
       ...f.dependencies, memoVariableStore: { read: f.dependencies.readMemos } };
     const wrappers = new Function(...Object.keys(deps), `${wrapperSource}; return { renderDonationRuleResponse, donationResponseTargetName };`)(...Object.values(deps));
@@ -401,7 +403,7 @@ for (const provider of providers) {
     const input = {
       ...wrappers, sid: 'user:owner', ownerUserId: 'owner',
       donorId: 'donor-id', donorName: 'Donor', donorMessage: '!memo ${action::injected}', amount: 3000,
-      entry: { sessionKey: 'session-key', channelId: `${provider}-channel`, liveChatId: 'live-chat-id' },
+      entry: { sessionKey: 'session-key', channelId: `${provider}-channel`, liveChatId: 'live-chat-id', remoteIngress: ingressEnabled },
       channelUid: `${provider}-channel`, responsesToSend,
       recordDonationRuleExecutionLog: async (_sid, log) => logs.push(log),
       makeChzzkChatPost: (sessionKey, accessToken, resolvedUsername, extra) => ({ provider: 'chzzk', sessionKey, accessToken, resolvedUsername, ...extra }),
