@@ -201,6 +201,7 @@ test('failure applies only its branch once and replaces the mission timer with a
 test('mission pass cancels outcomes; confirmed bonuses wait for result acknowledgement before rolling', () => {
   const h = harness({ effects: { 1: [{ type: 'card' }] }, cards: [clone(defaults.cards[11])] });
   h.act('roll');
+  h.state.players[0].shields = 1;
   h.finish(playerId, 'pass');
   assert.equal(h.state.players[0].shields, 0);
   assert.equal(h.state.phase, 'ready');
@@ -656,6 +657,7 @@ test('movement chains require a fresh deliberate action and can be cancelled', (
   h.finish();
   assert.equal(h.state.players[0].position, 1);
   assert.equal(h.state.round, 3);
+  h.state.players[0].shields = 1;
   h.finish(playerId, 'pass');
   assert.equal(h.state.round, 3);
   assert.equal(h.state.phase, 'ready');
@@ -753,12 +755,32 @@ test('bonus awards exactly one roll on complete, never an automatic completion l
   assert.equal(h.state.round, 3);
 });
 
-test('host pass needs no shield and forfeits bonus; participant pass consumes exactly one shield', () => {
-  const host = harness({ effects: { 1: [{ type: 'extra' }] } });
-  host.act('roll'); host.finish(playerId, 'pass');
-  assert.equal(host.state.phase, 'ready');
-  assert.equal(host.state.round, 1);
-  assert.equal(host.state.players[0].shields, 0);
+test('every pass consumes exactly one shield even when useShield is omitted or false', () => {
+  for (const fields of [{}, { useShield: false }, { useShield: true }]) {
+    const h = harness({ effects: { 1: [{ type: 'extra' }, { type: 'timer', value: 20 }] } });
+    h.act('roll');
+    h.state.players[0].shields = 2;
+    h.act('pass', fields, h.state.pending.readyAt);
+    assert.equal(h.state.phase, 'ready');
+    assert.equal(h.state.round, 1);
+    assert.equal(h.state.players[0].shields, 1);
+    assert.equal(h.state.timer, null);
+    assert.match(h.state.history.at(-1).text, /방어권 1장 사용/);
+  }
+});
+
+test('no-shield passes cannot bypass the cost or change missions, timers, queues or history', () => {
+  const h = harness({ effects: { 1: [{ type: 'timer', value: 20 }] } });
+  h.act('roll');
+  h.act('enqueue-donation', { donation: { id: 'queued', username: 'Viewer', provider: 'chzzk' } });
+  const before = clone(h.state);
+  for (const fields of [{}, { useShield: false }, { useShield: true }]) {
+    expectCode(() => h.act('pass', fields, h.state.pending.readyAt), 'no_shield', 409);
+    assert.deepEqual(h.state, before);
+  }
+});
+
+test('pass validates the legacy useShield field without allowing it to control the cost', () => {
   const h = harness({ effects: { 1: [{ type: 'shield' }, { type: 'shield' }, { type: 'extra' }] } });
   h.act('roll');
   for (const value of [1, 'true', null, {}]) assert.throws(() => h.act('pass', { useShield: value }, h.state.pending.readyAt), MarbleError);
@@ -774,6 +796,7 @@ test('legacy skip is voluntary rest cleared by complete/pass, never a failed-rol
     const h = harness({ effects: { 1: [{ type: 'skip', value: 3 }] } });
     h.act('roll');
     assert.equal(h.state.players[0].skipTurns, 3);
+    if (action === 'pass') h.state.players[0].shields = 1;
     h.finish(playerId, action);
     assert.equal(h.state.players[0].skipTurns, 0);
     h.act('roll', { source: 'points' });
@@ -883,6 +906,7 @@ test('bonus precedes queued donation; passing bonus forfeits it and consumes the
     const h = harness({ effects: { 1: [{ type: 'extra' }] } });
     h.act('roll');
     h.act('enqueue-donation', { donation: { id: 'd', username: 'Donor', provider: 'chzzk' } });
+    if (action === 'pass') h.state.players[0].shields = 1;
     h.finish(playerId, action);
     assert.equal(h.state.lastRoll.source, action === 'complete' ? 'bonus' : 'donation');
     assert.equal(h.state.donationQueue.length, action === 'complete' ? 1 : 0);

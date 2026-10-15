@@ -82,7 +82,7 @@ export type MarbleSnapshot = {
 };
 /** Gameplay actions accept playerId (default focus/first); authorization belongs to the backend.
  * timer-add uses seconds; enqueue-donation uses donation: MarbleDonation (20 queued per player).
- * Participant pass requires useShield:true; a host can omit it. reset returns to the lobby.
+ * Every pass consumes one shield from the target player; useShield cannot waive the cost. reset returns to the lobby.
  * focus changes only the display focus. round counts rolls, not turns. Default state has player-1.
  * expectedRollId (string|null) guards roll/complete/pass against stale per-player missions.
  * leave-player is server-internal, removes only the authorized departing member even during play.

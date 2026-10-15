@@ -800,6 +800,46 @@ test('participant authorization forces own pawn regardless of focus and ignores 
   await assert.rejects(db.action('roll', {}, { participant: true, actorUserId: 'other' }), { code: 'not_a_participant' });
 });
 
+test('host passes require a shield even when the client omits or disables useShield', async () => {
+  const db = fixture(); await db.active(); await db.action('roll'); db.now += 100000;
+  const before = clone(db.state());
+  for (const fields of [{}, { useShield: false }, { useShield: true }]) {
+    await assert.rejects(db.action('pass', fields), { code: 'no_shield', status: 409 });
+    assert.deepEqual(db.state(), before);
+  }
+});
+
+test('host passing another player uses that player shield, never the host shield', async () => {
+  const db = fixture(); const joined = await db.join(); await db.active();
+  await db.action('roll', { playerId: joined.playerId }); db.now += 100000;
+  db.state().players[0].shields = 5;
+  await assert.rejects(db.action('pass', { playerId: joined.playerId }), { code: 'no_shield' });
+  db.state().players.find(player => player.id === joined.playerId).shields = 1;
+  await db.action('pass', { playerId: joined.playerId, useShield: false });
+  assert.equal(db.state().players[0].shields, 5);
+  assert.equal(db.state().players.find(player => player.id === joined.playerId).shields, 0);
+});
+
+for (const participant of [false, true]) {
+  test(`${participant ? 'participant' : 'host'} pass rolls back failed saves and consumes once across concurrent retries`, async () => {
+    const db = fixture(); const joined = await db.join(); await db.active();
+    const options = participant ? actorOptions : undefined;
+    const playerId = participant ? joined.playerId : 'player-1';
+    await db.action('roll', { playerId }, options); db.now += 100000;
+    db.state().players.find(player => player.id === playerId).shields = 2;
+    const before = clone(db.state());
+    const input = { action: 'pass', useShield: false, playerId, revision: before.revision,
+      expectedRollId: before.playerStates[playerId].lastRoll.id, requestId: db.key() };
+    db.fail = /insert into marble_requests/;
+    await assert.rejects(db.store.act(owner, input, options), /injected database failure/);
+    assert.deepEqual(db.state(), before);
+    await Promise.all([db.store.act(owner, input, options), db.newStore().act(owner, input, options)]);
+    assert.equal(db.state().players.find(player => player.id === playerId).shields, 1);
+    assert.equal(db.state().playerStates[playerId].phase, 'ready');
+    assert.equal(db.state().revision, before.revision + 1);
+  });
+}
+
 test('participant pass consumes a shield, rejects free pass, and paused/control-off actions are forbidden', async () => {
   const db = fixture(); const joined = await db.join(); await db.active(); await db.action('roll', {}, actorOptions); db.now += 100000;
   await assert.rejects(db.action('pass', { useShield: false }, actorOptions), { code: 'no_shield' });

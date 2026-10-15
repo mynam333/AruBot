@@ -659,13 +659,14 @@ export function applyMarbleAction(state, input, context) {
       const player = target(next, input);
       const ps = readyEffect(next, player, context.now);
       if (input.action === 'complete' && ps.pending.challenge && !ps.pending.challenge.outcome) fail('challenge_result_required', '성공 또는 실패를 먼저 판정해 주세요.', 409);
-      if (input.action === 'pass' && own(input, 'useShield') && boolean(input.useShield, '방어권 사용')) {
-        if (!player.shields) fail('no_shield', '보유한 방어권이 없어요.', 409);
+      if (input.action === 'pass') {
+        if (own(input, 'useShield')) boolean(input.useShield, '방어권 사용');
+        if (!(player.shields >= 1)) fail('no_shield', '미션을 패스하려면 방어권이 1장 필요해요.', 409);
         player.shields--;
       }
       const followup = input.action === 'complete' ? marbleNextRoll(ps.pending) : null;
       ps.phase = 'ready'; ps.pending = null; ps.timer = null; player.skipTurns = 0;
-      log(next, context, `${player.name}: ${input.action === 'pass' ? '미션 패스' : '미션 완료'}`, player.id);
+      log(next, context, `${player.name}: ${input.action === 'pass' ? '미션 패스 · 방어권 1장 사용' : '미션 완료'}`, player.id);
       focus(next, player.id);
       if (followup) roll(next, player, context, followup === 'bonus' ? 'bonus' : 'event', undefined, followup === 'bonus' ? undefined : followup === 'backward' ? -1 : 1);
       else consumeDonation(next, player, context);
