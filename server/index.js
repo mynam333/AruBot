@@ -4051,12 +4051,19 @@ app.post('/api/video-donation/control-by-token', async (req, res) => {
     if (op === 'bgm_status') {
       if (settings.videoDonationViewerToken !== token) return res.status(404).json({ error: 'token not found' });
       const bgm = getPvdBgmSettings(settings);
-      const wasOwner = bgmPlayerPresence.current(sid)?.clientId === req.body.clientId;
+      const previousOwner = bgmPlayerPresence.current(sid);
+      const wasOwner = previousOwner?.clientId === req.body.clientId;
       const accepted = bgmPlayerPresence.report(sid, { ...req.body, visible: bgm.enabled && req.body.visible === true });
       const head = getVideoQueue(sid)[0];
       const state = pvdPlaybackState.get(sid);
-      const reportedAt = Number(req.body.atSec);
-      if (wasOwner && head?.kind === 'bgm' && head.id === req.body.itemId && !state?.paused && Number.isFinite(reportedAt)) {
+      const owner = bgmPlayerPresence.current(sid);
+      const freshPosition = Number.isSafeInteger(req.body.sequence) && req.body.sequence > (previousOwner?.sequence || 0);
+      const reportedAt = req.body.atSec;
+      if (accepted && wasOwner && freshPosition && req.body.positionValid !== false
+        && head?.kind === 'bgm' && head.id === req.body.itemId && owner?.readyItemId === head.id
+        && req.body.readyItemId === head.id && state && !state.paused
+        && Number(req.body.playbackRevision || 0) === Number(state.playbackRevision || 0)
+        && typeof reportedAt === 'number' && Number.isFinite(reportedAt)) {
         const atSec = Math.max(getPvdItemStartSec(head), Math.min(getPvdItemStartSec(head) + head.durationSec, reportedAt));
         setPvdPlaybackBaseFromAtSec(state, head, atSec);
         scheduleNextPvdAutoPop(sid);
@@ -4129,8 +4136,14 @@ app.post('/api/video-donation/control-by-token', async (req, res) => {
     }
     if (op === 'play' && req.body?.source === 'player' && playbackState?.paused === true) {
       const atSec = getCurrentAtSec(sid);
-      await broadcastPvdControl(sid, { op: 'pause', paused: true, atSec });
+      await broadcastPvdControl(sid, { op: 'pause', paused: true, atSec, itemId: getPvdQueueItemKey(q[0]), playbackRevision: playbackState.playbackRevision || 0 });
       return res.json({ ok: true, ignored: true, paused: true, idleDeferred: playbackState.idleDeferred === true, atSec });
+    }
+    // PLAYING also fires after buffering. It is an observation, not a new play/seek command.
+    if (req.body?.source === 'player' && playbackState && (
+      (op === 'play' && !playbackState.paused) || (op === 'pause' && playbackState.paused)
+    )) {
+      return res.json({ ok: true, ignored: true, paused: playbackState.paused === true, atSec: getCurrentAtSec(sid) });
     }
     return res.json(await controlPvdPlaybackForSid(sid, op, req.body?.atSec));
   } catch (e) {
@@ -6756,6 +6769,7 @@ app.post('/api/video-donation/reorder', async (req, res) => {
           item: reordered[0] || null,
           queue: reordered,
           startedAt: pvdPlaybackState.get(sid)?.baseStartMs || null,
+          playbackRevision: pvdPlaybackState.get(sid)?.playbackRevision || 0,
           paused: pvdPlaybackState.get(sid)?.paused || false,
           idleDeferred: pvdPlaybackState.get(sid)?.idleDeferred === true,
           atSec: reordered[0] ? getCurrentAtSec(sid) : 0,
@@ -6862,6 +6876,7 @@ app.post('/api/video-donation/delete-refund', async (req, res) => {
           item: q[0] || null,
           queue: q,
           startedAt: pvdPlaybackState.get(sid)?.baseStartMs || null,
+          playbackRevision: pvdPlaybackState.get(sid)?.playbackRevision || 0,
           paused: pvdPlaybackState.get(sid)?.paused || false,
           idleDeferred: pvdPlaybackState.get(sid)?.idleDeferred === true,
           atSec: q[0] ? getCurrentAtSec(sid) : 0,
@@ -7249,7 +7264,8 @@ async function popCurrentVideoDonationItem(sid, options = {}) {
 
 function setPvdPlaybackBaseFromAtSec(state, item, atSec) {
   const startSec = getPvdItemStartSec(item);
-  const safeAtSec = Math.max(startSec, Math.floor(Number(atSec || startSec)));
+  const value = Number(atSec);
+  const safeAtSec = Number.isFinite(value) ? Math.max(startSec, value) : startSec;
   const elapsedSec = Math.max(0, safeAtSec - startSec);
   state.baseStartMs = Date.now() - elapsedSec * 1000;
 }
@@ -7492,9 +7508,10 @@ async function controlPvdPlaybackForSid(sid, op, requestedAtSec) {
     };
   }
 
-  let atSec = Number(requestedAtSec);
+  let atSec = requestedAtSec == null ? NaN : Number(requestedAtSec);
   if (!Number.isFinite(atSec) || atSec < 0) atSec = getCurrentAtSec(sid);
   const safeAtSec = Math.max(0, Math.floor(atSec));
+  state.playbackRevision = (state.playbackRevision || 0) + 1;
 
   if (state.chzzkBlocked) {
     if (op === 'play' || op === 'pause') {
@@ -7528,6 +7545,8 @@ async function controlPvdPlaybackForSid(sid, op, requestedAtSec) {
 
   const message = await broadcastPvdControl(sid, {
     op,
+    itemId: getPvdQueueItemKey(item),
+    playbackRevision: state.playbackRevision,
     atSec: safeAtSec,
     paused: state.paused === true,
   });
@@ -7574,6 +7593,7 @@ async function broadcastPvdStart(sid, options = {}) {
       item: q[0] || null,
       queue: q,
       startedAt: q[0] ? state?.baseStartMs || null : null,
+      playbackRevision: state?.playbackRevision || 0,
       paused: q[0] ? state?.paused === true : null,
       idleDeferred: q[0] ? state?.idleDeferred === true : false,
       atSec: q[0] ? getCurrentAtSec(sid) : 0,
@@ -7617,7 +7637,10 @@ async function broadcastPvdStart(sid, options = {}) {
         item: q[0] || null,
         queue: q,
         startedAt: q[0] ? state?.baseStartMs || null : null,
+        playbackRevision: state?.playbackRevision || 0,
         paused: q[0] ? state?.paused === true : null,
+        atSec: q[0] ? getCurrentAtSec(sid) : 0,
+        serverNow: Date.now(),
         idleDeferred: q[0] ? state?.idleDeferred === true : false,
         chzzkDonationPaused: chzzkVideoRuntime.paused(sid),
         volume
@@ -8306,6 +8329,7 @@ app.get('/api/video-donation/now-playing', async (req, res) => {
       item: q[0] || null,
       queue: q,
       startedAt: state?.baseStartMs || null,
+      playbackRevision: state?.playbackRevision || 0,
       paused: state?.paused === true,
       idleDeferred: state?.idleDeferred === true,
       atSec: getCurrentAtSec(sid),
@@ -29851,6 +29875,7 @@ function registerPvdRoutes() {
           item: q[0] || null,
           queue: q,
           startedAt: q[0] ? state?.baseStartMs || null : null,
+          playbackRevision: state?.playbackRevision || 0,
           paused: q[0] ? state?.paused || false : null,
           idleDeferred: q[0] ? state?.idleDeferred === true : false,
           atSec: q[0] ? getCurrentAtSec(sid) : 0,

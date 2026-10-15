@@ -48,7 +48,7 @@ test('a Mix without saved seed tracks can still defer an incoming donation', asy
   expect(h.states.get(h.sid)).toMatchObject({ paused: true, idleDeferred: true });
 });
 
-function setupRoute() {
+function setupRoute(paused = true) {
   const control = jest.fn(async () => ({ ok: true, paused: false }));
   const broadcast = jest.fn(async () => ({}));
   const route = loadServerFunctions.route('/api/video-donation/control-by-token', {
@@ -56,7 +56,7 @@ function setupRoute() {
     getBotSettings: async () => ({ videoDonationViewerToken: 'viewer-token' }),
     getVideoQueue: () => [{ id: 'donation-1' }],
     getPvdQueueItemKey: (item) => item.id,
-    pvdPlaybackState: new Map([['test', { paused: true, idleDeferred: false }]]),
+    pvdPlaybackState: new Map([['test', { paused, idleDeferred: false }]]),
     getCurrentAtSec: () => 83, broadcastPvdControl: broadcast,
     controlPvdPlaybackForSid: control,
   });
@@ -68,7 +68,7 @@ test('a late automatic PLAYING report cannot cancel the web pause', async () => 
   const h = setupRoute();
   await h.route({ body: { token: 'viewer-token', itemId: 'donation-1', op: 'play', source: 'player' } }, h.response);
   expect(h.control).not.toHaveBeenCalled();
-  expect(h.broadcast).toHaveBeenCalledWith('test', { op: 'pause', paused: true, atSec: 83 });
+  expect(h.broadcast).toHaveBeenCalledWith('test', { op: 'pause', paused: true, atSec: 83, itemId: 'donation-1', playbackRevision: 0 });
   expect(h.response.body).toMatchObject({ ignored: true, paused: true, atSec: 83 });
 });
 
@@ -78,9 +78,33 @@ test('explicit playback requests still use the normal control path', async () =>
   expect(h.control).toHaveBeenCalledWith('test', 'play', undefined);
 });
 
+test('repeated automatic PLAYING events cannot reset an already running clock', async () => {
+  const h = setupRoute(false);
+  await h.route({ body: { token: 'viewer-token', itemId: 'donation-1', op: 'play', atSec: 12, source: 'player' } }, h.response);
+  expect(h.response.statusCode).toBe(200);
+  expect(h.response.body).toMatchObject({ ignored: true, paused: false, atSec: 83 });
+  expect(h.control).not.toHaveBeenCalled();
+  expect(h.broadcast).not.toHaveBeenCalled();
+});
+
 test('a stale player cannot change the next donation', async () => {
   const h = setupRoute();
   await h.route({ body: { token: 'viewer-token', itemId: 'old-item', op: 'pause', source: 'player' } }, h.response);
   expect(h.response.statusCode).toBe(409);
   expect(h.control).not.toHaveBeenCalled();
+});
+
+test('playback commands include the item and revision, and null position preserves the current time', async () => {
+  const item = { id: 'donation-1', startSec: 12 };
+  const state = { itemKey: item.id, paused: true, pausedAtSec: 83 };
+  const broadcast = jest.fn(async (_sid, message) => message);
+  const server = loadServerFunctions(['controlPvdPlaybackForSid', 'setPvdPlaybackBaseFromAtSec', 'getPvdItemStartSec'], {
+    getVideoQueue: () => [item], getPvdQueueItemKey: (entry) => entry.id,
+    pvdPlaybackState: new Map([['sid', state]]), getCurrentAtSec: () => 83,
+    videoDonationTimers: new Map(), scheduleNextPvdAutoPop: jest.fn(), broadcastPvdControl: broadcast,
+  });
+  await server.controlPvdPlaybackForSid('sid', 'play', null);
+  expect(broadcast).toHaveBeenLastCalledWith('sid', { op: 'play', itemId: item.id, playbackRevision: 1, atSec: 83, paused: false });
+  await server.controlPvdPlaybackForSid('sid', 'seek', 40);
+  expect(broadcast).toHaveBeenLastCalledWith('sid', { op: 'seek', itemId: item.id, playbackRevision: 2, atSec: 40, paused: false });
 });

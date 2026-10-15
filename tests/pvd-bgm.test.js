@@ -91,6 +91,55 @@ test('BGM queue waits for its player to be ready before starting the clock', asy
   expect(broadcast).toHaveBeenCalledWith('sid');
 });
 
+test.each([
+  { sequence: 1, atSec: 0 },
+  { sequence: 2, atSec: 0, readyItemId: '' },
+  { sequence: 2, atSec: null },
+  { sequence: 2, atSec: 0, positionValid: false },
+  { sequence: 2, atSec: 0, visible: false },
+  { sequence: 2, atSec: 0, itemId: 'previous-song' },
+  { sequence: 2, atSec: 20, playbackRevision: 0 },
+])('invalid or stale BGM heartbeat cannot rewind the playback clock: %j', async (patch) => {
+  const item = bgmItem();
+  const state = { itemKey: item.id, paused: false, bgmBlocked: false, baseStartMs: 1000, playbackRevision: 1 };
+  const presence = bgm.createBgmPlayerPresence();
+  const body = { token: 'token', op: 'bgm_status', clientId: 'player-001', visible: true, sequence: 1, readyItemId: item.id, itemId: item.id, playbackRevision: 1 };
+  presence.report('sid', body);
+  const rebase = jest.fn();
+  const route = loadServerFunctions.route('/api/video-donation/control-by-token', {
+    ...bgm, ...playback, bgmPlayerPresence: presence, broadcastPvdStart: jest.fn(),
+    pvdTokenToSid: new Map([['token', 'sid']]),
+    getBotSettings: async () => ({ videoDonationViewerToken: 'token', bgmEnabled: true }),
+    getVideoQueue: () => [item], pvdPlaybackState: new Map([['sid', state]]),
+    setPvdPlaybackBaseFromAtSec: rebase, scheduleNextPvdAutoPop: jest.fn(),
+  });
+  const res = { status(code) { this.code = code; return this; }, json(value) { this.body = value; return this; } };
+  await route({ body: { ...body, ...patch } }, res);
+  expect(res.code).toBeUndefined();
+  expect(rebase).not.toHaveBeenCalled();
+});
+
+test('a fresh, ready BGM heartbeat preserves fractional playback time', async () => {
+  const item = bgmItem();
+  const state = { itemKey: item.id, paused: false, bgmBlocked: false, baseStartMs: 1000 };
+  const presence = bgm.createBgmPlayerPresence();
+  const body = { token: 'token', op: 'bgm_status', clientId: 'player-001', visible: true, sequence: 1, readyItemId: item.id, itemId: item.id };
+  presence.report('sid', body);
+  const route = loadServerFunctions.route('/api/video-donation/control-by-token', {
+    ...bgm, ...loadServerFunctions(['getPvdItemStartSec', 'setPvdPlaybackBaseFromAtSec']),
+    bgmPlayerPresence: presence, broadcastPvdStart: jest.fn(),
+    pvdTokenToSid: new Map([['token', 'sid']]),
+    getBotSettings: async () => ({ videoDonationViewerToken: 'token', bgmEnabled: true }),
+    getVideoQueue: () => [item], pvdPlaybackState: new Map([['sid', state]]), scheduleNextPvdAutoPop: jest.fn(),
+  });
+  const res = { status(code) { this.code = code; return this; }, json(value) { this.body = value; return this; } };
+  const before = Date.now();
+  await route({ body: { ...body, sequence: 2, atSec: 83.75 } }, res);
+  expect(res.code).toBeUndefined();
+  expect(state.baseStartMs).toBeGreaterThanOrEqual(before - 73750);
+  expect(state.baseStartMs).toBeLessThanOrEqual(Date.now() - 73750);
+});
+
 function commandHarness(settings) {
   const enqueue = jest.fn(async (job) => ({ job, created: true, deduction: { deducted: true } }));
   const resolve = jest.fn(async () => ({ provider: 'youtube', mediaId: 'video000001', title: 'Song', durationSec: 180 }));

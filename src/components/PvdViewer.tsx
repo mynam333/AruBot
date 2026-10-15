@@ -48,6 +48,7 @@ type YouTubePlayer = {
   getCurrentTime?: () => number;
   getDuration?: () => number;
   getPlayerState?: () => number;
+  getPlaybackRate?: () => number;
   getVideoData?: () => { video_id?: string };
   loadModule?: (name: string) => void;
   loadVideoById?: (options: { videoId: string; startSeconds: number }) => void;
@@ -163,9 +164,13 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
   const ensureSeqRef = useRef<number>(0);
   const lastServerSyncRef = useRef<number>(0);
   const playbackPayloadVersionRef = useRef(0);
+  const serverPlaybackRevisionRef = useRef(0);
+  const pendingPlaybackControlsRef = useRef(0);
   const youtubePlaybackTargetRef = useRef({ atSec: 0, paused: false });
+  const pendingYouTubeSeekRef = useRef<{ atSec: number; expiresAt: number } | null>(null);
   const lastEmitRef = useRef<number>(0);
   const lastTimeRef = useRef<number>(0);
+  const lastTimeSampleAtRef = useRef(0);
   const suppressUntilRef = useRef<number>(0);
   const currentItemIdRef = useRef<string | null>(null);
   const lastReportRef = useRef<{ itemId: string | null; at: number } | null>(null);
@@ -472,17 +477,27 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
 
   const emitControl = useCallback((op: 'pause' | 'play' | 'seek' | 'volume' | 'duration', atSec?: number, nextVolume?: number, durationSec?: number, source = 'player') => {
     if (!token) return;
-    if (op === 'pause' || op === 'play' || op === 'seek') {
+    const changesPlayback = op === 'pause' || op === 'play' || op === 'seek';
+    if (changesPlayback) {
       if (chzzkDonationPausedRef.current) return;
       if (playerRole === 'bgm' && (!bgmEnabledRef.current || !bgmOwnerRef.current || isPlayerHidden())) return;
       if (serverQueuePausedRef.current && !(playerRole === 'bgm' && (op === 'seek' || source === 'bgm-window'))) return;
       playbackPayloadVersionRef.current += 1;
+      pendingPlaybackControlsRef.current += 1;
     }
     const apiBase = getViewerApiBase();
     const body = { token, op, atSec, volume: nextVolume, durationSec, source, itemId: currentItemIdRef.current };
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
     fetch(`${apiBase}/api/video-donation/control-by-token`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
-    }).catch(() => {});
+      signal: controller.signal, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    }).catch(() => {}).finally(() => {
+      clearTimeout(timeout);
+      if (changesPlayback) {
+        pendingPlaybackControlsRef.current -= 1;
+        playbackPayloadVersionRef.current += 1;
+      }
+    });
   }, [getViewerApiBase, token, playerRole, isPlayerHidden]);
 
   const reportYouTubeDuration = useCallback(() => {
@@ -520,15 +535,27 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
     const forwardDrift = target - current;
     const backwardDrift = current - target;
     const shouldSeek = targetSec !== null && (strict === true
-      ? (force === true || drift > 1.25)
+      ? drift > 1.25
       : force === true
       ? drift > PVD_FORCE_SYNC_THRESHOLD_SEC
       : (forwardDrift > PVD_FORWARD_SYNC_THRESHOLD_SEC || backwardDrift > PVD_BACKWARD_SYNC_THRESHOLD_SEC));
     suppressUntilRef.current = Date.now() + 1000;
 
     try {
-      if (shouldSeek && player.seekTo) player.seekTo(target, true);
-      if (targetSec !== null) lastTimeRef.current = target;
+      if (shouldSeek && player.seekTo) {
+        const pending = pendingYouTubeSeekRef.current;
+        if (!pending || pending.expiresAt <= Date.now() || Math.abs(pending.atSec - target) > 1.25) {
+          pendingYouTubeSeekRef.current = { atSec: target, expiresAt: Date.now() + 5000 };
+          player.seekTo(target, true);
+        }
+        current = Number(player.getCurrentTime?.() ?? current);
+      }
+      if (pendingYouTubeSeekRef.current && Math.abs(current - pendingYouTubeSeekRef.current.atSec) <= 1.25) {
+        pendingYouTubeSeekRef.current = null;
+      }
+      // Observe the actual player, not the server target we may have deliberately left unapplied.
+      lastTimeRef.current = current;
+      lastTimeSampleAtRef.current = Date.now();
     } catch {}
 
     try {
@@ -584,6 +611,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
 
   const stopPlayer = useCallback(() => {
     bgmReadyItemIdRef.current = null;
+    pendingYouTubeSeekRef.current = null;
     mixPlayerRef.current?.pause();
     mixActiveRef.current = false;
     setMixActive(false);
@@ -789,14 +817,16 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
       externalProviderRef.current = null;
       externalMediaKeyRef.current = null;
       const nextItemId = String(opts?.itemId || videoId || '');
-      if (currentItemIdRef.current !== nextItemId) {
+      const itemChanged = currentItemIdRef.current !== nextItemId;
+      if (itemChanged) {
         currentItemIdRef.current = nextItemId;
-        if (bgmReadyItemIdRef.current) bgmReadyItemIdRef.current = nextItemId;
+        bgmReadyItemIdRef.current = null;
+        pendingYouTubeSeekRef.current = null;
         lastReportRef.current = null;
         youtubeDurationReportedRef.current = null;
       }
 
-      const sameItem = currentVidRef.current === videoId && currentStartRef.current === safeStart && playerRef.current;
+      const sameItem = !itemChanged && currentVidRef.current === videoId && currentStartRef.current === safeStart && playerRef.current;
       if (sameItem) {
         applyYouTubeCaptions(captionsEnabled);
         const latest = youtubePlaybackTargetRef.current;
@@ -836,8 +866,15 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
           let t = activePlayer?.getCurrentTime ? Number(activePlayer.getCurrentTime()) : 0;
           if (playerRole !== 'bgm') lastTimeRef.current = t;
           const now = Date.now();
+          if (bgmReadyItemIdRef.current !== currentItemIdRef.current
+            && activePlayer?.getVideoData?.().video_id === expectedYouTubeMediaIdRef.current
+            && (e.data === YT.PlayerState.PLAYING || e.data === YT.PlayerState.PAUSED || e.data === 5)) {
+            bgmReadyItemIdRef.current = currentItemIdRef.current;
+            bgmReportRef.current();
+          }
           if (playerRole === 'bgm' && bgmEnabledRef.current && bgmOwnerRef.current
             && !chzzkDonationPausedRef.current && !isPlayerHidden()
+            && !pendingYouTubeSeekRef.current
             && (now > suppressUntilRef.current || e.data === YT.PlayerState.PAUSED)) {
             if (playbackModeRef.current === 'donation') {
               const bounded = Math.max(currentStartRef.current, Math.min(currentEndRef.current, t));
@@ -898,18 +935,17 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
               return;
             }
             reportYouTubeDuration();
-            if (!isPlayerHidden() && now > suppressUntilRef.current && now - lastEmitRef.current > 300) { lastEmitRef.current = now; emitControl('play', Math.floor(t)); }
           }
         } catch {}
       };
       const onReady = (event: YouTubePlayerEvent) => {
         if (!isExpectedYouTubePlayerMedia(event?.target)) return;
         bgmReadyItemIdRef.current = currentItemIdRef.current;
-        bgmReportRef.current();
         applyYouTubeCaptions(captionsEnabled);
         applyVolume(volumeRef.current);
         const latest = youtubePlaybackTargetRef.current;
         applyPlaybackTarget(latest.atSec, latest.paused, true);
+        bgmReportRef.current();
         reportYouTubeDuration();
       };
 
@@ -947,6 +983,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
       currentVidRef.current = videoId;
       currentStartRef.current = safeStart;
       lastTimeRef.current = target;
+      lastTimeSampleAtRef.current = Date.now();
 
       setTimeout(() => {
         if (seq !== ensureSeqRef.current) return;
@@ -1211,6 +1248,10 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
   }, [captureIdlePosition, ensureExternalPlayer, ensurePlayer, getItemProvider]);
 
   const applyServerPlaybackPayload = useCallback((payload: Record<string, unknown>, force = false) => {
+    const sameItem = isUnknownRecord(payload.item) && String(payload.item.id || '') === currentItemIdRef.current;
+    const revision = Number(payload.playbackRevision || 0);
+    if (sameItem && (revision < serverPlaybackRevisionRef.current || pendingPlaybackControlsRef.current > 0)) return;
+    serverPlaybackRevisionRef.current = revision;
     playbackPayloadVersionRef.current += 1;
     applyServerPauseState(payload);
     if (payload.volume != null) applyVolume(Number(payload.volume));
@@ -1274,7 +1315,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
   }, [applyYouTubeCaptions, captionsEnabled]);
 
   const resyncFromServer = useCallback(async (force = false) => {
-    if (!token) return;
+    if (!token || pendingPlaybackControlsRef.current > 0) return;
     const now = Date.now();
     if (!force && now - lastServerSyncRef.current < 1000) return;
     lastServerSyncRef.current = now;
@@ -1285,7 +1326,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
       const r = await fetch(`${apiBase}/api/video-donation/now-playing?token=${encodeURIComponent(token)}`, { cache: 'no-store' });
       if (!r.ok) return;
       const data = await r.json() as Record<string, unknown>;
-      if (version !== playbackPayloadVersionRef.current) return;
+      if (version !== playbackPayloadVersionRef.current || pendingPlaybackControlsRef.current > 0) return;
       const durationProbes = Array.isArray(data.durationProbes) ? data.durationProbes : [];
       for (const probe of durationProbes) {
         if (isUnknownRecord(probe)) handleDurationProbe(probe);
@@ -1310,10 +1351,16 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
       if (sending && !leaving) return;
       sending = true;
       try {
+        const player = playerRef.current;
+        const positionValid = !pendingYouTubeSeekRef.current && pendingPlaybackControlsRef.current === 0
+          && bgmReadyItemIdRef.current === currentItemIdRef.current
+          && player?.getVideoData?.().video_id === expectedYouTubeMediaIdRef.current
+          && (player?.getPlayerState?.() === 1 || player?.getPlayerState?.() === 2);
         const response = await fetch(`${getViewerApiBase()}/api/video-donation/control-by-token`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, keepalive: leaving,
           body: JSON.stringify({ token, op: 'bgm_status', clientId: idleClientIdRef.current, sequence: ++bgmSequenceRef.current, readyItemId: bgmReadyItemIdRef.current, visible: !leaving && !document.hidden && bgmEnabledRef.current && !autoplayBlockedRef.current,
-            itemId: currentItemIdRef.current, atSec: playerRef.current?.getCurrentTime?.(),
+            itemId: currentItemIdRef.current, playbackRevision: serverPlaybackRevisionRef.current,
+            positionValid, atSec: positionValid ? player?.getCurrentTime?.() : undefined,
           }),
         });
         if (!response.ok || disposed) return;
@@ -1488,6 +1535,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
       onRetry: startPolling,
       onOpen: () => {
         stopPolling();
+        serverPlaybackRevisionRef.current = 0;
         void resyncFromServer(true);
       },
       onMessage: (ev, ws) => {
@@ -1500,8 +1548,14 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
           if (data?.type === 'start' || data?.type === 'state' || data?.type === 'init' || data?.type === 'now-playing') {
             applyServerPlaybackPayload(data, true);
           } else if (data?.type === 'control') {
-            playbackPayloadVersionRef.current += 1;
             const op = String(data.op || '').toLowerCase();
+            const positionedControl = op === 'play' || op === 'pause' || op === 'seek';
+            if (positionedControl && data.itemId != null && String(data.itemId) !== currentItemIdRef.current) return;
+            if (positionedControl && typeof data.playbackRevision === 'number') {
+              if (data.playbackRevision < serverPlaybackRevisionRef.current) return;
+              serverPlaybackRevisionRef.current = data.playbackRevision;
+            }
+            playbackPayloadVersionRef.current += 1;
             applyServerPauseState(data);
             if (op === 'chzzk-donation') {
               if (playbackModeRef.current === 'idle') startIdlePlayback();
@@ -1541,13 +1595,13 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
               else if (!isPlaybackBlocked()) void resyncFromServer(true);
               return;
             }
-            if (playbackModeRef.current !== 'donation') return;
+            if (playbackModeRef.current !== 'donation' || !positionedControl) return;
             if (playerRole === 'bgm') setBgmPaused(op === 'pause' || data.paused === true);
-            const at = Number(data.atSec || 0) || 0;
+            const at = typeof data.atSec === 'number' && Number.isFinite(data.atSec) ? Math.max(0, data.atSec) : null;
             if (expectedYouTubeMediaIdRef.current !== '__external__') {
-              applyPlaybackTarget(Math.max(0, Math.floor(at)), op === 'pause' || data?.paused === true, true, true);
+              applyPlaybackTarget(at, op === 'pause' || data?.paused === true, true, true);
             } else {
-              applyExternalPlaybackTarget(Math.max(0, Math.floor(at)), op === 'pause' || data?.paused === true);
+              applyExternalPlaybackTarget(at, op === 'pause' || data?.paused === true);
             }
           }
         } catch {}
@@ -1584,16 +1638,27 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
         if (!YT || !playerRef.current || !playerRef.current.getCurrentTime) return;
         let t = Number(playerRef.current.getCurrentTime());
         if (!Number.isFinite(t)) return;
-        if (playbackModeRef.current !== 'donation') {
+        const now = Date.now();
+        const elapsed = Math.max(0, (now - lastTimeSampleAtRef.current) / 1000);
+        lastTimeSampleAtRef.current = now;
+        const pendingSeek = pendingYouTubeSeekRef.current;
+        if (pendingSeek) {
+          if (Math.abs(t - pendingSeek.atSec) <= 1.25 || now >= pendingSeek.expiresAt) pendingYouTubeSeekRef.current = null;
           lastTimeRef.current = t;
           return;
         }
-        const diff = Math.abs(t - lastTimeRef.current);
-        const now = Date.now();
+        if (playbackModeRef.current !== 'donation' || bgmReadyItemIdRef.current !== currentItemIdRef.current
+          || !isExpectedYouTubePlayerMedia(playerRef.current)) {
+          lastTimeRef.current = t;
+          return;
+        }
+        const delta = t - lastTimeRef.current;
+        const rate = Number(playerRef.current.getPlaybackRate?.()) || 1;
+        const jumped = delta < -1.5 || delta > elapsed * rate + 1.5;
         const state = playerRef.current.getPlayerState?.();
         const nativeBgmSeek = playerRole === 'bgm' && bgmReadyItemIdRef.current === currentItemIdRef.current
           && isExpectedYouTubePlayerMedia(playerRef.current) && (state === YT.PlayerState.PLAYING || state === YT.PlayerState.PAUSED);
-        if (!isPlayerHidden() && diff > 1.5 && (now > suppressUntilRef.current || nativeBgmSeek)) {
+        if (!isPlayerHidden() && jumped && (now > suppressUntilRef.current || nativeBgmSeek)) {
           if (playerRole === 'bgm') {
             const bounded = Math.max(currentStartRef.current, Math.min(currentEndRef.current, t));
             if (bounded !== t) playerRef.current.seekTo?.(bounded, true);

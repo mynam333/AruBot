@@ -62,7 +62,7 @@ export function createBgmPlayerPresence({ now = Date.now, leaseMs = 12000 } = {}
         return false;
       }
       if (owner && owner.clientId !== clientId) return false;
-      players.set(sid, { clientId, readyItemId: String(readyItemId || ''), expiresAt: now() + leaseMs });
+      players.set(sid, { clientId, sequence, readyItemId: String(readyItemId || ''), expiresAt: now() + leaseMs });
       return true;
     },
   };

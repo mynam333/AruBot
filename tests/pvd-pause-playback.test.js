@@ -104,6 +104,7 @@ function mount(initialPayload = {}, playerRole = 'video') {
     get externalVideo() { return externalVideo; },
     get externalVideoProps() { return externalVideoProps; },
     control: (op, atSec = 83) => socket.onmessage({ data: JSON.stringify({ type: 'control', op, atSec, paused: op === 'pause' }) }),
+    message: (data) => socket.onmessage({ data: JSON.stringify(data) }),
     volume: (volume) => socket.onmessage({ data: JSON.stringify({ type: 'control', op: 'volume', volume }) }),
     snapshot: (patch) => { payload = { ...payload, ...patch }; },
     deferSnapshot: (fn) => { getSnapshot = fn; },
@@ -181,6 +182,110 @@ test('external media respects a pause received before mounting and delayed initi
 const bgmPayload = (patch = {}) => ({
   item: { id: 'bgm-1', kind: 'bgm', mediaProvider: 'youtube', videoId: 'video000001', startSec: 12, durationSec: 100 },
   bgm: { enabled: true }, ...patch,
+});
+
+test('tolerated BGM clock drift is not reported back as a manual seek', async () => {
+  const h = mount(bgmPayload(), 'bgm'); await flush(); h.player.ready(); h.player.emit(1);
+  jest.advanceTimersByTime(1500); await flush();
+  h.player.time = 22.5;
+  h.focus(); await flush();
+  jest.advanceTimersByTime(300); await flush();
+  expect(h.calls.filter(({ body }) => body.op === 'seek')).toEqual([]);
+  expect(h.player.time).toBe(22.5);
+});
+
+test('a delayed programmatic BGM seek never echoes the old position to the server', async () => {
+  const h = mount(bgmPayload(), 'bgm'); await flush(); h.player.ready(); h.player.emit(1);
+  jest.advanceTimersByTime(1500); await flush();
+  h.player.seekTo.mockImplementation(() => {});
+  h.control('seek', 83);
+  jest.advanceTimersByTime(300); await flush();
+  h.player.time = 83;
+  jest.advanceTimersByTime(300); await flush();
+  expect(h.calls.filter(({ body }) => body.op === 'seek')).toEqual([]);
+});
+
+test('duplicate control acknowledgements do not seek an already aligned player', async () => {
+  const h = mount(bgmPayload(), 'bgm'); await flush(); h.player.ready();
+  h.player.seekTo.mockClear();
+  h.control('seek', 83); h.control('seek', 83);
+  expect(h.player.seekTo).toHaveBeenCalledTimes(1);
+});
+
+test('delayed controls for a previous queue item cannot rewind or pause the current song', async () => {
+  const h = mount(); await flush(); h.player.ready();
+  h.player.seekTo.mockClear(); h.player.pauseVideo.mockClear();
+  h.message({ type: 'control', itemId: 'old-item', op: 'pause', atSec: 12, paused: true });
+  h.player.emit(1);
+  expect(h.player.seekTo).not.toHaveBeenCalled();
+  expect(h.player.pauseVideo).not.toHaveBeenCalled();
+});
+
+test('controls without a position and unrelated control messages never seek to zero', async () => {
+  const h = mount(); await flush(); h.player.ready();
+  h.player.seekTo.mockClear();
+  h.message({ type: 'control', op: 'pause', paused: true });
+  h.message({ type: 'control', op: 'status' });
+  expect(h.player.seekTo).not.toHaveBeenCalled();
+  expect(h.player.time).toBe(20);
+});
+
+test('normal playback across a throttled timer is not a native seek', async () => {
+  const h = mount(bgmPayload(), 'bgm'); await flush(); h.player.ready(); h.player.emit(1);
+  jest.advanceTimersByTime(1500); await flush();
+  jest.setSystemTime(Date.now() + 10000);
+  h.player.time += 10;
+  jest.advanceTimersByTime(300); await flush();
+  expect(h.calls.filter(({ body }) => body.op === 'seek')).toEqual([]);
+});
+
+test('video buffering recovery does not emit a new playback command', async () => {
+  const h = mount(); await flush(); h.player.ready();
+  jest.advanceTimersByTime(1500); await flush();
+  h.player.emit(3); h.player.emit(1);
+  expect(h.calls.filter(({ body }) => body.op === 'play')).toEqual([]);
+});
+
+test('older snapshots and controls cannot overwrite a newer seek revision', async () => {
+  const h = mount(bgmPayload(), 'bgm'); await flush(); h.player.ready();
+  h.message({ type: 'control', op: 'seek', atSec: 83, itemId: 'bgm-1', playbackRevision: 2 });
+  h.player.seekTo.mockClear();
+  h.message({ type: 'start', ...bgmPayload({ atSec: 20, playbackRevision: 1 }) });
+  h.message({ type: 'control', op: 'seek', atSec: 20, itemId: 'bgm-1', playbackRevision: 1 });
+  await flush();
+  expect(h.player.time).toBe(83);
+  expect(h.player.seekTo).not.toHaveBeenCalled();
+});
+
+test('HTTP polling cannot restore the old position while a native seek is being submitted', async () => {
+  const h = mount(bgmPayload(), 'bgm'); await flush(); h.player.ready(); h.player.emit(1);
+  jest.advanceTimersByTime(1500); await flush();
+  const originalFetch = global.fetch;
+  let finish;
+  global.fetch = (url, options) => {
+    if (options?.body && JSON.parse(options.body).op === 'seek') return new Promise((resolve) => { finish = resolve; });
+    return originalFetch(url, options);
+  };
+  h.player.time = 83;
+  jest.advanceTimersByTime(300); await flush();
+  h.focus(); await flush();
+  h.message({ type: 'start', ...bgmPayload({ atSec: 20 }) }); await flush();
+  expect(h.player.time).toBe(83);
+  finish({ ok: true }); await flush();
+});
+
+test('a newly loaded BGM does not report the previous song position before readiness', async () => {
+  const h = mount(bgmPayload(), 'bgm'); await flush(); h.player.ready(); h.player.emit(1);
+  jest.advanceTimersByTime(1500); await flush();
+  h.player.time = 80;
+  h.player.seekTo.mockImplementation(() => {});
+  h.message({ type: 'start', ...bgmPayload({ item: { ...bgmPayload().item, id: 'bgm-2', videoId: 'video000002' }, atSec: 12 }) });
+  await flush(); h.player.emit(3);
+  jest.advanceTimersByTime(1800); await flush();
+  const reports = h.calls.filter(({ body }) => body.op === 'bgm_status' && body.itemId === 'bgm-2');
+  expect(reports.length).toBeGreaterThan(0);
+  expect(reports.every(({ body }) => body.positionValid === false && body.atSec === undefined)).toBe(true);
+  expect(h.calls.filter(({ body }) => body.op === 'seek')).toEqual([]);
 });
 
 test('BGM native controls expose the timeline and synchronize seeks across buffering events', async () => {
