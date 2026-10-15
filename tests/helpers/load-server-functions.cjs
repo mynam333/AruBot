@@ -9,6 +9,8 @@ const { createCommandAdmission } = require('./load-source.cjs')('server/command-
 function safetyBindings() {
   const commandAdmission = createCommandAdmission();
   return {
+    chatIngress: { enabled: false, canRun: () => true },
+    runtimeBackgroundInFlight: 0,
     ...memoVariables,
     resolveCommandMemoVariables: (plan, text) => memoVariables.resolveMemoVariablePlan(plan, text, { readMemos: async () => new Map() }),
     commandExecution: createCommandExecutionSafety(), commandAdmission, isCommandSafetyError,

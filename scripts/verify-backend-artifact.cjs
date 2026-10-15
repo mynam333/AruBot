@@ -5,9 +5,9 @@ const ts = require('typescript');
 
 // Inspect the staged files, not the checkout: tests in the full repository
 // cannot catch a shared runtime module omitted from the deployment archive.
-function verifyBackendArtifact(directory) {
+function verifyBackendArtifact(directory, entrypoints = ['server/index.js']) {
   const root = path.resolve(directory);
-  const pending = ['server/index.js'];
+  const pending = [...entrypoints];
   const visited = new Set();
   while (pending.length) {
     const relative = pending.pop();
@@ -49,7 +49,17 @@ module.exports = { verifyBackendArtifact };
 if (require.main === module) {
   try {
     if (!process.argv[2]) throw new Error('Usage: node scripts/verify-backend-artifact.cjs <staging-directory>');
-    const result = verifyBackendArtifact(process.argv[2]);
+    const result = verifyBackendArtifact(process.argv[2], [
+      'server/index.js',
+      'server/chat-ingress-service.mjs',
+      'server/chat-ingress-client.mjs',
+      'server/chat-ingress-providers.mjs',
+      'server/chat-ingress-journal.mjs',
+      'server/chat-runtime-lifecycle.mjs',
+      'server/runtime-handoff.js',
+      'scripts/deploy-chat-runtime.mjs',
+      'ecosystem.config.cjs',
+    ]);
     console.log(`[backend artifact] verified ${result.modules} local runtime modules`);
   } catch (error) {
     console.error(`[backend artifact] ${error.message}`);

@@ -47,6 +47,7 @@ export function createBgmPlayerPresence({ now = Date.now, leaseMs = 12000 } = {}
     return null;
   };
   return {
+    runtimeState: () => ({ players, reports }),
     current,
     report(sid, { clientId, visible, sequence, readyItemId }) {
       if (!/^[A-Za-z0-9_-]{8,80}$/.test(String(clientId || ''))) return false;

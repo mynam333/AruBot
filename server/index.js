@@ -1,4 +1,7 @@
 import express from 'express';
+import { createChatIngressClient, createIngressSocket } from './chat-ingress-client.mjs';
+import { createChatRuntimeLifecycle, protectRuntimeSocket } from './chat-runtime-lifecycle.mjs';
+import { transferDurableRuntimeJobs, renewDurableRuntimeJobs } from './supabase.js';
 import { cleanupUnlinkedAccounts } from './supabase.js';
 import { deleteAccountAutomationSoundFiles } from './account-local-files.js';
 import { createLocalAvatarRelay, normalizeChzzkAvatarEvent } from './local-avatar-relay.js';
@@ -131,6 +134,61 @@ import { WebSocketServer, WebSocket } from 'ws';
 const { createYoutubeLiveChatReceiver, toYoutubeLiveChatItem } = youtubeLiveChatReceiver;
 
 dotenv.config();
+const chatIngress = createChatIngressClient();
+let runtimeHttpInFlight = 0;
+let runtimeSocketInFlight = 0;
+let runtimeBackgroundInFlight = 0;
+const ingressProviderState = new Map();
+const ingressWarudoState = new Map();
+
+async function runActiveRuntimeTask(task) {
+  if (!chatIngress.canRun()) return;
+  runtimeBackgroundInFlight += 1;
+  try { return await task(); }
+  finally { runtimeBackgroundInFlight -= 1; }
+}
+
+function getRuntimeHandoffMaps() {
+  const idle = pvdIdlePlayback.runtimeState();
+  const bgm = bgmPlayerPresence.runtimeState();
+  return {
+    videoDonationQueues, pvdPlaybackState, activeSids, liveSession, liveStatusCache,
+    providerLiveObservations, attendanceDedupe, globalProcessedChat, globalSentReplies,
+    ingressProviderState, ingressWarudoState, disconnectedProviderRuntimeGuards,
+    macroTimers: macroTimerManager.macroTimers, macroFailures: macroTimerManager.failureCount,
+    macroFailureTimes: macroTimerManager.lastFailureTime, macroLastSent,
+    channelTokenMapping, channelTokensByChannel, oauthStateStore, youtubeBotOAuthPendingStore,
+    pvdIdleStates: idle.states, pvdIdleDisconnected: idle.disconnected, pvdIdleCounters: idle.counters,
+    bgmPlayers: bgm.players, bgmReports: bgm.reports,
+  };
+}
+
+function captureIngressProviderState() {
+  for (const [provider, store] of [['chzzk', sessionStore], ['cime', cimeSessionStore], ['youtube', youtubeSessionStore]]) {
+    for (const [key, entry] of store) {
+      ingressProviderState.set(`${provider}:${key}`, {
+        sentReplies: entry.sentReplies || new Set(),
+        processedIds: entry.processedIds || new Set(),
+        recentOutboundMessages: entry.recentOutboundMessages || new Map(),
+      });
+    }
+  }
+  ingressWarudoState.clear();
+  for (const [pid, queue] of warudoQueues) ingressWarudoState.set(pid, queue.items || []);
+}
+
+function restoreIngressProviderState() {
+  for (const [provider, store] of [['chzzk', sessionStore], ['cime', cimeSessionStore], ['youtube', youtubeSessionStore]]) {
+    for (const [key, entry] of store) {
+      const restored = ingressProviderState.get(`${provider}:${key}`);
+      if (restored) Object.assign(entry, restored);
+    }
+  }
+  for (const timer of videoDonationTimers.values()) clearTimeout(timer);
+  videoDonationTimers.clear();
+  warudoQueues.clear();
+  for (const [pid, items] of ingressWarudoState) warudoQueues.set(pid, { items, waiters: [] });
+}
 
 axios.interceptors.request.use((config) => {
   if (String(config.url || '').split('?')[0].endsWith('/open/v1/chats/send')) {
@@ -995,6 +1053,38 @@ app.use((req, res, next) => {
   next();
 });
 
+const runtimeLifecycle = createChatRuntimeLifecycle({
+  client: chatIngress,
+  getPending: () => chatIngress.pending + runtimeHttpInFlight + runtimeSocketInFlight + runtimeBackgroundInFlight
+    + commandExecution.getActiveCount() + rouletteProcessing.size + rouletteResultActionCoordinator.pendingCount()
+    + Number(macroDeliveryCycleRunning) + Number(durableRuntimeWorkerRunning)
+    + Number(registeredRuntimeMonitorRunning) + Number(chzzkLivePollRunning) + Number(sessionValidationCycleRunning),
+  getMaps: getRuntimeHandoffMaps,
+  getWorkerId: () => DURABLE_RUNTIME_WORKER_ID,
+  transferJobs: transferDurableRuntimeJobs,
+  beforeCapture: captureIngressProviderState,
+  afterRestore: restoreIngressProviderState,
+  onResume: async () => {
+    for (const sid of videoDonationQueues.keys()) scheduleNextPvdAutoPop(sid);
+  },
+});
+app.use('/api/runtime', (req, res, next) => {
+  if (!runtimeLifecycle.authorized(req)) return res.status(404).json({ error: 'not_found' });
+  next();
+}, express.json({ limit: '17mb', inflate: false }), (req, res) => runtimeLifecycle.handle(req, res));
+app.use(async (req, res, next) => {
+  if (!chatIngress.enabled || ['/api/health', '/api/readiness', '/api/version', '/readyz', '/healthz'].includes(req.path)
+    || (req.path === '/api/bot/settings' && !req.headers.cookie && !req.headers.authorization)) return next();
+  if (!chatIngress.active && !chatIngress.draining) await chatIngress.refresh().catch(() => null);
+  if (!chatIngress.canRun()) return res.status(503).set('Retry-After', '1').json({ error: 'runtime_handoff' });
+  runtimeHttpInFlight += 1;
+  let finished = false;
+  const finish = () => { if (!finished) { finished = true; runtimeHttpInFlight -= 1; } };
+  res.once('finish', finish);
+  res.once('close', finish);
+  next();
+});
+
 app.use(cors({ ...corsOptions, preflightContinue: true }));
 app.use(requestProtection.http);
 app.use(rejectUntrustedBrowserOrigin);
@@ -1059,6 +1149,8 @@ function providerRuntimeLeaseResourceKey(provider, ownerUserId, channelId = null
 }
 
 async function ensureProviderRuntimeLease(provider, ownerUserId, { channelId = null } = {}) {
+  if (runtimeReadinessState.shuttingDown) throw new Error('server_shutting_down');
+  if (chatIngress.enabled) return { remote: true, provider, ownerUserId, channelId };
   const normalizedProvider = String(provider || '').trim().toLowerCase();
   const owner = String(ownerUserId || '').replace(/^user:/, '').trim();
   const resourceKey = providerRuntimeLeaseResourceKey(normalizedProvider, owner, channelId);
@@ -1067,6 +1159,10 @@ async function ensureProviderRuntimeLease(provider, ownerUserId, { channelId = n
   if (existing && Number(existing.expiresAtMs || 0) > now + PROVIDER_RUNTIME_LEASE_RENEW_MS) return existing;
 
   const lease = await claimRuntimeLease(resourceKey, INSTANCE_ID, PROVIDER_RUNTIME_LEASE_TTL_MS);
+  if (runtimeReadinessState.shuttingDown) {
+    if (lease?.acquired) await releaseRuntimeLease(resourceKey, INSTANCE_ID).catch(() => {});
+    throw new Error('server_shutting_down');
+  }
   if (!lease?.acquired) {
     const error = new Error(`Provider runtime is owned by another instance: ${resourceKey}`);
     error.code = 'provider_runtime_lease_not_acquired';
@@ -1196,11 +1292,18 @@ function waitForCimeSessionOpen(entry, timeoutMs = 10_000) {
   });
 }
 
-async function recoverProviderSession(provider, ownerUserId) {
+async function recoverProviderSession(provider, ownerUserId, options = {}) {
   const normalizedProvider = normalizeRuntimeProvider(provider);
   const owner = String(ownerUserId || '').replace(/^user:/, '').trim();
-  if (!owner || !['cime', 'youtube'].includes(normalizedProvider)) return;
+  if (!owner || !['chzzk', 'cime', 'youtube'].includes(normalizedProvider)) return;
   assertProviderRuntimeConnected(owner, normalizedProvider);
+
+  if (normalizedProvider === 'chzzk') {
+    const sid = options.sid || `user:${owner}`;
+    const entry = await ensureSession(sid, options.channelId || undefined);
+    chzzkRuntimeErrors.delete(String(sid));
+    return entry;
+  }
 
   if (normalizedProvider === 'cime') {
     let entry = cimeSessionStore.get(owner);
@@ -1246,7 +1349,7 @@ function scheduleProviderSessionRecovery(provider, ownerUserId, options = {}) {
   const normalizedProvider = normalizeRuntimeProvider(provider);
   const owner = String(ownerUserId || '').replace(/^user:/, '').trim();
   const key = providerRuntimeRecoveryKey(normalizedProvider, owner);
-  if (!key || !['cime', 'youtube'].includes(normalizedProvider)) return null;
+  if (!key || !['chzzk', 'cime', 'youtube'].includes(normalizedProvider)) return null;
   if (isProviderSessionRecoveryBlocked(normalizedProvider, owner, options.error)) return null;
   const existing = providerRuntimeRecoverySupervisor.getState(key);
   if (existing) return existing;
@@ -1255,7 +1358,7 @@ function scheduleProviderSessionRecovery(provider, ownerUserId, options = {}) {
     : undefined);
   const state = providerRuntimeRecoverySupervisor.schedule(key, async () => {
     try {
-      await recoverProviderSession(normalizedProvider, owner);
+      await recoverProviderSession(normalizedProvider, owner, options);
       console.log(`[runtime-recovery] ${normalizedProvider} session recovered: ${owner}`);
     } catch (error) {
       if (normalizedProvider === 'youtube' && error?.retryAfterMs == null) {
@@ -1294,6 +1397,7 @@ function closeProviderRuntimeAfterLeaseLoss(state) {
     scheduleProviderSessionRecovery('cime', state.ownerUserId, { reason: 'runtime_lease_lost' });
   } else if (state.provider === 'chzzk') {
     closeChzzkProviderRuntimeSession(state.ownerUserId, 'runtime_lease_lost');
+    scheduleProviderSessionRecovery('chzzk', state.ownerUserId, { reason: 'runtime_lease_lost', channelId: state.channelId });
   }
 }
 
@@ -1304,6 +1408,10 @@ async function renewProviderRuntimeLeases() {
     for (const state of Array.from(providerRuntimeLeases.values())) {
       try {
         const renewed = await claimRuntimeLease(state.resourceKey, INSTANCE_ID, PROVIDER_RUNTIME_LEASE_TTL_MS);
+        if (runtimeReadinessState.shuttingDown) {
+          if (renewed?.acquired) await releaseRuntimeLease(state.resourceKey, INSTANCE_ID).catch(() => {});
+          return;
+        }
         if (!renewed?.acquired) {
           providerRuntimeLeases.delete(state.resourceKey);
           closeProviderRuntimeAfterLeaseLoss(state);
@@ -4063,6 +4171,7 @@ app.post('/api/video-donation/control-by-token', async (req, res) => {
         && head?.kind === 'bgm' && head.id === req.body.itemId && owner?.readyItemId === head.id
         && req.body.readyItemId === head.id && state && !state.paused
         && Number(req.body.playbackRevision || 0) === Number(state.playbackRevision || 0)
+        && (!req.body.playbackEpoch || req.body.playbackEpoch === state.playbackEpoch)
         && typeof reportedAt === 'number' && Number.isFinite(reportedAt)) {
         const atSec = Math.max(getPvdItemStartSec(head), Math.min(getPvdItemStartSec(head) + head.durationSec, reportedAt));
         setPvdPlaybackBaseFromAtSec(state, head, atSec);
@@ -4131,6 +4240,17 @@ app.post('/api/video-donation/control-by-token', async (req, res) => {
     if (!['pause', 'play', 'seek'].includes(op)) return res.status(400).json({ error: 'invalid op' });
     // Player state events report playback, but cannot override an explicit pause.
     const playbackState = pvdPlaybackState.get(sid);
+    const playerControl = ['player', 'bgm-window'].includes(req.body?.source);
+    if (playerControl && q[0].kind === 'bgm' && bgmPlayerPresence.current(sid)?.clientId !== req.body.clientId) {
+      return res.status(409).json({ error: 'bgm_player_owned' });
+    }
+    if (playerControl && ((req.body.playbackEpoch && req.body.playbackEpoch !== playbackState?.playbackEpoch)
+      || (Number.isSafeInteger(req.body.playbackRevision) && req.body.playbackRevision !== Number(playbackState?.playbackRevision || 0)))) {
+      return res.status(409).json({ error: 'stale_playback_control' });
+    }
+    if (req.body?.source === 'player' && op === 'seek' && q[0].kind !== 'bgm') {
+      return res.json({ ok: true, ignored: true });
+    }
     if (req.body?.source === 'player' && playbackState?.chzzkBlocked && (op === 'play' || op === 'pause')) {
       return res.json({ ok: true, ignored: true, paused: true, chzzkDonationPaused: true, atSec: getCurrentAtSec(sid) });
     }
@@ -4145,7 +4265,9 @@ app.post('/api/video-donation/control-by-token', async (req, res) => {
     )) {
       return res.json({ ok: true, ignored: true, paused: playbackState.paused === true, atSec: getCurrentAtSec(sid) });
     }
-    return res.json(await controlPvdPlaybackForSid(sid, op, req.body?.atSec));
+    return res.json(await controlPvdPlaybackForSid(sid, op, req.body?.atSec, {
+      clientId: String(req.body?.clientId || ''), controlId: String(req.body?.controlId || ''),
+    }));
   } catch (e) {
     return res.status(Number(e?.statusCode) || 500).json({ error: 'failed' });
   }
@@ -5698,7 +5820,7 @@ const cacheManager = new CacheManager();
 setInterval(cleanupStaleCache, 30 * 60 * 1000);
 
 // Run enhanced session cleanup every 15 minutes
-setInterval(cleanupInactiveSessions, 15 * 60 * 1000);
+setInterval(() => { if (chatIngress.canRun()) cleanupInactiveSessions(); }, 15 * 60 * 1000);
 
 // Record memory usage every 5 minutes
 setInterval(() => {
@@ -5710,6 +5832,7 @@ let macroDeliveryCycleRunning = false;
 
 setInterval(async () => {
   if (sessionValidationCycleRunning) return;
+  if (!chatIngress.canRun()) return;
   sessionValidationCycleRunning = true;
   try {
     const now = Date.now();
@@ -6026,9 +6149,11 @@ async function isMacroDeliveryTargetLive(target) {
 
 setInterval(async () => {
   if (macroDeliveryCycleRunning) return;
+  if (!chatIngress.canRun()) return;
   macroDeliveryCycleRunning = true;
   try {
     for (const target of getMacroDeliveryTargets()) {
+      if (!chatIngress.canRun()) break;
       const sid = target.sid;
 
       const live = await isMacroDeliveryTargetLive(target);
@@ -6041,6 +6166,7 @@ setInterval(async () => {
       // Process each macro independently using the new timer manager
       let macrosSentCount = 0;
       for (const m of macros) {
+        if (!chatIngress.canRun()) break;
         const timerMacroId = `${m.id}:${target.provider}`;
         // Check if this specific macro should be sent based on its individual timer
         if (macroTimerManager.shouldSendMacro(sid, timerMacroId, m.intervalSec)) {
@@ -6770,6 +6896,7 @@ app.post('/api/video-donation/reorder', async (req, res) => {
           queue: reordered,
           startedAt: pvdPlaybackState.get(sid)?.baseStartMs || null,
           playbackRevision: pvdPlaybackState.get(sid)?.playbackRevision || 0,
+          playbackEpoch: pvdPlaybackState.get(sid)?.playbackEpoch,
           paused: pvdPlaybackState.get(sid)?.paused || false,
           idleDeferred: pvdPlaybackState.get(sid)?.idleDeferred === true,
           atSec: reordered[0] ? getCurrentAtSec(sid) : 0,
@@ -6877,6 +7004,7 @@ app.post('/api/video-donation/delete-refund', async (req, res) => {
           queue: q,
           startedAt: pvdPlaybackState.get(sid)?.baseStartMs || null,
           playbackRevision: pvdPlaybackState.get(sid)?.playbackRevision || 0,
+          playbackEpoch: pvdPlaybackState.get(sid)?.playbackEpoch,
           paused: pvdPlaybackState.get(sid)?.paused || false,
           idleDeferred: pvdPlaybackState.get(sid)?.idleDeferred === true,
           atSec: q[0] ? getCurrentAtSec(sid) : 0,
@@ -6903,9 +7031,10 @@ function getVideoQueue(sid) {
 
 const bgmPlayerPresence = createBgmPlayerPresence();
 setInterval(() => {
+  if (!chatIngress.canRun()) return;
   for (const [sid, state] of pvdPlaybackState) {
     if (getVideoQueue(sid)[0]?.kind === 'bgm' && !state.bgmBlocked && !bgmPlayerPresence.current(sid)) {
-      broadcastPvdStart(sid).catch(() => null);
+      runActiveRuntimeTask(() => broadcastPvdStart(sid)).catch(() => null);
     }
   }
 }, 5000).unref?.();
@@ -6971,9 +7100,14 @@ async function dispatchDurableRuntimeJob(job) {
 }
 
 async function runDurableRuntimeWorker() {
-  if (durableRuntimeWorkerRunning) return false;
+  if (durableRuntimeWorkerRunning || !chatIngress.canRun()) return false;
   durableRuntimeWorkerRunning = true;
   try {
+    if (chatIngress.enabled) {
+      const jobIds = [...new Set([...videoDonationQueues.values(), ...rouletteQueues.values()]
+        .flatMap(queue => queue.map(item => item.runtimeJobId).filter(Boolean)))];
+      await renewDurableRuntimeJobs({ workerId: DURABLE_RUNTIME_WORKER_ID, jobIds });
+    }
     await renewChzzkVideoQueueJobs();
     const jobs = await claimDurableRuntimeJobs({
       workerId: DURABLE_RUNTIME_WORKER_ID,
@@ -7136,6 +7270,7 @@ function getChzzkVideoDonationPublicSettings(sid, settings) {
 let chzzkVideoReconcileRunning = false;
 const chzzkVideoConfiguredSids = new Set();
 async function reconcileChzzkVideoConnections() {
+  if (!chatIngress.canRun()) return;
   if (chzzkVideoReconcileRunning) return;
   chzzkVideoReconcileRunning = true;
   try {
@@ -7150,8 +7285,8 @@ async function reconcileChzzkVideoConnections() {
   } catch { console.warn('[CHZZK video] Connection reconciliation unavailable; retrying'); }
   finally { chzzkVideoReconcileRunning = false; }
 }
-setTimeout(() => { void reconcileChzzkVideoConnections(); }, 1500).unref?.();
-setInterval(() => { void reconcileChzzkVideoConnections(); }, 15000).unref?.();
+setTimeout(() => { void runActiveRuntimeTask(reconcileChzzkVideoConnections); }, 1500).unref?.();
+setInterval(() => { void runActiveRuntimeTask(reconcileChzzkVideoConnections); }, 15000).unref?.();
 
 async function renewChzzkVideoQueueJobs() {
   const entries = [...videoDonationQueues.entries()];
@@ -7218,6 +7353,7 @@ function createPvdPlaybackState(item, options = {}) {
   const paused = idleDeferred || bgmBlocked || resume?.paused === true;
   const atSec = Math.max(getPvdItemStartSec(item), Number(resume?.atSec) || getPvdItemStartSec(item));
   return {
+    playbackEpoch: `pvd_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`,
     baseStartMs: Date.now() - (atSec - getPvdItemStartSec(item)) * 1000,
     paused,
     pausedAtSec: paused ? atSec : null,
@@ -7352,7 +7488,7 @@ function isChzzkClipFallbackTitle(title, mediaId) {
 }
 
 async function broadcastPvdControl(sid, message) {
-  const payload = { type: 'control', ...message, serverNow: Date.now() };
+  const payload = { type: 'control', ...message, playbackEpoch: pvdPlaybackState.get(sid)?.playbackEpoch, serverNow: Date.now() };
   await broadcastToChannelBySid(sid, 'pvd', payload).catch(() => null);
   const set = pvdSidSockets.get(sid);
   const text = JSON.stringify(payload);
@@ -7389,6 +7525,7 @@ function pvdDeterministicTokenFromUid(uid) {
 
 function scheduleNextPvdAutoPop(sid) {
   try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
+  if (!chatIngress.canRun()) return;
   const q = getVideoQueue(sid);
   const item = q[0];
   if (!item) return;
@@ -7425,6 +7562,8 @@ function scheduleNextPvdAutoPop(sid) {
   const ms = Math.max(500, remaining * 1000);
   const scheduledItemKey = getPvdQueueItemKey(item);
   const timer = setTimeout(async () => {
+    if (!chatIngress.canRun()) return;
+    runtimeBackgroundInFlight += 1;
     try {
       // Confirm head unchanged and not paused before popping
       const head = getVideoQueue(sid)[0];
@@ -7443,7 +7582,7 @@ function scheduleNextPvdAutoPop(sid) {
       if (result.popped) await broadcastPvdStart(sid);
     } catch (e) {
       console.warn('[pvd:autoPop] failed', e?.message || e);
-    }
+    } finally { runtimeBackgroundInFlight -= 1; }
   }, ms);
   videoDonationTimers.set(sid, timer);
 }
@@ -7478,7 +7617,7 @@ async function activateDeferredPvdPlayback(sid, expectedItemId = '') {
   return { activated: true, item, queue: q };
 }
 
-async function controlPvdPlaybackForSid(sid, op, requestedAtSec) {
+async function controlPvdPlaybackForSid(sid, op, requestedAtSec, origin = {}) {
   const q = getVideoQueue(sid);
   const item = q[0] || null;
   if (!item) {
@@ -7547,6 +7686,8 @@ async function controlPvdPlaybackForSid(sid, op, requestedAtSec) {
     op,
     itemId: getPvdQueueItemKey(item),
     playbackRevision: state.playbackRevision,
+    clientId: origin.clientId,
+    controlId: origin.controlId,
     atSec: safeAtSec,
     paused: state.paused === true,
   });
@@ -7594,6 +7735,7 @@ async function broadcastPvdStart(sid, options = {}) {
       queue: q,
       startedAt: q[0] ? state?.baseStartMs || null : null,
       playbackRevision: state?.playbackRevision || 0,
+      playbackEpoch: state?.playbackEpoch,
       paused: q[0] ? state?.paused === true : null,
       idleDeferred: q[0] ? state?.idleDeferred === true : false,
       atSec: q[0] ? getCurrentAtSec(sid) : 0,
@@ -7638,6 +7780,7 @@ async function broadcastPvdStart(sid, options = {}) {
         queue: q,
         startedAt: q[0] ? state?.baseStartMs || null : null,
         playbackRevision: state?.playbackRevision || 0,
+        playbackEpoch: state?.playbackEpoch,
         paused: q[0] ? state?.paused === true : null,
         atSec: q[0] ? getCurrentAtSec(sid) : 0,
         serverNow: Date.now(),
@@ -7770,7 +7913,12 @@ app.get('/healthz', (req, res) => {
 
 async function handleReadiness(req, res) {
   const db = await checkDatabaseReady();
-  const ready = db.ok && runtimeReadinessState.initialBootstrapCompleted && !runtimeReadinessState.shuttingDown;
+  let ingressReady = true;
+  if (chatIngress.enabled) {
+    try { ingressReady = (await chatIngress.refresh()).healthy !== false; }
+    catch { ingressReady = false; }
+  }
+  const ready = db.ok && ingressReady && runtimeReadinessState.initialBootstrapCompleted && !runtimeReadinessState.shuttingDown;
   return res.status(ready ? 200 : 503).json({
     ok: ready,
     check: 'readiness',
@@ -7783,6 +7931,15 @@ async function handleReadiness(req, res) {
       lastMonitorAt: runtimeReadinessState.lastMonitorAt,
       lastMonitorError: runtimeReadinessState.lastMonitorError,
       shuttingDown: runtimeReadinessState.shuttingDown,
+      ingressReady,
+      runtimeId: chatIngress.enabled ? chatIngress.runtimeId : null,
+      active: chatIngress.active,
+      draining: chatIngress.draining,
+      ingress: chatIngress.enabled ? {
+        backlog: chatIngress.status?.backlog ?? null,
+        inflight: chatIngress.status?.inflight ?? null,
+        needsReview: chatIngress.status?.uncertain ?? null,
+      } : null,
     },
     db,
   });
@@ -8331,6 +8488,7 @@ app.get('/api/video-donation/now-playing', async (req, res) => {
       startedAt: state?.baseStartMs || null,
       playbackRevision: state?.playbackRevision || 0,
       paused: state?.paused === true,
+      playbackEpoch: state?.playbackEpoch,
       idleDeferred: state?.idleDeferred === true,
       atSec: getCurrentAtSec(sid),
       elapsedSec: getCurrentPvdElapsedSec(sid),
@@ -12872,6 +13030,9 @@ function markProviderRuntimeConnected(ownerUserId, provider) {
 }
 
 function markProviderRuntimeDisconnected(ownerUserId, provider, platformUserId = null, reason = 'platform_disconnected') {
+  if (chatIngress.enabled) chatIngress.close({ provider, ownerUserId }).catch(error => {
+    console.warn('[chat-ingress] Receiver close pending:', error?.message || error);
+  });
   const key = providerRuntimeGuardKey(ownerUserId, provider);
   if (!key) return false;
   disconnectedProviderRuntimeGuards.set(key, {
@@ -12883,6 +13044,7 @@ function markProviderRuntimeDisconnected(ownerUserId, provider, platformUserId =
 }
 
 function assertProviderRuntimeConnected(ownerUserId, provider) {
+  if (runtimeReadinessState.shuttingDown) throw new Error('server_shutting_down');
   const key = providerRuntimeGuardKey(ownerUserId, provider);
   if (!key || !disconnectedProviderRuntimeGuards.has(key)) return;
   const guard = disconnectedProviderRuntimeGuards.get(key) || {};
@@ -13579,6 +13741,7 @@ function reconcileSessionAfterProviderDisconnect(sid, provider) {
  *
  */
 async function updateSessionStateLocked(sid, isLive, startTimestamp) {
+  if (!chatIngress.canRun()) return { operation: 'ignore_observation', reason: 'runtime_standby' };
   if (accountDeletionSessionGuards.has(sid)) {
     return { operation: 'ignore_observation', reason: 'account_deletion_pending' };
   }
@@ -14013,6 +14176,7 @@ function isChzzkLiveDetailOpen(content) {
 
 async function ensureChzzkChatSessionForLiveSid(sid, channelId = null) {
   if (!CHZZK_CHAT_CONNECT_ON_LIVE || !sid) return null;
+  if (runtimeReadinessState.shuttingDown) return null;
   let targetChannelId = channelId ? String(channelId) : '';
   if (!targetChannelId) {
     try {
@@ -14025,6 +14189,7 @@ async function ensureChzzkChatSessionForLiveSid(sid, channelId = null) {
 
   const existing = sessionStore.get(sid);
   if (existing?.connected && (existing?.subscribed?.has?.('ALL') || existing?.subscribed?.has?.(targetChannelId))) return existing;
+  if (getProviderSessionRecoveryStatus('chzzk', ownerUserIdFromSid(sid))) return null;
 
   const key = `${sid}:${targetChannelId}`;
   if (liveChatEnsurePromises.has(key)) return liveChatEnsurePromises.get(key);
@@ -14047,6 +14212,9 @@ async function ensureChzzkChatSessionForLiveSid(sid, channelId = null) {
         at: new Date().toISOString(),
       });
       console.warn(`[CHZZK] Failed to ensure live chat session for ${sid} channel=${targetChannelId}:`, error?.response?.data || error?.message || error);
+      scheduleProviderSessionRecovery('chzzk', ownerUserIdFromSid(sid), {
+        sid, channelId: targetChannelId, reason: 'chat_subscription_failed', error,
+      });
       return null;
     })
     .finally(() => {
@@ -14776,6 +14944,10 @@ app.get('/api/warudo/debug/ws', async (req, res) => {
 validateSecretEncryptionConfig();
 validateDatabaseProviderConfig();
 await initDb();
+if (chatIngress.enabled) {
+  // The handoff cannot safely degrade to a non-transactional REST adapter.
+  await renewDurableRuntimeJobs({ workerId: `preflight:${chatIngress.runtimeId}`, jobIds: [] });
+}
 
 async function refreshPostgRESTSchema() {
   try {
@@ -15080,6 +15252,7 @@ async function applyDrawingRetentionResult(result) {
 }
 
 async function runPrivacyRetentionCleanup(reason = 'scheduled') {
+  if (!chatIngress.canRun()) return;
   if (!PRIVACY_RETENTION_CLEANUP_ENABLED || privacyRetentionCleanupRunning) return null;
   privacyRetentionCleanupRunning = true;
   try {
@@ -15826,6 +15999,7 @@ setInterval(cleanupTokenStats, 24 * 60 * 60 * 1000);
 /**
  */
 async function runTokenMaintenanceScheduler() {
+  if (!chatIngress.canRun()) return;
   try {
     console.log('[Token Scheduler] Starting token maintenance...');
 
@@ -21993,7 +22167,7 @@ app.use('/api/chzzk/events', async (req, res, next) => {
 // Background poller: periodically refresh live status for recently active sids
 let chzzkLivePollRunning = false;
 setInterval(async () => {
-  if (chzzkLivePollRunning) return;
+  if (chzzkLivePollRunning || !chatIngress.canRun()) return;
   chzzkLivePollRunning = true;
   try {
     const now = Date.now();
@@ -24474,9 +24648,15 @@ app.post('/api/auth/chzzk/session/attach', async (req, res) => {
 
 // Helper to get a valid access token (refreshing if necessary)
 async function getValidAccessToken(sid) {
+  return singleFlight(`chzzk-token:${sid}`, () => loadValidChzzkAccessToken(sid));
+}
+
+async function loadValidChzzkAccessToken(sid) {
   assertProviderRuntimeConnected(ownerUserIdFromSid(sid), 'chzzk');
-  // Reuse logic in /api/auth/chzzk/token by calling the function flow inline
   let tokens = await getTokens(sid);
+  const platformTokens = !tokens && String(sid).startsWith('user:')
+    ? await getPlatformTokens('chzzk', ownerUserIdFromSid(sid)) : null;
+  tokens ||= platformTokens;
   if (!tokens) throw new Error('No tokens stored');
   const now = new Date();
   const expiresAt = new Date(tokens.expiresAt);
@@ -24494,13 +24674,21 @@ async function getValidAccessToken(sid) {
     const rPayload = (r?.data && r.data.content) ? r.data.content : r?.data || {};
     const { accessToken, refreshToken, tokenType, expiresIn } = rPayload;
     const expectedTokens = tokens;
+    if (!accessToken) throw new Error('CHZZK token refresh returned no access token');
     tokens = {
       accessToken,
       refreshToken: refreshToken || tokens.refreshToken,
       tokenType: tokenType || 'Bearer',
       expiresAt: computeExpiresAt(expiresIn || 86400)
     };
-    await updateTokens(sid, tokens, { expectedTokens });
+    assertProviderRuntimeConnected(ownerUserIdFromSid(sid), 'chzzk');
+    if (platformTokens) {
+      const updated = await upsertPlatformTokens('chzzk', ownerUserIdFromSid(sid), platformTokens.platformUserId,
+        { ...platformTokens, ...tokens }, { expectedTokens });
+      if (!updated) throw new Error('CHZZK authorization changed during refresh');
+    } else {
+      await updateTokens(sid, tokens, { expectedTokens });
+    }
   }
   return tokens.accessToken;
 }
@@ -24561,13 +24749,30 @@ async function ensureSession(sid, channelId) {
       channelId = await resolveChannelIdForOwnerUserId(ownerUserId, { provider: 'chzzk', allowFallback: false });
     } catch { }
   }
+  const entry = await singleFlight(`chzzk-session:${channelId || sid}`, () => ensureChzzkSessionOwned(sid, channelId));
+  assertProviderRuntimeConnected(ownerUserId, 'chzzk');
+  sessionStore.set(sid, entry);
+  entry.sids?.add(sid);
+  return entry;
+}
+
+async function ensureChzzkSessionOwned(sid, channelId) {
+  const ownerUserId = ownerUserIdFromSid(sid);
+  assertProviderRuntimeConnected(ownerUserId, 'chzzk');
   await ensureProviderRuntimeLease('chzzk', ownerUserId, { channelId });
+  const remote = chatIngress.enabled ? await chatIngress.ensure({ provider: 'chzzk', ownerUserId, sid, channelId }) : null;
   let entry = sessionStore.get(sid);
   // If we already have a per-channel session, reuse it and map this sid to it
   const chKey = String(channelId || '');
   if (!entry && chKey && channelSessionStore.has(chKey)) {
     entry = channelSessionStore.get(chKey);
     sessionStore.set(sid, entry);
+  }
+  if (remote && entry) {
+    entry.sessionKey = remote.sessionKey;
+    entry.connected = remote.connected === true;
+    entry.socket.connected = entry.connected;
+    entry.subscribed = new Set(remote.subscribed ? ['ALL'] : []);
   }
   if (entry && entry.connected) {
     // Ensure subscription for requested channel
@@ -24584,12 +24789,13 @@ async function ensureSession(sid, channelId) {
     return pending;
   }
 
-  const accessToken = await getValidAccessToken(sid);
+  const accessToken = remote ? null : await getValidAccessToken(sid);
   // Create session (user)
-  const sessResp = await axios.get(`${OPENAPI_BASE}/open/v1/sessions/auth`, {
-    headers: { Authorization: `Bearer ${accessToken}` }
+  const sessResp = remote ? null : await axios.get(`${OPENAPI_BASE}/open/v1/sessions/auth`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    timeout: DEFAULT_TIMEOUT,
   });
-  const url = (sessResp?.data && sessResp.data.content && sessResp.data.content.url) ? sessResp.data.content.url : sessResp?.data?.url;
+  const url = remote ? 'ingress:chzzk' : (sessResp?.data && sessResp.data.content && sessResp.data.content.url) ? sessResp.data.content.url : sessResp?.data?.url;
   if (!url) throw new Error('Failed to create session URL');
 
   const socketOption = {
@@ -24601,6 +24807,7 @@ async function ensureSession(sid, channelId) {
 
   // If there is an existing socket, disconnect it to avoid session limits
   if (entry && entry.socket) {
+    entry.expectedDisconnect = true;
     try {
       if (entry.socket.connected || typeof entry.socket.disconnect === 'function') {
         entry.socket.disconnect();
@@ -24609,9 +24816,17 @@ async function ensureSession(sid, channelId) {
   }
 
   const createPromise = (async () => {
-    const io = await getIoClient();
-    const socket = typeof io === 'function' ? io(url, socketOption) : io.connect(url, socketOption);
+    const io = remote ? null : await getIoClient();
+    assertProviderRuntimeConnected(ownerUserId, 'chzzk');
+    const socket = remote ? createIngressSocket(remote) : typeof io === 'function' ? io(url, socketOption) : io.connect(url, socketOption);
     entry = { socket, sessionKey: null, queue: [], connected: false, subscribed: new Set(), channelId: chKey || null, sids: new Set([sid]), primarySid: sid, expectedDisconnect: false };
+    if (remote) {
+      entry.sessionKey = remote.sessionKey;
+      entry.connected = remote.connected === true;
+      entry.subscribed = new Set(remote.subscribed ? ['ALL'] : []);
+      entry.remoteIngress = true;
+      Object.assign(entry, ingressProviderState.get(`chzzk:${sid}`) || {});
+    }
     sessionStore.set(sid, entry);
     if (chKey) channelSessionStore.set(chKey, entry);
 
@@ -24621,6 +24836,7 @@ async function ensureSession(sid, channelId) {
 
     socket.on('SYSTEM', async (raw) => {
       try {
+        if (runtimeReadinessState.shuttingDown || sessionStore.get(sid) !== entry) return;
         const data = (typeof raw === 'string') ? JSON.parse(raw) : raw;
         const type = data?.type;
         console.log('[CHZZK SYSTEM]', type, data);
@@ -24703,7 +24919,7 @@ async function ensureSession(sid, channelId) {
 
       // Server-side rule processing: if message starts with any enabled keyword, reply
       relayChzzkAvatarEvent(entry, ev);
-      (async () => {
+      return (async () => {
         try {
           const text = String(ev.message || '').trim();
           if (!text) return;
@@ -25368,6 +25584,7 @@ async function ensureSession(sid, channelId) {
               });
             } catch (e) {
               console.error('Backend auto-reply send error', e?.response?.data || e.message);
+              if (entry.remoteIngress) throw e;
             }
 
             // Send only one matching rule per message
@@ -25375,6 +25592,7 @@ async function ensureSession(sid, channelId) {
           }
         } catch (e) {
           console.error('Backend rule processing error', e?.message || e);
+          if (entry.remoteIngress) throw e;
         }
       })();
     });
@@ -25400,7 +25618,7 @@ async function ensureSession(sid, channelId) {
           const sid = entry.primarySid || [...sessionStore.entries()].find(([, e]) => e === entry)?.[0];
           if (!sid) return;
           // Paid events remain actionable after broadcast end, without a live lookup.
-          const settings = await getBotSettings(sid) || {};
+          const settings = (entry.remoteIngress ? await getBotSettingsStrict(sid) : await getBotSettings(sid)) || {};
           const channelUid = entry.channelId || (await resolveChzzkChannelUidsForSid(sid, settings))[0] || null;
           const amount = Math.max(0, Number(ev.amount || 0));
           const donorName = String(ev.user || '?듬챸');
@@ -25409,11 +25627,17 @@ async function ensureSession(sid, channelId) {
           await marbleRuntime.donation({
             sid, provider: 'chzzk', event: msg, userId: donorId, username: donorName,
             text: donorMessage, amount, currency: 'KRW',
-          }).catch((error) => console.warn('[Marble] CHZZK donation:', error?.message || error));
+          }).catch((error) => {
+            console.warn('[Marble] CHZZK donation:', error?.message || error);
+            if (entry.remoteIngress) throw error;
+          });
           await participationWheelRuntime.donation({
             sid, provider: 'chzzk', event: msg, userId: donorId, username: donorName,
             text: donorMessage, amount, currency: 'KRW',
-          }).catch((error) => console.warn('[Wheel] CHZZK donation:', error?.message || error));
+          }).catch((error) => {
+            console.warn('[Wheel] CHZZK donation:', error?.message || error);
+            if (entry.remoteIngress) throw error;
+          });
           // 1) Award channel points
           try {
             const pointsPerK = Math.max(0, Number(settings?.donation?.pointsPerK ?? 10));
@@ -25423,11 +25647,12 @@ async function ensureSession(sid, channelId) {
                 // Use donor's userId (channel id) as the points subject
                 const pointsUserId = donorId || `donor:${donorName}`;
                 if (!(await isChannelPointExcluded(settings, pointsUserId))) {
-                  try { await incrChannelPoints(channelUid, String(pointsUserId), donorName, award); } catch { }
+                  try { await incrChannelPoints(channelUid, String(pointsUserId), donorName, award); }
+                  catch (error) { if (entry.remoteIngress) throw error; }
                 }
               }
             }
-          } catch { }
+          } catch (error) { if (entry.remoteIngress) throw error; }
 
           // 2) Find ALL matching donation rules
           const responsesToSend = [];
@@ -25439,6 +25664,7 @@ async function ensureSession(sid, channelId) {
               if (!donationRuleMatchesMessage(r, donorMessage)) continue;
 
               const { text: built, features: donationFeatures } = await renderDonationRuleResponse(r, {
+                ingressEvent: entry.remoteIngress === true,
                 sid, provider: 'chzzk', userId: donorId, username: donorName,
                 amount, message: donorMessage, source: 'donation-rule',
                 channelUid,
@@ -25463,11 +25689,14 @@ async function ensureSession(sid, channelId) {
               });
               if (built && built.length > 0) responsesToSend.push(built);
             }
-          } catch { }
+          } catch (error) { if (entry.remoteIngress) throw error; }
 
           // 3) Send chat for every matched rule (separately)
           try {
-            if (!entry.sessionKey) return;
+            if (!entry.sessionKey) {
+              if (entry.remoteIngress && responsesToSend.length) throw new Error('ingress_reply_session_unavailable');
+              return;
+            }
             const accessToken = await getValidAccessToken(sid);
             const url = `${OPENAPI_BASE}/open/v1/chats/send`;
             for (const msgText of responsesToSend) {
@@ -25475,13 +25704,14 @@ async function ensureSession(sid, channelId) {
               await axios.post(url, { message: msgText }, {
                 params: { sessionKey: entry.sessionKey },
                 headers: { Authorization: `Bearer ${accessToken}` }
-              }).catch(() => { });
+              }).catch((error) => { if (entry.remoteIngress) throw error; });
               // small delay to avoid rate limits
               await new Promise(r => setTimeout(r, 120));
             }
-          } catch { }
+          } catch (error) { if (entry.remoteIngress) throw error; }
         } catch (error) {
           console.error('[CHZZK] Donation automation error', error?.message || error);
+          if (entry.remoteIngress) throw error;
         }
       })();
     });
@@ -25515,6 +25745,7 @@ async function ensureSession(sid, channelId) {
         status: null,
         at: new Date().toISOString(),
       });
+      scheduleProviderSessionRecovery('chzzk', ownerUserId, { sid, channelId, reason: 'websocket_closed' });
     });
 
     const recordSocketError = (error) => {
@@ -25525,6 +25756,7 @@ async function ensureSession(sid, channelId) {
         at: new Date().toISOString(),
       });
       console.error('[CHZZK socket error]', message);
+      scheduleProviderSessionRecovery('chzzk', ownerUserId, { sid, channelId, reason: 'websocket_error', error });
     };
     socket.on('connect_error', recordSocketError);
     socket.on('error', recordSocketError);
@@ -25536,6 +25768,7 @@ async function ensureSession(sid, channelId) {
   try {
     const created = await createPromise;
     await ensureSubscribed(created, sid, channelId);
+    assertProviderRuntimeConnected(ownerUserId, 'chzzk');
     chzzkRuntimeErrors.delete(String(sid));
     return created;
   } finally {
@@ -25544,6 +25777,8 @@ async function ensureSession(sid, channelId) {
 }
 
 async function ensureSubscribed(entry, sid, channelId) {
+  assertProviderRuntimeConnected(ownerUserIdFromSid(sid), 'chzzk');
+  if (chatIngress.enabled) return;
   // Subscriptions are per user session in CHZZK docs; channelId is not required for subscribe endpoints.
   if (entry.subscribed.has('ALL')) return;
   if (entry.subscribing) return entry.subscribing;
@@ -25553,11 +25788,13 @@ async function ensureSubscribed(entry, sid, channelId) {
     // wait briefly for the SYSTEM connected message
     const start = Date.now();
     while (!entry.sessionKey && Date.now() - start < 8000) {
+      assertProviderRuntimeConnected(ownerUserIdFromSid(sid), 'chzzk');
       await new Promise(r => setTimeout(r, 50));
     }
   }
   if (!entry.sessionKey) throw new Error('No sessionKey yet');
   const accessToken = await getValidAccessToken(sid);
+  assertProviderRuntimeConnected(ownerUserIdFromSid(sid), 'chzzk');
   await subscribeEvent('chat', entry.sessionKey, undefined, accessToken);
   await subscribeEvent('donation', entry.sessionKey, undefined, accessToken);
   await subscribeEvent('subscription', entry.sessionKey, undefined, accessToken);
@@ -25596,6 +25833,7 @@ async function subscribeEvent(kind, sessionKey, channelId, accessToken) {
   try {
     await axios.post(url, null, {
       params: { sessionKey },
+      timeout: DEFAULT_TIMEOUT,
       headers: {
         Authorization: `Bearer ${accessToken}`,
       },
@@ -26238,10 +26476,22 @@ async function sendYoutubeChat(ownerUserId, liveChatId, message) {
 
 async function renderDonationRuleResponse(rule, context) {
   assertSafeTextPayload([rule, context]);
+  const desktopErrors = [];
   const desktop = dispatchDonationRuleDesktop(rule, context, {
     broadcastToDesktop,
-    onError: (error) => console.warn('[Donation Response] Desktop delivery failed:', error?.message || error),
+    onError: (error) => {
+      desktopErrors.push(error);
+      console.warn('[Donation Response] Desktop delivery failed:', error?.message || error);
+    },
   });
+  if (chatIngress.enabled && desktop.completion) {
+    // Timed repeats keep their existing non-blocking chat behavior, but an API
+    // deployment must wait for the entire scheduled batch before taking a snapshot.
+    runtimeBackgroundInFlight += 1;
+    void desktop.completion.catch(error => {
+      console.error('[chat-ingress] Scheduled desktop delivery failed:', error?.message || error);
+    }).finally(() => { runtimeBackgroundInFlight -= 1; });
+  }
   const result = await renderDonationResponse(rule.response, {
     ...context, ruleId: rule.id || null, ruleName: rule.name || null,
   }, {
@@ -26250,6 +26500,10 @@ async function renderDonationRuleResponse(rule, context) {
   });
   for (const failure of result.errors) {
     console.warn(`[Donation Response] ${context.provider} ${failure.phase} failed:`, failure.error?.message || failure.error);
+  }
+  if (context.ingressEvent) {
+    const failures = [...desktopErrors, ...result.errors.map(failure => failure.error)];
+    if (failures.length) throw new AggregateError(failures, 'ingress_donation_effect_incomplete');
   }
   return { ...result, ...desktop };
 }
@@ -26264,7 +26518,7 @@ async function processYoutubeDonationAutomation(entry, ev) {
     if (ev?.currency !== 'KRW') return;
     const ownerUserId = entry.ownerUserId;
     const sid = entry.primarySid || `user:${ownerUserId}`;
-    const settings = await getBotSettings(sid) || {};
+    const settings = (entry.remoteIngress ? await getBotSettingsStrict(sid) : await getBotSettings(sid)) || {};
     const amount = Math.max(0, Number(ev.amount || 0));
     const donorName = String(ev.user || 'Unknown');
     const donorId = String(ev.userId || `youtube-donor:${donorName}`);
@@ -26273,16 +26527,22 @@ async function processYoutubeDonationAutomation(entry, ev) {
     await marbleRuntime.donation({
       sid, provider: 'youtube', event: ev, userId: donorId, username: donorName,
       text: donorMessage, amount, currency: ev.currency,
-    }).catch((error) => console.warn('[Marble] YouTube donation:', error?.message || error));
+    }).catch((error) => {
+      console.warn('[Marble] YouTube donation:', error?.message || error);
+      if (entry.remoteIngress) throw error;
+    });
     await participationWheelRuntime.donation({
       sid, provider: 'youtube', event: ev, userId: donorId, username: donorName,
       text: donorMessage, amount, currency: ev.currency,
-    }).catch((error) => console.warn('[Wheel] YouTube donation:', error?.message || error));
+    }).catch((error) => {
+      console.warn('[Wheel] YouTube donation:', error?.message || error);
+      if (entry.remoteIngress) throw error;
+    });
 
     const pointsPerK = Math.max(0, Number(settings?.donation?.pointsPerK ?? 10));
     const award = calculateDonationPointAward(amount, pointsPerK);
     if (award > 0 && entry.channelId && !(await isChannelPointExcluded(settings, donorId))) {
-      await incrChannelPoints(entry.channelId, donorId, donorName, award).catch(() => { });
+      await incrChannelPoints(entry.channelId, donorId, donorName, award).catch((error) => { if (entry.remoteIngress) throw error; });
     }
 
     const responsesToSend = [];
@@ -26293,6 +26553,7 @@ async function processYoutubeDonationAutomation(entry, ev) {
       if (!donationRuleMatchesMessage(r, donorMessage)) continue;
 
       const { text: built, features: donationFeatures } = await renderDonationRuleResponse(r, {
+        ingressEvent: entry.remoteIngress === true,
         sid, provider: 'youtube', userId: donorId, username: donorName,
         amount, message: donorMessage, source: 'youtube-super-chat-rule',
         channelUid: entry.channelId || null,
@@ -26316,11 +26577,12 @@ async function processYoutubeDonationAutomation(entry, ev) {
     }
 
     for (const msgText of responsesToSend) {
-      await sendYoutubeChat(ownerUserId, entry.liveChatId, msgText).catch(() => { });
+      await sendYoutubeChat(ownerUserId, entry.liveChatId, msgText).catch((error) => { if (entry.remoteIngress) throw error; });
       await new Promise(r => setTimeout(r, 120));
     }
   } catch (e) {
     console.error('[YouTube] Super Chat automation error', e?.message || e);
+    if (entry.remoteIngress) throw e;
   }
 }
 
@@ -26710,6 +26972,7 @@ async function processYoutubeChatAutomation(entry, ev) {
     }
   } catch (e) {
     console.error('[YouTube] Chat automation error', e?.message || e);
+    if (entry.remoteIngress) throw e;
   }
 }
 
@@ -27010,9 +27273,66 @@ async function hydrateYoutubeReceiverApiMetadata(entry) {
   return liveInfo;
 }
 
+async function ensureIngressProviderEntry(provider, ownerUserId) {
+  assertProviderRuntimeConnected(ownerUserId, provider);
+  const sid = `user:${ownerUserId}`;
+  const metadata = await chatIngress.ensure({ provider, ownerUserId, sid });
+  assertProviderRuntimeConnected(ownerUserId, provider);
+  const store = provider === 'youtube' ? youtubeSessionStore : cimeSessionStore;
+  let entry = store.get(ownerUserId);
+  if (!entry || entry.closed) {
+    entry = {
+      provider, ownerUserId, primarySid: sid, queue: [], closed: false,
+      processedIds: new Set(), sentReplies: new Set(), recentOutboundMessages: new Map(),
+      acceptAfterTs: 0, remoteIngress: true,
+    };
+    store.set(ownerUserId, entry);
+    Object.assign(entry, ingressProviderState.get(`${provider}:${ownerUserId}`) || {});
+  }
+  for (const key of ['channelId', 'sessionKey', 'broadcastId', 'liveChatId', 'title', 'botChannelId', 'lastError']) {
+    entry[key] = metadata[key] ?? null;
+  }
+  entry.connected = metadata.connected === true;
+  entry.subscribed = new Set(metadata.subscribed ? ['ALL'] : []);
+  if (provider === 'cime') {
+    entry.ws ||= createIngressSocket(metadata);
+    entry.ws.readyState = entry.connected ? WebSocket.OPEN : WebSocket.CLOSED;
+  }
+  activeSids.set(sid, Date.now());
+  return entry;
+}
+
+async function dispatchIngressEvent(event) {
+  const { provider, ownerUserId, eventName, payload } = event;
+  assertProviderRuntimeConnected(ownerUserId, provider);
+  if (provider === 'chzzk') {
+    const entry = await ensureSession(event.sid || `user:${ownerUserId}`, event.channelId);
+    if (!['CHAT', 'DONATION', 'SUBSCRIPTION'].includes(eventName)) throw new Error('unsupported_ingress_event');
+    await entry.socket.dispatch(eventName, payload);
+    return;
+  }
+  if (provider !== 'cime' && provider !== 'youtube') throw new Error('unsupported_ingress_provider');
+  const entry = await ensureIngressProviderEntry(provider, ownerUserId);
+  const parsed = provider === 'cime' ? parseCimeEvent(payload) : normalizeYoutubeLiveChatItem(payload);
+  if (!parsed || inspectTextPayload(parsed.ev)) return;
+  const { ev, eventName: kind } = parsed;
+  // Receiver history is filtered at ingestion, never at API worker startup.
+  pushEvent(entry, ev);
+  entry.lastMessageAt = Date.now();
+  if (provider === 'youtube') {
+    if (kind === 'CHAT') await processYoutubeChatAutomation(entry, ev);
+    else if (kind === 'DONATION') await processYoutubeDonationAutomation(entry, ev);
+  } else {
+    if (kind === 'CHAT') await processCimeChatAutomation(entry, ev);
+    else if (kind === 'DONATION') await processCimeDonationAutomation(entry, ev);
+    else if (kind === 'SUBSCRIPTION') rememberCimeSubscriptionMonths(entry, ev);
+  }
+}
+
 async function ensureYoutubeSession(ownerUserId) {
   if (!ownerUserId) throw new Error('ownerUserId is required');
   assertProviderRuntimeConnected(ownerUserId, 'youtube');
+  if (chatIngress.enabled) return ensureIngressProviderEntry('youtube', ownerUserId);
   await ensureProviderRuntimeLease('youtube', ownerUserId);
   const existing = youtubeSessionStore.get(ownerUserId);
   if (existing && !existing.closed && (existing.connected || existing.stream || existing.chatClient)) return existing;
@@ -27022,6 +27342,7 @@ async function ensureYoutubeSession(ownerUserId) {
     const sid = `user:${ownerUserId}`;
     const botProfile = await getValidYoutubeBotProfile();
     const streamerChannel = await getYoutubeStreamerChannel(ownerUserId);
+    assertProviderRuntimeConnected(ownerUserId, 'youtube');
     if (!streamerChannel?.youtubeChannelId) {
       const entry = {
         provider: 'youtube',
@@ -27081,6 +27402,7 @@ async function ensureYoutubeSession(ownerUserId) {
       return entry;
     }
     const channelId = streamerChannel.youtubeChannelId || await getYoutubeChannelId(ownerUserId);
+    assertProviderRuntimeConnected(ownerUserId, 'youtube');
     const entry = {
       provider: 'youtube',
       ownerUserId,
@@ -27915,6 +28237,7 @@ async function processCimeChatAutomation(entry, ev) {
     }
   } catch (e) {
     console.error('[CIME] Chat automation error', e?.message || e);
+    if (entry.remoteIngress) throw e;
   }
 }
 
@@ -27922,7 +28245,7 @@ async function processCimeDonationAutomation(entry, ev) {
   try {
     const ownerUserId = entry.ownerUserId;
     const sid = entry.primarySid || `user:${ownerUserId}`;
-    const settings = await getBotSettings(sid) || {};
+    const settings = (entry.remoteIngress ? await getBotSettingsStrict(sid) : await getBotSettings(sid)) || {};
     const amount = Math.max(0, Number(ev.amount || 0));
     const donorName = String(ev.user || 'Unknown');
     const donorId = String(ev.userId || `donor:${donorName}`);
@@ -27931,16 +28254,22 @@ async function processCimeDonationAutomation(entry, ev) {
     await marbleRuntime.donation({
       sid, provider: 'cime', event: ev, userId: donorId, username: donorName,
       text: donorMessage, amount, currency: 'KRW',
-    }).catch((error) => console.warn('[Marble] CIME donation:', error?.message || error));
+    }).catch((error) => {
+      console.warn('[Marble] CIME donation:', error?.message || error);
+      if (entry.remoteIngress) throw error;
+    });
     await participationWheelRuntime.donation({
       sid, provider: 'cime', event: ev, userId: donorId, username: donorName,
       text: donorMessage, amount, currency: 'KRW',
-    }).catch((error) => console.warn('[Wheel] CIME donation:', error?.message || error));
+    }).catch((error) => {
+      console.warn('[Wheel] CIME donation:', error?.message || error);
+      if (entry.remoteIngress) throw error;
+    });
 
     const pointsPerK = Math.max(0, Number(settings?.donation?.pointsPerK ?? 10));
     const award = calculateDonationPointAward(amount, pointsPerK);
     if (award > 0 && entry.channelId && !(await isChannelPointExcluded(settings, donorId))) {
-      await incrChannelPoints(entry.channelId, donorId, donorName, award).catch(() => { });
+      await incrChannelPoints(entry.channelId, donorId, donorName, award).catch((error) => { if (entry.remoteIngress) throw error; });
     }
 
     const responsesToSend = [];
@@ -27951,6 +28280,7 @@ async function processCimeDonationAutomation(entry, ev) {
       if (!donationRuleMatchesMessage(r, donorMessage)) continue;
 
       const { text: built, features: donationFeatures } = await renderDonationRuleResponse(r, {
+        ingressEvent: entry.remoteIngress === true,
         sid, provider: 'cime', userId: donorId, username: donorName,
         amount, message: donorMessage, source: 'cime-donation-rule',
         channelUid: entry.channelId || null,
@@ -27974,11 +28304,12 @@ async function processCimeDonationAutomation(entry, ev) {
     }
 
     for (const msgText of responsesToSend) {
-      await sendCimeChat(ownerUserId, msgText).catch(() => { });
+      await sendCimeChat(ownerUserId, msgText).catch((error) => { if (entry.remoteIngress) throw error; });
       await new Promise(r => setTimeout(r, 120));
     }
   } catch (e) {
     console.error('[CIME] Donation automation error', e?.message || e);
+    if (entry.remoteIngress) throw e;
   }
 }
 
@@ -27997,6 +28328,7 @@ async function subscribeCimeEvent(kind, sessionKey, accessToken) {
 }
 
 async function ensureCimeSubscribed(entry) {
+  if (chatIngress.enabled) return;
   if (entry.subscribed.has('ALL')) return;
   const accessToken = await getValidCimeAccessToken(entry.ownerUserId);
   await subscribeCimeEvent('chat', entry.sessionKey, accessToken);
@@ -28033,6 +28365,7 @@ function scheduleCimeSubscribeRetry(entry) {
 async function ensureCimeSession(ownerUserId) {
   if (!ownerUserId) throw new Error('ownerUserId is required');
   assertProviderRuntimeConnected(ownerUserId, 'cime');
+  if (chatIngress.enabled) return ensureIngressProviderEntry('cime', ownerUserId);
   await ensureProviderRuntimeLease('cime', ownerUserId);
   const existing = cimeSessionStore.get(ownerUserId);
   if (existing && !existing.closed && existing.connected && existing.ws && existing.ws.readyState === WebSocket.OPEN) {
@@ -28076,6 +28409,7 @@ async function ensureCimeSession(ownerUserId) {
       reconnectTimer: null,
       closed: false
     };
+    assertProviderRuntimeConnected(ownerUserId, 'cime');
     cimeSessionStore.set(ownerUserId, entry);
     activeSids.set(entry.primarySid, Date.now());
 
@@ -28649,24 +28983,37 @@ async function forEachWithConcurrency(items, concurrency, worker) {
 // Bootstrap: ensure sessions for all sids that have tokens on startup
 async function bootstrapEnsureSessions() {
   try {
-    const sids = await listAllSidsWithTokens();
-    if (!Array.isArray(sids) || sids.length === 0) return;
-    console.log(`[bootstrap] Checking CHZZK live status for ${sids.length} sid(s)`);
+    const inventory = await Promise.allSettled([listAllSidsWithTokens(), listPlatformTokenUsers('chzzk')]);
+    const legacySids = inventory[0].status === 'fulfilled' ? inventory[0].value : [];
+    const platformUsers = inventory[1].status === 'fulfilled' ? inventory[1].value : [];
+    const sids = [...new Set([
+      ...legacySids,
+      ...platformUsers.map(user => user?.userId ? `user:${String(user.userId).replace(/^user:/, '')}` : ''),
+    ].map(value => String(value || '').trim()).filter(Boolean))];
     await forEachWithConcurrency(sids, REGISTERED_RUNTIME_MONITOR_CONCURRENCY, async (sid) => {
+      if (runtimeReadinessState.shuttingDown) return;
       try {
         activeSids.set(sid, Date.now());
         const settings = await getBotSettings(sid).catch(() => ({})) || {};
         const channelUids = await resolveChzzkChannelUidsForSid(sid, settings);
         if (channelUids.length) {
-          await refreshChzzkLiveStatusForSid(sid, { settings, channelUids, force: true });
+          // Subscribe even while offline, and wait for the subscription attempt.
+          // A failed live API lookup must not hold the chat connection hostage.
+          await Promise.allSettled([
+            ensureChzzkChatSessionForLiveSid(sid, channelUids[0]),
+            refreshChzzkLiveStatusForSid(sid, { settings, channelUids, force: true, ensureChat: false }),
+          ]);
         }
       } catch (e) {
         console.warn('[bootstrap] CHZZK live status check skipped:', sid, e?.response?.data || e?.message || e);
       }
       await sleep(100);
     });
+    const failed = inventory.find(result => result.status === 'rejected');
+    if (failed) throw failed.reason;
   } catch (e) {
     console.warn('[bootstrap] CHZZK live status bootstrap failed:', e?.message || e);
+    throw e;
   }
 }
 
@@ -28677,6 +29024,7 @@ async function bootstrapEnsureCimeSessions(reason = 'startup') {
     if (reason === 'startup') console.log(`[bootstrap] Checking CIME live status for ${users.length} account(s)`);
     let leaseConflictCount = 0;
     await forEachWithConcurrency(users, REGISTERED_RUNTIME_MONITOR_CONCURRENCY, async (user) => {
+      if (runtimeReadinessState.shuttingDown) return;
       const ownerUserId = String(user?.userId || '').trim();
       if (!ownerUserId) return;
       const existing = cimeSessionStore.get(ownerUserId);
@@ -28695,8 +29043,12 @@ async function bootstrapEnsureCimeSessions(reason = 'startup') {
       const channelId = String(user?.platformUserId || '').trim() || null;
       try {
         await ensureProviderRuntimeLease('cime', ownerUserId);
-        await refreshCimeLiveStatus(ownerUserId, sid, channelId);
-        await ensureCimeSession(ownerUserId);
+        const entry = await ensureCimeSession(ownerUserId);
+        await waitForCimeSessionOpen(entry);
+        await ensureCimeSubscribed(entry);
+        await refreshCimeLiveStatus(ownerUserId, sid, channelId).catch((error) => {
+          console.warn('[bootstrap] CIME live status refresh skipped:', ownerUserId, error?.message || error);
+        });
       } catch (e) {
         if (isProviderRuntimeLeaseConflict(e)) {
           leaseConflictCount += 1;
@@ -28716,6 +29068,7 @@ async function bootstrapEnsureCimeSessions(reason = 'startup') {
     }
   } catch (e) {
     console.warn('[bootstrap] CIME session bootstrap failed:', e?.message || e);
+    throw e;
   }
 }
 
@@ -28726,6 +29079,7 @@ async function bootstrapEnsureYoutubeSessions(reason = 'startup') {
     if (reason === 'startup') console.log(`[bootstrap] Checking YouTube live status for ${users.length} account(s)`);
     let leaseConflictCount = 0;
     await forEachWithConcurrency(users, REGISTERED_RUNTIME_MONITOR_CONCURRENCY, async (user) => {
+      if (runtimeReadinessState.shuttingDown) return;
       const ownerUserId = String(user?.userId || '').trim();
       if (!ownerUserId) return;
       const existing = youtubeSessionStore.get(ownerUserId);
@@ -28740,8 +29094,10 @@ async function bootstrapEnsureYoutubeSessions(reason = 'startup') {
       if (existing) disposeYoutubeSessionForRecovery(ownerUserId, 'bootstrap_stale_session');
       try {
         await ensureProviderRuntimeLease('youtube', ownerUserId);
-        await refreshYoutubeLiveStatus(ownerUserId, `user:${ownerUserId}`, { force: true });
         await ensureYoutubeSession(ownerUserId);
+        await refreshYoutubeLiveStatus(ownerUserId, `user:${ownerUserId}`, { force: true }).catch((error) => {
+          console.warn('[bootstrap] YouTube live status refresh skipped:', ownerUserId, error?.message || error);
+        });
         const streamerChannel = await getYoutubeStreamerChannel(ownerUserId).catch(() => null);
         if (streamerChannel?.youtubeChannelId && streamerChannel?.websubSecret) {
           await subscribeYoutubeChannelWebsub(null, streamerChannel);
@@ -28765,6 +29121,7 @@ async function bootstrapEnsureYoutubeSessions(reason = 'startup') {
     }
   } catch (e) {
     console.warn('[bootstrap] YouTube session bootstrap failed:', e?.message || e);
+    throw e;
   }
 }
 
@@ -28914,6 +29271,7 @@ async function validateYoutubeCentralBotAuthorization(summary) {
 }
 
 async function validateYoutubeAuthorizations(reason = 'scheduled') {
+  if (!chatIngress.canRun()) return;
   if (youtubeAuthorizationValidationRunning) return null;
   youtubeAuthorizationValidationRunning = true;
   const summary = {
@@ -28991,21 +29349,23 @@ setInterval(() => { validateYoutubeAuthorizations('scheduled').catch(() => null)
 async function bootstrapRegisteredChannelLiveStatuses(reason = 'startup') {
   console.log(`[bootstrap] Starting sequential live status check for registered channels reason=${reason}`);
   const shouldPrimeProviderObservations = providerObservationBootstrapPending;
+  const errors = [];
   if (shouldPrimeProviderObservations) {
-    await primeConnectedProviderLiveObservations();
+    await primeConnectedProviderLiveObservations().catch(error => errors.push(error));
   }
   try {
-    await bootstrapEnsureSessions();
+    await bootstrapEnsureSessions().catch(error => errors.push(error));
     await sleep(250);
-    await bootstrapEnsureCimeSessions();
+    await bootstrapEnsureCimeSessions(reason).catch(error => errors.push(error));
     await sleep(250);
-    await bootstrapEnsureYoutubeSessions();
+    await bootstrapEnsureYoutubeSessions(reason).catch(error => errors.push(error));
   } finally {
-    if (shouldPrimeProviderObservations) {
+    if (shouldPrimeProviderObservations && errors.length === 0 && !runtimeReadinessState.shuttingDown) {
       providerObservationBootstrapPending = false;
       await finalizeProviderLiveObservationBootstrap();
     }
   }
+  if (errors.length) throw new AggregateError(errors, 'Registered account inventory/bootstrap failed');
   console.log(`[bootstrap] Sequential live status check completed reason=${reason}`);
 }
 
@@ -29016,6 +29376,8 @@ let lastFullProviderRecoveryAt = 0;
 
 async function runRegisteredRuntimeMonitor(reason = 'scheduled') {
   if (registeredRuntimeMonitorRunning) return false;
+  if (runtimeReadinessState.shuttingDown) return false;
+  if (chatIngress.enabled && runtimeReadinessState.initialBootstrapCompleted && !chatIngress.canRun()) return false;
   registeredRuntimeMonitorRunning = true;
   try {
     const shouldRunFullRecovery = reason === 'startup'
@@ -29023,8 +29385,10 @@ async function runRegisteredRuntimeMonitor(reason = 'scheduled') {
       || Date.now() - lastFullProviderRecoveryAt >= REGISTERED_PROVIDER_RECOVERY_INTERVAL_MS;
     if (shouldRunFullRecovery) {
       await bootstrapRegisteredChannelLiveStatuses(reason);
+      if (runtimeReadinessState.shuttingDown) return false;
       lastFullProviderRecoveryAt = Date.now();
       runtimeReadinessState.initialBootstrapCompleted = true;
+      if (chatIngress.enabled) chatIngress.start(dispatchIngressEvent);
     } else {
       // CHZZK needs a short live poll. CIME and YouTube are reconciled by the
       // persistent recovery supervisor and by the full periodic pass above.
@@ -29032,6 +29396,10 @@ async function runRegisteredRuntimeMonitor(reason = 'scheduled') {
     }
     runtimeReadinessState.lastMonitorAt = new Date().toISOString();
     runtimeReadinessState.lastMonitorError = null;
+    if (!runtimeReadinessState.readySignalled && server.listening && typeof process.send === 'function') {
+      process.send('ready');
+      runtimeReadinessState.readySignalled = true;
+    }
     return true;
   } catch (error) {
     runtimeReadinessState.lastMonitorError = error?.message || String(error);
@@ -29057,6 +29425,7 @@ setInterval(() => {
 }, REGISTERED_RUNTIME_MONITOR_INTERVAL_MS).unref?.();
 
 setInterval(() => {
+  if (!chatIngress.canRun()) return;
   renewExpiringYoutubeWebsubSubscriptions().catch((error) => {
     console.warn('[YouTube WebSub] Renewal cycle failed:', error?.message || error);
   });
@@ -29111,12 +29480,14 @@ async function gracefulShutdown(signal, { exitCode = 0 } = {}) {
     forceTimer.unref?.();
 
     try {
+      if (chatIngress.enabled) await chatIngress.stop();
       providerRuntimeRecoverySupervisor.cancelAll();
       const leasesToRelease = Array.from(providerRuntimeLeases.values());
       providerRuntimeLeases.clear();
       for (const ownerUserId of Array.from(youtubeSessionStore.keys())) closeYoutubeSession(ownerUserId, 'shutdown');
       for (const ownerUserId of Array.from(cimeSessionStore.keys())) closeCimeSession(ownerUserId, 'shutdown');
       for (const entry of sessionStore.values()) {
+        entry.expectedDisconnect = true;
         try { entry?.socket?.disconnect?.(); } catch { }
         try { entry?.socket?.close?.(); } catch { }
       }
@@ -29714,6 +30085,11 @@ function enableWebSocketHeartbeat(webSocketServer, intervalMs = 30_000) {
     console.error('[WebSocketServer] Listener error:', error?.message || error);
   });
   webSocketServer.on('connection', (socket, req) => {
+    if (chatIngress.enabled) protectRuntimeSocket(socket, {
+      canRun: () => chatIngress.canRun(),
+      started: () => { runtimeSocketInFlight += 1; },
+      finished: () => { runtimeSocketInFlight -= 1; },
+    });
     requestProtection.protectSocket(socket, req);
     socket.__arubotAlive = true;
     socket.on('pong', () => {
@@ -29876,6 +30252,7 @@ function registerPvdRoutes() {
           queue: q,
           startedAt: q[0] ? state?.baseStartMs || null : null,
           playbackRevision: state?.playbackRevision || 0,
+          playbackEpoch: state?.playbackEpoch,
           paused: q[0] ? state?.paused || false : null,
           idleDeferred: q[0] ? state?.idleDeferred === true : false,
           atSec: q[0] ? getCurrentAtSec(sid) : 0,
@@ -30765,6 +31142,11 @@ wssDesktop.on('connection', async (ws, req) => {
 // Single upgrade dispatcher for both WS servers
 try {
   server.on('upgrade', async (req, socket, head) => {
+    if (chatIngress.enabled && !chatIngress.active && !chatIngress.draining) await chatIngress.refresh().catch(() => null);
+    if (!chatIngress.canRun()) {
+      socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nRetry-After: 1\r\n\r\n');
+      return;
+    }
     try {
       if (!requestProtection.upgrade(req, socket)) return;
       const u = new URL(req.url, `http://localhost:${PORT}`);

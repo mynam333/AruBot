@@ -19,12 +19,12 @@ on:
 
 concurrency:
   group: backend-deploy-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
 
     services:
       postgres:
@@ -79,6 +79,7 @@ jobs:
           npm run test:marble
           npm run test:accounts
           npm run test:donations
+          node --test tests/chat-ingress*.test.mjs tests/chat-runtime*.test.mjs tests/runtime-handoff*.test.mjs
           npm run build
 
       - name: Create backend artifact
@@ -414,52 +415,16 @@ jobs:
               RELEASES_TO_KEEP=2
             fi
 
-            CURRENT_REAL="$(readlink -f "$CURRENT_DIR" || true)"
-            RELEASE_REAL="$(readlink -f "$RELEASE_DIR" || true)"
-            kept=0
-            removed=0
-
-            echo "Cleaning backend releases in $RELEASES_DIR. Keeping $RELEASES_TO_KEEP release(s)."
-
-            find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d -name '.tmp-*' -mmin +60 -print -exec rm -rf -- {} +
-
-            while IFS= read -r release_path; do
-              if [ -z "$release_path" ]; then
-                continue
-              fi
-
-              release_real="$(readlink -f "$release_path" || true)"
-              if [ -n "$CURRENT_REAL" ] && [ "$release_real" = "$CURRENT_REAL" ]; then
-                kept=$((kept + 1))
-                echo "Keeping active backend release: $release_path"
-                continue
-              fi
-
-              if [ -n "$RELEASE_REAL" ] && [ "$release_real" = "$RELEASE_REAL" ]; then
-                kept=$((kept + 1))
-                echo "Keeping deployed backend release: $release_path"
-                continue
-              fi
-
-              if [ "$kept" -lt "$RELEASES_TO_KEEP" ]; then
-                kept=$((kept + 1))
-                echo "Keeping recent backend release: $release_path"
-                continue
-              fi
-
-              echo "Removing old backend release: $release_path"
-              rm -rf -- "$release_path"
-              removed=$((removed + 1))
-            done < <(
-              find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d ! -name '.*' -printf '%T@ %p\n' \
-                | sort -rn \
-                | cut -d' ' -f2-
-            )
-
-            echo "Backend release cleanup complete: removed $removed old release(s)."
+            # Resolve every PM2 cwd/script and both active symlinks before deleting releases.
+            APP_DIR="$APP_DIR" RELEASE_DIR="$RELEASE_DIR" PREVIOUS_CURRENT_REAL="$PREVIOUS_CURRENT_REAL" \
+              RELEASES_TO_KEEP="$RELEASES_TO_KEEP" node "$RELEASE_DIR/scripts/deploy-chat-runtime.mjs" --cleanup
           }
 
           ensure_deploy_dirs
+          # Serialize migrations and switching even across manual SSH deployments/workflow runs.
+          exec 9>"$SHARED_DIR/backend-deploy.lock"
+          flock -w 900 9 || { echo "Another backend deployment holds the lock" >&2; exit 1; }
+          PREVIOUS_CURRENT_REAL="$(readlink -f "$CURRENT_DIR" 2>/dev/null || true)"
           rm -rf "$TMP_RELEASE_DIR"
           mkdir -p "$TMP_RELEASE_DIR"
 
@@ -477,8 +442,6 @@ jobs:
           load_node_runtime
           ensure_native_build_tools
           npm ci --omit=dev
-          npm run db:migrate
-          npm run db:provider-smoke
 
           if ! command -v pm2 >/dev/null 2>&1; then
             npm install -g pm2 || {
@@ -491,9 +454,34 @@ jobs:
             }
           fi
 
-          rm -rf "$RELEASE_DIR"
+          if [ -e "$RELEASE_DIR" ]; then
+            echo "Refusing to replace an existing immutable release: $RELEASE_DIR" >&2
+            exit 1
+          fi
           mv "$TMP_RELEASE_DIR" "$RELEASE_DIR"
           printf '%s\n' "$RELEASE_SHA" > "$RELEASE_DIR/.release-sha"
+          cd "$RELEASE_DIR"
+          DEPLOY_MODE="$(APP_DIR="$APP_DIR" node scripts/deploy-chat-runtime.mjs --mode)"
+          if [ "$DEPLOY_MODE" = "ingress" ]; then
+            APP_DIR="$APP_DIR" RELEASE_DIR="$RELEASE_DIR" RELEASE_SHA="$RELEASE_SHA" \
+              node scripts/deploy-chat-runtime.mjs --preflight
+          elif [ "$DEPLOY_MODE" != "legacy" ]; then
+            echo "Unknown backend deployment mode: $DEPLOY_MODE" >&2
+            exit 1
+          fi
+
+          # Schema changes must remain compatible with the still-running old worker/ingress.
+          npm run db:migrate
+          npm run db:provider-smoke
+
+          if [ "$DEPLOY_MODE" = "ingress" ]; then
+            APP_DIR="$APP_DIR" RELEASE_DIR="$RELEASE_DIR" RELEASE_SHA="$RELEASE_SHA" \
+              RELEASES_TO_KEEP="$RELEASES_TO_KEEP" node scripts/deploy-chat-runtime.mjs
+            pm2 status
+            exit 0
+          fi
+
+          # Existing installations stay on the legacy path until explicitly opted in.
           switch_current_release
 
           if ! start_release "$RELEASE_DIR" "$RELEASE_SHA" || ! wait_for_release "$RELEASE_SHA"; then

@@ -112,7 +112,7 @@ function MarbleWorkspace({ writable }: { writable: boolean }) {
     if (!state || disabled) return;
     setNotice('');
     const playerId = typeof payload.playerId === 'string' ? payload.playerId : selectedId;
-    const guard = ['roll', 'complete', 'pass', 'timer-pause', 'timer-resume', 'timer-add', 'timer-finish'].includes(action) && playerId
+    const guard = ['roll', 'complete', 'pass', 'challenge-roll', 'challenge-result', 'timer-pause', 'timer-resume', 'timer-add', 'timer-finish'].includes(action) && playerId
       ? { playerId, expectedRollId: state.playerStates[playerId]?.lastRoll?.id ?? null } : {};
     void mutation.send({ path: '/api/marble/action', method: 'POST', snapshot: true, body: { action, ...payload, ...guard, revision: state.revision, requestId: crypto.randomUUID() }, success });
   };

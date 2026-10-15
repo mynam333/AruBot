@@ -126,7 +126,7 @@ export function createCommandExecutionSafety({ now = Date.now, limits = {}, onBl
       : storage.run(undefined, () => task(...args));
   }
   const detached = (task) => storage.run(undefined, task);
-  return { scope, run, consume, count, wait, check, capture, bind, detached, current, reject: stop };
+  return { scope, run, consume, count, wait, check, capture, bind, detached, current, reject: stop, getActiveCount: () => active };
 }
 
 export const isCommandSafetyError = (error) => String(error?.code || '').startsWith('command_safety_');

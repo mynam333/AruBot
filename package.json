@@ -45,6 +45,7 @@
     "accounts:cleanup": "node scripts/cleanup-unlinked-accounts.js",
     "test:accounts": "node --test tests/unlinked-account-cleanup.test.mjs tests/platform-token-guard.test.mjs tests/chzzk-token-persistence.test.mjs tests/account-local-files.test.mjs",
     "test:donations": "node --test tests/donation-response.test.mjs tests/donation-test-and-regex.test.mjs",
+    "test:chat-runtime": "node --test tests/chat-ingress*.test.mjs tests/chat-runtime*.test.mjs tests/runtime-handoff.test.mjs",
     "pm2:start": "pm2 start ecosystem.config.cjs --env production",
     "pm2:reload": "pm2 startOrReload ecosystem.config.cjs --env production --update-env",
     "pm2:stop": "pm2 stop arubot-api",

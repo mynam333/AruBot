@@ -3,7 +3,7 @@ const LEASE_MS = 20000;
 export function createPvdIdlePlaybackStore({ now = Date.now } = {}) {
   const states = new Map();
   const disconnected = new Map();
-  let controlVersion = now();
+  const counters = new Map([['controlVersion', now()]]);
   const get = (sid) => {
     const state = states.get(sid);
     return state && now() - state.updatedAt < LEASE_MS ? state : null;
@@ -18,6 +18,7 @@ export function createPvdIdlePlaybackStore({ now = Date.now } = {}) {
     };
   };
   return {
+    runtimeState: () => ({ states, disconnected, counters }),
     snapshot,
     report(sid, report = {}) {
       const clientId = String(report.clientId || '');
@@ -63,7 +64,9 @@ export function createPvdIdlePlaybackStore({ now = Date.now } = {}) {
       state.atSec = snapshot(sid).atSec;
       state.updatedAt = now();
       state.paused = op === 'pause';
-      state.command = { version: ++controlVersion, op, itemId: state.item.id, clientId: state.clientId };
+      const controlVersion = counters.get('controlVersion') + 1;
+      counters.set('controlVersion', controlVersion);
+      state.command = { version: controlVersion, op, itemId: state.item.id, clientId: state.clientId };
       return state.command;
     },
     clear(sid) { states.delete(sid); },

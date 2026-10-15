@@ -1,12 +1,12 @@
 import { readFile } from 'node:fs/promises';
 import { createHash, randomBytes, randomInt as cryptoRandomInt, randomUUID } from 'node:crypto';
-import { applyMarbleAction, createMarbleState, DEFAULT_MARBLE_SETTINGS, DEFAULT_MARBLE_PARTICIPATION_SETTINGS, parseMarbleParticipationSettings, MARBLE_COLORS, toPublicMarbleState } from '../shared/marble.js';
+import { applyMarbleAction, createMarbleState, DEFAULT_MARBLE_SETTINGS, DEFAULT_MARBLE_PARTICIPATION_SETTINGS, parseMarbleParticipationSettings, parseMarbleSettings, MarbleError, MARBLE_COLORS, toPublicMarbleState } from '../shared/marble.js';
 
 const MIGRATION = new URL('./migrations/032_marble.sql', import.meta.url);
 const PARTICIPATION_MIGRATION = new URL('./migrations/033_marble_participation.sql', import.meta.url);
 const OBS_MIGRATION = new URL('./migrations/034_marble_obs_membership.sql', import.meta.url);
-const HOST_ACTIONS = new Set(['add-player', 'remove-player', 'update-player', 'start', 'end', 'reset', 'pause', 'resume', 'roll', 'complete', 'pass', 'focus', 'timer-pause', 'timer-resume', 'timer-add', 'timer-finish']);
-const PARTICIPANT_ACTIONS = new Set(['roll', 'complete', 'pass']);
+const HOST_ACTIONS = new Set(['add-player', 'remove-player', 'update-player', 'start', 'end', 'reset', 'pause', 'resume', 'roll', 'complete', 'pass', 'challenge-roll', 'challenge-result', 'focus', 'timer-pause', 'timer-resume', 'timer-add', 'timer-finish']);
+const PARTICIPANT_ACTIONS = new Set(['roll', 'complete', 'pass', 'challenge-roll', 'challenge-result']);
 const UUID = /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i;
 const makeToken = () => `marble_${randomBytes(32).toString('base64url')}`;
 const fail = (code, status = 400) => { throw Object.assign(new Error(code), { code, status }); };
@@ -42,7 +42,7 @@ function canonical(value) {
 }
 const digest = value => createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
 // Exact released-content fingerprints avoid overwriting edited boards or decks.
-const PREVIOUS_DEFAULT_DECK = '12b2f3f089d9cfd788badddf7616e32c43ec09bb42f2a0c8c345c2a0c152bb15';
+const PREVIOUS_DEFAULT_DECKS = new Set(['12b2f3f089d9cfd788badddf7616e32c43ec09bb42f2a0c8c345c2a0c152bb15', '5f2d58109ccb46ac25d472dbe95a4344e5172756095b6688e2df2a5ef78982b0']);
 const PREVIOUS_DEFAULT_TILES = {
   'tile-9': '686607ff5153a9e06700195b5b89a4c5ae179a47c8911b0eb524b7e7cfa4d3b1',
   'tile-18': 'fce2ad406501deaed49cf40be5b1eec0d2f645c34d5683a510569fc29a1de81b',
@@ -56,7 +56,10 @@ function upgradeDefaultContent(state) {
     changed = true;
     return copy(DEFAULT_MARBLE_SETTINGS.tiles.find(item => item.id === tile.id));
   });
-  if (digest(state.settings.cards) === PREVIOUS_DEFAULT_DECK) {
+  if (PREVIOUS_DEFAULT_DECKS.has(digest(state.settings.cards))) {
+    // An edited tile may draw several legacy cards or combine immediate rewards.
+    try { parseMarbleSettings({ cards: DEFAULT_MARBLE_SETTINGS.cards }, state.settings); }
+    catch (error) { if (error instanceof MarbleError) return changed; throw error; }
     state.settings.cards = copy(DEFAULT_MARBLE_SETTINGS.cards);
     state.deck = [];
     changed = true;
@@ -365,7 +368,8 @@ export function createMarbleStore({ withPgClient, ensureIdentityTables, deductCh
         if (operation !== 'act' || !PARTICIPANT_ACTIONS.has(action.action) || !row.state.settings.participantControl) fail('participant_control_forbidden', 403);
         if (row.state.status !== 'running') fail('game_not_running', 409);
         // A supplied playerId or focused pawn never grants control of another account.
-        action = { action: action.action, playerId: player.id, ...(action.action === 'pass' ? { useShield: true } : {}) };
+        action = { action: action.action, playerId: player.id, ...(action.action === 'pass' ? { useShield: true } : {}),
+          ...(action.action === 'challenge-result' ? { outcome: input.outcome } : {}) };
       } else if (operation === 'act') {
         if (!HOST_ACTIONS.has(action.action)) fail('invalid_action');
         if (['add-player', 'remove-player', 'update-player'].includes(action.action)) {

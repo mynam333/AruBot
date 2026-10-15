@@ -4904,9 +4904,18 @@ export async function getTokens(sid) {
 // List all sids that currently have tokens stored
 export async function listAllSidsWithTokens() {
   ensure();
-  const { data, error } = await supabase.from('tokens').select('sid').neq('access_token', null);
-  if (error || !Array.isArray(data)) return [];
-  return data.map(r => String(r.sid)).filter(Boolean);
+  const sids = new Set();
+  const pageSize = 500;
+  for (let offset = 0; ; offset += pageSize) {
+    // Both PostgreSQL and PostgREST exclude NULL/empty tokens with this predicate.
+    // `<> NULL` never matches a PostgreSQL row; it silently disabled cold startup.
+    const { data, error } = await supabase.from('tokens').select('sid')
+      .gt('access_token', '').order('sid').range(offset, offset + pageSize - 1);
+    if (error) throw error;
+    if (!Array.isArray(data)) throw new Error('Invalid stored token inventory');
+    for (const row of data) if (row.sid) sids.add(String(row.sid));
+    if (data.length < pageSize) return Array.from(sids);
+  }
 }
 
 export async function updateTokens(sid, tokensOrNull, { expectedTokens } = {}) {
@@ -9387,6 +9396,105 @@ export async function claimDurableRuntimeJobs(options = {}) {
       [workerId, limit, leaseMs, jobTypes.length ? jobTypes : null]
     );
     return (result.rows || []).map(normalizeDurableRuntimeJob);
+  });
+}
+
+export async function transferDurableRuntimeJobs({ fromWorkerId, toWorkerId, jobIds } = {}) {
+  const invalid = () => {
+    const error = new Error('Durable job transfer requires distinct worker IDs and at most 10000 unique job IDs');
+    error.code = 'invalid_durable_runtime_job_transfer';
+    return error;
+  };
+  const validId = (value) => typeof value === 'string' && value.length > 0
+    && value.length <= 512 && value.trim() === value && !value.includes('\0');
+  if (!validId(fromWorkerId) || !validId(toWorkerId) || fromWorkerId === toWorkerId
+    || !Array.isArray(jobIds) || jobIds.length > 10_000) throw invalid();
+  const ids = Array.from(jobIds);
+  if (ids.some((id) => !validId(id)) || new Set(ids).size !== ids.length) throw invalid();
+  if (!getDbUrl()) {
+    const error = new Error('Durable runtime handoff requires direct PostgreSQL (POSTGRES_RUNTIME_URL/POSTGRES_URL or SUPABASE_DB_URL); transactional REST transfer RPC is not supported');
+    error.code = 'durable_runtime_job_transfer_unsupported';
+    throw error;
+  }
+  if (!ids.length) return [];
+
+  return withPgClient(async (pg) => {
+    await ensureDurableRuntimeJobsWithClient(pg);
+    await pg.query('begin');
+    try {
+      const locked = await pg.query(
+        `select * from durable_runtime_jobs
+          where id = any($1::text[])
+          order by id
+          for update`,
+        [ids]
+      );
+      const rows = locked.rows || [];
+      if (rows.length !== ids.length || rows.some((row) => row.status !== 'processing'
+        || ![fromWorkerId, toWorkerId].includes(row.locked_by) || row.locked_at == null)) {
+        const error = new Error('Durable runtime job transfer ownership/status mismatch; no jobs transferred');
+        error.code = 'durable_runtime_job_transfer_mismatch';
+        throw error;
+      }
+      // Transfer the existing attempt, including idempotent retries. Refresh the
+      // lease so a 30-second claim cannot immediately steal the new owner's jobs.
+      const updated = await pg.query(
+        `update durable_runtime_jobs
+            set locked_by = $2, locked_at = now(), updated_at = now()
+          where id = any($1::text[]) and status = 'processing'
+            and locked_by in ($2, $3)
+          returning *`,
+        [ids, toWorkerId, fromWorkerId]
+      );
+      if (updated.rows?.length !== ids.length) {
+        const error = new Error('Durable runtime job transfer affected an unexpected number of jobs');
+        error.code = 'durable_runtime_job_transfer_mismatch';
+        throw error;
+      }
+      const byId = new Map(updated.rows.map((row) => [String(row.id), normalizeDurableRuntimeJob(row)]));
+      const jobs = ids.map((id) => byId.get(id));
+      if (byId.size !== ids.length || jobs.some((job) => !job || job.status !== 'processing' || job.lockedBy !== toWorkerId)) {
+        const error = new Error('Durable runtime job transfer returned unexpected jobs');
+        error.code = 'durable_runtime_job_transfer_mismatch';
+        throw error;
+      }
+      await pg.query('commit');
+      return jobs;
+    } catch (error) {
+      try { await pg.query('rollback'); } catch {}
+      throw error;
+    }
+  });
+}
+
+export async function renewDurableRuntimeJobs({ workerId, jobIds } = {}) {
+  const validId = (value) => typeof value === 'string' && value.length > 0
+    && value.length <= 512 && value.trim() === value && !value.includes('\0');
+  const invalid = () => {
+    const error = new Error('Durable job renewal requires a worker ID and at most 10000 unique job IDs');
+    error.code = 'invalid_durable_runtime_job_renewal';
+    return error;
+  };
+  if (!validId(workerId) || !Array.isArray(jobIds) || jobIds.length > 10_000) throw invalid();
+  const ids = Array.from(jobIds);
+  if (ids.some((id) => !validId(id)) || new Set(ids).size !== ids.length) throw invalid();
+  if (!getDbUrl()) {
+    const error = new Error('Durable runtime renewal requires direct PostgreSQL (POSTGRES_RUNTIME_URL/POSTGRES_URL or SUPABASE_DB_URL); REST renewal is not supported');
+    error.code = 'durable_runtime_job_renewal_unsupported';
+    throw error;
+  }
+  if (!ids.length) return [];
+  return withPgClient(async (pg) => {
+    await ensureDurableRuntimeJobsWithClient(pg);
+    const result = await pg.query(
+      `update durable_runtime_jobs
+          set locked_at = now()
+        where id = any($1::text[]) and status = 'processing' and locked_by = $2
+        returning id`,
+      [ids, workerId]
+    );
+    const renewed = new Set((result.rows || []).map((row) => String(row.id)));
+    return ids.filter((id) => renewed.has(id));
   });
 }
 

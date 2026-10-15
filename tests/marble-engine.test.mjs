@@ -118,17 +118,18 @@ test('Live2D defaults favor drinks, snacks and timed speech without physical per
   assert.deepEqual(defaults.tiles[14].effects, [{ type: 'rollBackward' }]);
 });
 
-test('golden deck is a separate event collection with editable categories and actual rewards', () => {
+test('all twelve golden cards are editable voice-friendly missions with conditional outcomes', () => {
   const titles = new Set(defaults.tiles.map(tile => tile.title));
   for (const item of defaults.cards) {
     assert.ok(!titles.has(item.title));
     assert.ok(Object.hasOwn(engine.MARBLE_EVENT_LABELS, item.eventKind));
-    assert.notEqual(item.eventKind, 'game');
-    assert.match(item.text, /술|안주|물/);
-    assert.doesNotMatch(item.title, /월드컵|청문회|퀴즈|릴레이|예측|거꾸로 대답/);
+    assert.ok(item.challenge);
+    assert.ok(item.challenge.success.text && item.challenge.failure.text);
+    assert.ok(item.effects.every(effect => ['message', 'timer'].includes(effect.type)));
   }
-  const types = new Set(defaults.cards.flatMap(item => item.effects.map(effect => effect.type)));
-  for (const type of ['shield', 'shieldLoss', 'shieldClear', 'shieldDouble', 'timer', 'extra', 'rollForward', 'rollBackward', 'goto']) assert.ok(types.has(type));
+  const types = new Set(defaults.cards.flatMap(item => [...item.challenge.success.effects, ...item.challenge.failure.effects].map(effect => effect.type)));
+  for (const type of ['shield', 'shieldLoss', 'timer', 'extra']) assert.ok(types.has(type));
+  assert.equal(defaults.cards.filter(item => item.challenge.rollDice).length, 2);
   const state = createMarbleState();
   assert.deepEqual(toPublicMarbleState(state).settings.cards, state.settings.cards);
   for (const eventKind of ['__proto__', 'unknown', null]) expectCode(() => parseMarbleSettings({ cards: [{ ...card('bad'), eventKind }] }), 'invalid_event_kind');
@@ -136,9 +137,96 @@ test('golden deck is a separate event collection with editable categories and ac
   expectCode(() => parseMarbleSettings({ tiles }), 'invalid_event_kind');
   const h = harness({ effects: { 1: [{ type: 'card' }] }, cards: [clone(defaults.cards[0])] });
   h.act('roll');
-  assert.equal(h.state.players[0].shields, 2);
+  assert.equal(h.state.players[0].shields, 0);
+  expectCode(() => h.finish(), 'challenge_result_required');
+  h.act('challenge-result', { outcome: 'success' }, h.state.pending.readyAt);
+  assert.equal(h.state.players[0].shields, 1);
   h.finish();
+  assert.equal(h.state.players[0].shields, 1);
+});
+
+test('mission die is independent of board dice, persisted, animation-gated and cannot reroll', () => {
+  const h = harness({ effects: { 2: [{ type: 'card' }] }, cards: [clone(defaults.cards[2])], diceCount: 2 });
+  h.act('roll');
+  const boardRoll = clone(h.state.lastRoll), player = clone(h.state.players[0]);
+  expectCode(() => h.act('challenge-roll'), 'animation_in_progress');
+  expectCode(() => h.act('challenge-result', { outcome: 'success' }, h.state.pending.readyAt), 'challenge_roll_required');
+  h.context.randomInt = () => 5;
+  h.act('challenge-roll');
+  const mission = h.state.pending.challenge.roll;
+  assert.deepEqual(mission.dice, [6]);
+  assert.deepEqual(mission.path, []);
+  assert.deepEqual(h.state.lastRoll, boardRoll);
+  assert.deepEqual(h.state.players[0], player);
+  assert.equal(h.state.round, 1);
+  assert.match(h.state.pending.text, /6눈/);
+  assert.deepEqual(toPublicMarbleState(h.state).pending.challenge.roll, mission);
+  expectCode(() => h.act('challenge-result', { outcome: 'success' }), 'animation_in_progress');
+  expectCode(() => h.act('challenge-roll', {}, mission.endsAt), 'challenge_roll_unavailable');
+  h.act('challenge-result', { outcome: 'success' });
   assert.equal(h.state.players[0].shields, 2);
+  const resolved = clone(h.state);
+  expectCode(() => h.act('challenge-result', { outcome: 'failure' }), 'challenge_already_resolved');
+  assert.deepEqual(h.state, resolved);
+});
+
+test('mission die and timer pause/resume with the shared clock without moving the pawn', () => {
+  const custom = clone(defaults.cards[2]); custom.effects = [{ type: 'timer', value: 30 }];
+  const h = harness({ effects: { 1: [{ type: 'card' }] }, cards: [custom] });
+  h.act('roll');
+  assert.equal(h.state.timer.paused, true);
+  h.act('challenge-roll', {}, h.state.pending.readyAt);
+  const before = clone(h.state.pending.challenge.roll), deadline = h.state.timer.deadline;
+  h.act('pause', {}, before.startedAt + 300);
+  h.act('resume', {}, h.context.now + 10000);
+  assert.equal(h.state.pending.challenge.roll.startedAt, before.startedAt + 10000);
+  assert.equal(h.state.pending.challenge.roll.endsAt, before.endsAt + 10000);
+  assert.equal(h.state.timer.deadline, deadline + 10000);
+  assert.equal(h.state.players[0].position, 1);
+  expectCode(() => h.act('challenge-result', { outcome: 'success' }), 'animation_in_progress');
+  h.act('challenge-result', { outcome: 'success' }, h.state.pending.challenge.roll.endsAt);
+});
+
+test('failure applies only its branch once and replaces the mission timer with a penalty timer', () => {
+  const h = harness({ effects: { 1: [{ type: 'card' }] }, cards: [clone(defaults.cards[5])] });
+  h.act('roll');
+  h.act('challenge-result', { outcome: 'failure' }, h.state.pending.readyAt + 60000);
+  assert.equal(h.state.players[0].shields, 0);
+  assert.equal(h.state.pending.challenge.outcome, 'failure');
+  assert.equal(h.state.timer.durationMs, 30000);
+  assert.equal(h.state.timer.deadline, h.context.now + 30000);
+  assert.match(h.state.pending.text, /멍/);
+});
+
+test('mission pass cancels outcomes; confirmed bonuses wait for result acknowledgement before rolling', () => {
+  const h = harness({ effects: { 1: [{ type: 'card' }] }, cards: [clone(defaults.cards[11])] });
+  h.act('roll');
+  h.finish(playerId, 'pass');
+  assert.equal(h.state.players[0].shields, 0);
+  assert.equal(h.state.phase, 'ready');
+  const other = harness({ effects: { 1: [{ type: 'card' }] }, cards: [clone(defaults.cards[11])] });
+  other.act('roll');
+  other.act('enqueue-donation', { donation: { id: 'queued', username: 'Viewer 1', provider: 'chzzk' } });
+  other.act('challenge-result', { outcome: 'success' }, other.state.pending.readyAt);
+  assert.equal(other.state.round, 1);
+  assert.equal(other.state.donationQueue.length, 1);
+  other.finish();
+  assert.equal(other.state.lastRoll.source, 'bonus');
+  assert.equal(other.state.donationQueue.length, 1);
+});
+
+test('challenge validation rejects injected fields, premature effects, invalid branches and conflicting cards', () => {
+  const value = clone(defaults.cards[0]);
+  for (const challenge of [
+    { ...value.challenge, outcome: 'success' }, { ...value.challenge, rollDice: 'yes' },
+    { ...value.challenge, failure: { text: '', effects: [] } },
+    { ...value.challenge, success: { text: 'bad', effects: [{ type: 'card' }] } },
+    { ...value.challenge, success: { text: 'bad', effects: [{ type: 'goto', value: 0 }] } },
+    { ...value.challenge, success: { text: 'bad', effects: [{ type: 'extra' }, { type: 'rollForward' }] } },
+  ]) assert.throws(() => parseMarbleSettings({ cards: [{ ...value, challenge }] }), MarbleError);
+  expectCode(() => parseMarbleSettings({ cards: [{ ...value, effects: [{ type: 'shield' }] }] }), 'invalid_challenge_effect');
+  expectCode(() => parseMarbleSettings({ tiles: board({ 1: [{ type: 'card' }, { type: 'card' }] }) }), 'conflicting_challenge_effects');
+  expectCode(() => parseMarbleSettings({ tiles: board().map((tile, i) => i === 1 ? { ...tile, challenge: value.challenge } : tile) }), 'invalid_challenge_effect');
 });
 
 test('explicit artwork survives parsing and public snapshots while legacy content stays unchanged', () => {

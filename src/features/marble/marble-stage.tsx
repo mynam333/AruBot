@@ -1,8 +1,8 @@
 'use client';
 
-import { ArrowDown, ArrowDownRight, ArrowLeft, ArrowRight, ArrowUp, Crown, Dice5, Flag, Move, Pause, Shield, Timer, Users } from 'lucide-react';
+import { ArrowDown, ArrowDownRight, ArrowLeft, ArrowRight, ArrowUp, Check, Crown, Dice5, Flag, Move, Pause, Shield, Timer, Users, X } from 'lucide-react';
 import { memo, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
-import { MARBLE_SIZES, MARBLE_EVENT_LABELS, marbleBlockGeometry, marbleBoardLayout, marbleContentIcon, marbleNextRoll, type MarbleBlock, type MarbleLayoutItem, type MarbleLayouts, type MarbleOrientation, type MarblePlayer, type MarbleSnapshot, type MarbleTimer } from '../../../shared/marble';
+import { MARBLE_SIZES, MARBLE_EVENT_LABELS, marbleBlockGeometry, marbleBoardLayout, marbleChallengeText, marbleContentIcon, marbleNextRoll, type MarbleBlock, type MarbleLayoutItem, type MarbleLayouts, type MarbleOrientation, type MarblePlayer, type MarbleSnapshot, type MarbleTimer } from '../../../shared/marble';
 import { marbleCardMotion, marbleCompleteLabel, marbleMissionPage, marblePawnMotion, marblePawnPlacement, marbleTileRegions, marbleTravelEdge, paginateMarbleText } from './marble-presentation';
 import { MarbleDiceScene } from './marble-dice';
 import { MarbleTileArt } from './marble-tile-art';
@@ -49,7 +49,7 @@ function useServerClock(snapshot: MarbleSnapshot, reduced: boolean) {
       const now = state.status === 'paused' ? state.pausedAt ?? snapshot.serverNow : snapshot.serverNow + performance.now() - started;
       setClock({ snapshot, now });
       if (state.status !== 'running') return;
-      const rolls = Object.values(state.playerStates ?? {}).map(player => player.lastRoll).concat(state.lastRoll);
+      const rolls = Object.values(state.playerStates ?? {}).flatMap(player => [player.lastRoll, player.pending?.challenge?.roll]).concat(state.lastRoll);
       const moving = !reduced && state.status === 'running' && rolls.some(roll => roll && now < roll.endsAt + 1000);
       if (moving) frame = requestAnimationFrame(tick);
       else timeout = setTimeout(tick, 100);
@@ -241,12 +241,16 @@ export function MarbleStage({ snapshot, layouts = snapshot.state.settings.layout
   const state = snapshot.state;
   const player = state.players.find(item => item.id === state.currentPlayerId) ?? state.players[0];
   const playerState = player ? state.playerStates?.[player.id] : null;
-  const roll = playerState?.lastRoll ?? state.lastRoll;
+  const movementRoll = playerState?.lastRoll ?? state.lastRoll;
   const pending = playerState?.pending ?? state.pending;
+  const challenge = pending?.challenge;
+  const roll = challenge?.roll ?? movementRoll;
+  const challengeRolling = !!challenge?.roll && now < challenge.roll.endsAt;
   const goldenCard = pending?.cardId ? state.settings.cards.find(card => card.id === pending.cardId) : null;
   const landingTile = pending ? state.settings.tiles.find(tile => tile.id === pending.tileId) : null;
   const goldenOnly = !!goldenCard && landingTile?.effects.length === 1 && landingTile.effects[0].type === 'card';
-  const missionText = goldenOnly ? [...new Set([goldenCard.text, landingTile.effects[0].text, ...(pending?.effects.map(effect => effect.text) ?? [])].filter(Boolean))].join('\n') : pending?.text ?? '';
+  const missionText = challenge ? marbleChallengeText(challenge.outcome ? pending.text : [challenge.missionText, `성공: ${challenge.success.text}`, `실패: ${challenge.failure.text}`].join('\n'), challengeRolling ? null : challenge)
+    : goldenOnly ? [...new Set([goldenCard.text, landingTile.effects[0].text, ...(pending?.effects.map(effect => effect.text) ?? [])].filter(Boolean))].join('\n') : pending?.text ?? '';
   const followup = marbleNextRoll(pending);
   const eventLabel = goldenCard?.eventKind ? MARBLE_EVENT_LABELS[goldenCard.eventKind] : '특별 이벤트';
   const shieldDelta = pending?.shieldDelta;
@@ -257,10 +261,10 @@ export function MarbleStage({ snapshot, layouts = snapshot.state.settings.layout
   const missionReady = !!pending && now >= pending.readyAt;
   const cardMotion = marbleCardMotion(now, pending?.readyAt ?? now, !!pending?.cardId, reduced);
   const reveal = !!pending && cardMotion.revealed;
-  const pose = marblePawnMotion(roll, player?.position ?? 0, now, reduced);
+  const pose = marblePawnMotion(movementRoll, player?.position ?? 0, now, reduced);
   const paused = state.status === 'paused';
   const travelLabel = roll?.direction === -1 ? '후진' : roll?.direction === 1 ? '전진' : '이동';
-  const phaseLabel = paused ? '일시정지' : rolling ? roll?.direction ? `${travelLabel} 주사위` : '굴리는 중' : pose.moving ? `${Math.min(pose.step + 1, pose.steps)} / ${pose.steps}칸 ${travelLabel}` : pending && !missionReady ? '이동 대기' : pending ? pending.cardId ? '이벤트 진행' : '미션 진행' : state.status === 'finished' ? '종료' : '준비';
+  const phaseLabel = paused ? '일시정지' : rolling ? challenge?.roll ? '미션 주사위' : roll?.direction ? `${travelLabel} 주사위` : '굴리는 중' : pose.moving ? `${Math.min(pose.step + 1, pose.steps)} / ${pose.steps}칸 ${travelLabel}` : pending && !missionReady ? '이동 대기' : challenge?.outcome ? challenge.outcome === 'success' ? '미션 성공' : '미션 실패' : challenge?.roll ? '미션 주사위 결과' : pending ? pending.cardId ? '이벤트 진행' : '미션 진행' : state.status === 'finished' ? '종료' : '준비';
   const remaining = remainingTime(timer, now, pending?.readyAt);
   const label = player?.name ?? '플레이어';
   const updateLayout = (block: MarbleBlock, patch: Partial<MarbleLayoutItem>) => {
@@ -315,7 +319,7 @@ export function MarbleStage({ snapshot, layouts = snapshot.state.settings.layout
   return <div ref={root} className={styles.viewport} data-orientation={orientation} data-reduced-motion={reduced} data-paused={paused} style={forced ? { aspectRatio: `${canvas.width} / ${canvas.height}` } : undefined}>
     <div className={styles.stage} style={{ width: canvas.width, height: canvas.height, left: (viewport.width - canvas.width * zoom) / 2, top: (viewport.height - canvas.height * zoom) / 2, transform: `scale(${zoom})` }}>
       {block('board', <Board snapshot={snapshot} now={now} reduced={reduced} orientation={orientation} />)}
-      {block('dice', <div className={styles.diceBlock} data-phase={paused ? 'paused' : rolling ? 'rolling' : pose.moving ? 'moving' : 'ready'}><header className={styles.blockHeading}>{player ? <Avatar player={player} /> : <Dice5 />}<FitText max={26} min={16}>{label}</FitText>{paused ? <Pause /> : <Dice5 />}</header>
+      {block('dice', <div className={styles.diceBlock} data-mission-roll={!!challenge?.roll} data-phase={paused ? 'paused' : rolling ? 'rolling' : pose.moving ? 'moving' : 'ready'}><header className={styles.blockHeading}>{player ? <Avatar player={player} /> : <Dice5 />}<FitText max={26} min={16}>{label}</FitText>{paused ? <Pause /> : <Dice5 />}</header>
         <MarbleDiceScene dice={dice} progress={progress} seed={roll?.id ?? 'ready'} reduced={reduced} />
         <div className={styles.diceResult} aria-label={roll && !rolling ? `주사위 합계 ${dice.reduce((sum, value) => sum + value, 0)}` : '주사위 대기'}>{!rolling && roll ? <b>{dice.reduce((sum, value) => sum + value, 0)}</b> : <Dice5 />}<span>{phaseLabel}</span>{!rolling && dice.length > 1 ? <small>{dice.join(' + ')}</small> : null}</div>
       </div>)}
@@ -324,12 +328,12 @@ export function MarbleStage({ snapshot, layouts = snapshot.state.settings.layout
         <div className={styles.timerDigits}>{timer ? timeLabel(remaining) : '--:--'}{state.status === 'paused' || timer?.paused ? <Pause /> : null}</div>
         <div className={styles.timerTrack} role="progressbar" aria-label="미션 남은 시간" aria-valuemin={0} aria-valuemax={timer ? Math.ceil(timer.durationMs / 1000) : 1} aria-valuenow={Math.ceil(remaining / 1000)}><span style={{ width: `${timer ? clamp(remaining / Math.max(1, timer.durationMs) * 100, 0, 100) : 0}%` }} /></div>
       </div>)}
-      {block('card', <div className={styles.cardScene} data-revealed={reveal} data-golden={!!pending?.cardId} style={{ '--mission-color': pending?.color ?? '#d4a332' } as CSSProperties}>
+      {block('card', <div className={styles.cardScene} data-revealed={reveal} data-golden={!!pending?.cardId} data-outcome={challenge?.outcome} style={{ '--mission-color': pending?.color ?? '#d4a332' } as CSSProperties}>
         <div className={styles.cardRotor} style={{ transform: `translateY(${-cardMotion.lift}px) rotateY(${pending?.cardId ? cardMotion.rotation : 0}deg)` }}>
         <div className={styles.mission} data-golden={!!pending?.cardId} aria-hidden={!reveal && !!pending?.cardId}>
-        <header className={styles.blockHeading}>{pending?.cardId ? <Crown /> : <Flag />}<span>{pending?.cardId ? '황금 이벤트' : '미션'}</span><FitText max={22} min={15}>{label}</FitText></header>
-        {pending && (reveal || pending.cardId) ? <div className={styles.missionContent}><div className={styles.missionTitleRow}>{goldenCard ? <MarbleTileArt kind={marbleContentIcon(goldenCard)} /> : null}<FitText className={styles.missionTitle} max={34} min={20}>{goldenOnly ? goldenCard.title : pending.title}</FitText></div><MissionText text={missionText} now={now} readyAt={pending.readyAt + (pending.cardId ? 820 : 320)} />
-          <footer className={styles.missionFooter}>{followup ? <><Dice5 />{marbleCompleteLabel(followup)}</> : pending.cardId ? <><Crown />{eventLabel}</> : <><Flag />{roll?.to ?? player?.position ?? 0}번 칸</>}{shieldDelta !== undefined ? <span data-shield-loss={shieldDelta < 0}><Shield />방어권 {shieldDelta === 0 ? '변동 없음' : `${shieldDelta > 0 ? '+' : ''}${shieldDelta}`}</span> : timer ? <span><Timer />{timeLabel(remaining)}</span> : null}</footer></div>
+        <header className={styles.blockHeading}>{challenge?.outcome ? challenge.outcome === 'success' ? <Check /> : <X /> : pending?.cardId ? <Crown /> : <Flag />}<span>{challenge?.outcome ? challenge.outcome === 'success' ? '성공 · 보상' : '실패 · 벌칙' : challenge ? '황금 미션' : pending?.cardId ? '황금 이벤트' : '미션'}</span><FitText max={22} min={15}>{label}</FitText></header>
+        {pending && (reveal || pending.cardId) ? <div className={styles.missionContent}><div className={styles.missionTitleRow}>{goldenCard ? <MarbleTileArt kind={marbleContentIcon(goldenCard)} /> : null}<FitText className={styles.missionTitle} max={34} min={20}>{goldenOnly ? goldenCard.title : pending.title}</FitText></div><MissionText text={missionText} now={now} readyAt={challenge?.resolvedAt ?? challenge?.roll?.endsAt ?? pending.readyAt + (pending.cardId ? 820 : 320)} />
+          <footer className={styles.missionFooter}>{followup ? <><Dice5 />{marbleCompleteLabel(followup)}</> : challenge ? <><Crown />{challenge.outcome ? '결과 확인 중' : challengeRolling ? '미션 주사위 굴리는 중' : challenge.rollDice && !challenge.roll ? '미션 주사위 대기' : '성공·실패 판정 대기'}</> : pending.cardId ? <><Crown />{eventLabel}</> : <><Flag />{roll?.to ?? player?.position ?? 0}번 칸</>}{shieldDelta !== undefined ? <span data-shield-loss={shieldDelta < 0}><Shield />방어권 {shieldDelta === 0 ? '변동 없음' : `${shieldDelta > 0 ? '+' : ''}${shieldDelta}`}</span> : timer ? <span><Timer />{timeLabel(remaining)}</span> : null}</footer></div>
           : <div className={styles.cardBack}><div className={styles.cardSeal}>{pending?.cardId ? <Crown /> : <Flag />}</div><strong>{pending ? '곧 공개됩니다' : state.status === 'finished' ? '플레이 종료' : '오늘의 첫 미션'}</strong><span>{pending ? '도착 후 미션 공개' : state.status === 'finished' ? '함께한 시간을 기억해요' : '미션 대기 중'}</span></div>}
         {pending?.cardId && cardMotion.sheen > 0 ? <span className={styles.cardSheen} aria-hidden="true" style={{ transform: `translateX(${-150 + cardMotion.sheen * 350}%) skewX(-18deg)`, opacity: Math.sin(cardMotion.sheen * Math.PI) * .5 }} /> : null}
         </div>

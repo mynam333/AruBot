@@ -16,10 +16,10 @@ describe('startup live status refresh regression', () => {
     const monitorBody = serverIndex.slice(monitorStart, monitorEnd);
 
     expect(bootstrapBody).toContain('await bootstrapEnsureSessions()');
-    expect(bootstrapBody).toContain('await bootstrapEnsureCimeSessions()');
-    expect(bootstrapBody).toContain('await bootstrapEnsureYoutubeSessions()');
-    expect(bootstrapBody.indexOf('await bootstrapEnsureSessions()')).toBeLessThan(bootstrapBody.indexOf('await bootstrapEnsureCimeSessions()'));
-    expect(bootstrapBody.indexOf('await bootstrapEnsureCimeSessions()')).toBeLessThan(bootstrapBody.indexOf('await bootstrapEnsureYoutubeSessions()'));
+    expect(bootstrapBody).toContain('await bootstrapEnsureCimeSessions(reason)');
+    expect(bootstrapBody).toContain('await bootstrapEnsureYoutubeSessions(reason)');
+    expect(bootstrapBody.indexOf('await bootstrapEnsureSessions()')).toBeLessThan(bootstrapBody.indexOf('await bootstrapEnsureCimeSessions(reason)'));
+    expect(bootstrapBody.indexOf('await bootstrapEnsureCimeSessions(reason)')).toBeLessThan(bootstrapBody.indexOf('await bootstrapEnsureYoutubeSessions(reason)'));
     expect(serverIndex).toContain('async function runRegisteredRuntimeMonitor');
     expect(serverIndex).toContain('if (registeredRuntimeMonitorRunning) return false');
     expect(startupBody).toContain("runRegisteredRuntimeMonitor('startup')");
@@ -65,6 +65,8 @@ describe('startup live status refresh regression', () => {
 
     expect(chzzkBody).toContain('listAllSidsWithTokens()');
     expect(chzzkBody).toContain('resolveChzzkChannelUidsForSid(sid, settings)');
-    expect(chzzkBody).toContain('refreshChzzkLiveStatusForSid(sid, { settings, channelUids, force: true })');
+    expect(chzzkBody).toContain("listPlatformTokenUsers('chzzk')");
+    expect(chzzkBody).toContain('ensureChzzkChatSessionForLiveSid(sid, channelUids[0])');
+    expect(chzzkBody).toContain('refreshChzzkLiveStatusForSid(sid, { settings, channelUids, force: true, ensureChat: false })');
   });
 });

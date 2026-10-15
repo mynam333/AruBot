@@ -23,6 +23,7 @@ function mount(initialPayload = {}, playerRole = 'video') {
   const listeners = new Map();
   let socket;
   let player;
+  const players = [];
   let payload = { item: { id: 'donation-1', mediaProvider: 'youtube', videoId: 'video000001', startSec: 12 }, paused: false, atSec: 20, ...initialPayload };
   let getSnapshot = async () => payload;
   const calls = [];
@@ -33,6 +34,7 @@ function mount(initialPayload = {}, playerRole = 'video') {
       this.pauseVideo = jest.fn(); this.playVideo = jest.fn();
       this.seekTo = jest.fn((time) => { this.time = time; });
       player = this;
+      players.push(this);
     }
     getVideoData() { return { video_id: this.id }; }
     getCurrentTime() { return this.time; }
@@ -100,7 +102,7 @@ function mount(initialPayload = {}, playerRole = 'video') {
   const disposers = effects.map((effect) => effect());
   cleanup = () => disposers.reverse().forEach((dispose) => { if (typeof dispose === 'function') dispose(); });
   return {
-    calls, render, get player() { return player; },
+    calls, render, players, get player() { return player; },
     get externalVideo() { return externalVideo; },
     get externalVideoProps() { return externalVideoProps; },
     control: (op, atSec = 83) => socket.onmessage({ data: JSON.stringify({ type: 'control', op, atSec, paused: op === 'pause' }) }),
@@ -267,7 +269,7 @@ test('HTTP polling cannot restore the old position while a native seek is being 
     return originalFetch(url, options);
   };
   h.player.time = 83;
-  jest.advanceTimersByTime(300); await flush();
+  jest.advanceTimersByTime(900); await flush();
   h.focus(); await flush();
   h.message({ type: 'start', ...bgmPayload({ atSec: 20 }) }); await flush();
   expect(h.player.time).toBe(83);
@@ -293,7 +295,7 @@ test('BGM native controls expose the timeline and synchronize seeks across buffe
   expect(h.player.options.playerVars).toMatchObject({ controls: 1, disablekb: 0 });
   jest.advanceTimersByTime(1500); await flush();
   h.player.time = 83; h.player.emit(3); h.player.emit(1);
-  jest.advanceTimersByTime(300); await flush();
+  jest.advanceTimersByTime(900); await flush();
   expect(h.calls.filter(({ body }) => body.op === 'seek').map(({ body }) => body))
     .toEqual([expect.objectContaining({ atSec: 83, itemId: 'bgm-1' })]);
 });
@@ -302,7 +304,7 @@ test('BGM native seek updates a paused queue without resuming it', async () => {
   const h = mount(bgmPayload({ paused: true }), 'bgm'); await flush(); h.player.ready();
   jest.advanceTimersByTime(1500); await flush(); h.player.playVideo.mockClear();
   h.player.time = 83; h.player.emit(2);
-  jest.advanceTimersByTime(300); await flush();
+  jest.advanceTimersByTime(900); await flush();
   expect(h.calls).toContainEqual(expect.objectContaining({ body: expect.objectContaining({ op: 'seek', atSec: 83 }) }));
   expect(h.calls.some(({ body }) => body.op === 'play')).toBe(false);
   expect(h.player.playVideo).not.toHaveBeenCalled();
@@ -331,7 +333,7 @@ test('a native BGM seek immediately after the server pause acknowledgement is no
   jest.advanceTimersByTime(1500); await flush();
   h.control('pause', 20); h.player.emit(2);
   h.player.time = 60; h.player.emit(3); h.player.emit(2);
-  jest.advanceTimersByTime(300); await flush();
+  jest.advanceTimersByTime(900); await flush();
   expect(h.calls).toContainEqual(expect.objectContaining({ body: expect.objectContaining({ op: 'seek', atSec: 60 }) }));
   expect(h.calls.some(({ body }) => body.op === 'play')).toBe(false);
 });
@@ -339,8 +341,8 @@ test('a native BGM seek immediately after the server pause acknowledgement is no
 test.each([[0, 12], [175, 112]])('BGM native seek %s stays inside the requested segment at %s', async (time, bounded) => {
   const h = mount(bgmPayload(), 'bgm'); await flush(); h.player.ready();
   jest.advanceTimersByTime(1500); await flush();
-  h.player.time = time; h.player.emit(3);
-  jest.advanceTimersByTime(300); await flush();
+  h.player.time = time; h.player.emit(3); h.player.emit(1);
+  jest.advanceTimersByTime(900); await flush();
   expect(h.player.seekTo).toHaveBeenLastCalledWith(bounded, true);
   expect(h.calls).toContainEqual(expect.objectContaining({ body: expect.objectContaining({ op: 'seek', atSec: bounded }) }));
 });
@@ -350,4 +352,114 @@ test('native BGM controls do not resume playback during a Chzzk donation interru
   h.player.ready(); jest.advanceTimersByTime(1500); await flush();
   h.player.emit(1);
   expect(h.calls.some(({ body }) => body.op === 'play')).toBe(false);
+});
+
+test.each(['video', 'bgm'])('%s snapshots and reconnects never rewind an already playing item', async (role) => {
+  const h = mount(role === 'bgm' ? bgmPayload() : {}, role); await flush(); h.player.ready(); h.player.emit(1);
+  jest.advanceTimersByTime(1500); await flush();
+  h.player.time = 70;
+  h.player.seekTo.mockClear();
+  h.focus(); await flush();
+  h.message({ type: 'start', ...(role === 'bgm' ? bgmPayload() : { item: { id: 'donation-1', mediaProvider: 'youtube', videoId: 'video000001', startSec: 12 } }), atSec: 20, paused: false });
+  await flush();
+  expect(h.player.time).toBe(70);
+  expect(h.player.seekTo).not.toHaveBeenCalled();
+});
+
+test.each(['video', 'bgm'])('%s transient zero/buffering samples never become a seek command', async (role) => {
+  const h = mount(role === 'bgm' ? bgmPayload() : {}, role); await flush(); h.player.ready(); h.player.emit(1);
+  jest.advanceTimersByTime(1500); await flush();
+  h.player.time = 0; h.player.emit(3);
+  jest.advanceTimersByTime(900); await flush();
+  h.player.time = 20; h.player.emit(1);
+  jest.advanceTimersByTime(900); await flush();
+  expect(h.calls.filter(({ body }) => body.op === 'seek')).toEqual([]);
+});
+
+test('a duplicate seek revision cannot replay the seek after playback has advanced', async () => {
+  const h = mount(bgmPayload(), 'bgm'); await flush(); h.player.ready();
+  const control = { type: 'control', op: 'seek', atSec: 20, itemId: 'bgm-1', playbackRevision: 2 };
+  h.message(control); h.player.time = 40; h.player.seekTo.mockClear();
+  h.message(control);
+  expect(h.player.time).toBe(40);
+  expect(h.player.seekTo).not.toHaveBeenCalled();
+});
+
+test('server restart epochs preserve local progress but accept subsequent explicit controls', async () => {
+  const h = mount(bgmPayload({ playbackEpoch: 'before', playbackRevision: 8 }), 'bgm');
+  await flush(); h.player.ready(); h.player.time = 70; h.player.seekTo.mockClear();
+  h.message({ type: 'start', ...bgmPayload({ atSec: 12, playbackEpoch: 'after', playbackRevision: 0 }) }); await flush();
+  expect(h.player.time).toBe(70);
+  h.message({ type: 'control', itemId: 'bgm-1', op: 'seek', atSec: 40, playbackEpoch: 'after', playbackRevision: 1 });
+  expect(h.player.time).toBe(40);
+  h.message({ type: 'start', ...bgmPayload({ atSec: 20, playbackEpoch: 'before', playbackRevision: 9 }) }); await flush();
+  expect(h.player.time).toBe(40);
+});
+
+test('a snapshot with a genuinely newer seek revision still applies the requested position', async () => {
+  const h = mount({ playbackEpoch: 'epoch', playbackRevision: 1 }); await flush(); h.player.ready();
+  h.player.time = 70;
+  h.snapshot({ atSec: 30, playbackEpoch: 'epoch', playbackRevision: 2 }); h.focus(); await flush();
+  expect(h.player.time).toBe(30);
+});
+
+test('a delayed echo of a locally submitted seek does not rewind its sender', async () => {
+  const h = mount(bgmPayload({ playbackEpoch: 'epoch', playbackRevision: 0 }), 'bgm'); await flush(); h.player.ready(); h.player.emit(1);
+  jest.advanceTimersByTime(1500); await flush();
+  h.player.time = 60; jest.advanceTimersByTime(900); await flush();
+  const sent = h.calls.find(({ body }) => body.op === 'seek').body;
+  h.player.time = 65; h.player.seekTo.mockClear();
+  h.message({ type: 'control', ...sent, atSec: 60, playbackRevision: 1, paused: false });
+  expect(h.player.time).toBe(65);
+  expect(h.player.seekTo).not.toHaveBeenCalled();
+});
+
+test('repeated snapshots do not reset a direct-video clip to its initial position', async () => {
+  const h = mount({ item: { id: 'clip-1', mediaProvider: 'chzzk_clip', mediaId: 'clip1', embedUrl: 'https://example.com/video.mp4', startSec: 12 } });
+  await flush(); h.render(); jest.advanceTimersByTime(1000); await flush();
+  h.externalVideo.currentTime = 65;
+  h.focus(); await flush(); jest.advanceTimersByTime(1000); await flush();
+  expect(h.externalVideo.currentTime).toBe(65);
+});
+
+test.each(['video', 'bgm'])('a failed %s completion report retries without replaying the completed item', async (role) => {
+  const h = mount(role === 'bgm' ? bgmPayload() : {}, role); await flush(); h.player.ready(); h.player.emit(1);
+  const originalFetch = global.fetch;
+  const pops = [];
+  global.fetch = (url, options) => {
+    if (url.includes('/pop-by-token')) { pops.push(JSON.parse(options.body)); return Promise.reject(new Error('offline')); }
+    return originalFetch(url, options);
+  };
+  h.player.emit(0); await flush();
+  expect(pops).toHaveLength(1);
+  expect(h.players).toHaveLength(1);
+  if (role === 'bgm') h.snapshot({ paused: true });
+  jest.advanceTimersByTime(5000); await flush();
+  expect(pops).toHaveLength(2);
+  expect(h.players).toHaveLength(1);
+  h.snapshot({ item: { id: 'donation-2', kind: role, mediaProvider: 'youtube', videoId: 'video000002', startSec: 0 }, atSec: 0, paused: false });
+  h.focus(); await flush();
+  expect(h.players).toHaveLength(2);
+  expect(h.player.id).toBe('video000002');
+});
+
+test('BGM keeps playing through a short presence outage and releases an expired lease', async () => {
+  const h = mount(bgmPayload(), 'bgm'); await flush(); h.player.ready(); h.player.emit(1);
+  h.player.pauseVideo.mockClear();
+  const originalFetch = global.fetch;
+  let failing = true;
+  global.fetch = (url, options) => {
+    if (failing && options?.body && JSON.parse(options.body).op === 'bgm_status') return Promise.reject(new Error('offline'));
+    return originalFetch(url, options);
+  };
+  jest.advanceTimersByTime(3000); await flush();
+  expect(h.player.pauseVideo).not.toHaveBeenCalled();
+  jest.advanceTimersByTime(3000); await flush();
+  expect(h.player.pauseVideo).not.toHaveBeenCalled();
+  jest.advanceTimersByTime(3000); await flush();
+  expect(h.player.pauseVideo).toHaveBeenCalled();
+  failing = false;
+  jest.advanceTimersByTime(3000); await flush();
+  h.player.ready();
+  expect(h.player.playVideo).toHaveBeenCalled();
 });

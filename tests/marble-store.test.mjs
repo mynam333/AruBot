@@ -6,6 +6,7 @@ import { createMarbleStore } from '../server/marble-store.js';
 import { createMarbleState, DEFAULT_MARBLE_SETTINGS, DEFAULT_MARBLE_PARTICIPATION_SETTINGS } from '../shared/marble.js';
 
 const legacyDefaults = JSON.parse(await readFile(new URL('./fixtures/marble-legacy-party-defaults.json', import.meta.url), 'utf8'));
+const legacyGoldenDeck = JSON.parse(await readFile(new URL('./fixtures/marble-golden-legacy-defaults.json', import.meta.url), 'utf8'));
 
 const clone = value => structuredClone(value);
 const owner = 'owner';
@@ -224,7 +225,7 @@ function fixture() {
   db.action = async (action, extra = {}, options) => {
     const snapshot = await db.store.snapshot(owner);
     const targetId = options?.actorUserId ? snapshot.state.players.find(player => player.userId === options.actorUserId)?.id : extra.playerId || snapshot.state.currentPlayerId || snapshot.state.players[0]?.id;
-    return db.store.act(owner, { action, revision: snapshot.state.revision, requestId: db.key(), ...(['roll', 'complete', 'pass'].includes(action) ? { expectedRollId: snapshot.state.playerStates[targetId]?.lastRoll?.id ?? null } : {}), ...extra }, options);
+    return db.store.act(owner, { action, revision: snapshot.state.revision, requestId: db.key(), ...(['roll', 'complete', 'pass', 'challenge-roll', 'challenge-result'].includes(action) ? { expectedRollId: snapshot.state.playerStates[targetId]?.lastRoll?.id ?? null } : {}), ...extra }, options);
   };
   db.configure = async settings => {
     const snapshot = await db.store.snapshot(owner);
@@ -637,6 +638,73 @@ test('content upgrade persistence failures do not return fictitious success', as
   await assert.rejects(db.store.snapshot(owner), /injected database failure/);
   assert.deepEqual(db.state().settings.cards, legacyDefaults.cards);
   assert.equal((await db.store.snapshot(owner)).state.settings.cards.length, 12);
+});
+
+test('released twelve-card deck upgrades only when unchanged and compatible, after active play ends', async () => {
+  const db = fixture(); await db.store.snapshot(owner);
+  db.state().settings.cards = clone(legacyGoldenDeck);
+  const layouts = clone(db.state().settings.layouts);
+  await db.store.snapshot(owner);
+  assert.deepEqual(db.state().settings.cards, DEFAULT_MARBLE_SETTINGS.cards);
+  assert.deepEqual(db.state().settings.layouts, layouts);
+  db.state().settings.cards = clone(legacyGoldenDeck);
+  db.state().settings.cards[0].text += ' custom';
+  await db.store.snapshot(owner);
+  assert.equal(db.state().settings.cards[0].challenge, undefined);
+  await db.action('start');
+  db.state().settings.cards = clone(legacyGoldenDeck);
+  await db.store.snapshot(owner);
+  assert.deepEqual(db.state().settings.cards, legacyGoldenDeck);
+  await db.action('end'); await db.store.snapshot(owner);
+  assert.deepEqual(db.state().settings.cards, DEFAULT_MARBLE_SETTINGS.cards);
+  db.state().settings.cards = clone(legacyGoldenDeck);
+  db.state().settings.tiles[3].effects.push({ type: 'shield' });
+  await db.store.snapshot(owner);
+  assert.deepEqual(db.state().settings.cards, legacyGoldenDeck);
+});
+
+test('mission dice and success are transactional, idempotent and scoped to the online participant', async () => {
+  const db = fixture(); const joined = await db.join();
+  const tiles = clone(DEFAULT_MARBLE_SETTINGS.tiles); tiles[1].effects = [{ type: 'card' }];
+  await db.configure({ tiles, cards: [clone(DEFAULT_MARBLE_SETTINGS.cards[2])] });
+  const started = await db.action('start');
+  await db.action('roll', {}, actorOptions);
+  db.now = db.state().playerStates[joined.playerId].pending.readyAt;
+  const input = { action: 'challenge-roll', revision: db.state().revision, requestId: db.key(), playerId: 'player-1', expectedRollId: db.state().playerStates[joined.playerId].lastRoll.id };
+  const first = await db.store.act(owner, input, actorOptions);
+  const roll = first.state.playerStates[joined.playerId].pending.challenge.roll;
+  assert.deepEqual((await db.store.act(owner, input, actorOptions)).state.playerStates[joined.playerId].pending.challenge.roll, roll);
+  assert.equal(db.state().playerStates['player-1'].pending, null);
+  db.now = roll.endsAt;
+  const resultInput = { ...input, action: 'challenge-result', requestId: db.key(), outcome: 'success', revision: db.state().revision };
+  await db.store.act(owner, resultInput, actorOptions);
+  await db.store.act(owner, resultInput, actorOptions);
+  assert.equal(db.state().players.find(player => player.id === joined.playerId).shields, 2);
+  await assert.rejects(db.store.act(owner, { ...resultInput, requestId: db.key() }, actorOptions), { code: 'challenge_already_resolved' });
+  await assert.rejects(db.store.act(owner, { ...resultInput, outcome: 'failure' }, actorOptions), { code: 'request_id_conflict' });
+  const overlay = await db.store.overlay(started.overlayToken);
+  assert.equal(overlay.state.playerStates[joined.playerId].pending.challenge.outcome, 'success');
+  assert.deepEqual(overlay.state.playerStates[joined.playerId].pending.challenge.roll.dice, [1]);
+  assert.equal(db.deductions.length, 0);
+});
+
+test('simultaneous opposite mission judgements settle once and failed saves roll back rewards', async () => {
+  const db = fixture(); await db.store.snapshot(owner);
+  const tiles = clone(DEFAULT_MARBLE_SETTINGS.tiles); tiles[1].effects = [{ type: 'card' }];
+  await db.configure({ tiles, cards: [clone(DEFAULT_MARBLE_SETTINGS.cards[0])] });
+  await db.action('start'); await db.action('roll'); db.now = db.state().pending.readyAt;
+  const input = { action: 'challenge-result', revision: db.state().revision, expectedRollId: db.state().lastRoll.id, outcome: 'success' };
+  db.fail = /^update marble_rooms set/;
+  await assert.rejects(db.store.act(owner, { ...input, requestId: db.key() }), /injected database failure/);
+  assert.equal(db.state().players[0].shields, 0);
+  assert.equal(db.state().pending.challenge.outcome, undefined);
+  const results = await Promise.allSettled([
+    db.store.act(owner, { ...input, requestId: db.key() }),
+    db.store.act(owner, { ...input, outcome: 'failure', requestId: db.key() }),
+  ]);
+  assert.equal(results.filter(value => value.status === 'fulfilled').length, 1);
+  assert.equal(results.find(value => value.status === 'rejected').reason.code, 'challenge_already_resolved');
+  assert.equal(db.state().players[0].shields, 1);
 });
 
 test('shield losses are idempotent and overlays retain actual deltas and event travel direction', async () => {

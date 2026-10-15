@@ -5,7 +5,7 @@ import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tooltip } from '@/components/ui/tooltip';
-import { DEFAULT_MARBLE_SETTINGS, MARBLE_EFFECT_LABELS, MARBLE_ICON_LABELS, MARBLE_EVENT_LABELS, marbleContentIcon, type MarbleEffect, type MarbleEffectType, type MarbleEventKind, type MarbleIcon, type MarbleSettings, type MarbleTile } from '../../../shared/marble';
+import { DEFAULT_MARBLE_SETTINGS, MARBLE_EFFECT_LABELS, MARBLE_ICON_LABELS, MARBLE_EVENT_LABELS, marbleContentIcon, type MarbleChallenge, type MarbleEffect, type MarbleEffectType, type MarbleEventKind, type MarbleIcon, type MarbleSettings, type MarbleTile } from '../../../shared/marble';
 import { MarbleTileArt } from './marble-tile-art';
 import styles from '@/features/admin/marble-page.module.css';
 
@@ -28,6 +28,26 @@ function Tool({ label, children, ...props }: React.ButtonHTMLAttributes<HTMLButt
   return <Tooltip content={label}><button type="button" className={styles.iconButton} aria-label={label} title={label} {...props}>{children}</button></Tooltip>;
 }
 
+const resultTypes = effectTypes.filter(type => !['card', 'move', 'goto', 'skip'].includes(type));
+function EffectEditor({ label, effects, allowed, tileCount, disabled, onChange }: {
+  label: string; effects: MarbleEffect[]; allowed: MarbleEffectType[]; tileCount: number; disabled: boolean; onChange: (effects: MarbleEffect[]) => void;
+}) {
+  const update = (index: number, effect: MarbleEffect) => onChange(effects.map((item, i) => i === index ? effect : item));
+  return <>
+    <div className={styles.sectionHeading}><h3>{label} <span className={styles.muted}>{effects.length}/6</span></h3><Button type="button" variant="outline" size="sm" disabled={disabled || effects.length >= 6} onClick={() => onChange([...effects, newEffect('message')])}><Plus size={15} />효과 추가</Button></div>
+    <div className={styles.effectList}>{effects.length === 0 ? <p className={styles.muted}>등록된 효과 없음</p> : effects.map((effect, index) => {
+      const rule = valueRules[effect.type];
+      return <div className={styles.effectRow} key={index}>
+        <label className={styles.field}>{label} {index + 1}<select className={styles.select} value={effect.type} onChange={event => update(index, newEffect(event.target.value as MarbleEffectType))}>{allowed.map(type => <option key={type} value={type}>{MARBLE_EFFECT_LABELS[type]}</option>)}</select></label>
+        {rule ? <label className={styles.field}>{rule.label}<Input type="number" required min={rule.min} max={effect.type === 'goto' ? tileCount - 1 : rule.max} step={1} value={effect.type === 'shield' && effect.value === undefined ? 1 : Number.isFinite(effect.value) ? effect.value : ''} onChange={event => update(index, { ...effect, value: event.target.value === '' ? Number.NaN : Number(event.target.value) })} /></label>
+          : effect.type === 'message' ? <label className={styles.field}>메시지<Input maxLength={500} value={effect.text ?? ''} onChange={event => update(index, { ...effect, text: event.target.value })} /></label> : <span className={styles.effectSummary}>{MARBLE_EFFECT_LABELS[effect.type]}</span>}
+        <Tool label={`${label} ${index + 1} 삭제`} disabled={disabled} onClick={() => onChange(effects.filter((_, i) => i !== index))}><Trash2 size={16} /></Tool>
+        {effect.type !== 'message' ? <label className={`${styles.field} ${styles.effectText}`}>추가 메시지 (선택)<Input maxLength={500} value={effect.text ?? ''} onChange={event => update(index, { ...effect, text: event.target.value })} /></label> : null}
+      </div>;
+    })}</div>
+  </>;
+}
+
 export function MarbleContentEditor({ settings, onChange, disabled = false }: {
   settings: MarbleSettings; onChange: (settings: MarbleSettings) => void; disabled?: boolean;
 }) {
@@ -44,7 +64,7 @@ export function MarbleContentEditor({ settings, onChange, disabled = false }: {
 
   const updateItems = (next: MarbleTile[]) => onChange({ ...settings, [kind]: next });
   const updateSelected = (patch: Partial<MarbleTile>) => updateItems(items.map((item, index) => index === selectedIndex ? { ...item, ...patch } : item));
-  const updateEffect = (index: number, effect: MarbleEffect) => updateSelected({ effects: selected.effects.map((item, i) => i === index ? effect : item) });
+  const updateChallenge = (patch: Partial<MarbleChallenge>) => updateSelected({ challenge: { ...selected.challenge!, ...patch } });
   const move = (direction: -1 | 1) => {
     const next = [...items];
     const target = selectedIndex + direction;
@@ -58,6 +78,7 @@ export function MarbleContentEditor({ settings, onChange, disabled = false }: {
     const additions = Array.from({ length: batch }, (_, index): MarbleTile => ({
       id: crypto.randomUUID(), title: `새 ${label} ${items.length + index + 1}`, text: '',
       color: isTile ? '#e5f3ef' : '#f7df91', effects: [],
+      ...(!isTile ? { challenge: { rollDice: false, success: { text: '방어권 1장 획득', effects: [{ type: 'shield' as const }] }, failure: { text: '시청자에게 한 문장으로 인사하기', effects: [] } } } : {}),
     }));
     updateItems([...items, ...additions]);
     setSelectedId(additions[0].id);
@@ -116,21 +137,28 @@ export function MarbleContentEditor({ settings, onChange, disabled = false }: {
           updateItems(items.map((item, index) => index === selectedIndex ? next : item));
         }}><option value="">특별 이벤트</option>{Object.entries(MARBLE_EVENT_LABELS).map(([key, name]) => <option key={key} value={key}>{name}</option>)}</select></label> : null}
         <label className={styles.field}>본문<textarea className={styles.textarea} rows={4} maxLength={1000} value={selected.text} onChange={event => updateSelected({ text: event.target.value })} /></label>
-        <div className={styles.sectionHeading}><h3>효과 <span className={styles.muted}>{selected.effects.length}/6</span></h3><Button type="button" variant="outline" size="sm" disabled={disabled || selected.effects.length >= 6} onClick={() => updateSelected({ effects: [...selected.effects, newEffect('message')] })}><Plus size={15} />효과 추가</Button></div>
-        <div className={styles.effectList}>
-          {selected.effects.length === 0 ? <p className={styles.muted}>등록된 효과 없음</p> : selected.effects.map((effect, index) => {
-            const rule = valueRules[effect.type];
-            return <div className={styles.effectRow} key={index}>
-              <label className={styles.field}><span>효과 {index + 1}</span><select className={styles.select} value={effect.type} onChange={event => updateEffect(index, newEffect(event.target.value as MarbleEffectType))}>
-                {effectTypes.filter(type => isTile || type !== 'card').map(type => <option key={type} value={type}>{MARBLE_EFFECT_LABELS[type]}</option>)}
-              </select></label>
-              {rule ? <label className={styles.field}>{rule.label}<Input type="number" required min={rule.min} max={effect.type === 'goto' ? settings.tiles.length - 1 : rule.max} step={1} value={effect.type === 'shield' && effect.value === undefined ? 1 : Number.isFinite(effect.value) ? effect.value : ''} onChange={event => updateEffect(index, { ...effect, value: event.target.value === '' ? Number.NaN : Number(event.target.value) })} /></label>
-                : effect.type === 'message' ? <label className={styles.field}>메시지<Input maxLength={500} value={effect.text ?? ''} onChange={event => updateEffect(index, { ...effect, text: event.target.value })} /></label> : <span className={styles.effectSummary}>{MARBLE_EFFECT_LABELS[effect.type]}</span>}
-              <Tool label={`효과 ${index + 1} 삭제`} disabled={disabled} onClick={() => updateSelected({ effects: selected.effects.filter((_, i) => i !== index) })}><Trash2 size={16} /></Tool>
-              {effect.type !== 'message' ? <label className={`${styles.field} ${styles.effectText}`}>추가 메시지 (선택)<Input maxLength={500} value={effect.text ?? ''} onChange={event => updateEffect(index, { ...effect, text: event.target.value })} /></label> : null}
-            </div>;
-          })}
-        </div>
+        {!isTile ? <label className={styles.challengeToggle}><input type="checkbox" checked={!!selected.challenge} onChange={event => {
+          if (event.target.checked) {
+            if (selected.effects.some(effect => ['move', 'goto', 'skip'].includes(effect.type)) && !window.confirm('판정형 카드에서는 고정 이동·지정 칸 이동·쉬어가기 효과가 제거됩니다. 전환할까요?')) return;
+            updateSelected({ effects: selected.effects.filter(effect => ['message', 'timer'].includes(effect.type)), challenge: {
+            rollDice: false, success: { text: '성공 보상', effects: selected.effects.filter(effect => resultTypes.includes(effect.type) && !['timer', 'message'].includes(effect.type)) },
+            failure: { text: '실패 벌칙', effects: [] },
+          } });
+          }
+          else if (window.confirm('판정별 보상·벌칙을 제거하고 즉시 실행형으로 바꿀까요?')) {
+            const next = { ...selected }; delete next.challenge;
+            updateItems(items.map((item, index) => index === selectedIndex ? next : item));
+          }
+        }} /> 성공·실패 판정</label> : null}
+        <EffectEditor label={selected.challenge ? '미션 진행 효과' : '효과'} effects={selected.effects} allowed={selected.challenge ? ['message', 'timer'] : effectTypes.filter(type => isTile || type !== 'card')} tileCount={settings.tiles.length} disabled={disabled} onChange={effects => updateSelected({ effects })} />
+        {selected.challenge ? <div className={styles.challengeEditor}>
+          <label className={styles.challengeToggle}><input type="checkbox" checked={selected.challenge.rollDice} onChange={event => updateChallenge({ rollDice: event.target.checked })} /> 별도 미션 주사위 1개</label>
+          {selected.challenge.rollDice ? <Button type="button" size="sm" variant="outline" onClick={() => updateSelected({ text: selected.text + '{dice}' })} disabled={disabled || selected.text.length > 994}><Plus size={14} />본문에 주사위 눈금 삽입</Button> : null}
+          {(['success', 'failure'] as const).map(key => <div className={styles.challengeEditor} key={key}>
+            <label className={styles.field}>{key === 'success' ? '성공 보상' : '실패 벌칙'}<textarea className={styles.textarea} rows={3} required maxLength={1000} value={selected.challenge![key].text} onChange={event => updateChallenge({ [key]: { ...selected.challenge![key], text: event.target.value } })} /></label>
+            <EffectEditor label={key === 'success' ? '성공 효과' : '실패 효과'} effects={selected.challenge![key].effects} allowed={resultTypes} tileCount={settings.tiles.length} disabled={disabled} onChange={effects => updateChallenge({ [key]: { ...selected.challenge![key], effects } })} />
+          </div>)}
+        </div> : null}
       </fieldset> : null}
     </div>
   </section>;

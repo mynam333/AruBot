@@ -8,8 +8,8 @@ describe('영상 후원 재생 제어 회귀 방지', () => {
   const localRenderer = fs.readFileSync(path.join(__dirname, '..', 'local-program', 'renderer', 'renderer.js'), 'utf8');
 
   test('모든 재생 제어 API는 같은 상태 전환 함수를 사용해야 함', () => {
-    expect(serverIndex.match(/controlPvdPlaybackForSid\(sid, op, req\.body\?\.atSec\)/g)).toHaveLength(3);
-    expect(serverIndex).toContain('async function controlPvdPlaybackForSid(sid, op, requestedAtSec)');
+    expect(serverIndex.match(/controlPvdPlaybackForSid\(sid, op, req\.body\?\.atSec[),]/g)).toHaveLength(3);
+    expect(serverIndex).toContain('async function controlPvdPlaybackForSid(sid, op, requestedAtSec, origin = {})');
     expect(serverIndex).toContain("if (op === 'play' && state.idleDeferred === true)");
     expect(serverIndex).toContain('await activateDeferredPvdPlayback(sid, getPvdQueueItemKey(item))');
     expect(serverIndex).toContain('const message = await broadcastPvdControl(sid, {');

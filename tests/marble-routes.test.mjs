@@ -32,11 +32,24 @@ async function fixture(t, options = {}) {
   return {
     calls, changes, errors, get writes() { return writes; },
     async request(path, method = 'GET', body, headers = {}) {
-      const response = await fetch(`http://127.0.0.1:${server.address().port}${path}`, {
-        method, headers: { 'Content-Type': 'application/json', ...headers },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      const payload = body === undefined ? undefined : JSON.stringify(body);
+      // OS-assigned test ports can be blocked by fetch's browser unsafe-port list.
+      return new Promise((resolve, reject) => {
+        const request = http.request({ hostname: '127.0.0.1', port: server.address().port, path, method,
+          headers: { 'Content-Type': 'application/json', ...(payload === undefined ? {} : { 'Content-Length': Buffer.byteLength(payload) }), ...headers } }, response => {
+          let data = '';
+          response.setEncoding('utf8');
+          response.on('data', chunk => { data += chunk; });
+          response.on('error', reject);
+          response.on('end', () => {
+            try { resolve({ status: response.statusCode, headers: new Headers(Object.entries(response.headers).map(([key, value]) => [key, Array.isArray(value) ? value.join(', ') : String(value)])), body: JSON.parse(data) }); }
+            catch (error) { reject(error); }
+          });
+        });
+        request.on('error', reject);
+        request.setTimeout(5000, () => request.destroy(new Error('Test HTTP request timed out')));
+        request.end(payload);
       });
-      return { status: response.status, headers: response.headers, body: await response.json() };
     },
   };
 }
@@ -119,6 +132,18 @@ test('participant APIs use actual actor, never selected owner or body identity',
   await h.request('/api/viewer/marble/rooms/room-owner/action', 'POST', body, host);
   assert.deepEqual(h.calls.at(-1), ['act', 'room-owner', body, { participant: true, actorUserId: 'actual-actor' }]);
   assert.deepEqual(h.changes, ['room-owner']);
+});
+
+test('mission dice and judgement routes retain roll guards and outcome while selecting the authenticated actor', async t => {
+  const h = await fixture(t);
+  for (const action of ['challenge-roll', 'challenge-result']) {
+    const body = { action, requestId: `mission-${action}`, expectedRollId: 'board-roll', revision: 4,
+      ...(action === 'challenge-result' ? { outcome: 'failure' } : {}) };
+    assert.equal((await h.request('/api/marble/action', 'POST', body, host)).status, 200);
+    assert.deepEqual(h.calls.at(-1), ['act', 'selected-owner', body]);
+    assert.equal((await h.request('/api/viewer/marble/rooms/room-owner/action', 'POST', body, viewer)).status, 200);
+    assert.deepEqual(h.calls.at(-1), ['act', 'room-owner', body, { participant: true, actorUserId: 'actual-actor' }]);
+  }
 });
 
 test('invitation search and membership routes keep host and target actor separate', async t => {

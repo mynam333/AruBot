@@ -1,0 +1,179 @@
+[
+  {
+    "id": "card-1",
+    "title": "단골 술집 서비스",
+    "text": "단골 보너스로 방어권 두 장 획득! 지금 마시는 술의 향이나 맛을 즐기며 한 모금 건배해요.",
+    "color": "#d4a52b",
+    "effects": [
+      {
+        "type": "shield",
+        "value": 2
+      }
+    ],
+    "icon": "cheers",
+    "eventKind": "reward"
+  },
+  {
+    "id": "card-2",
+    "title": "안주 서비스 도착",
+    "text": "안주 서비스와 함께 방어권 한 장 획득! 준비한 안주를 한 입 맛보고 잠시 여유를 즐겨요.",
+    "color": "#d4a52b",
+    "effects": [
+      {
+        "type": "shield"
+      }
+    ],
+    "icon": "snack",
+    "eventKind": "reward"
+  },
+  {
+    "id": "card-3",
+    "title": "술자리 계산서",
+    "text": "계산서 도착! 방어권 한 장이 차감돼요. 술은 잠시 내려놓고 물 한 모금. 방어권이 없으면 추가 불이익은 없어요.",
+    "color": "#d4a52b",
+    "effects": [
+      {
+        "type": "shieldLoss",
+        "value": 1
+      }
+    ],
+    "icon": "drink",
+    "eventKind": "penalty"
+  },
+  {
+    "id": "card-4",
+    "title": "안주 추가 주문",
+    "text": "안주를 추가 주문한 비용으로 방어권 두 장이 차감돼요. 준비한 안주 한 입을 즐겨요. 부족한 방어권은 보유한 만큼만 차감해요.",
+    "color": "#d4a52b",
+    "effects": [
+      {
+        "type": "shieldLoss",
+        "value": 2
+      }
+    ],
+    "icon": "snack",
+    "eventKind": "penalty"
+  },
+  {
+    "id": "card-5",
+    "title": "단골 적립 두 배",
+    "text": "술집의 적립 행사! 보유 방어권이 두 배가 돼요. 안주 한 입과 함께 행운을 즐겨요. 보유량이 0장이면 그대로이며 최대 99장이에요.",
+    "color": "#d4a52b",
+    "effects": [
+      {
+        "type": "shieldDouble"
+      }
+    ],
+    "icon": "shield",
+    "eventKind": "reward"
+  },
+  {
+    "id": "card-6",
+    "title": "술집 마감 정산",
+    "text": "마감 정산으로 보유 방어권이 모두 회수돼요. 1분 동안 물과 안주로 쉬어 가요. 방어권이 없어도 추가 벌칙은 없어요.",
+    "color": "#d4a52b",
+    "effects": [
+      {
+        "type": "shieldClear"
+      },
+      {
+        "type": "timer",
+        "value": 60
+      }
+    ],
+    "icon": "rest",
+    "eventKind": "penalty"
+  },
+  {
+    "id": "card-7",
+    "title": "안주 원정 출발",
+    "text": "안주 한 입으로 원정 준비! 전진 주사위 하나를 굴려 나온 눈만큼 이동하고 도착한 칸의 이벤트를 진행해요.",
+    "color": "#d4a52b",
+    "effects": [
+      {
+        "type": "rollForward"
+      }
+    ],
+    "icon": "snack",
+    "eventKind": "feast"
+  },
+  {
+    "id": "card-8",
+    "title": "두고 온 술잔",
+    "text": "술잔을 두고 온 기분! 후진 주사위 하나를 굴려 나온 눈만큼 돌아가요. 도착한 칸의 이벤트를 진행하며 술을 더 마실 필요는 없어요.",
+    "color": "#d4a52b",
+    "effects": [
+      {
+        "type": "rollBackward"
+      }
+    ],
+    "icon": "drink",
+    "eventKind": "feast"
+  },
+  {
+    "id": "card-9",
+    "title": "수분 충전 보너스",
+    "text": "방어권 한 장을 받고 물 한 모금! 1분 동안 술을 쉬며 편하게 이야기해요.",
+    "color": "#d4a52b",
+    "effects": [
+      {
+        "type": "shield"
+      },
+      {
+        "type": "timer",
+        "value": 60
+      }
+    ],
+    "icon": "water",
+    "eventKind": "reward"
+  },
+  {
+    "id": "card-10",
+    "title": "안주 풀코스",
+    "text": "90초 동안 안주를 내 속도로 즐겨요. 쉬는 시간이 끝나면 한 번 더 굴리기로 보너스 주사위를 받아요.",
+    "color": "#d4a52b",
+    "effects": [
+      {
+        "type": "timer",
+        "value": 90
+      },
+      {
+        "type": "extra"
+      }
+    ],
+    "icon": "snack",
+    "eventKind": "feast"
+  },
+  {
+    "id": "card-11",
+    "title": "금주령 3분",
+    "text": "지금부터 3분은 술 대신 물과 안주만! 다음 굴리기 전에 잠시 술자리를 쉬어 가요.",
+    "color": "#d4a52b",
+    "effects": [
+      {
+        "type": "timer",
+        "value": 180
+      }
+    ],
+    "icon": "water",
+    "eventKind": "rule"
+  },
+  {
+    "id": "card-12",
+    "title": "귀가 택시",
+    "text": "술집에서 출발 칸까지 택시를 타요. 요금은 방어권 한 장! 출발 칸의 미션은 추가로 실행하지 않아요. 방어권이 없어도 이동은 진행돼요.",
+    "color": "#d4a52b",
+    "effects": [
+      {
+        "type": "shieldLoss",
+        "value": 1
+      },
+      {
+        "type": "goto",
+        "value": 0
+      }
+    ],
+    "icon": "start",
+    "eventKind": "feast"
+  }
+]

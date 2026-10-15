@@ -10,7 +10,7 @@ import { MarbleStage } from './marble-stage';
 import { MarbleParticipationEditor } from './marble-participation-editor';
 import { marbleCompleteLabel } from './marble-presentation';
 import { useMarbleSnapshot } from './use-marble-snapshot';
-import { marbleNextRoll, type MarbleInvitation, type MarblePlayer, type MarbleSnapshot, type MarbleViewerOverlay } from '../../../shared/marble';
+import { marbleChallengeText, marbleNextRoll, type MarbleInvitation, type MarblePlayer, type MarbleSnapshot, type MarbleViewerOverlay } from '../../../shared/marble';
 import styles from '@/features/admin/marble-page.module.css';
 
 type Mutation = {
@@ -111,6 +111,11 @@ export function MarblePlayerControls({ snapshot, playerId, host = false, disable
   const followup = marbleNextRoll(runtime?.pending);
   const ready = runtime?.phase === 'ready';
   const moving = Boolean(runtime?.pending && (state.pausedAt ?? now) < runtime.pending.readyAt);
+  const challenge = runtime?.pending?.challenge;
+  const challengeRolling = !!challenge?.roll && (state.pausedAt ?? now) < challenge.roll.endsAt;
+  const awaitingResult = !!challenge && !challenge.outcome;
+  const needsDice = awaitingResult && challenge.rollDice && !challenge.roll;
+  const canJudge = !moving && !challengeRolling && !needsDice;
   const allowed = !disabled && state.status === 'running' && !!player && !!runtime && (host || (snapshot.actorPlayerId === playerId && state.settings.participantControl));
   const timer = runtime?.timer;
   const remaining = timer ? Math.min(timer.durationMs, Math.max(0, timer.paused || timer.deadline === null ? timer.remainingMs : timer.deadline - (state.pausedAt ?? now))) : 0;
@@ -124,12 +129,19 @@ export function MarblePlayerControls({ snapshot, playerId, host = false, disable
       <div className={styles.playerFacts}><span>완주 {player.laps}회</span><span>방어권 {player.shields}개</span>{player.skipTurns > 0 ? <span>쉬기 {player.skipTurns}회</span> : null}</div>
       <div className={styles.diceResult} aria-label="최근 주사위 결과">{runtime?.lastRoll ? <><Dice5 size={20} /><strong>{runtime.lastRoll.dice.join(' + ')}</strong><span>합계 {runtime.lastRoll.dice.reduce((a, b) => a + b, 0)}</span></> : <span>아직 굴린 주사위가 없습니다.</span>}</div>
       <Button type="button" className={styles.rollButton} disabled={!allowed || !ready} onClick={() => act('roll')}><Dice5 size={19} />{moving ? '이동 중' : selectingPlayer ? '선택 참가자 굴리기' : '주사위 굴리기'}</Button>
-      {runtime?.pending && !moving ? <div className={styles.mission} aria-live="polite"><span className={styles.eyebrow}>{runtime.pending.cardId ? '황금 카드' : '진행 중인 미션'}</span><h3>{runtime.pending.title}</h3><p>{runtime.pending.text}</p>{runtime.pending.shieldDelta !== undefined ? <output className={styles.shieldChange} data-negative={runtime.pending.shieldDelta < 0}><ShieldCheck size={15} />방어권 {runtime.pending.shieldDelta === 0 ? '변동 없음' : `${runtime.pending.shieldDelta > 0 ? '+' : ''}${runtime.pending.shieldDelta}장`} · 보유 {player.shields}장</output> : null}</div> : <p className={styles.muted}>{state.status === 'paused' ? '게임 일시정지' : moving ? '말 이동 중' : state.status === 'running' ? '굴리기 대기' : state.status === 'finished' ? '게임 종료' : '게임 시작 대기'}</p>}
+      {runtime?.pending && !moving ? <div className={styles.mission} aria-live="polite"><span className={styles.eyebrow}>{challenge?.outcome ? challenge.outcome === 'success' ? '미션 성공 · 보상' : '미션 실패 · 벌칙' : runtime.pending.cardId ? '황금 카드' : '진행 중인 미션'}</span><h3>{runtime.pending.title}</h3><p>{marbleChallengeText(challengeRolling ? challenge!.missionText : runtime.pending.text, challengeRolling ? null : challenge)}</p>{runtime.pending.shieldDelta !== undefined ? <output className={styles.shieldChange} data-negative={runtime.pending.shieldDelta < 0}><ShieldCheck size={15} />방어권 {runtime.pending.shieldDelta === 0 ? '변동 없음' : `${runtime.pending.shieldDelta > 0 ? '+' : ''}${runtime.pending.shieldDelta}장`} · 보유 {player.shields}장</output> : null}
+        {awaitingResult ? <div className={styles.challengeOutcomes}><div data-outcome="success"><strong><Check size={15} />성공 보상</strong><p>{marbleChallengeText(challenge.success.text, challengeRolling ? null : challenge)}</p></div><div data-outcome="failure"><strong><X size={15} />실패 벌칙</strong><p>{marbleChallengeText(challenge.failure.text, challengeRolling ? null : challenge)}</p></div></div> : null}
+        {challenge?.roll ? <output className={styles.challengeDie}><Dice5 size={19} />{challengeRolling ? '미션 주사위 굴리는 중' : `미션 주사위 ${challenge.roll.dice[0]}눈`}</output> : null}
+      </div> : <p className={styles.muted}>{state.status === 'paused' ? '게임 일시정지' : moving ? '말 이동 중' : state.status === 'running' ? '굴리기 대기' : state.status === 'finished' ? '게임 종료' : '게임 시작 대기'}</p>}
       {timer ? <div className={styles.timerArea}>
         <div className={styles.sectionHeading}><span><Timer size={16} />{timer.paused ? '타이머 일시정지' : seconds === 0 ? '시간 종료' : '남은 시간'}</span><output className={styles.timerValue}>{String(Math.floor(seconds / 60)).padStart(2, '0')}:{String(seconds % 60).padStart(2, '0')}</output></div>
-        {host ? <div className={styles.actions}><Button type="button" size="sm" variant="outline" disabled={!allowed || moving} onClick={() => act(timer.paused ? 'timer-resume' : 'timer-pause')}>{timer.paused ? <Play size={14} /> : <Pause size={14} />}{timer.paused ? '재개' : '정지'}</Button><Button type="button" size="sm" variant="outline" disabled={!allowed || moving} onClick={() => act('timer-add', { seconds: 30 })}><Plus size={14} />30초</Button><Button type="button" size="sm" variant="ghost" disabled={!allowed || moving} onClick={() => act('timer-finish')}><Check size={14} />타이머 종료</Button></div> : null}
+        {host ? <div className={styles.actions}><Button type="button" size="sm" variant="outline" disabled={!allowed || !canJudge} onClick={() => act(timer.paused ? 'timer-resume' : 'timer-pause')}>{timer.paused ? <Play size={14} /> : <Pause size={14} />}{timer.paused ? '재개' : '정지'}</Button><Button type="button" size="sm" variant="outline" disabled={!allowed || !canJudge} onClick={() => act('timer-add', { seconds: 30 })}><Plus size={14} />30초</Button><Button type="button" size="sm" variant="ghost" disabled={!allowed || !canJudge} onClick={() => act('timer-finish')}><Check size={14} />타이머 종료</Button></div> : null}
       </div> : null}
-      <div className={styles.controlPair}><Button type="button" variant="secondary" disabled={!allowed || ready || moving} onClick={() => act('complete')}>{followup ? <Dice5 size={17} /> : <Check size={17} />}{marbleCompleteLabel(followup)}</Button><Button type="button" variant="outline" disabled={!allowed || ready || moving || (!host && player.shields < 1)} onClick={() => act('pass')}><ShieldCheck size={17} />{host ? '미션 패스' : '방어권 사용'}</Button></div>
+      {awaitingResult ? <>
+        {needsDice ? <Button type="button" disabled={!allowed || moving} onClick={() => act('challenge-roll')}><Dice5 size={17} />미션 주사위 굴리기</Button> : null}
+        <div className={styles.controlPair}><Button type="button" className={styles.challengeSuccess} disabled={!allowed || !canJudge} onClick={() => act('challenge-result', { outcome: 'success' })}><Check size={17} />성공</Button><Button type="button" variant="outline" className={styles.challengeFailure} disabled={!allowed || !canJudge} onClick={() => act('challenge-result', { outcome: 'failure' })}><X size={17} />실패</Button></div>
+      </> : null}
+      <div className={styles.controlPair}>{!awaitingResult ? <Button type="button" variant="secondary" disabled={!allowed || ready || moving || challengeRolling} onClick={() => act('complete')}>{followup ? <Dice5 size={17} /> : <Check size={17} />}{challenge && !followup ? '결과 확인 · 다음 진행' : marbleCompleteLabel(followup)}</Button> : null}<Button type="button" variant="outline" disabled={!allowed || ready || moving || challengeRolling || (!host && player.shields < 1)} onClick={() => act('pass')}><ShieldCheck size={17} />{host ? '미션 패스' : '방어권 사용'}</Button></div>
       {!host && !state.settings.participantControl ? <p className={styles.warning}>방장이 참가자 직접 조작을 껐습니다.</p> : null}
       {(host ? runtime?.donationQueue.length : snapshot.viewerDonationQueueCount ?? 0) ? <p className={styles.muted}>후원 굴리기 대기 {host ? runtime?.donationQueue.length : snapshot.viewerDonationQueueCount}건</p> : null}
     </> : <p className={styles.empty}>참가자를 선택해 주세요.</p>}
@@ -199,9 +211,9 @@ function MarbleParticipantWorkspace({ ownerId }: { ownerId: string }) {
   const runtime = playerId ? snapshot?.state.playerStates[playerId] : undefined;
   const display = snapshot && runtime ? { ...snapshot, state: { ...snapshot.state, ...runtime, currentPlayerId: playerId } } : snapshot;
   const disabled = mutation.busy || mutation.offline || !!mutation.retry || !!error;
-  const action = (action: string) => {
+  const action = (action: string, payload?: Record<string, unknown>) => {
     if (!snapshot || !playerId || disabled || !snapshot.state.settings.participantControl) return;
-    void mutation.send({ path: `${path}/action`, method: 'POST', snapshot: true, body: { action, playerId, expectedRollId: snapshot.state.playerStates[playerId]?.lastRoll?.id ?? null, ...(action === 'pass' ? { useShield: true } : {}), revision: snapshot.state.revision, requestId: crypto.randomUUID() } });
+    void mutation.send({ path: `${path}/action`, method: 'POST', snapshot: true, body: { action, playerId, expectedRollId: snapshot.state.playerStates[playerId]?.lastRoll?.id ?? null, ...(action === 'pass' ? { useShield: true } : {}), ...(action === 'challenge-result' ? { outcome: payload?.outcome } : {}), revision: snapshot.state.revision, requestId: crypto.randomUUID() } });
   };
   if (left) return <main className={`${styles.page} ${styles.participantPage}`}>
     <header className={styles.header}><h1>참여 종료</h1><LinkButton href="/marble#obs" variant="outline" size="sm"><Monitor size={16} />내 OBS·주루마블</LinkButton></header>

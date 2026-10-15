@@ -163,6 +163,7 @@ test('BGM request interruption reports an exact checkpoint and ignores the video
   jest.advanceTimersByTime(3000);
   await flush();
   expect(harness.loads).toEqual(['video000001']);
+  harness.emit(1);
   harness.push({ ...state, item: { id: 'video-1', mediaProvider: 'youtube', videoId: 'donation001' } });
   await flush();
   expect(harness.loads).toEqual(['video000001']);

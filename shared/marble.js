@@ -49,7 +49,7 @@ export function marbleBoardLayout(count, orientation) {
 }
 
 export const MARBLE_EFFECT_LABELS = Object.freeze({ message: '미션', timer: '타이머', move: '고정 칸 이동', rollForward: '주사위로 전진', rollBackward: '주사위로 후진', goto: '지정 칸 이동', skip: '쉬어가기', extra: '보너스 굴리기', shield: '방어권 획득', shieldLoss: '방어권 차감', shieldClear: '방어권 전부 회수', shieldDouble: '방어권 두 배', card: '황금 카드' });
-export const MARBLE_EVENT_LABELS = Object.freeze({ reward: '보상 이벤트', penalty: '반전 이벤트', feast: '술·안주 이벤트', rule: '특별 규칙', game: '시청자 미니게임' });
+export const MARBLE_EVENT_LABELS = Object.freeze({ reward: '보상 이벤트', penalty: '반전 이벤트', feast: '술·안주 이벤트', rule: '특별 규칙', game: '시청자 미션' });
 export const MARBLE_BLOCK_LABELS = Object.freeze({ board: '보드', dice: '주사위', timer: '타이머', card: '미션 카드', roster: '참가자' });
 export const MARBLE_ICON_LABELS = Object.freeze({ start: '출발', drink: '술', snack: '안주', cheers: '건배', talk: 'TMI·토크',
   speech: '말투', forbidden: '금지어', water: '물', card: '황금 카드', shield: '방어권', forward: '전진', backward: '후진',
@@ -81,6 +81,11 @@ export function marbleContentIcon(item, index = -1) {
 
 const message = () => [{ type: 'message' }];
 const content = (id, title, text, effects = message(), color = '#2c9c87', icon, eventKind) => ({ id, title, text, color, effects, ...(icon ? { icon } : {}), ...(eventKind ? { eventKind } : {}) });
+const missionCard = (id, title, text, icon, success, failure, options = {}) => ({
+  ...content(id, title, text, options.seconds ? [{ type: 'timer', value: options.seconds }] : message(), '#d4a52b', icon, 'game'),
+  challenge: { rollDice: options.rollDice === true, success, failure },
+});
+const outcome = (text, effects = message()) => ({ text, effects });
 export const DEFAULT_MARBLE_PARTICIPATION_SETTINGS = freeze({
   points: { enabled: false, command: '!주루마블', cost: 100 },
   donation: { enabled: false, minimum: 1000 },
@@ -115,18 +120,30 @@ export const DEFAULT_MARBLE_SETTINGS = freeze({
     content('tile-23', '건배 한 모금', '오늘 자신에게 해 주고 싶은 한마디와 함께 건배, 술 한 모금!', message(), '#e78940', 'cheers'),
   ],
   cards: [
-    content('card-1', '단골 술집 서비스', '단골 보너스로 방어권 두 장 획득! 지금 마시는 술의 향이나 맛을 즐기며 한 모금 건배해요.', [{ type: 'shield', value: 2 }], '#d4a52b', 'cheers', 'reward'),
-    content('card-2', '안주 서비스 도착', '안주 서비스와 함께 방어권 한 장 획득! 준비한 안주를 한 입 맛보고 잠시 여유를 즐겨요.', [{ type: 'shield' }], '#d4a52b', 'snack', 'reward'),
-    content('card-3', '술자리 계산서', '계산서 도착! 방어권 한 장이 차감돼요. 술은 잠시 내려놓고 물 한 모금. 방어권이 없으면 추가 불이익은 없어요.', [{ type: 'shieldLoss', value: 1 }], '#d4a52b', 'drink', 'penalty'),
-    content('card-4', '안주 추가 주문', '안주를 추가 주문한 비용으로 방어권 두 장이 차감돼요. 준비한 안주 한 입을 즐겨요. 부족한 방어권은 보유한 만큼만 차감해요.', [{ type: 'shieldLoss', value: 2 }], '#d4a52b', 'snack', 'penalty'),
-    content('card-5', '단골 적립 두 배', '술집의 적립 행사! 보유 방어권이 두 배가 돼요. 안주 한 입과 함께 행운을 즐겨요. 보유량이 0장이면 그대로이며 최대 99장이에요.', [{ type: 'shieldDouble' }], '#d4a52b', 'shield', 'reward'),
-    content('card-6', '술집 마감 정산', '마감 정산으로 보유 방어권이 모두 회수돼요. 1분 동안 물과 안주로 쉬어 가요. 방어권이 없어도 추가 벌칙은 없어요.', [{ type: 'shieldClear' }, { type: 'timer', value: 60 }], '#d4a52b', 'rest', 'penalty'),
-    content('card-7', '안주 원정 출발', '안주 한 입으로 원정 준비! 전진 주사위 하나를 굴려 나온 눈만큼 이동하고 도착한 칸의 이벤트를 진행해요.', [{ type: 'rollForward' }], '#d4a52b', 'snack', 'feast'),
-    content('card-8', '두고 온 술잔', '술잔을 두고 온 기분! 후진 주사위 하나를 굴려 나온 눈만큼 돌아가요. 도착한 칸의 이벤트를 진행하며 술을 더 마실 필요는 없어요.', [{ type: 'rollBackward' }], '#d4a52b', 'drink', 'feast'),
-    content('card-9', '수분 충전 보너스', '방어권 한 장을 받고 물 한 모금! 1분 동안 술을 쉬며 편하게 이야기해요.', [{ type: 'shield' }, { type: 'timer', value: 60 }], '#d4a52b', 'water', 'reward'),
-    content('card-10', '안주 풀코스', '90초 동안 안주를 내 속도로 즐겨요. 쉬는 시간이 끝나면 한 번 더 굴리기로 보너스 주사위를 받아요.', [{ type: 'timer', value: 90 }, { type: 'extra' }], '#d4a52b', 'snack', 'feast'),
-    content('card-11', '금주령 3분', '지금부터 3분은 술 대신 물과 안주만! 다음 굴리기 전에 잠시 술자리를 쉬어 가요.', [{ type: 'timer', value: 180 }], '#d4a52b', 'water', 'rule'),
-    content('card-12', '귀가 택시', '술집에서 출발 칸까지 택시를 타요. 요금은 방어권 한 장! 출발 칸의 미션은 추가로 실행하지 않아요. 방어권이 없어도 이동은 진행돼요.', [{ type: 'shieldLoss', value: 1 }, { type: 'goto', value: 0 }], '#d4a52b', 'start', 'feast'),
+    missionCard('card-1', '너에게만 애교', '시청자에게 애교 섞인 한 문장을 말해요. 손동작 없이 목소리만으로! 끝까지 말하면 성공이에요.', 'speech',
+      outcome('애교 전달 성공! 방어권 1장을 받아요.', [{ type: 'shield' }]), outcome('귀여운 목소리로 “다음에는 꼭 성공할게요!”를 한 번 말해요.')),
+    missionCard('card-2', '오늘의 명대사', '채팅에서 추천한 대사 한 문장을 골라 끝까지 연기해요. 불편하거나 개인정보가 담긴 대사는 제외해요.', 'talk',
+      outcome('명대사 완성! 방어권 1장을 받아요.', [{ type: 'shield' }]), outcome('오늘 있었던 소소한 TMI 하나를 공개해요.')),
+    missionCard('card-3', '주사위 건배', '미션 주사위를 굴리고 {dice}눈만큼 작은 모금으로 건배해요. 물·무알코올로 바꿔도 성공! 속도 제한 없이 부담되면 패스해요.', 'cheers',
+      outcome('내 페이스로 건배 완료! 방어권 2장을 받아요.', [{ type: 'shield', value: 2 }]), outcome('방어권 1장을 반납해요. 없으면 차감 없이 종료하며 추가로 마시지 않아요.', [{ type: 'shieldLoss', value: 1 }]), { rollDice: true }),
+    missionCard('card-4', '진지한 한 문장', '“저는 지금 아주 진지합니다.”를 웃지 않고 세 번 말해요. 중간에 웃으면 실패예요.', 'speech',
+      outcome('진지함 인정! 방어권 1장을 받아요.', [{ type: 'shield' }]), outcome('가장 장난스러운 목소리로 같은 대사를 한 번 더 말해요.')),
+    missionCard('card-5', '칭찬 배달', '시청자 전체에게 서로 다른 칭찬 세 가지를 말해요. 닉네임을 지목하지 않아도 괜찮아요.', 'talk',
+      outcome('칭찬 배달 완료! 방어권 1장과 안주 한 입의 여유를 얻어요.', [{ type: 'shield' }]), outcome('나 자신을 칭찬하는 한 문장을 당당하게 말해요.')),
+    missionCard('card-6', '냥체 집중 시간', '1분 동안 모든 문장 끝에 “냥”을 붙여 채팅과 대화해요. 한 번도 빠뜨리지 않으면 성공이에요.', 'speech',
+      outcome('끝까지 냥체 성공! 방어권 2장을 받아요.', [{ type: 'shield', value: 2 }]), outcome('30초 동안 문장 끝에 “멍”을 붙여 말해요.', [{ type: 'timer', value: 30 }]), { seconds: 60 }),
+    missionCard('card-7', '안주 맛 표현왕', '안주를 한 입 맛보고 “맛있다” 없이 맛을 서로 다른 표현 두 가지로 설명해요. 안주가 없으면 좋아하는 음식으로 대신해요.', 'snack',
+      outcome('맛 표현 성공! 보너스 주사위를 한 번 굴려요.', [{ type: 'extra' }]), outcome('방어권 1장을 반납해요. 보유량이 없으면 차감 없이 마쳐요.', [{ type: 'shieldLoss', value: 1 }])),
+    missionCard('card-8', '목소리 세 가지', '같은 인사 한 문장을 평소 목소리, 속삭이는 목소리, 씩씩한 목소리로 한 번씩 말해요. 세 가지를 구별하면 성공!', 'speech',
+      outcome('목소리 변신 성공! 방어권 1장을 받아요.', [{ type: 'shield' }]), outcome('시청자가 고른 한 가지 목소리로 인사를 한 번 더 해요.')),
+    missionCard('card-9', '추억 한 조각', '30초 안에 방송하면서 즐거웠던 순간 하나를 떠올려 이야기해요. 사생활이나 다른 사람의 비밀은 제외해요.', 'talk',
+      outcome('좋은 추억 공유 완료! 방어권 1장을 받아요.', [{ type: 'shield' }]), outcome('다음 방송에서 해 보고 싶은 일을 한 가지 말해요.'), { seconds: 30 }),
+    missionCard('card-10', '주사위 칭찬 릴레이', '미션 주사위를 굴려 나온 {dice}눈만큼 짧은 칭찬을 시청자에게 전해요. 표현을 반복하지 않으면 성공이에요.', 'extra',
+      outcome('칭찬 릴레이 성공! 방어권 2장을 받아요.', [{ type: 'shield', value: 2 }]), outcome('30초 동안 문장 끝에 “최고예요”를 붙여 말해요.', [{ type: 'timer', value: 30 }]), { rollDice: true }),
+    missionCard('card-11', '오글 대사 도전', '“오늘도 와 줘서 고마워. 기다리고 있었어.”를 끊지 않고 한 문장으로 말해요. 쑥스러워도 끝까지 말하면 성공!', 'talk',
+      outcome('대사 완주! 방어권 1장을 받아요.', [{ type: 'shield' }]), outcome('시청자에게 귀여운 목소리로 고맙다는 인사를 한 번 해요.')),
+    missionCard('card-12', '오늘의 TMI', '30초 안에 오늘의 사소한 TMI 하나를 이야기해요. 먹은 음식이나 작은 실수도 좋아요. 개인정보나 다른 사람의 비밀은 제외해요.', 'mission',
+      outcome('TMI 공개 완료! 방어권 1장과 보너스 굴리기를 받아요.', [{ type: 'shield' }, { type: 'extra' }]), outcome('다음 미션의 성공을 응원하는 짧은 구호를 한 번 외쳐요.'), { seconds: 30 }),
   ],
   layouts: {
     landscape: {
@@ -217,20 +234,37 @@ function validateFollowupEffects(effects) {
     fail('conflicting_roll_effects', '주사위 전진·후진과 보너스 굴리기는 한 이벤트에 하나만 설정해 주세요.');
   }
 }
+function parseChallenge(value, count) {
+  object(value, ['rollDice', 'success', 'failure'], '황금 카드 미션');
+  const result = { rollDice: boolean(value.rollDice, '미션 주사위') };
+  for (const key of ['success', 'failure']) {
+    const branch = object(value[key], ['text', 'effects'], '판정 결과');
+    const effects = array(branch.effects, 0, 6, '결과 효과').map(effect => parseEffect(effect, count, true));
+    if (effects.some(effect => ['move', 'goto', 'skip'].includes(effect.type))) fail('invalid_challenge_effect', '결과 이동은 주사위 전진·후진 효과를 사용해 주세요.');
+    validateFollowupEffects(effects);
+    result[key] = { text: text(branch.text, 1000, '결과 설명', false, true), effects };
+  }
+  return result;
+}
 function parseContents(value, count, cards) {
   const seen = new Set();
   return array(value, cards ? 1 : 12, cards ? 60 : 40, cards ? '카드' : '칸').map(item => {
-    object(item, ['id', 'title', 'text', 'color', 'effects', 'icon', 'eventKind'], '칸 또는 카드');
+    object(item, ['id', 'title', 'text', 'color', 'effects', 'icon', 'eventKind', 'challenge'], '칸 또는 카드');
     const key = id(item.id);
     if (seen.has(key)) fail('duplicate_id', '칸 또는 카드 ID가 중복되었어요.');
     seen.add(key);
     if (own(item, 'icon') && (typeof item.icon !== 'string' || !own(MARBLE_ICON_LABELS, item.icon))) fail('invalid_icon', '지원하지 않는 아이콘이에요.');
     if (own(item, 'eventKind') && (!cards || typeof item.eventKind !== 'string' || !own(MARBLE_EVENT_LABELS, item.eventKind))) fail('invalid_event_kind', '황금 카드의 이벤트 종류를 확인해 주세요.');
     const effects = array(item.effects, 0, 6, '효과').map(effect => parseEffect(effect, count, cards));
+    const challenge = own(item, 'challenge') ? parseChallenge(item.challenge, count) : null;
+    if (challenge && (!cards || effects.some(effect => !['message', 'timer'].includes(effect.type)))) {
+      fail('invalid_challenge_effect', '판정 전에는 메시지·타이머만 사용하고 보상·벌칙은 결과에 설정해 주세요.');
+    }
     validateFollowupEffects(effects);
     return { id: key, title: text(item.title, 60, '제목'), text: text(item.text, 1000, '본문', true, true), color: color(item.color),
       ...(own(item, 'icon') ? { icon: item.icon } : {}),
       ...(own(item, 'eventKind') ? { eventKind: item.eventKind } : {}),
+      ...(challenge ? { challenge } : {}),
       effects };
   });
 }
@@ -287,6 +321,9 @@ export function parseMarbleSettings(input, base = DEFAULT_MARBLE_SETTINGS) {
   for (const tile of parsedTiles) {
     const draws = tile.effects.filter(effect => effect.type === 'card').length;
     if (!draws) continue;
+    if (parsedCards.some(card => card.challenge) && (draws !== 1 || tile.effects.some(effect => !['card', 'message', 'timer'].includes(effect.type)))) {
+      fail('conflicting_challenge_effects', '미션 카드 칸에는 카드 한 장과 메시지·타이머만 함께 설정할 수 있어요.');
+    }
     for (const card of parsedCards) validateFollowupEffects([...tile.effects, ...Array.from({ length: draws }, () => card.effects).flat()]);
   }
   return {
@@ -325,6 +362,7 @@ function readyEffect(state, player, now) {
   const ps = state.playerStates[player.id];
   if (ps.phase !== 'effect' || !ps.pending) fail('no_pending_mission', '진행 중인 미션이 없어요.', 409);
   if (now < ps.pending.readyAt) fail('animation_in_progress', '주사위와 말 이동이 끝난 뒤 진행해 주세요.', 409);
+  if (ps.pending.challenge?.roll && now < ps.pending.challenge.roll.endsAt) fail('animation_in_progress', '미션 주사위가 멈춘 뒤 진행해 주세요.', 409);
   return ps;
 }
 function generatedId(context) { return id(context.uuid(), '생성 ID'); }
@@ -361,9 +399,37 @@ function move(player, distance, count, path) {
   }
 }
 export function marbleNextRoll(pending) {
+  if (pending?.challenge && !pending.challenge.outcome) return null;
   if (pending?.effects.some(effect => effect.type === 'rollForward')) return 'forward';
   if (pending?.effects.some(effect => effect.type === 'rollBackward')) return 'backward';
   return pending?.extraTurn ? 'bonus' : null;
+}
+
+export function marbleChallengeText(value, challenge) {
+  return String(value ?? '').replaceAll('{dice}', challenge?.roll ? String(challenge.roll.dice[0]) : '?');
+}
+
+function applyEffects(state, player, effects, path = []) {
+  let durationMs = 0;
+  let extraTurn = false;
+  const shieldsBefore = player.shields;
+  const changesShields = effects.some(effect => ['shield', 'shieldLoss', 'shieldClear', 'shieldDouble'].includes(effect.type));
+  for (const effect of effects) {
+    switch (effect.type) {
+      case 'message': case 'rollForward': case 'rollBackward': break;
+      case 'timer': durationMs += effect.value * 1000; break;
+      case 'move': move(player, effect.value, state.settings.tiles.length, path); break;
+      case 'goto': move(player, (effect.value - player.position + state.settings.tiles.length) % state.settings.tiles.length, state.settings.tiles.length, path); break;
+      case 'skip': player.skipTurns = Math.min(18, player.skipTurns + effect.value); break;
+      case 'extra': extraTurn = true; break;
+      case 'shield': player.shields = Math.min(99, player.shields + (effect.value ?? 1)); break;
+      case 'shieldLoss': player.shields = Math.max(0, player.shields - effect.value); break;
+      case 'shieldClear': player.shields = 0; break;
+      case 'shieldDouble': player.shields = Math.min(99, player.shields * 2); break;
+      default: fail('invalid_effect', '지원하지 않는 효과예요.');
+    }
+  }
+  return { durationMs, extraTurn, shieldsBefore, changesShields };
 }
 
 function roll(state, player, context, source = 'host', username, direction) {
@@ -378,40 +444,21 @@ function roll(state, player, context, source = 'host', username, direction) {
   const resolved = [];
   const descriptions = [tile.text];
   const titles = [tile.title];
-  let cardId, missionColor = tile.color;
+  let cardId, challenge, missionColor = tile.color;
   // Only the dice landing tile triggers. Cards expand once; their schema forbids card effects.
   for (const effect of tile.effects) {
     if (effect.type !== 'card') { resolved.push(copy(effect)); continue; }
     const card = drawCard(state, context);
     cardId = card.id;
     missionColor = card.color;
+    if (card.challenge) challenge = { ...copy(card.challenge), missionText: card.text };
     titles.push(card.title);
     descriptions.push(card.text);
     if (effect.text) descriptions.push(effect.text);
     resolved.push(...copy(card.effects));
   }
-  let durationMs = 0;
-  let extraTurn = false;
-  const shieldsBefore = player.shields;
-  const changesShields = resolved.some(effect => ['shield', 'shieldLoss', 'shieldClear', 'shieldDouble'].includes(effect.type));
-  for (const effect of resolved) {
-    if (effect.text && !descriptions.includes(effect.text)) descriptions.push(effect.text);
-    switch (effect.type) {
-      case 'message': break;
-      // A deliberate complete action starts the next roll; never recurse between movement tiles.
-      case 'rollForward': case 'rollBackward': break;
-      case 'timer': durationMs += effect.value * 1000; break;
-      case 'move': move(player, effect.value, state.settings.tiles.length, path); break;
-      case 'goto': move(player, (effect.value - player.position + state.settings.tiles.length) % state.settings.tiles.length, state.settings.tiles.length, path); break;
-      case 'skip': player.skipTurns = Math.min(18, player.skipTurns + effect.value); break;
-      case 'extra': extraTurn = true; break;
-      case 'shield': player.shields = Math.min(99, player.shields + (effect.value ?? 1)); break;
-      case 'shieldLoss': player.shields = Math.max(0, player.shields - effect.value); break;
-      case 'shieldClear': player.shields = 0; break;
-      case 'shieldDouble': player.shields = Math.min(99, player.shields * 2); break;
-      default: fail('invalid_effect', '지원하지 않는 효과예요.');
-    }
-  }
+  for (const effect of resolved) if (effect.text && !descriptions.includes(effect.text)) descriptions.push(effect.text);
+  const { durationMs, extraTurn, shieldsBefore, changesShields } = applyEffects(state, player, resolved, path);
   const endsAt = context.now + DICE_MS + path.length * STEP_MS;
   ps.lastRoll = { id: generatedId(context), playerId: player.id, dice, from, to: player.position, path,
     startedAt: context.now, diceDurationMs: DICE_MS, stepDurationMs: STEP_MS, endsAt, source };
@@ -420,8 +467,15 @@ function roll(state, player, context, source = 'host', username, direction) {
   ps.pending = { title: titles.join(' · '), text: descriptions.filter(Boolean).join('\n'), color: missionColor,
     tileId: tile.id, effects: resolved, readyAt: endsAt, extraTurn };
   if (cardId) ps.pending.cardId = cardId;
+  if (challenge) {
+    ps.pending.challenge = challenge;
+    ps.pending.title = titles.slice(1).join(' · ');
+    ps.pending.text = [challenge.missionText, ...resolved.map(effect => effect.text)].filter(Boolean).join('\n');
+    challenge.missionText = ps.pending.text;
+  }
   if (changesShields) ps.pending.shieldDelta = player.shields - shieldsBefore;
   ps.timer = durationMs ? { durationMs, deadline: endsAt + durationMs, remainingMs: durationMs, paused: false } : null;
+  if (challenge?.rollDice && ps.timer) { ps.timer.deadline = null; ps.timer.paused = true; }
   ps.phase = 'effect';
   state.round++;
   log(state, context, `${player.name}: ${direction ? direction < 0 ? '후진 ' : '전진 ' : ''}${dice.join(' + ')} → ${tile.title}`, player.id);
@@ -452,6 +506,7 @@ const ACTION_FIELDS = {
   'add-player': ['name', 'color', 'userId', 'avatarUrl'], 'remove-player': [], 'leave-player': [], 'update-player': ['name', 'color', 'userId', 'avatarUrl'],
   start: [], end: [], reset: [], pause: [], resume: [], focus: [],
   roll: ['source', 'username', 'expectedRollId'], complete: ['expectedRollId'], pass: ['useShield', 'expectedRollId'],
+  'challenge-roll': ['expectedRollId'], 'challenge-result': ['expectedRollId', 'outcome'],
   'timer-pause': [], 'timer-resume': [], 'timer-add': ['seconds'], 'timer-finish': [],
   settings: ['settings'], layout: ['layouts'], 'enqueue-donation': ['donation'],
 };
@@ -548,6 +603,8 @@ export function applyMarbleAction(state, input, context) {
       for (const ps of Object.values(next.playerStates)) {
         if (ps.lastRoll) { ps.lastRoll.startedAt += delta; ps.lastRoll.endsAt += delta; }
         if (ps.pending) ps.pending.readyAt += delta;
+        if (ps.pending?.challenge?.roll) { ps.pending.challenge.roll.startedAt += delta; ps.pending.challenge.roll.endsAt += delta; }
+        if (ps.pending?.challenge?.resolvedAt != null) ps.pending.challenge.resolvedAt += delta;
         if (ps.timer && ps.timer.deadline !== null) ps.timer.deadline += delta;
       }
       next.status = 'running'; next.pausedAt = null;
@@ -561,10 +618,47 @@ export function applyMarbleAction(state, input, context) {
       roll(next, player, context, source, own(input, 'username') ? text(input.username, 80, '요청자') : undefined);
       break;
     }
+    case 'challenge-roll': {
+      const player = target(next, input);
+      const ps = readyEffect(next, player, context.now);
+      const challenge = ps.pending.challenge;
+      if (!challenge?.rollDice || challenge.roll || challenge.outcome) fail('challenge_roll_unavailable', '지금은 미션 주사위를 굴릴 수 없어요.', 409);
+      const die = random(context, 6) + 1;
+      challenge.roll = { id: generatedId(context), playerId: player.id, dice: [die], from: player.position, to: player.position, path: [],
+        startedAt: context.now, diceDurationMs: DICE_MS, stepDurationMs: STEP_MS, endsAt: context.now + DICE_MS, source: 'challenge' };
+      ps.pending.text = marbleChallengeText(challenge.missionText, challenge);
+      if (ps.timer) { ps.timer.deadline = challenge.roll.endsAt + ps.timer.remainingMs; ps.timer.paused = false; }
+      log(next, context, `${player.name}: ${ps.pending.title} · 미션 주사위 ${die}`, player.id);
+      focus(next, player.id);
+      break;
+    }
+    case 'challenge-result': {
+      const player = target(next, input);
+      const ps = readyEffect(next, player, context.now);
+      const challenge = ps.pending.challenge;
+      if (!challenge || challenge.outcome) fail('challenge_already_resolved', '판정할 미션이 없거나 이미 결과를 확정했어요.', 409);
+      if (challenge.rollDice && !challenge.roll) fail('challenge_roll_required', '미션 주사위를 먼저 굴려 주세요.', 409);
+      if (!['success', 'failure'].includes(input.outcome)) fail('invalid_outcome', '성공 또는 실패를 선택해 주세요.');
+      const branch = challenge[input.outcome];
+      const { durationMs, extraTurn, shieldsBefore, changesShields } = applyEffects(next, player, branch.effects);
+      challenge.outcome = input.outcome;
+      challenge.resolvedAt = context.now;
+      ps.pending.effects = copy(branch.effects);
+      ps.pending.text = marbleChallengeText([branch.text, ...branch.effects.map(effect => effect.text)].filter(Boolean).join('\n'), challenge);
+      ps.pending.extraTurn = extraTurn;
+      if (changesShields) ps.pending.shieldDelta = player.shields - shieldsBefore;
+      else delete ps.pending.shieldDelta;
+      ps.timer = durationMs ? { durationMs, deadline: context.now + durationMs, remainingMs: durationMs, paused: false } : null;
+      log(next, context, `${player.name}: ${ps.pending.title} ${input.outcome === 'success' ? '성공' : '실패'} · ${ps.pending.text}`, player.id);
+      if (changesShields) log(next, context, `${player.name}: 방어권 ${shieldsBefore} → ${player.shields}장`, player.id);
+      focus(next, player.id);
+      break;
+    }
     case 'complete':
     case 'pass': {
       const player = target(next, input);
       const ps = readyEffect(next, player, context.now);
+      if (input.action === 'complete' && ps.pending.challenge && !ps.pending.challenge.outcome) fail('challenge_result_required', '성공 또는 실패를 먼저 판정해 주세요.', 409);
       if (input.action === 'pass' && own(input, 'useShield') && boolean(input.useShield, '방어권 사용')) {
         if (!player.shields) fail('no_shield', '보유한 방어권이 없어요.', 409);
         player.shields--;
@@ -584,6 +678,7 @@ export function applyMarbleAction(state, input, context) {
       const player = target(next, input);
       const ps = readyEffect(next, player, context.now);
       const timer = ps.timer;
+      if (ps.pending.challenge?.rollDice && !ps.pending.challenge.roll) fail('challenge_roll_required', '미션 주사위를 먼저 굴려 주세요.', 409);
       if (!timer) fail('no_timer', '진행 중인 타이머가 없어요.', 409);
       if (input.action === 'timer-pause') {
         if (timer.paused) fail('timer_already_paused', '이미 멈춘 타이머예요.', 409);
@@ -684,12 +779,20 @@ function pick(value, keys) {
   return result;
 }
 function publicContent(item) {
-  return { ...pick(item, ['id', 'title', 'text', 'color', 'icon', 'eventKind']), effects: item.effects.map(effect => pick(effect, ['type', 'value', 'text'])) };
+  return { ...pick(item, ['id', 'title', 'text', 'color', 'icon', 'eventKind']), effects: item.effects.map(effect => pick(effect, ['type', 'value', 'text'])),
+    ...(item.challenge ? { challenge: publicChallenge(item.challenge) } : {}) };
+}
+function publicChallenge(challenge, runtime = false) {
+  const result = pick(challenge, runtime ? ['rollDice', 'missionText', 'outcome', 'resolvedAt'] : ['rollDice']);
+  for (const key of ['success', 'failure']) result[key] = { text: challenge[key].text, effects: challenge[key].effects.map(effect => pick(effect, ['type', 'value', 'text'])) };
+  if (runtime && challenge.roll) result.roll = pick(challenge.roll, ['id', 'playerId', 'dice', 'from', 'to', 'path', 'startedAt', 'diceDurationMs', 'stepDurationMs', 'endsAt', 'source']);
+  return result;
 }
 function publicPlayerState(ps) {
   return { phase: ps.phase,
     lastRoll: ps.lastRoll ? pick(ps.lastRoll, ['id', 'playerId', 'dice', 'from', 'to', 'path', 'startedAt', 'diceDurationMs', 'stepDurationMs', 'endsAt', 'source', 'direction']) : null,
-    pending: ps.pending ? { ...pick(ps.pending, ['title', 'text', 'color', 'tileId', 'cardId', 'readyAt', 'extraTurn', 'shieldDelta']), effects: ps.pending.effects.map(effect => pick(effect, ['type', 'value', 'text'])) } : null,
+    pending: ps.pending ? { ...pick(ps.pending, ['title', 'text', 'color', 'tileId', 'cardId', 'readyAt', 'extraTurn', 'shieldDelta']), effects: ps.pending.effects.map(effect => pick(effect, ['type', 'value', 'text'])),
+      ...(ps.pending.challenge ? { challenge: publicChallenge(ps.pending.challenge, true) } : {}) } : null,
     timer: ps.timer ? pick(ps.timer, ['durationMs', 'deadline', 'remainingMs', 'paused']) : null, donationQueue: [] };
 }
 export function toPublicMarbleState(state) {

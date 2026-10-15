@@ -48,15 +48,16 @@ test('a Mix without saved seed tracks can still defer an incoming donation', asy
   expect(h.states.get(h.sid)).toMatchObject({ paused: true, idleDeferred: true });
 });
 
-function setupRoute(paused = true) {
+function setupRoute(paused = true, { kind = 'video', playbackEpoch = 'epoch-1', playbackRevision = 0, owner = 'owner-client' } = {}) {
   const control = jest.fn(async () => ({ ok: true, paused: false }));
   const broadcast = jest.fn(async () => ({}));
   const route = loadServerFunctions.route('/api/video-donation/control-by-token', {
     pvdTokenToSid: new Map([['viewer-token', 'test']]),
     getBotSettings: async () => ({ videoDonationViewerToken: 'viewer-token' }),
-    getVideoQueue: () => [{ id: 'donation-1' }],
+    getVideoQueue: () => [{ id: 'donation-1', kind }],
     getPvdQueueItemKey: (item) => item.id,
-    pvdPlaybackState: new Map([['test', { paused, idleDeferred: false }]]),
+    pvdPlaybackState: new Map([['test', { paused, idleDeferred: false, playbackEpoch, playbackRevision }]]),
+    bgmPlayerPresence: { current: () => owner ? { clientId: owner } : null },
     getCurrentAtSec: () => 83, broadcastPvdControl: broadcast,
     controlPvdPlaybackForSid: control,
   });
@@ -75,7 +76,7 @@ test('a late automatic PLAYING report cannot cancel the web pause', async () => 
 test('explicit playback requests still use the normal control path', async () => {
   const h = setupRoute();
   await h.route({ body: { token: 'viewer-token', itemId: 'donation-1', op: 'play' } }, h.response);
-  expect(h.control).toHaveBeenCalledWith('test', 'play', undefined);
+  expect(h.control).toHaveBeenCalledWith('test', 'play', undefined, { clientId: '', controlId: '' });
 });
 
 test('repeated automatic PLAYING events cannot reset an already running clock', async () => {
@@ -91,6 +92,35 @@ test('a stale player cannot change the next donation', async () => {
   const h = setupRoute();
   await h.route({ body: { token: 'viewer-token', itemId: 'old-item', op: 'pause', source: 'player' } }, h.response);
   expect(h.response.statusCode).toBe(409);
+  expect(h.control).not.toHaveBeenCalled();
+});
+
+test.each(['other-client', '', undefined])('a non-owner BGM window (%s) cannot seek the queue', async (clientId) => {
+  const h = setupRoute(false, { kind: 'bgm' });
+  await h.route({ body: { token: 'viewer-token', itemId: 'donation-1', op: 'seek', atSec: 12, source: 'player', clientId } }, h.response);
+  expect(h.response.statusCode).toBe(409);
+  expect(h.response.body.error).toBe('bgm_player_owned');
+  expect(h.control).not.toHaveBeenCalled();
+});
+
+test.each([{ playbackEpoch: 'old-epoch', playbackRevision: 3 }, { playbackEpoch: 'epoch-1', playbackRevision: 2 }])('stale BGM controls cannot reset the current clock: %j', async (version) => {
+  const h = setupRoute(false, { kind: 'bgm', playbackRevision: 3 });
+  await h.route({ body: { token: 'viewer-token', itemId: 'donation-1', op: 'seek', source: 'player', clientId: 'owner-client', ...version } }, h.response);
+  expect(h.response.statusCode).toBe(409);
+  expect(h.response.body.error).toBe('stale_playback_control');
+  expect(h.control).not.toHaveBeenCalled();
+});
+
+test('the owning BGM window can issue an explicit control with its identity echoed', async () => {
+  const h = setupRoute(false, { kind: 'bgm', playbackRevision: 3 });
+  await h.route({ body: { token: 'viewer-token', itemId: 'donation-1', op: 'seek', atSec: 80, source: 'player', clientId: 'owner-client', controlId: 'control-1', playbackEpoch: 'epoch-1', playbackRevision: 3 } }, h.response);
+  expect(h.control).toHaveBeenCalledWith('test', 'seek', 80, { clientId: 'owner-client', controlId: 'control-1' });
+});
+
+test('automatic position observations from a video overlay cannot become seeks', async () => {
+  const h = setupRoute(false);
+  await h.route({ body: { token: 'viewer-token', itemId: 'donation-1', op: 'seek', atSec: 12, source: 'player' } }, h.response);
+  expect(h.response.body).toMatchObject({ ok: true, ignored: true });
   expect(h.control).not.toHaveBeenCalled();
 });
 

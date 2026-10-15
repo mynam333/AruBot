@@ -2,7 +2,10 @@ export type MarbleEffectType = 'message' | 'timer' | 'move' | 'rollForward' | 'r
 export type MarbleEffect = { type: MarbleEffectType; value?: number; text?: string };
 export type MarbleIcon = 'start' | 'drink' | 'snack' | 'cheers' | 'talk' | 'speech' | 'forbidden' | 'water' | 'card' | 'shield' | 'forward' | 'backward' | 'extra' | 'rest' | 'timer' | 'mission';
 export type MarbleEventKind = 'reward' | 'penalty' | 'feast' | 'rule' | 'game';
-export type MarbleTile = { id: string; title: string; text: string; color: string; effects: MarbleEffect[]; icon?: MarbleIcon; eventKind?: MarbleEventKind };
+export type MarbleChallengeOutcome = { text: string; effects: MarbleEffect[] };
+export type MarbleChallenge = { rollDice: boolean; success: MarbleChallengeOutcome; failure: MarbleChallengeOutcome };
+export type MarbleChallengeState = MarbleChallenge & { missionText: string; roll?: MarbleRoll; outcome?: 'success' | 'failure'; resolvedAt?: number };
+export type MarbleTile = { id: string; title: string; text: string; color: string; effects: MarbleEffect[]; icon?: MarbleIcon; eventKind?: MarbleEventKind; challenge?: MarbleChallenge };
 export type MarbleCard = MarbleTile;
 export type MarbleBlock = 'board' | 'dice' | 'timer' | 'card' | 'roster';
 export type MarbleOrientation = 'landscape' | 'portrait';
@@ -46,6 +49,7 @@ export type MarblePending = {
   effects: MarbleEffect[]; readyAt: number; extraTurn: boolean;
   /** Actual change after 0..99 clamping; present only when a shield effect ran. */
   shieldDelta?: number;
+  challenge?: MarbleChallengeState;
 };
 export type MarbleTimer = { durationMs: number; deadline: number | null; remainingMs: number; paused: boolean };
 export type MarbleHistory = { id: string; at: number; text: string; playerId?: string };
@@ -94,6 +98,8 @@ export const MARBLE_EVENT_LABELS: Record<MarbleEventKind, string>;
 export function marbleContentIcon(item: Pick<MarbleTile, 'title' | 'effects' | 'icon'>, index?: number): MarbleIcon;
 /** Movement events use exactly one die and wait for complete, preserving pass and stale-roll guards. */
 export function marbleNextRoll(pending: MarblePending | null | undefined): 'forward' | 'backward' | 'bonus' | null;
+/** Substitute the persisted mission die; never uses the board-movement roll. */
+export function marbleChallengeText(value: string, challenge?: MarbleChallengeState | null): string;
 export const MARBLE_BLOCK_LABELS: Record<MarbleBlock, string>;
 export const MARBLE_SIZES: Record<MarbleOrientation, { width: number; height: number }>;
 /** Legacy fixed geometry; use marbleBlockGeometry for orientation-aware board dimensions. */

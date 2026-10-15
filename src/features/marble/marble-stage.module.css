@@ -131,6 +131,10 @@
 .missionFooter svg { width: 16px; height: 16px; }
 .missionFooter > span { margin-left: auto; display: flex; align-items: center; gap: 5px; font-variant-numeric: tabular-nums; }
 .missionFooter > span[data-shield-loss='true'] { color: #a13b4e; }
+.cardScene[data-outcome='success'] .mission::before { background: #17634e; }
+.cardScene[data-outcome='failure'] .mission::before { background: #833f50; }
+.cardScene[data-outcome] .mission > .blockHeading { color: #fff; }
+.diceBlock[data-mission-roll='true'] { outline: 2px solid #d4a52b; outline-offset: -2px; }
 .cardBack { height: 264px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 11px; }
 .cardSeal { width: 77px; height: 77px; display: grid; place-items: center; border: 1px solid #b9944270; border-radius: 50%; margin-bottom: 4px; color: #b28a29; }
 .cardSeal svg { width: 39px; height: 39px; stroke-width: 1.5; }
