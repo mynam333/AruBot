@@ -58,14 +58,14 @@ for (const pause of [false, true]) for (const queue of [false, true]) {
   });
 }
 
-test('native donation durations accumulate; skip removes only that donation', async () => {
+test('native donations wait through ads and resume only after every donation ends or is skipped', async () => {
   const h = harness(true, false);
   h.event('d1'); h.event('d2'); await flush();
   await h.advance(5000);
   h.connector.onControl({ donationId: 'd1', stopVideo: true });
-  await h.advance(12999);
+  await h.advance(120000);
   assert.equal(h.runtime.paused('sid'), true);
-  await h.advance(1);
+  h.connector.onControl({ donationId: 'd2', donationCommand: 'STOP' });
   assert.equal(h.runtime.paused('sid'), false);
   assert.deepEqual(h.paused, [true, false]);
 });
@@ -74,6 +74,8 @@ test('duplicate deliveries are ignored and switching off releases the interrupti
   const h = harness(true, false);
   h.event(); h.event(); await flush();
   await h.advance(13000);
+  assert.equal(h.runtime.paused('sid'), true);
+  h.connector.onControl({ donationId: 'd1', donationCommand: 'STOP' });
   assert.equal(h.runtime.paused('sid'), false);
   h.event('d2'); await flush();
   h.runtime.configure('sid', { ...h.settings, videoDonationChzzkPauseEnabled: false });
@@ -87,9 +89,60 @@ test('provider alert pause holds future alerts but does not release an active in
   h.connector.onSettings({ alertPauseActive: true });
   assert.equal(h.runtime.paused('sid'), true);
   await h.advance(30000);
+  assert.equal(h.runtime.paused('sid'), true);
+  h.connector.onControl({ donationId: 'd1', donationCommand: 'STOP' });
   assert.equal(h.runtime.paused('sid'), false);
   h.connector.onSettings({ alertPauseActive: false });
   assert.equal(h.runtime.paused('sid'), true);
+  await h.advance(13000);
+  assert.equal(h.runtime.paused('sid'), true);
+  h.connector.onControl({ donationId: 'd2', donationCommand: 'STOP' });
+  assert.equal(h.runtime.paused('sid'), false);
+});
+
+test('pause-only mode does not wait for duration metadata or release on connection failure', async () => {
+  const h = harness(true, false, { resolveDuration: () => { throw new Error('must not fetch'); } });
+  h.event('d1', { durationSec: null });
+  assert.equal(h.runtime.paused('sid'), true);
+  h.connector.onStatus('retrying');
+  await h.advance(86400000);
+  assert.equal(h.runtime.paused('sid'), true);
+  h.connector.onControl({ donationId: 'unrelated', donationCommand: 'STOP' });
+  assert.equal(h.runtime.paused('sid'), true);
+  h.connector.onStatus('connected');
+  h.connector.onControl({ donationId: 'd1', donationCommand: 'STOP' });
+  assert.deepEqual(h.paused, [true, false]);
+  assert.equal(h.timerCount, 0);
+});
+
+test('PLAY confirms a priority donation even while subsequent alerts are held', () => {
+  const h = harness(true, false);
+  h.connector.onSettings({ alertPauseActive: true });
+  h.event('d1'); h.event('priority');
+  assert.equal(h.runtime.paused('sid'), false);
+  h.connector.onControl({ donationId: 'priority', donationCommand: 'PLAY' });
+  assert.equal(h.runtime.paused('sid'), true);
+  h.connector.onControl({ donationId: 'priority', donationCommand: 'STOP' });
+  assert.equal(h.runtime.paused('sid'), false);
+  h.connector.onSettings({ alertPauseActive: false });
+  assert.equal(h.runtime.paused('sid'), true);
+  h.runtime.closeAll();
+});
+
+test('STOP before arrival prevents a late duplicate from pausing; repeated STOP is idempotent', () => {
+  const h = harness(true, false);
+  h.connector.onControl({ donationId: 'd1', donationCommand: 'STOP' });
+  h.event('d1');
+  assert.deepEqual(h.paused, []);
+  h.event('d2');
+  h.connector.onControl({ donationId: 'd2', donationCommand: 'STOP' });
+  h.connector.onControl({ donationId: 'd2', donationCommand: 'STOP' });
+  assert.deepEqual(h.paused, [true, false]);
+});
+
+test('only upstream TEST previews retain a duration fallback', async () => {
+  const h = harness(true, false);
+  h.event('TEST');
   await h.advance(13000);
   assert.equal(h.runtime.paused('sid'), false);
 });
@@ -187,13 +240,15 @@ test('same-secret queue toggle retains failed insert retry without reconnecting'
   assert.equal(h.timerCount, 0);
 });
 
-test('unchanged native config does not restart an active pause timer', async t => {
+test('unchanged native config preserves the actual-completion hold', async t => {
   const h = harness(true, false);
   t.after(() => h.runtime.closeAll());
   h.event();
   await h.advance(5000);
   h.runtime.configure('sid', { ...h.settings, unrelated: true });
   await h.advance(8000);
+  assert.equal(h.runtime.paused('sid'), true);
+  h.connector.onControl({ donationId: 'd1', donationCommand: 'STOP' });
   assert.equal(h.runtime.paused('sid'), false);
   assert.equal(h.connections.length, 1);
 });

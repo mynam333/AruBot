@@ -123,11 +123,14 @@ export function createChzzkVideoRuntime({ enqueue, remove, setPaused, resolveDur
     const head = state.native[0];
     publishPause(sid, state, Boolean(head && (!state.alertPaused || head.startedAt != null) && state.config.pauseEnabled && !state.config.queueEnabled));
     if (!head || (state.alertPaused && head.startedAt == null)) return;
-    head.startedAt = now();
+    head.startedAt ??= now();
+    // Real donations end only on STOP/skip, never on an estimated media duration.
+    // CHZZK's TEST overlay deliberately does not send play/end acknowledgements.
+    if (head.donationId !== 'TEST') return;
     state.timer = timers.setTimeout(() => {
       state.native.shift();
       advance(sid, state);
-    }, head.remainingMs);
+    }, Math.max(0, head.remainingMs - (now() - head.startedAt)));
     state.timer?.unref?.();
   };
   const drain = async (sid, state) => {
@@ -141,8 +144,10 @@ export function createChzzkVideoRuntime({ enqueue, remove, setPaused, resolveDur
         try {
           if (state.cancelled.has(event.donationId)) { state.pending.shift(); continue; }
           let durationSec = event.durationSec;
-          if (!(durationSec > 0)) durationSec = await resolveDuration(sid, event);
-          if (!(durationSec > 0) || !Number.isFinite(durationSec)) throw new Error('duration_unavailable');
+          if (state.config.queueEnabled || event.donationId === 'TEST') {
+            if (!(durationSec > 0)) durationSec = await resolveDuration(sid, event);
+            if (!(durationSec > 0) || !Number.isFinite(durationSec)) throw new Error('duration_unavailable');
+          }
           if (channels.get(sid) !== state) return;
           if (state.cancelled.has(event.donationId)) { state.pending.shift(); continue; }
           if (state.config.queueEnabled) {
@@ -216,13 +221,24 @@ export function createChzzkVideoRuntime({ enqueue, remove, setPaused, resolveDur
           void drain(sid, state);
         },
         onControl(event) {
-          if (channels.get(sid) !== state || event?.stopVideo !== true || !event.donationId) return;
+          if (channels.get(sid) !== state || !event?.donationId) return;
+          if (event.donationCommand === 'PLAY' && event.stopVideo !== true) {
+            const index = state.native.findIndex(item => item.donationId === event.donationId);
+            if (index < 0) return;
+            // Priority donations can start ahead of arrival order, even with alerts held.
+            const [item] = state.native.splice(index, 1);
+            item.startedAt = now();
+            state.native.unshift(item);
+            advance(sid, state);
+            return;
+          }
+          if (event.stopVideo !== true && event.donationCommand !== 'STOP') return;
           state.cancelled.add(String(event.donationId));
           if (state.cancelled.size > 10000) state.cancelled.delete(state.cancelled.values().next().value);
           const wasHead = state.native[0]?.donationId === event.donationId;
           state.native = state.native.filter((item) => item.donationId !== event.donationId);
           if (wasHead) advance(sid, state);
-          queueRemoval(sid, state, event.donationId);
+          if (state.config.queueEnabled && event.stopVideo === true) queueRemoval(sid, state, event.donationId);
         },
         onSettings(event) {
           if (channels.get(sid) !== state || typeof event?.alertPauseActive !== 'boolean') return;

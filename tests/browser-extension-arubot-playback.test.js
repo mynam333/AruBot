@@ -60,7 +60,7 @@ function createYouTubePage(paused = false) {
   return { video, overlay, countdown, onMessage };
 }
 
-async function createExtension({ fetchSnapshot, initiallyPaused = false, extraDelaySec = 1, focusedOnly = false } = {}) {
+async function createExtension({ fetchSnapshot, initiallyPaused = false, extraDelaySec = 1, focusedOnly = false, services, playbackHolds } = {}) {
   const page = createYouTubePage(initiallyPaused);
   const sockets = [];
   const listeners = {};
@@ -77,8 +77,12 @@ async function createExtension({ fetchSnapshot, initiallyPaused = false, extraDe
           monitoring: true,
           extraDelaySec,
           resumeFocusedOnly: focusedOnly,
-          services: { arubot: { enabled: true, overlayUrl: 'https://arubot.yuaru.com/pvd/test-token' } }
+          services: services || { arubot: { enabled: true, overlayUrl: 'https://arubot.yuaru.com/pvd/test-token' } }
         } }),
+        set: jest.fn().mockResolvedValue(undefined)
+      },
+      session: {
+        get: jest.fn().mockResolvedValue({ playbackHolds }),
         set: jest.fn().mockResolvedValue(undefined)
       },
       onChanged: { addListener() {} }
@@ -124,8 +128,9 @@ async function createExtension({ fetchSnapshot, initiallyPaused = false, extraDe
     fetch: fetchMock,
     WebSocket: FakeWebSocket
   });
-  vm.runInContext(`${backgroundSource}\nglobalThis.testHooks = { runtime, enqueuePause, getPublicState };`, context);
+  vm.runInContext(`${backgroundSource}\nglobalThis.testHooks = { runtime, enqueuePause, getPublicState, handleSocketIoMessage };`, context);
   await flushMessages();
+  for (let i = 0; i < 10 && !sockets.length; i++) await flushMessages();
   const socket = sockets[0];
   socket.readyState = 1;
   socket.listeners.open();
@@ -190,6 +195,8 @@ describe('AruBot extension playback synchronization', () => {
     expect(ext.page.video.paused).toBe(true);
     expect(ext.page.video.play).not.toHaveBeenCalled();
     await jest.advanceTimersByTimeAsync(4200);
+    expect(ext.page.video.paused).toBe(true);
+    await ext.emit({ type: 'start', item: null });
     expect(ext.page.video.paused).toBe(false);
   });
 
@@ -211,10 +218,12 @@ describe('AruBot extension playback synchronization', () => {
 
     expect(ext.lastMessage().until).toBe(Date.now() + 6000);
     await jest.advanceTimersByTimeAsync(6200);
+    expect(ext.page.video.paused).toBe(true);
+    await ext.emit({ type: 'start', item: null });
     expect(ext.page.video.paused).toBe(false);
   });
 
-  test('paused donations remain paused beyond their original duration and resume their remaining countdown on play', async () => {
+  test('paused donations keep waiting for completion even after play and the estimated deadline', async () => {
     const ext = await createExtension();
     await ext.emit(playback('short-video', 10));
     await ext.emit({ type: 'control', op: 'pause', atSec: 2, paused: true, serverNow: Date.now() });
@@ -229,6 +238,8 @@ describe('AruBot extension playback synchronization', () => {
     await ext.emit({ type: 'control', op: 'play', atSec: 2, paused: false, serverNow: Date.now() });
     expect(ext.lastMessage().until).toBe(Date.now() + 9000);
     await jest.advanceTimersByTimeAsync(9200);
+    expect(ext.page.video.paused).toBe(true);
+    await ext.emit({ type: 'start', item: null });
     expect(ext.page.video.paused).toBe(false);
   });
 
@@ -307,13 +318,15 @@ describe('AruBot extension playback synchronization', () => {
     expect(ext.getPublicState().pauseUntil).toBe(0);
   });
 
-  test('disconnected paused playback has a finite fallback instead of permanently pausing YouTube', async () => {
+  test('disconnects never prove completion; manual resume remains available', async () => {
     const ext = await createExtension();
     await ext.emit(playback('video', 600, { paused: true }));
     ext.runtime.connectors.get('arubot').close();
     await jest.advanceTimersByTimeAsync(45300);
 
     expect(ext.fetchMock).toHaveBeenCalledTimes(1);
+    expect(ext.page.video.paused).toBe(true);
+    await ext.command({ type: 'clear-pause' });
     expect(ext.page.video.paused).toBe(false);
   });
 
@@ -338,15 +351,117 @@ describe('AruBot extension playback synchronization', () => {
     expect(ext.page.video.paused).toBe(true);
   });
 
-  test('the alarm resumes expired pauses even when the worker timer was missed', async () => {
+  test('the alarm never expires an actual-playback hold', async () => {
     const ext = await createExtension();
     await ext.emit(playback('short-video', 3));
     jest.setSystemTime(Date.now() + 10000);
     ext.listeners.alarm({ name: 'aru-pause-tick' });
     await flushMessages();
 
+    expect(ext.page.video.paused).toBe(true);
+    expect(ext.getPublicState().pauseHeld).toBe(true);
+    await ext.emit({ type: 'start', item: null });
     expect(ext.page.video.paused).toBe(false);
-    expect(ext.getPublicState().pauseUntil).toBe(0);
+  });
+
+  test('CHZZK ads, unknown lengths, normal STOP and skips use actual completion, not wall time', async () => {
+    const ext = await createExtension();
+    const event = async (name, body) => {
+      ext.handleSocketIoMessage('chzzk', `42${JSON.stringify([name, JSON.stringify(body)])}`, {});
+      await flushMessages();
+    };
+    await event('donation', { donationId: 'd1', videoId: 'abcdefghijk', playMode: 'AUTO_PLAY', startSecond: 0, endSecond: 3 });
+    await event('donation', { donationId: 'd2', videoId: 'abcdefghijk', playMode: 'VIDEO_PLAY' });
+    await jest.advanceTimersByTimeAsync(120000);
+    expect(ext.page.video.paused).toBe(true);
+    expect(ext.getPublicState().services.chzzk.queue).toHaveLength(2);
+    await event('donationControl', { donationId: 'd1', donationCommand: 'STOP' });
+    expect(ext.page.video.paused).toBe(true);
+    await event('donationControl', { donationId: 'unrelated', donationCommand: 'STOP' });
+    expect(ext.page.video.paused).toBe(true);
+    await event('donationControl', { donationId: 'd2', stopVideo: true });
+    expect(ext.page.video.paused).toBe(false);
+    expect(ext.page.video.play).toHaveBeenCalledTimes(1);
+    await event('donation', { donationId: 'd2', videoId: 'abcdefghijk', playMode: 'VIDEO_PLAY' });
+    expect(ext.page.video.paused).toBe(false);
+  });
+
+  test('CHZZK held alerts survive an idle resume and PLAY activates priority playback', async () => {
+    const ext = await createExtension();
+    const event = async (name, body) => {
+      ext.handleSocketIoMessage('chzzk', `42${JSON.stringify([name, body])}`, {});
+      await flushMessages();
+    };
+    await event('donationSetting', { donationType: 'VIDEO', alertPauseActive: true });
+    await event('donation', { donationId: 'd1', videoId: 'abcdefghijk', playMode: 'AUTO_PLAY' });
+    expect(ext.page.video.paused).toBe(false);
+    expect(ext.getPublicState().services.chzzk.queue).toHaveLength(1);
+    await event('donationControl', { donationId: 'd1', donationCommand: 'PLAY' });
+    expect(ext.page.video.paused).toBe(true);
+    await event('donationControl', { donationId: 'd1', donationCommand: 'STOP' });
+    expect(ext.page.video.paused).toBe(false);
+  });
+
+  test('CHZZK completion cannot release an AruBot hold or another timed donation', async () => {
+    const ext = await createExtension();
+    await ext.emit(playback('video', 1));
+    await ext.enqueuePause('cime', 8, { id: 'cime' });
+    ext.handleSocketIoMessage('chzzk', `42["donation",{"donationId":"d1","videoId":"abcdefghijk","playMode":"AUTO_PLAY"}]`, {});
+    ext.handleSocketIoMessage('chzzk', `42["donationControl",{"donationId":"d1","donationCommand":"STOP"}]`, {});
+    await flushMessages();
+    expect(ext.page.video.paused).toBe(true);
+    await ext.emit({ type: 'start', item: null });
+    expect(ext.page.video.paused).toBe(true);
+    await jest.advanceTimersByTimeAsync(9300);
+    expect(ext.page.video.paused).toBe(false);
+  });
+
+  test('AruBot relays native CHZZK holds even with BGM or no current queue item', async () => {
+    const ext = await createExtension();
+    await ext.emit({ type: 'start', item: null, chzzkDonationPaused: true });
+    expect(ext.page.video.paused).toBe(true);
+    await ext.emit(playback('bgm', 100, { item: { id: 'bgm', kind: 'bgm' }, chzzkDonationPaused: true }));
+    expect(ext.page.video.paused).toBe(true);
+    await ext.emit({ type: 'control', op: 'chzzk-donation', paused: false, chzzkDonationPaused: false });
+    expect(ext.page.video.paused).toBe(false);
+  });
+
+  test('CHZZK connection uses EIO3 client pings and receives real STOP after a long hold', async () => {
+    const ext = await createExtension({
+      services: { chzzk: { enabled: true, overlayUrl: 'https://chzzk.naver.com/video-donation/video@test' } },
+      fetchSnapshot: async url => response({ content: url.endsWith('/session-url')
+        ? { sessionUrl: 'https://ssio09.nchat.naver.com?auth=test' }
+        : { alertPauseActive: false } })
+    });
+    const packet = async text => { ext.socket.listeners.message({ data: text }); await flushMessages(); };
+    await packet('0{"sid":"test","pingInterval":25000,"pingTimeout":5000}');
+    await packet('40');
+    await packet('42["donation",{"donationId":"d1","videoId":"abcdefghijk","playMode":"AUTO_PLAY","endSecond":1}]');
+    for (let i = 0; i < 4; i++) {
+      await jest.advanceTimersByTimeAsync(25000);
+      expect(ext.socket.send).toHaveBeenLastCalledWith('2');
+      await packet('3');
+      expect(ext.page.video.paused).toBe(true);
+    }
+    await packet('42["donationControl",{"donationId":"d1","donationCommand":"STOP"}]');
+    expect(ext.page.video.paused).toBe(false);
+    expect(ext.socket.send.mock.calls.some(([value]) => value === '40')).toBe(false);
+  });
+
+  test('a worker restart restores a CHZZK hold and clears it only on matching STOP', async () => {
+    const sourceUrl = 'https://chzzk.naver.com/video-donation/video@test';
+    const ext = await createExtension({
+      services: { chzzk: { enabled: true, overlayUrl: sourceUrl } },
+      playbackHolds: { chzzk: { sourceUrl, held: true, queue: [{ donationId: 'd1', waitForCompletion: true, startedAt: 1, endAt: 0 }] } },
+      fetchSnapshot: async url => response({ content: url.endsWith('/session-url')
+        ? { sessionUrl: 'https://ssio09.nchat.naver.com?auth=test' }
+        : { alertPauseActive: false } })
+    });
+    expect(ext.page.video.paused).toBe(true);
+    ext.socket.listeners.message({ data: '42["donationControl",{"donationId":"d1","donationCommand":"STOP"}]' });
+    await flushMessages();
+    expect(ext.page.video.paused).toBe(false);
+    expect(ext.chrome.storage.session.set).toHaveBeenCalled();
   });
 
   test('an originally paused YouTube video is not started by donation completion', async () => {

@@ -4,6 +4,7 @@
 
   const state = {
     until: 0,
+    held: false,
     extensionPaused: false,
     shouldResume: false,
     overlay: null,
@@ -53,18 +54,19 @@
   function updateOverlay() {
     const overlay = ensureOverlay();
     const remaining = state.until - Date.now();
-    if (remaining > 0) {
+    if (state.held || remaining > 0) {
       overlay.style.display = 'flex';
       const time = overlay.querySelector('[data-time]');
-      if (time) time.textContent = formatRemaining(remaining);
+      if (time) time.textContent = state.held ? '\uD6C4\uC6D0 \uC885\uB8CC \uB300\uAE30' : formatRemaining(remaining);
     } else {
       overlay.style.display = 'none';
     }
   }
 
-  function pauseVideos(until) {
+  function pauseVideos(until, held = false) {
     // Background sends the combined deadline; skips and seeks can shorten it.
     state.until = Math.max(0, Number(until) || 0);
+    state.held = held === true;
     const videos = getVideos();
     if (!state.extensionPaused) {
       state.shouldResume = videos.some((video) => !video.paused && !video.ended);
@@ -76,7 +78,7 @@
     updateOverlay();
     if (!state.interval) {
       state.interval = setInterval(() => {
-        if (state.until > Date.now()) {
+        if (state.held || state.until > Date.now()) {
           for (const video of getVideos()) {
             if (!video.paused) {
               try { video.pause(); } catch {}
@@ -93,6 +95,7 @@
   function resumeVideos() {
     const shouldResume = state.shouldResume;
     state.until = 0;
+    state.held = false;
     state.extensionPaused = false;
     state.shouldResume = false;
     if (state.interval) {
@@ -109,11 +112,18 @@
     }
   }
 
+  let messageRevision = 0;
   chrome.runtime.onMessage.addListener((message) => {
     if (message?.type === 'aru-pause:pause') {
-      pauseVideos(message.until);
+      messageRevision += 1;
+      pauseVideos(message.until, message.held);
     } else if (message?.type === 'aru-pause:resume') {
+      messageRevision += 1;
       resumeVideos();
     }
   });
+  // Tabs opened/reloaded during a donation must also wait for its actual end.
+  chrome.runtime.sendMessage?.({ type: 'get-playback-pause' }).then?.(message => {
+    if (!messageRevision && (message?.held || message?.until > Date.now())) pauseVideos(message.until, message.held);
+  }).catch?.(() => {});
 })();

@@ -462,6 +462,22 @@ test('notifyPlayback explicitly PUTs play/end, skips TEST and rejects path injec
   assert.equal(await h.connector.notifyPlayback('donation-1', 'play'), false);
 });
 
+test('studio PLAY/STOP controls are delivered without requiring the manual stopVideo flag', async t => {
+  const h = harness(t);
+  await flush();
+  const socket = h.sockets[0];
+  socket.handshake();
+  socket.event('donationControl', JSON.stringify({ donationId: 123, donationCommand: 'PLAY' }));
+  socket.event('donationControl', { donationId: 123, donationCommand: 'STOP', stopVideo: false });
+  socket.event('donationControl', { donationId: '../unsafe', donationCommand: 'STOP' });
+  socket.event('donationControl', { donationId: 123, donationCommand: 'PAUSE' });
+  assert.deepEqual(h.controls, [
+    { donationId: '123', donationCommand: 'PLAY' },
+    { donationId: '123', donationCommand: 'STOP' },
+  ]);
+  assert.equal(h.calls.some(call => call.method === 'PUT'), false);
+});
+
 test('duplicate in-flight notifications share one request and close aborts it', async t => {
   const h = harness(t, { fetch: async (url, options) => {
     if (options.method === 'PUT') return new Promise(() => {});

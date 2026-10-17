@@ -8,10 +8,10 @@ const ID_PATTERN = /^[a-zA-Z0-9_-]{1,128}$/;
 const own = (value, key) => Object.hasOwn(value, key);
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 
-// Verified against the first-party A5 overlay on 2026-10-12:
-// https://ssl.pstatic.net/static/nng/glive/resource/p/static/js/index-VdvK-ysl.js
-// Ib: GET /video-session/{key}/alert-setting; _R: GET /alerts/{key}/session-url.
-// xR/SR: PUT /video-session/{key}/donations/{id}/play|end. AUTO_PLAY waits 3s.
+// Verified against first-party overlay/studio bundles on 2026-10-18:
+// glive/resource/p/static/js/index-uNhAs37B.js: WR/GR PUT play/end; AUTO_PLAY waits 3s.
+// glive-center/resource/p/static/js/index-6WFD2822.js: donationControl.donationCommand
+// PLAY/STOP drives the studio's isPlaying/isPlayed state for that donationId.
 // delayMs/durationSec describe requested timing, not observed playback or buffering.
 
 function badSettings(message) {
@@ -374,6 +374,9 @@ export function createChzzkVideoDonationConnector({
             const control = parseObject(event[1]);
             const donationId = identifier(control?.donationId);
             if (donationId && control.stopVideo === true) deliver(onControl, { donationId, stopVideo: true });
+            else if (donationId && ['PLAY', 'STOP'].includes(control.donationCommand)) {
+              deliver(onControl, { donationId, donationCommand: control.donationCommand });
+            }
           } else if (event[0] === 'donationSetting') {
             const value = settings(event[1]);
             if (value) deliver(onSettings, value);

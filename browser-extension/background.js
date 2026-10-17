@@ -32,6 +32,7 @@ const runtime = {
     connectedAt: null,
     reconnectAt: null,
     endAt: 0,
+    held: false,
     queue: [],
     lastEventAt: null,
     lastDurationSec: null
@@ -48,6 +49,8 @@ const chzzkDurationCache = new Map();
 let chzzkDonationSequence = Promise.resolve();
 let youTubeMessageSequence = Promise.resolve();
 let youTubeMessageRevision = 0;
+let connectorGeneration = 0;
+const chzzkFinished = new Set();
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -83,6 +86,13 @@ async function loadSettings() {
   const stored = await storageGet(['settings']);
   runtime.settings = mergeSettings(DEFAULT_SETTINGS, stored.settings);
   await storageSet({ settings: runtime.settings });
+  const saved = await api.storage.session?.get('playbackHolds').catch(() => null);
+  for (const service of ['chzzk', 'arubot']) {
+    const hold = saved?.playbackHolds?.[service];
+    if (hold && hold.sourceUrl === runtime.settings.services[service]?.overlayUrl) {
+      Object.assign(runtime.serviceState[service], hold);
+    }
+  }
 }
 
 async function saveSettings(nextSettings) {
@@ -105,6 +115,7 @@ function getPublicState() {
     settings: clone(runtime.settings),
     services: clone(runtime.serviceState),
     pauseUntil: runtime.pauseUntil,
+    pauseHeld: hasPlaybackHold(),
     now: Date.now(),
     effectiveRemainingSec: Math.max(0, Math.ceil((runtime.pauseUntil - Date.now()) / 1000))
   };
@@ -131,11 +142,25 @@ function effectivePauseUntil() {
   return Math.max(0, ...SERVICES.map(serviceEndAt));
 }
 
+function hasPlaybackHold() {
+  return SERVICES.some(service => runtime.serviceState[service].held);
+}
+
+function persistPlaybackHolds() {
+  const playbackHolds = Object.fromEntries(['chzzk', 'arubot'].map(service => {
+    const state = runtime.serviceState[service];
+    return [service, { held: state.held, queue: state.queue, endAt: state.endAt,
+      alertPaused: state.alertPaused, completionOverflow: state.completionOverflow === true,
+      sourceUrl: runtime.settings.services[service].overlayUrl }];
+  }));
+  return api.storage.session?.set({ playbackHolds }).catch(() => {});
+}
+
 function compactQueues() {
   const now = Date.now();
   for (const service of SERVICES) {
     const state = runtime.serviceState[service];
-    state.queue = (state.queue || []).filter((item) => item.endAt > now);
+    state.queue = (state.queue || []).filter((item) => item.waitForCompletion || item.endAt > now);
     if (state.endAt <= now) state.endAt = 0;
   }
 }
@@ -180,6 +205,7 @@ async function enqueuePause(service, durationSec, event = {}) {
   const endAt = startAt + totalDuration * 1000;
   const item = {
     id: fingerprint,
+    donationId: event?.donationId,
     service,
     label: SERVICE_LABELS[service],
     durationSec: totalDuration,
@@ -190,7 +216,8 @@ async function enqueuePause(service, durationSec, event = {}) {
   };
 
   state.endAt = endAt;
-  state.queue = [...(state.queue || []).filter((queued) => queued.endAt > now), item].slice(-20);
+  const held = (state.queue || []).filter(queued => queued.waitForCompletion);
+  state.queue = [...held, ...(state.queue || []).filter(queued => !queued.waitForCompletion && queued.endAt > now).slice(-19), item];
   state.lastEventAt = now;
   state.lastDurationSec = totalDuration;
   state.status = 'connected';
@@ -204,7 +231,8 @@ async function enqueuePause(service, durationSec, event = {}) {
 function syncYouTubePause() {
   compactQueues();
   runtime.pauseUntil = effectivePauseUntil();
-  if (runtime.pauseUntil <= Date.now()) return resumeYouTube();
+  persistPlaybackHolds();
+  if (!hasPlaybackHold() && runtime.pauseUntil <= Date.now()) return resumeYouTube(false);
   scheduleResume();
   return pauseYouTube(runtime.pauseUntil);
 }
@@ -214,6 +242,10 @@ function scheduleResume() {
   compactQueues();
   runtime.pauseUntil = effectivePauseUntil();
   const delay = runtime.pauseUntil - Date.now();
+  if (hasPlaybackHold()) {
+    runtime.resumeTimer = null;
+    return;
+  }
   if (delay <= 0) {
     runtime.resumeTimer = null;
     resumeYouTube();
@@ -268,17 +300,22 @@ function sendToYouTubeTabs(message) {
 }
 
 function pauseYouTube(until) {
-  return sendToYouTubeTabs({ type: 'aru-pause:pause', until, reason: 'video-donation' });
+  return sendToYouTubeTabs({ type: 'aru-pause:pause', until, held: hasPlaybackHold(), reason: 'video-donation' });
 }
 
-function resumeYouTube() {
+function resumeYouTube(clearQueues = true) {
   if (runtime.resumeTimer) clearTimeout(runtime.resumeTimer);
   runtime.resumeTimer = null;
   runtime.pauseUntil = 0;
   for (const service of SERVICES) {
     runtime.serviceState[service].endAt = 0;
-    runtime.serviceState[service].queue = [];
+    if (clearQueues) {
+      runtime.serviceState[service].queue = [];
+      runtime.serviceState[service].held = false;
+      runtime.serviceState[service].completionOverflow = false;
+    }
   }
+  persistPlaybackHolds();
   return sendToYouTubeTabs({ type: 'aru-pause:resume' });
 }
 
@@ -294,6 +331,16 @@ function restartConnectors() {
 
   for (const service of SERVICES) {
     const config = runtime.settings.services[service];
+    const state = runtime.serviceState[service];
+    if (!config?.enabled || !config.overlayUrl || (state.sourceUrl && state.sourceUrl !== config.overlayUrl)) {
+      state.held = false;
+      state.queue = [];
+      state.endAt = 0;
+      state.alertPaused = false;
+      state.completionOverflow = false;
+      if (service === 'chzzk') chzzkFinished.clear();
+    }
+    state.sourceUrl = config?.overlayUrl || '';
     if (!config?.enabled) {
       setServiceState(service, { status: 'disabled', message: 'Disabled', connectedAt: null, reconnectAt: null });
       continue;
@@ -304,9 +351,11 @@ function restartConnectors() {
     }
     startConnector(service, config.overlayUrl);
   }
+  syncYouTubePause().catch(() => {});
 }
 
 function stopConnectors() {
+  connectorGeneration += 1;
   for (const timer of runtime.reconnectTimers.values()) clearTimeout(timer);
   runtime.reconnectTimers.clear();
   for (const connector of runtime.connectors.values()) {
@@ -327,6 +376,7 @@ function scheduleReconnect(service, overlayUrl, reason, attempt = 0) {
 }
 
 async function startConnector(service, overlayUrl, attempt = 0) {
+  const generation = connectorGeneration;
   try {
     if (runtime.connectors.has(service)) {
       try { runtime.connectors.get(service).close(); } catch {}
@@ -334,8 +384,10 @@ async function startConnector(service, overlayUrl, attempt = 0) {
     }
     setServiceState(service, { status: 'connecting', message: 'Connecting', reconnectAt: null });
     const connector = await createConnector(service, overlayUrl, attempt);
+    if (generation !== connectorGeneration) { connector.close(); return; }
     runtime.connectors.set(service, connector);
   } catch (error) {
+    if (generation !== connectorGeneration) return;
     scheduleReconnect(service, overlayUrl, error?.message || 'Connect failed', attempt);
   }
 }
@@ -585,12 +637,32 @@ async function resolveChzzkDonationDuration(payload) {
 }
 
 function enqueueChzzkDonation(service, payload) {
+  const id = String(payload?.donationId ?? '');
+  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(id) || !['AUTO_PLAY', 'VIDEO_PLAY'].includes(payload?.playMode)) return false;
+  if (id !== 'TEST') {
+    const state = runtime.serviceState[service];
+    if (chzzkFinished.has(id) || state.queue.some(item => item.donationId === id)) return false;
+    if (state.queue.filter(item => item.waitForCompletion).length >= 200) {
+      state.completionOverflow = true;
+      state.held = true;
+      state.message = 'Playback confirmation queue full';
+      return syncYouTubePause();
+    }
+    state.queue.push({ id: `chzzk:${id}`, donationId: id, service, label: SERVICE_LABELS.chzzk,
+      waitForCompletion: true, startedAt: null, startAt: Date.now(), endAt: 0,
+      title: payload.titleExpose === true ? payload.donationText : null });
+    state.lastEventAt = Date.now();
+    return syncChzzkPlayback();
+  }
+  // TEST overlays do not acknowledge play/end to CHZZK; only previews use a timer.
+  const generation = connectorGeneration;
   const resolutionPromise = resolveChzzkDonationDuration(payload)
     .catch(() => ({ durationSec: null, source: 'resolution_failed' }));
   const next = chzzkDonationSequence
     .catch(() => {})
     .then(async () => {
       const resolution = await resolutionPromise;
+      if (generation !== connectorGeneration) return false;
       if (resolution.durationSec) {
         return enqueuePause(service, resolution.durationSec, {
           ...payload,
@@ -612,6 +684,37 @@ function enqueueChzzkDonation(service, payload) {
     });
   chzzkDonationSequence = next;
   return next;
+}
+
+function syncChzzkPlayback() {
+  const state = runtime.serviceState.chzzk;
+  const native = state.queue.filter(item => item.waitForCompletion);
+  if (!state.alertPaused && native.length && !native.some(item => item.startedAt != null)) {
+    native[0].startedAt = Date.now();
+  }
+  state.held = state.completionOverflow === true || native.some(item => item.startedAt != null || !state.alertPaused);
+  state.message = state.completionOverflow ? 'Playback confirmation queue full'
+    : state.held ? 'Waiting for actual donation end' : 'Connected, waiting';
+  const result = syncYouTubePause();
+  broadcastState();
+  return result;
+}
+
+function handleChzzkControl(body) {
+  const id = String(body?.donationId ?? '');
+  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(id)) return;
+  const state = runtime.serviceState.chzzk;
+  if (body.stopVideo === true || body.donationCommand === 'STOP') {
+    chzzkFinished.add(id);
+    if (chzzkFinished.size > 10000) chzzkFinished.delete(chzzkFinished.values().next().value);
+    state.queue = state.queue.filter(item => item.donationId !== id);
+    state.endAt = Math.max(0, ...state.queue.map(item => item.endAt || 0));
+  } else if (body.donationCommand === 'PLAY') {
+    const item = state.queue.find(item => item.donationId === id);
+    if (!item) return;
+    item.startedAt = Date.now();
+  } else return;
+  return syncChzzkPlayback();
 }
 
 function extractCimeClipIdFromValue(value) {
@@ -706,6 +809,7 @@ function createWebSocketConnector({ service, url, protocols, onOpen, onMessage, 
     }
   });
   ws.addEventListener('message', (event) => {
+    if (closedByUser) return;
     try {
       if (handleCommonHeartbeatMessage(String(event.data), ws)) return;
       const result = onMessage?.(event, ws);
@@ -832,28 +936,57 @@ function buildToonationSocketUrl(payload) {
 }
 
 async function createChzzkConnector(overlayUrl, attempt) {
+  const generation = connectorGeneration;
   const alertId = extractChzzkVideoDonationAlertId(overlayUrl);
   if (!alertId) throw new Error('CHZZK video session id not found');
-  const response = await fetch(`https://api.chzzk.naver.com/manage/v1/alerts/${encodeChzzkAlertPathId(alertId)}/session-url`, {
-    credentials: 'include',
-    cache: 'no-store',
-    headers: {
-      'accept': 'application/json'
-    }
-  });
-  if (!response.ok) throw new Error(`CHZZK session HTTP ${response.status}`);
-  const data = await response.json();
+  const data = await fetchJsonWithTimeout(`https://api.chzzk.naver.com/manage/v1/alerts/${encodeChzzkAlertPathId(alertId)}/session-url`);
   const sessionUrl = data?.content?.sessionUrl;
   if (!sessionUrl) throw new Error('CHZZK session URL not found');
   const socketUrl = buildChzzkDonationSocketUrl(sessionUrl);
-
-  return createWebSocketConnector({
+  const settings = await fetchJsonWithTimeout(`https://api.chzzk.naver.com/manage/v1/video-session/${encodeChzzkAlertPathId(alertId)}/alert-setting`);
+  if (generation !== connectorGeneration) return { close() {} };
+  if (typeof settings?.content?.alertPauseActive !== 'boolean') throw new Error('CHZZK alert settings unavailable');
+  runtime.serviceState.chzzk.alertPaused = settings.content.alertPauseActive;
+  await syncChzzkPlayback();
+  let pingTimer = null;
+  let pongTimer = null;
+  let handshake = null;
+  const clearHeartbeat = () => { clearTimeout(pingTimer); clearTimeout(pongTimer); };
+  const schedulePing = ws => {
+    clearTimeout(pingTimer);
+    pingTimer = setTimeout(() => {
+      if (ws.readyState !== WebSocket.OPEN) return;
+      pongTimer = setTimeout(() => ws.close(), handshake.pingTimeout);
+      ws.send('2');
+    }, handshake.pingInterval);
+  };
+  const connector = createWebSocketConnector({
     service: 'chzzk',
     url: socketUrl,
-    onOpen: () => {},
-    onMessage: (event, ws) => handleSocketIoMessage('chzzk', String(event.data), ws),
-    onClose: () => scheduleReconnect('chzzk', overlayUrl, 'Socket closed', attempt)
+    onOpen: ws => { pongTimer = setTimeout(() => ws.close(), 10000); },
+    onMessage: (event, ws) => {
+      const packet = String(event.data);
+      if (packet.length > 65536) { ws.close(); return; }
+      if (packet.startsWith('0')) {
+        const value = parseJsonMessage(packet.slice(1));
+        if (handshake || !value?.sid || ![value.pingInterval, value.pingTimeout].every(n => Number.isInteger(n) && n > 0 && n <= 120000)) { ws.close(); return; }
+        handshake = value;
+        clearTimeout(pongTimer);
+        // EIO3 uses client ping -> server pong, including during long advertisements.
+        schedulePing(ws);
+        return;
+      }
+      if (packet === '3' && handshake) {
+        clearTimeout(pongTimer);
+        schedulePing(ws);
+        return;
+      }
+      if (packet === '1' || packet === '41' || packet.startsWith('44')) { ws.close(); return; }
+      return handleSocketIoMessage('chzzk', packet, ws);
+    },
+    onClose: () => { clearHeartbeat(); scheduleReconnect('chzzk', overlayUrl, 'Socket closed', attempt); }
   });
+  return { close() { clearHeartbeat(); connector.close(); } };
 }
 
 function encodeChzzkAlertPathId(alertId) {
@@ -902,6 +1035,11 @@ function handleSocketIoMessage(service, packet, ws) {
       setServiceState(service, { status: 'error', message: String(raw || 'Socket auth error') });
       return;
     }
+    if (eventName === 'donationControl') return handleChzzkControl(body);
+    if (eventName === 'donationSetting' && body?.donationType === 'VIDEO' && typeof body.alertPauseActive === 'boolean') {
+      runtime.serviceState.chzzk.alertPaused = body.alertPauseActive;
+      return syncChzzkPlayback();
+    }
     if (eventName !== 'donation' || !body || !isLikelyVideoDonation(body)) return;
     return enqueueChzzkDonation(service, body);
   }
@@ -938,17 +1076,25 @@ async function createAruBotConnector(overlayUrl, attempt) {
     lastServerNow = Math.max(lastServerNow, serverNow);
     snapshot = payload;
     const item = payload.item || null;
-    const itemId = item ? getAruBotItemId(payload) : '';
+    const itemId = payload.chzzkDonationPaused === true ? 'chzzk-native' : item ? getAruBotItemId(payload) : '';
     if (itemId !== dismissedItemId) dismissedItemId = '';
     const state = runtime.serviceState.arubot;
     const now = Date.now();
-    if (!item || item.kind === 'bgm' || payload.idleDeferred === true || item.isIdle === true || dismissedItemId) {
+    if (payload.chzzkDonationPaused === true && !dismissedItemId) {
+      state.held = true;
+      state.endAt = 0;
+      state.queue = [{ id: 'arubot:chzzk-native', service: 'arubot', label: SERVICE_LABELS.arubot,
+        waitForCompletion: true, startAt: now, endAt: 0, title: 'CHZZK video donation' }];
+      state.message = 'Waiting for actual donation end';
+    } else if (!item || item.kind === 'bgm' || payload.idleDeferred === true || item.isIdle === true || dismissedItemId) {
+      state.held = false;
       state.endAt = 0;
       state.queue = [];
       state.message = payload.idleDeferred ? 'Waiting for idle music to finish' : 'Connected, waiting';
     } else {
       const remaining = normalizeAruBotRemainingDuration(payload);
-      // Paused/unknown-length playback uses a bounded lease refreshed by snapshots.
+      // Remaining time is display-only. Ads/buffering never release the hold.
+      state.held = true;
       const duration = payload.paused === true || !remaining
         ? 45
         : remaining + normalizeSeconds(runtime.settings.extraDelaySec, 1);
@@ -961,6 +1107,7 @@ async function createAruBotConnector(overlayUrl, attempt) {
         rawDurationSec: remaining,
         startAt: now,
         endAt: state.endAt,
+        waitForCompletion: true,
         title: item.title || item.videoTitle || item.mediaTitle || 'AruBot video donation'
       }];
       state.lastDurationSec = remaining;
@@ -980,7 +1127,7 @@ async function createAruBotConnector(overlayUrl, attempt) {
       const payload = await fetchAruBotNowPlaying(apiBase, token);
       if (!closed && requestedRevision === revision) await handleAruBotStart(payload);
     } catch {
-      // Keep the latest socket state and let its finite pause timer expire on disconnect.
+      // An unavailable snapshot cannot prove that playback ended. Keep holding.
     } finally {
       fetching = false;
     }
@@ -1000,7 +1147,7 @@ async function createAruBotConnector(overlayUrl, attempt) {
       setServiceState('arubot', { status: 'connected', message: `Connected: ${new URL(apiBase).host}` });
       refreshSnapshot();
       syncTimer = setInterval(() => {
-        if (!snapshot || (snapshot.item && snapshot.item.kind !== 'bgm' && !snapshot.idleDeferred && !dismissedItemId)) refreshSnapshot();
+        if (!snapshot || (!dismissedItemId && (snapshot.chzzkDonationPaused || (snapshot.item && snapshot.item.kind !== 'bgm' && !snapshot.idleDeferred)))) refreshSnapshot();
       }, 15000);
     },
     onMessage: (event) => {
@@ -1011,9 +1158,9 @@ async function createAruBotConnector(overlayUrl, attempt) {
         revision += 1;
         return handleAruBotStart(payload);
       }
-      if (payload.type === 'control' && ['pause', 'play', 'seek'].includes(payload.op)) {
+      if (payload.type === 'control' && ['pause', 'play', 'seek', 'chzzk-donation'].includes(payload.op)) {
         revision += 1;
-        if (!snapshot?.item) return refreshSnapshot();
+        if (!snapshot) return refreshSnapshot();
         const next = { ...snapshot, ...payload, item: snapshot.item };
         if (typeof payload.paused !== 'boolean') {
           next.paused = payload.op === 'seek' ? snapshot.paused : payload.op === 'pause';
@@ -1034,7 +1181,7 @@ async function createAruBotConnector(overlayUrl, attempt) {
       connector.close();
     },
     clearPause() {
-      dismissedItemId = snapshot?.item ? getAruBotItemId(snapshot) : '';
+      dismissedItemId = snapshot?.chzzkDonationPaused === true ? 'chzzk-native' : snapshot?.item ? getAruBotItemId(snapshot) : '';
       revision += 1;
     }
   };
@@ -1130,6 +1277,10 @@ function matchFirst(text, regex) {
 
 api.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
+    if (message?.type === 'get-playback-pause') {
+      sendResponse({ until: effectivePauseUntil(), held: hasPlaybackHold() });
+      return;
+    }
     if (message?.type === 'get-state') {
       sendResponse(getPublicState());
       return;
@@ -1177,7 +1328,7 @@ api.runtime.onStartup.addListener(async () => {
 
 api.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'aru-pause-tick') {
-    if (runtime.pauseUntil > 0 || effectivePauseUntil() > 0) syncYouTubePause().catch(() => {});
+    if (hasPlaybackHold() || runtime.pauseUntil > 0 || effectivePauseUntil() > 0) syncYouTubePause().catch(() => {});
     broadcastState();
   }
 });

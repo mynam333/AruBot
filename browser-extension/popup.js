@@ -21,9 +21,9 @@ function render(state) {
   latestState = state;
   const remaining = Math.max(0, Math.ceil((state.pauseUntil - Date.now()) / 1000));
   document.querySelector('#monitoring').checked = Boolean(state.settings.monitoring);
-  document.querySelector('#remaining').textContent = format(remaining);
+  document.querySelector('#remaining').textContent = state.pauseHeld ? '종료 대기' : format(remaining);
   document.querySelector('#summary').textContent = state.settings.monitoring ? '후원 감지 중' : '후원 감지 중지';
-  document.querySelector('#meterFill').style.width = remaining > 0 ? '100%' : '0%';
+  document.querySelector('#meterFill').style.width = state.pauseHeld || remaining > 0 ? '100%' : '0%';
 
   const root = document.querySelector('#services');
   root.textContent = '';
@@ -50,7 +50,7 @@ function render(state) {
 
     const time = document.createElement('span');
     time.className = 'time';
-    time.textContent = format(serviceRemaining);
+    time.textContent = service.held ? '종료 대기' : format(serviceRemaining);
 
     text.append(name, message);
     meta.append(dot, text);
@@ -72,6 +72,8 @@ function localizeStatus(value) {
     'Overlay URL required': '오버레이 주소 필요',
     Connected: '연결됨',
     'Connected, waiting': '연결됨 · 후원 대기',
+    'Waiting for actual donation end': '실제 후원 종료 대기',
+    'Playback confirmation queue full': '대기 한도 초과 · 수동 재개 필요',
   };
   if (labels[text]) return labels[text];
   if (text.startsWith('Connected:')) return `연결됨: ${text.slice('Connected:'.length).trim()}`;

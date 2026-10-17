@@ -67,7 +67,7 @@ describe('CHZZK extension video metadata parser', () => {
     expect(chrome.alarms.create).toHaveBeenCalledWith('aru-pause-tick', { periodInMinutes: 0.5 });
   });
 
-  test('a CHZZK packet without endSecond resolves YouTube metadata before pausing', async () => {
+  test('a CHZZK packet without endSecond holds immediately without a metadata request', async () => {
     const extensionRoot = path.join(__dirname, '..', 'browser-extension');
     const eventTarget = () => ({ addListener: jest.fn() });
     const settings = {
@@ -110,10 +110,13 @@ describe('CHZZK extension video metadata parser', () => {
       if (url.includes('/session-url')) {
         return {
           ok: true,
-          json: async () => ({
+          text: async () => JSON.stringify({
             content: { sessionUrl: 'https://ssio09.nchat.naver.com:443?auth=test-token' }
           })
         };
+      }
+      if (url.endsWith('/alert-setting')) {
+        return { ok: true, text: async () => JSON.stringify({ content: { alertPauseActive: false } }) };
       }
       if (url.startsWith('https://www.youtube.com/watch?')) {
         return {
@@ -181,10 +184,12 @@ describe('CHZZK extension video metadata parser', () => {
     expect(sockets).toHaveLength(1);
     expect(sockets[0].url).toContain('EIO=3');
     expect(sockets[0].url).not.toContain('EIO=4');
+    chrome.tabs.sendMessage.mockClear();
 
     sockets[0].emit('message', {
       data: `42${JSON.stringify(['donation', JSON.stringify({
         donationId: 'donation-without-end',
+        playMode: 'AUTO_PLAY',
         startSecond: 5,
         endSecond: null,
         videoType: 'YOUTUBE',
@@ -198,9 +203,8 @@ describe('CHZZK extension video metadata parser', () => {
     const pauseCall = chrome.tabs.sendMessage.mock.calls.find(([, message]) => message?.type === 'aru-pause:pause');
     expect(pauseCall).toBeDefined();
     expect(pauseCall[0]).toBe(7);
-    expect(pauseCall[1].until - Date.now()).toBeGreaterThanOrEqual(28000);
-    expect(pauseCall[1].until - Date.now()).toBeLessThanOrEqual(30000);
-    expect(fetch.mock.calls.some(([url]) => String(url).startsWith('https://www.youtube.com/watch?'))).toBe(true);
+    expect(pauseCall[1].held).toBe(true);
+    expect(fetch.mock.calls.some(([url]) => String(url).startsWith('https://www.youtube.com/watch?'))).toBe(false);
   });
 
   test('identifies YouTube and CHZZK clip donations from current event fields', () => {
