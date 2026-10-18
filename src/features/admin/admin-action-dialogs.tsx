@@ -859,20 +859,25 @@ export function VideoDonationSettingsDialog({ variant = 'secondary', label = '�
 
 export function DonationSettingsDialog({ variant = 'secondary', label = '후원 설정', className }: ActionDialogButtonProps) {
   const [pointsPerK, setPointsPerK] = useState('10');
+  const [settingsState, setSettingsState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [isPending, startTransition] = useTransition();
 
   const load = async () => {
+    setSettingsState('loading');
     try {
       const response = await fetch(apiUrl('/api/donation/settings'), { credentials: 'include', cache: 'no-store' });
-      if (!response.ok) return;
+      if (!response.ok) throw new Error('settings_load_failed');
       const payload = await response.json();
+      if (!payload.settings) throw new Error('settings_missing');
       setPointsPerK(String(payload.settings?.pointsPerK ?? 10));
+      setSettingsState('ready');
     } catch {
-      // Keep local defaults.
+      setSettingsState('error');
     }
   };
 
   const submit = (close: () => void) => {
+    if (settingsState !== 'ready' || isPending) return;
     startTransition(async () => {
       try {
         await postJson('/api/donation/settings', { settings: { pointsPerK: Math.max(0, Number(pointsPerK || 0)) } });
@@ -895,6 +900,7 @@ export function DonationSettingsDialog({ variant = 'secondary', label = '후원 
       description="후원한 마음이 다음 참여 포인트로 이어지도록 금액별 적립 기준을 정합니다."
       submitLabel="설정 저장"
       pending={isPending}
+      disabled={settingsState !== 'ready' || isPending}
       onSubmit={submit}
       onOpen={load}
       variant={variant}
@@ -902,8 +908,13 @@ export function DonationSettingsDialog({ variant = 'secondary', label = '후원 
       className={className}
       testId="donation-settings-trigger"
     >
+      {settingsState !== 'ready' ? (
+        <p role={settingsState === 'error' ? 'alert' : 'status'} className="text-sm text-muted-foreground">
+          {settingsState === 'error' ? '설정을 불러오지 못했어요. 창을 닫고 다시 열어 주세요.' : '설정을 불러오는 중입니다.'}
+        </p>
+      ) : null}
       <Field label="1,000원당 지급 포인트">
-        <Input value={pointsPerK} onChange={(event) => setPointsPerK(event.target.value)} inputMode="numeric" />
+        <Input disabled={settingsState !== 'ready' || isPending} value={pointsPerK} onChange={(event) => setPointsPerK(event.target.value)} inputMode="numeric" />
       </Field>
     </ActionDialogFrame>
   );

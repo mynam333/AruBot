@@ -8304,17 +8304,20 @@ export async function getBotSettingsStrict(sid) {
     .maybeSingle();
   if (error) throw error;
   const settings = data?.settings;
-  return settings && typeof settings === 'object' && !Array.isArray(settings) ? settings : {};
+  if (settings != null && (typeof settings !== 'object' || Array.isArray(settings))) {
+    throw new Error('Invalid stored bot settings');
+  }
+  return settings || {};
 }
 
 export async function setBotSettings(sid, settingsObj) {
-  ensure();
-  const settings = settingsObj || {};
-  const { error } = await supabase.from('bot_settings').upsert({ sid, settings });
-  if (error) throw error;
+  return patchBotSettings(sid, settingsObj);
 }
 
 export async function patchBotSettings(sid, patch) {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+    throw new Error('Invalid bot settings patch');
+  }
   return updateBotSettingsAtomically(sid, (current) => ({ ...current, ...patch }));
 }
 
@@ -8327,7 +8330,14 @@ export async function updateBotSettingsAtomically(sid, updater) {
     try {
       await pg.query("insert into bot_settings (sid, settings) values ($1, '{}'::jsonb) on conflict (sid) do nothing", [sid]);
       const { rows } = await pg.query('select settings from bot_settings where sid = $1 for update', [sid]);
-      const next = await updater(rows[0]?.settings || {});
+      const current = rows[0]?.settings ?? {};
+      if (typeof current !== 'object' || Array.isArray(current)) {
+        throw new Error('Invalid stored bot settings');
+      }
+      const next = await updater(current);
+      if (!next || typeof next !== 'object' || Array.isArray(next)) {
+        throw new Error('Invalid bot settings update');
+      }
       await pg.query('update bot_settings set settings = $2::jsonb where sid = $1', [sid, JSON.stringify(next)]);
       await pg.query('commit');
       return next;

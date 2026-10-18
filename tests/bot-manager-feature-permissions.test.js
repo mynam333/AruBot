@@ -175,7 +175,7 @@ describe('Delegated feature controls', () => {
     const noop = () => {};
     const load = callback('drawing-donation-page', 'refresh', {
       blocksReadable: false, ownerControls: false, defaultSettings: { canvas: {} },
-      setSettings: noop, setItems: noop, setBlockedUsers: noop, setOverlayPath: noop, setViewerDonationPath: noop,
+      setSettings: noop, setSettingsLoaded: noop, setItems: noop, setBlockedUsers: noop, setOverlayPath: noop, setViewerDonationPath: noop,
       readJson: async (url) => { requests.push(url); return url.endsWith('viewer-url')
         ? { token: null, path: null, ownerOnly: true } : { items: [], settings: { canvas: {} } }; },
     });

@@ -92,6 +92,10 @@ export function DonationRulesPage() {
   const load = useCallback(() => {
     startTransition(async () => {
       const data = await readJson<DonationRulesResponse>('/api/donation/rules');
+      if (!data) {
+        toast.error('후원 반응을 불러오지 못했습니다. 다시 시도해 주세요.');
+        return;
+      }
       setRules(data?.rules || []);
     });
   }, []);

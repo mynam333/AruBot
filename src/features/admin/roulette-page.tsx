@@ -594,6 +594,10 @@ export function RoulettePage() {
   const load = useCallback(() => {
     startTransition(async () => {
       const data = await readJson<RouletteDefinitionsResponse>('/api/roulette/definitions');
+      if (!data) {
+        toast.error('룰렛을 불러오지 못했습니다. 다시 시도해 주세요.');
+        return;
+      }
       setDefinitions(data?.definitions || []);
     });
   }, []);

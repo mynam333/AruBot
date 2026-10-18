@@ -84,6 +84,7 @@ export function PointsPage() {
   const [rows, setRows] = useState<PointRow[]>([]);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsLoadState, setSettingsLoadState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [pointsPerChat, setPointsPerChat] = useState('1');
   const [pointsPerAttendance, setPointsPerAttendance] = useState('0');
   const [pointsPerDonationK, setPointsPerDonationK] = useState('10');
@@ -107,6 +108,7 @@ export function PointsPage() {
   }, [deferredQuery, sortBy]);
 
   const load = useCallback(() => {
+    setSettingsLoadState('loading');
     startTransition(async () => {
       const params = new URLSearchParams({
         page: String(page),
@@ -119,6 +121,11 @@ export function PointsPage() {
         readJson<PointsResponse>(`/api/channelpoints/list?${params.toString()}`),
         donationReadable ? readJson<DonationSettingsResponse>('/api/donation/settings') : Promise.resolve(null),
       ]);
+      if (!data) {
+        setSettingsLoadState('error');
+        toast.error('포인트 정보를 불러오지 못했습니다. 다시 시도해 주세요.');
+        return;
+      }
       const nextRows = data?.points || [];
       setRows(nextRows);
       setDrafts(Object.fromEntries(nextRows.map((row) => [rowUserId(row), String(Number(row.points || 0))])));
@@ -128,10 +135,15 @@ export function PointsPage() {
       setFilteredPoints(Number(data?.filteredPoints ?? nextRows.reduce((sum, row) => sum + Number(row.points || 0), 0)));
       setTotalPages(Math.max(1, Number(data?.totalPages || 1)));
       if (data?.page && Number(data.page) !== page) setPage(Math.max(1, Number(data.page)));
-      setPointsPerChat(String(data?.settings?.channelPointsPerChat ?? 1));
-      setPointsPerAttendance(String(data?.settings?.channelPointsPerAttendance ?? 0));
-      setExcludeText(data?.settings?.channelPointsExcludeUserIdsText || '');
-      setPointsPerDonationK(String(donationData?.settings?.pointsPerK ?? 10));
+      if (!data.settings || (donationReadable && !donationData?.settings)) {
+        setSettingsLoadState('error');
+        return;
+      }
+      setPointsPerChat(String(data.settings.channelPointsPerChat ?? 1));
+      setPointsPerAttendance(String(data.settings.channelPointsPerAttendance ?? 0));
+      setExcludeText(data.settings.channelPointsExcludeUserIdsText || '');
+      if (donationData?.settings) setPointsPerDonationK(String(donationData.settings.pointsPerK ?? 10));
+      setSettingsLoadState('ready');
     });
   }, [deferredQuery, page, sortBy, donationReadable]);
 
@@ -196,7 +208,7 @@ export function PointsPage() {
   };
 
   const savePointSettings = async () => {
-    if (!writable) return;
+    if (!writable || settingsLoadState !== 'ready' || busyId === 'settings') return;
     setBusyId('settings');
     try {
       await postJson('/api/bot/settings', {
@@ -422,6 +434,13 @@ export function PointsPage() {
               </Button>
             </div>
             <div className="grid min-h-0 gap-4 overflow-y-auto p-[clamp(1rem,2.4vw,1.5rem)]">
+            {settingsLoadState !== 'ready' ? (
+              <div role="status" className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
+                {settingsLoadState === 'loading' ? '저장된 포인트 설정을 불러오는 중입니다.' : '포인트 설정을 불러오지 못했습니다. 다시 불러온 후 저장해 주세요.'}
+                {settingsLoadState === 'error' ? <Button type="button" variant="outline" onClick={load}><RefreshCw className="h-4 w-4" />다시 불러오기</Button> : null}
+              </div>
+            ) : null}
+            <fieldset disabled={settingsLoadState !== 'ready' || busyId === 'settings'} className="grid min-w-0 gap-4">
               <div className="grid min-w-0 gap-3 sm:grid-cols-[repeat(3,minmax(0,1fr))]">
                 <label className="grid gap-2 text-sm font-semibold">
                   채팅 1개당 포인트
@@ -445,10 +464,11 @@ export function PointsPage() {
                   className="box-border min-h-[12rem] w-full min-w-0 max-w-full resize-y rounded-[var(--radius-control)] border bg-background/80 p-[clamp(0.75rem,1.4vw,1rem)] text-sm leading-6 outline-none transition placeholder:text-muted-foreground focus:border-primary/45 focus:ring-2 focus:ring-ring"
                 />
               </label>
+            </fieldset>
             </div>
             <div className="flex flex-col-reverse gap-2 border-t bg-background/64 p-[clamp(1rem,2.4vw,1.5rem)] sm:flex-row sm:justify-end">
               <Button type="button" variant="ghost" onClick={() => setSettingsOpen(false)}>취소</Button>
-              <Button type="button" onClick={savePointSettings} disabled={!writable || (busyId === 'settings')}>
+              <Button type="button" onClick={savePointSettings} disabled={!writable || settingsLoadState !== 'ready' || (busyId === 'settings')}>
                 {busyId === 'settings' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                 설정 저장
               </Button>

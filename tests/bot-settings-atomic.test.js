@@ -2,11 +2,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const ts = require('typescript');
 const loadServerFunctions = require('./helpers/load-server-functions.cjs');
-const { assertBotManagerEffects } = require('./helpers/load-source.cjs')('shared/bot-management-policy.js');
+const { assertBotManagerEffects, mergeBotManagerSettings, filterBotManagerSettings } = require('./helpers/load-source.cjs')('shared/bot-management-policy.js');
+const { normalizePointAward } = require('./helpers/load-source.cjs')('server/point-earning-policy.js');
 const { normalizeChzzkVideoDonationSettings } = require('./helpers/load-source.cjs')('server/chzzk-video-donation.js');
 
 const source = ts.createSourceFile('supabase.js', fs.readFileSync(path.join(__dirname, '../server/supabase.js'), 'utf8'), ts.ScriptTarget.Latest, true);
-const names = ['patchBotSettings', 'updateBotSettingsAtomically'];
+const names = ['setBotSettings', 'patchBotSettings', 'updateBotSettingsAtomically'];
 const declarations = names.map((name) => source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === name).getText(source).replace(/^export /, '')).join('\n');
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const sid = 'user:owner';
@@ -39,6 +40,9 @@ function harness(initial = {}, extra = {}) {
     normalizeDrawingDonationSettings: (value) => value,
     normalizeDonationRuleForStorage: (value) => ({ ...value }),
     assertBotManagerEffects,
+    mergeBotManagerSettings,
+    filterBotManagerSettings,
+    normalizePointAward,
     normalizeRouletteDefinition: (value) => value,
     normalizeBlockedBotUsers: (value) => value || [],
     buildBotUserBlockKeys: (value) => new Set([value.toLowerCase()]),
@@ -271,9 +275,123 @@ test('drawing token initialization is single-winner and respects rotation', asyn
   expect(h.bindings.drawingTokenToSid.has('draw_created')).toBe(false);
 });
 
-test('feature handlers no longer perform whole-settings replacement', () => {
+test('all feature handlers including owner settings avoid whole-settings replacement', () => {
   const server = fs.readFileSync(path.join(__dirname, '../server/index.js'), 'utf8');
-  // The owner-only generic settings contract is intentionally outside this change.
-  expect(server.match(/\bsetBotSettings\(/g)).toHaveLength(1);
-  expect(server).toContain('await setBotSettings(sid, settings);');
+  expect(server).not.toMatch(/\bsetBotSettings\(/);
+});
+
+const savedSettings = {
+  botEnabled: true,
+  rouletteDefs: [{ id: 'roulette', name: 'Saved wheel', items: [{ label: 'Keep' }, { label: 'Both' }] }],
+  donationRules: [{ id: 'donation', responses: ['Saved response'] }],
+  donation: { pointsPerK: 25 },
+  videoDonationEnabled: true,
+  videoDonationVolume: 4,
+  videoDonationViewerToken: 'keep-overlay-token',
+  bgmEnabled: true,
+  bgmPointsPerSecond: 5,
+  drawingDonation: { enabled: true, pointsCost: 100 },
+  macros: [{ id: 'macro', message: 'Saved announcement' }],
+};
+
+test.each([undefined, { role: 'owner' }, { role: 'site_admin' }, { role: 'manager', scopes: ['commands:write', 'points:write'] }])(
+  'attendance and point saves preserve every unrelated setting for %j', async (access) => {
+    const h = harness(savedSettings);
+    const attendance = { attendanceEnabled: false, attendanceMessage: 'Custom attendance', channelPointsPerAttendance: 20 };
+    const points = { channelPointsPerChat: 7, channelPointsExcludeUserIdsText: 'excluded-viewer' };
+    expect((await h.run('/api/bot/settings', { settings: attendance }, 'post', {}, access)).statusCode).toBe(200);
+    expect((await h.run('/api/bot/settings', { settings: points }, 'post', {}, access)).statusCode).toBe(200);
+    expect(h.read()).toEqual({ ...savedSettings, ...attendance, ...points });
+    expect(h.bindings.getBotSettings).not.toHaveBeenCalled();
+  },
+);
+
+test('concurrent attendance, point, roulette, and video saves all survive', async () => {
+  const h = harness(savedSettings);
+  const responses = await Promise.all([
+    h.run('/api/bot/settings', { settings: { attendanceEnabled: false } }),
+    h.run('/api/roulette/definitions/upsert', { definition: { id: 'second', name: 'Second', items: [{}, {}] } }),
+    h.run('/api/bot/settings', { settings: { channelPointsPerChat: 3 } }),
+    h.run('/api/video-donation/settings', { volume: 2 }),
+  ]);
+  expect(responses.map((res) => res.statusCode)).toEqual([200, 200, 200, 200]);
+  expect(h.read()).toMatchObject({
+    ...savedSettings, attendanceEnabled: false, channelPointsPerChat: 3, videoDonationVolume: 2,
+    rouletteDefs: [...savedSettings.rouletteDefs, expect.objectContaining({ id: 'second' })],
+  });
+});
+
+test('empty patches are harmless, while explicit false, zero, and array clearing still work', async () => {
+  const h = harness(savedSettings);
+  expect((await h.run('/api/bot/settings', { settings: {} })).statusCode).toBe(200);
+  expect(h.read()).toEqual(savedSettings);
+  const patch = { botEnabled: false, channelPointsPerChat: 0, rouletteDefs: [] };
+  expect((await h.run('/api/bot/settings', { settings: patch })).statusCode).toBe(200);
+  expect(h.read()).toEqual({ ...savedSettings, ...patch });
+});
+
+test('legacy setting writes also merge rather than replace the stored configuration', async () => {
+  const h = harness(savedSettings);
+  await h.setBotSettings(sid, { channelPointsPerChat: 10 });
+  expect(h.read()).toEqual({ ...savedSettings, channelPointsPerChat: 10 });
+});
+
+test.each([null, undefined, [], 'invalid', false])('invalid settings patches cannot wipe storage: %j', async (settings) => {
+  const h = harness(savedSettings);
+  expect((await h.run('/api/bot/settings', { settings })).statusCode).toBe(400);
+  await expect(h.patchBotSettings(sid, settings)).rejects.toThrow('Invalid bot settings patch');
+  expect(h.read()).toEqual(savedSettings);
+  expect(h.queries).toEqual([]);
+});
+
+test.each([null, undefined, [], 'invalid', false])('invalid updater results roll back: %j', async (next) => {
+  const h = harness(savedSettings);
+  await expect(h.updateBotSettingsAtomically(sid, () => next)).rejects.toThrow('Invalid bot settings update');
+  expect(h.read()).toEqual(savedSettings);
+  expect(h.queries.at(-1).sql).toBe('rollback');
+  expect(h.queries.some(({ sql }) => sql.startsWith('update bot_settings'))).toBe(false);
+});
+
+test.each([[], 'corrupt', false])('malformed existing settings are not replaced with defaults: %j', async (stored) => {
+  const h = harness(stored);
+  await expect(h.patchBotSettings(sid, { botEnabled: true })).rejects.toThrow('Invalid stored bot settings');
+  expect(h.read()).toEqual(stored);
+  expect(h.queries.at(-1).sql).toBe('rollback');
+});
+
+test('failed DB writes never announce success or invalidate runtime settings', async () => {
+  const h = harness(savedSettings);
+  h.withPgClient.mockRejectedValueOnce(new Error('database unavailable'));
+  const res = await h.run('/api/bot/settings', { settings: { attendanceEnabled: false } });
+  expect(res.statusCode).toBe(500);
+  expect(h.read()).toEqual(savedSettings);
+  expect(h.bindings.invalidatePublicPointPolicyCache).not.toHaveBeenCalled();
+});
+
+test('restricted managers still cannot change another feature through generic settings', async () => {
+  const h = harness(savedSettings);
+  const res = await h.run('/api/bot/settings', { settings: { attendanceEnabled: false, rouletteDefs: [] } }, 'post', {}, { role: 'manager', scopes: ['commands:write'] });
+  expect(res.statusCode).toBe(403);
+  expect(res.body.code).toBe('bot_scope_required');
+  expect(h.read()).toEqual(savedSettings);
+});
+
+test.each([
+  '/api/bot/settings', '/api/donation/settings', '/api/donation/rules', '/api/roulette/definitions',
+  '/api/video-donation/settings', '/api/drawing-donation/settings', '/api/macros', '/api/channelpoints/list',
+])('%s does not report empty/default settings during a DB outage', async (url) => {
+  const h = harness(savedSettings, { getBotSettingsStrict: jest.fn(async () => { throw new Error('database unavailable'); }) });
+  const res = await h.run(url, {}, 'get');
+  expect(res.statusCode).toBeGreaterThanOrEqual(500);
+  expect(res.body).toEqual({ error: expect.any(String) });
+  expect(h.bindings.getBotSettingsStrict).toHaveBeenCalledWith(sid);
+  expect(h.bindings.getBotSettings).not.toHaveBeenCalled();
+  expect(h.read()).toEqual(savedSettings);
+});
+
+test('generic settings reads return persisted settings or an authentication error', async () => {
+  const h = harness(savedSettings);
+  expect((await h.run('/api/bot/settings', {}, 'get')).body).toEqual({ settings: savedSettings });
+  const unauthenticated = harness(savedSettings, { getPartitionId: async () => null });
+  expect((await unauthenticated.run('/api/bot/settings', {}, 'get')).statusCode).toBe(401);
 });

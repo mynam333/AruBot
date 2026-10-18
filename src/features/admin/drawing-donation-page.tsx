@@ -103,6 +103,7 @@ export function DrawingDonationPage() {
   const blocksReadable = canRead('drawing') || canRead('commands');
   const blocksWritable = writable || canWrite('commands');
   const [settings, setSettings] = useState<DrawingSettings>(defaultSettings);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [items, setItems] = useState<DrawingItem[]>([]);
   const [blockedUsers, setBlockedUsers] = useState<BlockedUser[]>([]);
   const [overlayPath, setOverlayPath] = useState('');
@@ -137,7 +138,9 @@ export function DrawingDonationPage() {
       blocksReadable ? readJson<{ items: BlockedUser[] }>('/api/bot/blocked-users') : Promise.resolve({ items: [] }),
       readJson<{ path: string; donationPath?: string | null; publicUid?: string | null }>('/api/drawing-donation/viewer-url'),
     ]);
+    if (!settingsPayload.settings) throw new Error('settings_missing');
     setSettings({ ...defaultSettings, ...settingsPayload.settings, canvas: { ...defaultSettings.canvas, ...settingsPayload.settings?.canvas } });
+    setSettingsLoaded(true);
     setItems(queuePayload.items || []);
     setBlockedUsers(blockPayload.items || []);
     setOverlayPath(ownerControls ? viewerPayload.path || '' : '');
@@ -220,7 +223,7 @@ export function DrawingDonationPage() {
   }, [applyQueuePayload]);
 
   const saveSettings = () => {
-    if (!writable) return;
+    if (!writable || !settingsLoaded || isPending) return;
     startTransition(async () => {
       try {
         const payload = await postJson<{ settings: DrawingSettings }>('/api/drawing-donation/settings', settings);
@@ -455,7 +458,7 @@ export function DrawingDonationPage() {
             <Button type="button" variant="secondary" onClick={() => refresh().catch(() => undefined)}>
               <RefreshCw className="h-[1em] w-[1em]" /> 새로고침
             </Button>
-            <Button type="button" onClick={saveSettings} disabled={!writable || (isPending)}>
+            <Button type="button" onClick={saveSettings} disabled={!writable || !settingsLoaded || (isPending)}>
               <Settings className="h-[1em] w-[1em]" /> 설정 저장
             </Button>
           </div>
@@ -467,6 +470,7 @@ export function DrawingDonationPage() {
           <CardHeader>
             <CardTitle>접수 설정</CardTitle>
             <CardDescription>포인트 비용과 OBS 표시 시간을 정합니다.</CardDescription>
+            {!settingsLoaded ? <p role="status" className="text-sm text-muted-foreground">저장된 설정을 불러온 후 저장할 수 있습니다. 계속 표시되면 새로고침해 주세요.</p> : null}
           </CardHeader>
           <CardContent className="grid gap-4 md:grid-cols-2">
             <div className="flex min-h-[var(--control-height)] items-center justify-between gap-3 rounded-[var(--radius-control)] border bg-background/70 px-4">

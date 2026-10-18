@@ -243,6 +243,10 @@ export function MacrosPage() {
   const load = useCallback(() => {
     startTransition(async () => {
       const data = await readJson<MacroResponse>('/api/macros');
+      if (!data) {
+        toast.error('자동 알림을 불러오지 못했습니다. 다시 시도해 주세요.');
+        return;
+      }
       setMacros(Array.isArray(data?.macros) ? data.macros : []);
     });
   }, []);

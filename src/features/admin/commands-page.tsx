@@ -104,6 +104,7 @@ export function CommandsPage() {
   const [editingRule, setEditingRule] = useState<BotRule | null>(null);
   const [form, setForm] = useState<CommandForm | null>(null);
   const [attendanceOpen, setAttendanceOpen] = useState(false);
+  const [attendanceLoadState, setAttendanceLoadState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [attendanceEnabled, setAttendanceEnabled] = useState(true);
   const [attendanceAnnounce, setAttendanceAnnounce] = useState(true);
   const [attendanceCommandOnly, setAttendanceCommandOnly] = useState(false);
@@ -118,7 +119,6 @@ export function CommandsPage() {
     startTransition(async () => {
       const data = await readJson<RulesResponse>('/api/bot/rules');
       if (!data) {
-        setRules([]);
         toast.error('명령어를 불러오지 못했습니다. 로그인 상태를 확인해 주세요.');
         return;
       }
@@ -127,14 +127,20 @@ export function CommandsPage() {
   }, []);
 
   const loadAttendanceSettings = useCallback(async () => {
+    setAttendanceLoadState('loading');
     const data = await readJson<BotSettingsResponse>('/api/bot/settings');
-    const settings = data?.settings || {};
+    if (!data?.settings) {
+      setAttendanceLoadState('error');
+      return;
+    }
+    const settings = data.settings;
     setAttendanceEnabled(settings.attendanceEnabled !== false);
     setAttendanceAnnounce(settings.attendanceAnnounce !== false);
     setAttendanceCommandOnly(settings.attendanceCommandOnly === true);
     setAttendanceCommandKeyword(settings.attendanceCommandKeyword || '!출석');
     setAttendanceMessage(settings.attendanceMessage || DEFAULT_ATTENDANCE_MESSAGE);
     setAttendancePoints(String(settings.channelPointsPerAttendance ?? 0));
+    setAttendanceLoadState('ready');
   }, []);
 
   useEffect(() => {
@@ -237,7 +243,7 @@ export function CommandsPage() {
   };
 
   const saveAttendanceSettings = async () => {
-    if (!writable) return;
+    if (!writable || attendanceLoadState !== 'ready' || busyId === 'attendance') return;
     setBusyId('attendance');
     try {
       await postJson('/api/bot/settings', {
@@ -433,6 +439,13 @@ export function CommandsPage() {
               </div>
             </div>
             <div className="grid min-h-0 gap-4 overflow-y-auto p-[clamp(1rem,2.4vw,1.5rem)]">
+            {attendanceLoadState !== 'ready' ? (
+              <div role="status" className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
+                {attendanceLoadState === 'loading' ? '저장된 출석 설정을 불러오는 중입니다.' : '출석 설정을 불러오지 못했습니다. 다시 불러온 후 저장해 주세요.'}
+                {attendanceLoadState === 'error' ? <Button type="button" variant="outline" onClick={() => void loadAttendanceSettings()}><RefreshCw className="h-4 w-4" />다시 불러오기</Button> : null}
+              </div>
+            ) : null}
+            <fieldset disabled={attendanceLoadState !== 'ready' || busyId === 'attendance'} className="grid min-w-0 gap-4">
               <div className="grid gap-3 rounded-[var(--radius-control)] border bg-background/70 p-3">
                 <div className="grid gap-3 sm:grid-cols-2">
                   <Button disabled={!writable} type="button" variant={attendanceEnabled ? 'soft' : 'outline'} onClick={() => setAttendanceEnabled((value) => !value)}>
@@ -476,10 +489,11 @@ export function CommandsPage() {
               <div className="rounded-[var(--radius-control)] border bg-background/70 p-3 text-sm leading-6 text-muted-foreground">
                 출석 전용 변수와 시청자·출석·방송·채널 변수, 룰렛·실행 액션을 사용할 수 있습니다. 우측 상단의 변수 도움말에서 지원 플랫폼과 조회 조건을 확인할 수 있습니다.
               </div>
+            </fieldset>
             </div>
             <div className="flex flex-col-reverse gap-2 border-t bg-background/64 p-[clamp(1rem,2.4vw,1.5rem)] sm:flex-row sm:justify-end">
               <Button type="button" variant="ghost" onClick={() => setAttendanceOpen(false)}>취소</Button>
-              <Button type="button" onClick={saveAttendanceSettings} disabled={!writable || (busyId === 'attendance')}>
+              <Button type="button" onClick={saveAttendanceSettings} disabled={!writable || attendanceLoadState !== 'ready' || (busyId === 'attendance')}>
                 {busyId === 'attendance' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                 저장
               </Button>

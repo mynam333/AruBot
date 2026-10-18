@@ -179,7 +179,7 @@ export function mergeBotManagerSettings(current, incoming, access) {
   if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) {
     throw Object.assign(new Error('설정 형식이 올바르지 않습니다.'), { status: 400 });
   }
-  if (!access || access.role !== 'manager') return incoming;
+  if (!access || access.role !== 'manager') return { ...current, ...incoming };
   const next = { ...current };
   for (const [key, value] of Object.entries(incoming)) {
     if (JSON.stringify(current[key]) === JSON.stringify(value)) continue;
