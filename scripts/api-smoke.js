@@ -17,6 +17,7 @@ async function requestJson(baseUrl, path, { timeoutMs = 5000, headers = {} } = {
   try {
     const response = await fetch(`${baseUrl}${path}`, {
       method: 'GET',
+      redirect: 'error',
       headers: {
         accept: 'application/json',
         ...headers,
@@ -45,6 +46,18 @@ function assertOk(result, predicate = null) {
   if (!result.ok) throw new Error(`${result.path} returned HTTP ${result.status}`);
   if (predicate && !predicate(result.body)) {
     throw new Error(`${result.path} returned unexpected body: ${JSON.stringify(result.body)}`);
+  }
+}
+
+function assertLoginRequired(result) {
+  if (result.status !== 401) {
+    throw new Error(`${result.path} returned HTTP ${result.status}, expected HTTP 401`);
+  }
+  const body = result.body;
+  if (!body || typeof body !== 'object' || Array.isArray(body)
+    || body.error !== 'Login required' || 'settings' in body) {
+    // Do not print a response that may have accidentally exposed private settings.
+    throw new Error(`${result.path} returned unexpected body: expected Login required without settings`);
   }
 }
 
@@ -80,7 +93,8 @@ async function main() {
     && body?.db?.ok === true
   ));
   assertOk(checks[2], (body) => body?.ok === true);
-  assertOk(checks[3], (body) => body && typeof body === 'object' && 'settings' in body);
+  // This deployment probe deliberately has no account credentials.
+  assertLoginRequired(checks[3]);
 
   if (expectedProvider) {
     const providerBodies = checks
@@ -101,6 +115,7 @@ async function main() {
       path: check.path,
       status: check.status,
       ok: check.ok,
+      passed: true,
       dbProvider: check.body?.dbProvider || null,
     })),
   };

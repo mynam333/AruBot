@@ -389,9 +389,31 @@ test.each([
   expect(h.read()).toEqual(savedSettings);
 });
 
-test('generic settings reads return persisted settings or an authentication error', async () => {
+test('authenticated owners read persisted settings through the strict loader', async () => {
   const h = harness(savedSettings);
-  expect((await h.run('/api/bot/settings', {}, 'get')).body).toEqual({ settings: savedSettings });
-  const unauthenticated = harness(savedSettings, { getPartitionId: async () => null });
-  expect((await unauthenticated.run('/api/bot/settings', {}, 'get')).statusCode).toBe(401);
+  const res = await h.run('/api/bot/settings', {}, 'get', {}, { role: 'owner' });
+  expect(res.statusCode).toBe(200);
+  expect(res.body).toEqual({ settings: savedSettings });
+  expect(h.bindings.getBotSettingsStrict).toHaveBeenCalledTimes(1);
+  expect(h.bindings.getBotSettingsStrict).toHaveBeenCalledWith(sid);
+  expect(h.bindings.getBotSettings).not.toHaveBeenCalled();
+});
+
+test('anonymous settings reads return the authentication error without reading storage', async () => {
+  const h = harness(savedSettings, { getPartitionId: async () => null });
+  const res = await h.run('/api/bot/settings', {}, 'get');
+  expect(res.statusCode).toBe(401);
+  expect(res.body).toEqual({ error: 'Login required' });
+  expect(h.bindings.getBotSettingsStrict).not.toHaveBeenCalled();
+  expect(h.bindings.getBotSettings).not.toHaveBeenCalled();
+});
+
+test('failed settings reads return 503 without exposing saved settings or defaults', async () => {
+  const h = harness(savedSettings, { getBotSettingsStrict: jest.fn(async () => { throw new Error('database unavailable'); }) });
+  const res = await h.run('/api/bot/settings', {}, 'get', {}, { role: 'owner' });
+  expect(res.statusCode).toBe(503);
+  expect(res.body).toEqual({ error: 'Failed to load bot settings' });
+  expect(h.bindings.getBotSettingsStrict).toHaveBeenCalledWith(sid);
+  expect(h.bindings.getBotSettings).not.toHaveBeenCalled();
+  expect(h.read()).toEqual(savedSettings);
 });

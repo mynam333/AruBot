@@ -111,6 +111,10 @@ npm run db:switch-to-postgres -- --execute --confirm=switch-to-postgres --base=h
 npm run api:smoke -- --base=http://localhost:3001 --expect-provider=postgres
 ```
 
+`api:smoke`는 인증 정보 없이 health/readiness/version을 검사하고, `/api/bot/settings`는 HTTP 401과 `error: "Login required"`, `settings` 필드 미노출을 요구한다. 다른 상태 코드, 잘못된 오류 본문, 리디렉션은 실패한다. 배포 시 `--expect-release=<SHA>`를 함께 지정해 대상 릴리스를 확인한다. 결과의 `checks[].ok`는 HTTP 성공 여부이며, `passed`는 계약 검증 성공 여부이므로 정상적인 settings 401은 `ok: false, passed: true`로 표시된다.
+
+자격 증명이나 실제 DB 없이 smoke CLI와 인증된 settings 응답을 검증하려면 `node node_modules/jest/bin/jest.js --runInBand tests/api-smoke.test.js tests/bot-settings-atomic.test.js`를 실행한다. smoke 테스트는 임시 로컬 HTTP 서버와 빈 작업 디렉터리를 사용하고, settings 테스트는 실제 handler와 기존 메모리 DB 하네스를 사용한다. 이는 배포 환경의 실제 로그인 세션과 DB를 통한 검증을 대신하지 않는다.
+
 `db:switch-to-postgres`는 PM2 백엔드 중지, Supabase public schema dump, Postgres restore, migration, sequence repair, count/checksum 검증, `.env`의 `ARUBOT_DB_PROVIDER=postgres` 전환, PM2 reload, API smoke까지 한 번에 수행한다. 기본은 dry-run이며 실제 실행에는 `--execute --confirm=switch-to-postgres`가 필요하다. dump 중에도 운영 백엔드를 계속 실행해야 하는 특수 상황에서만 `--skip-runtime-stop`을 사용한다.
 
 Windows 설치 파일 빌드:
