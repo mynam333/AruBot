@@ -229,14 +229,15 @@ describe('KST attendance calendar and session integrity', () => {
     });
   });
 
-  test('attendance date never falls back to a cached or database session start date', () => {
+  test('attendance date uses the active session and restores its start date after restart', () => {
     const start = serverIndex.indexOf('async function getAttendanceDate');
     const end = serverIndex.indexOf('async function validateAndRecoverSessionState', start);
     const body = serverIndex.slice(start, end);
-    expect(body).toContain('resolveAttendanceDate()');
-    expect(body).toContain("source: 'current_kst'");
-    expect(body).not.toContain('liveSession.get');
-    expect(body).not.toContain('getLiveSessionFromDB');
+    expect(body).toContain('resolveAttendanceDate(Date.now(), session)');
+    expect(body).toContain('await sessionStateUpdateQueues.get(sid)');
+    expect(body).toContain('liveSession.get(sid)');
+    expect(body).toContain('await getLiveSessionFromDB(sid)');
+    expect(serverIndex.match(/const attendDate = await getAttendanceDate\(sid\)/g)).toHaveLength(4);
   });
 
   test('all providers use common live-session reconciliation', () => {

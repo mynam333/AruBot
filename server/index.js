@@ -13883,11 +13883,21 @@ async function updateSessionStateLocked(sid, isLive, startTimestamp) {
  */
 async function getAttendanceDate(sid) {
   const startTime = Date.now();
-  const attendanceDate = resolveAttendanceDate();
+  // A chat arriving during live-session reconciliation must use the new session.
+  await sessionStateUpdateQueues.get(sid);
+  let session = liveSession.get(sid);
+  let source = 'session_cache';
+  if (!session) {
+    const storedSession = await getLiveSessionFromDB(sid);
+    // Do not replace a live update that completed during the DB lookup.
+    session = liveSession.get(sid) || storedSession;
+    source = liveSession.has(sid) ? 'session_cache' : 'session_db';
+  }
+  const attendanceDate = resolveAttendanceDate(Date.now(), session);
   logPerformanceMetrics('getAttendanceDate', sid, {
     duration: Date.now() - startTime,
-    source: 'current_kst',
-    cacheHit: false,
+    source: session?.live === true ? source : 'current_kst',
+    cacheHit: source === 'session_cache',
   });
   return attendanceDate;
 }
@@ -22253,7 +22263,7 @@ const BOT_VARIABLES = [
   { key: '{attendance.streak}', label: '연속 출석일', description: '출석 시점 또는 현재 출석 기록의 연속 출석일입니다.', group: '출석', providers: BOT_VARIABLE_PROVIDERS, contexts: ['attendance', 'blueprint'] },
   { key: '{attendance.totalDays}', label: '누적 출석일', description: '출석 시점 또는 현재 출석 기록의 전체 출석일입니다.', group: '출석', providers: BOT_VARIABLE_PROVIDERS, contexts: ['attendance', 'blueprint'] },
   { key: '{attendance.points}', label: '출석 포인트', description: '출석 실행으로 지급된 포인트이며, 출석 이벤트가 아닌 실행 액션에서는 0입니다.', group: '출석', providers: BOT_VARIABLE_PROVIDERS, contexts: ['attendance', 'blueprint'] },
-  { key: '{attendance.date}', label: '출석 날짜', description: '한국 표준시(KST) 기준 출석 날짜입니다.', group: '출석', providers: BOT_VARIABLE_PROVIDERS, contexts: ['attendance', 'blueprint'] },
+  { key: '{attendance.date}', label: '출석 날짜', description: '방송 시작일의 한국 표준시(KST) 날짜입니다. 자정을 넘겨도 같은 방송은 시작일 기준으로 출석합니다.', group: '출석', providers: BOT_VARIABLE_PROVIDERS, contexts: ['attendance', 'blueprint'] },
   { key: '{user.followedAt}', label: '팔로우 시작일', description: '플랫폼에서 팔로우 날짜를 제공하는 경우 시청자가 팔로우를 시작한 날짜입니다.', group: '시청자', providers: ['chzzk', 'cime'], caveat: 'YouTube 채팅에서는 팔로우 날짜를 제공하지 않아 확인할 수 없음으로 표시됩니다.' },
   { key: '{user.followedDays}', label: '팔로우 일수', description: '팔로우한 날을 1일째로 계산한 팔로우 일수입니다.', group: '시청자', providers: ['chzzk', 'cime'], caveat: 'YouTube 채팅에서는 팔로우 날짜를 제공하지 않아 0일로 표시됩니다.' },
   { key: '{user.subscriptionMonths}', label: '구독 개월', description: '구독 이벤트나 구독 목록에서 확인 가능한 시청자의 구독 개월 수입니다.', group: '시청자', providers: ['chzzk', 'cime'], caveat: '씨미는 수신한 구독 이벤트에 저장된 값을 사용하며, YouTube 멤버십 개월은 현재 제공하지 않습니다.' },
@@ -24968,7 +24978,7 @@ async function ensureChzzkSessionOwned(sid, channelId) {
             const attendDate = await getAttendanceDate(sid);
             const attKey = `${sid}:${resolvedUserId}:${attendDate}`;
 
-            const dateSource = 'current_kst';
+            const dateSource = 'broadcast_start_kst';
 
             try {
               if (!attendanceDedupe.has(attKey)) {
