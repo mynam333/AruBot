@@ -67,20 +67,7 @@ jobs:
         run: npm ci
 
       - name: Verify backend build safety
-        run: |
-          npm run audit:production
-          npm run lint
-          npx tsc --noEmit --pretty false --incremental false
-          npm test -- --runInBand
-          npm run test:drawing
-          npm run test:avatars
-          npm run test:wheel
-          npm run test:emotes
-          npm run test:marble
-          npm run test:accounts
-          npm run test:donations
-          node --test tests/chat-ingress*.test.mjs tests/chat-runtime*.test.mjs tests/runtime-handoff*.test.mjs
-          npm run build
+        run: npm run verify:backend
 
       - name: Create backend artifact
         run: |

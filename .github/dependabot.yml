@@ -1,0 +1,29 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: daily
+    open-pull-requests-limit: 5
+    versioning-strategy: increase-if-necessary
+    allow:
+      - dependency-type: all
+    # These exact artifacts are a reviewed protocol compatibility exception.
+    # The audit still fails on any new/changed advisory in this chain.
+    ignore:
+      - dependency-name: '*'
+        update-types: [version-update:semver-major]
+      - dependency-name: socket.io-client
+      - dependency-name: engine.io-client
+      - dependency-name: socket.io-parser
+      - dependency-name: parseuri
+      - dependency-name: xmlhttprequest-ssl
+      - dependency-name: ws
+        versions: ['>=3.0.0 <4.0.0']
+    groups:
+      compatible-production:
+        dependency-type: production
+        update-types: [minor, patch]
+      compatible-development:
+        dependency-type: development
+        update-types: [minor, patch]

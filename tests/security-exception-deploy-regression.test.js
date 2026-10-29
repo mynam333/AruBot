@@ -182,6 +182,44 @@ function knownBulkResponse() {
 describe('production security exception and deployment gates', () => {
   const audit = require('../scripts/audit-production-dependencies.cjs');
 
+  test('Express request parsers retain the October 2026 security patches on compatible release lines', () => {
+    const packageLock = JSON.parse(fs.readFileSync(path.join(root, 'package-lock.json'), 'utf8'));
+    for (const [name, safeRange] of [['body-parser', '>=1.20.9 <2.0.0'], ['qs', '>=6.16.1 <7.0.0']]) {
+      const entries = Object.entries(packageLock.packages).filter(([node]) => node.endsWith(`/node_modules/${name}`) || node === `node_modules/${name}`);
+      expect(entries.length).toBeGreaterThan(0);
+      for (const [, entry] of entries) expect(semver.satisfies(entry.version, safeRange)).toBe(true);
+    }
+  });
+
+  test.each([false, true])('qs comma serialization handles non-callable toString values (encodeValuesOnly=%s)', (encodeValuesOnly) => {
+    const qs = require('qs');
+    for (const toString of [0, null, 'not-callable']) {
+      expect(qs.stringify({ a: [{ toString }] }, { arrayFormat: 'comma', encodeValuesOnly }))
+        .toBe('a=%5Bobject%20Object%5D');
+    }
+    expect(qs.stringify({ a: ['one', 'two'] }, { arrayFormat: 'comma' })).toBe('a=one%2Ctwo');
+    expect(qs.parse('state=oauth%3Atest&hub.challenge=hello&items%5B%5D=one&items%5B%5D=two'))
+      .toEqual({ state: 'oauth:test', 'hub.challenge': 'hello', items: ['one', 'two'] });
+  });
+
+  test('new vulnerabilities remain blocked and report the installed version, advisory and affected range', async () => {
+    const report = knownAuditReport();
+    report.vulnerabilities['body-parser'] = {
+      name: 'body-parser', severity: 'high', nodes: ['node_modules/body-parser'],
+      via: [{ title: 'compressed request DoS', range: '<1.20.9', url: 'https://github.com/advisories/GHSA-27r3-jxmh-p828' }],
+    };
+    const warning = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const error = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expect(audit.runProductionAuditGate({ report })).rejects.toThrow('1 production vulnerability');
+      expect(error).toHaveBeenCalledWith(expect.stringContaining('installed: node_modules/body-parser@'));
+      expect(error).toHaveBeenCalledWith(expect.stringContaining('affected: <1.20.9; https://github.com/advisories/GHSA-27r3-jxmh-p828'));
+    } finally {
+      warning.mockRestore();
+      error.mockRestore();
+    }
+  });
+
   test('Axios stays on the patched 1.x release line in every locked dependency path', () => {
     const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
     const packageLock = JSON.parse(fs.readFileSync(path.join(root, 'package-lock.json'), 'utf8'));
@@ -479,9 +517,11 @@ describe('production security exception and deployment gates', () => {
   test('deployment runs verification, release-aware smoke checks, and rollback', () => {
     const workflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'deploy-backend.yml'), 'utf8');
     expect(workflow).toContain("BACKEND_RELEASES_TO_KEEP: ${{ vars.BACKEND_RELEASES_TO_KEEP || '2' }}");
-    expect(workflow).toContain('npm run audit:production');
-    expect(workflow).toContain('npm test -- --runInBand');
-    expect(workflow).toContain('npm run build');
+    expect(workflow).toContain('run: npm run verify:backend');
+    const { STEPS } = require('../scripts/verify-backend-safety.cjs');
+    expect(STEPS.map(({ args }) => args.join(' '))).toEqual(expect.arrayContaining([
+      'run audit:production', 'test -- --runInBand', 'run build',
+    ]));
     expect(workflow).toContain('BACKEND_APP_DIR: /home/ubuntu/AruBot');
     expect(workflow).toContain('local stable_cwd="/home/ubuntu/AruBot/current"');
     expect(workflow).toContain('export ARUBOT_APP_CWD="$stable_cwd"');

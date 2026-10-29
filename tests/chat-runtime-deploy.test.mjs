@@ -385,7 +385,11 @@ test('workflow keeps legacy opt-in, serializes releases, checks deploy tests and
   const workflow = (await fs.readFile(new URL('../.github/workflows/deploy-backend.yml', import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
   assert.match(workflow, /cancel-in-progress: false/);
   assert.match(workflow, /flock -w 900 9/);
-  assert.match(workflow, /node --test tests\/chat-ingress\*\.test\.mjs tests\/chat-runtime\*\.test\.mjs tests\/runtime-handoff\*\.test\.mjs/);
+  assert.match(workflow, /run: npm run verify:backend/);
+  const { STEPS } = await import('../scripts/verify-backend-safety.cjs');
+  assert.ok(STEPS.some(({ args }) => args.join(' ') === 'run test:chat-runtime'));
+  const manifest = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal(manifest.scripts['test:chat-runtime'], 'node --test tests/chat-ingress*.test.mjs tests/chat-runtime*.test.mjs tests/runtime-handoff*.test.mjs');
   assert.ok(workflow.indexOf('node scripts/deploy-chat-runtime.mjs --preflight') < workflow.lastIndexOf('npm run db:migrate'));
   assert.ok(workflow.lastIndexOf('npm run db:provider-smoke') < workflow.lastIndexOf('node scripts/deploy-chat-runtime.mjs\n'));
   assert.ok(workflow.lastIndexOf('exit 0') < workflow.lastIndexOf('switch_current_release'));

@@ -104,7 +104,8 @@ describe('룰렛 오버레이 레이아웃 회귀 방지', () => {
     expect(rouletteViewer).toContain('const wheelResolvedIndex = wheelIndexAtPointer(wheelFinalRotation, nextWheelItems.length, entries.weights)');
     expect(rouletteViewer).toContain('setWheelSelectedIndex(wheelResolvedIndex)');
     expect(rouletteViewer).toContain('wheelDiscRef');
-    expect(rouletteViewer).toContain('wheel.animate(');
+    // Playback behavior (WAAPI and fallback) is exercised in roulette-wheel-animation.test.js.
+    expect(rouletteViewer).toContain('animateRouletteWheel(');
     expect(rouletteViewer).not.toContain('setWheelRotationDeg(currentWheelRotation)');
     expect(rouletteViewer).toContain('wheelSettled ? wheelSelectedIndex : -1');
     expect(rouletteViewer).toContain("{wheelSettled ? (state.label || String(state.value ?? '')) : '행운의 순간을 기다려 주세요'}");

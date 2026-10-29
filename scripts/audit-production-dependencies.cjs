@@ -873,6 +873,17 @@ async function runProductionAuditGate({
   if (result.blocking.length > 0) {
     for (const item of result.blocking) {
       console.error(`[security audit] blocking vulnerability: ${item.name} (${item.severity}) nodes=${item.nodes.join(',') || 'unknown'}`);
+      const vulnerability = auditReport.vulnerabilities[item.name];
+      for (const node of item.nodes) {
+        console.error(`[security audit] installed: ${node}@${packageLock.packages?.[node]?.version || 'unknown'}`);
+      }
+      for (const advisory of vulnerability?.via || []) {
+        const detail = typeof advisory === 'string'
+          ? `via dependency: ${advisory}`
+          : `${advisory.title || advisory.source}; affected: ${advisory.range || vulnerability.range}; ${advisory.url || ''}`;
+        console.error(`[security audit] ${normalizeDiagnostic(detail)}`);
+      }
+      console.error('[security audit] Update the affected dependency and package-lock.json, then rerun npm run audit:production. Do not add an exception just to pass deployment.');
     }
     throw new Error(`${result.blocking.length} production vulnerability entry or changed exception was not approved`);
   }

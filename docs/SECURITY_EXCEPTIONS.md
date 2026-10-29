@@ -1,5 +1,39 @@
 # Security exceptions
 
+## Backend preflight and dependency maintenance
+
+Run `npm ci` and `npm run verify:backend` before release. The same check manifest runs
+in pull-request CI and in `Deploy Backend`: production audit, lint, TypeScript,
+all existing backend/native test groups, and the production build. It stops at the
+first failure and prints the exact command to reproduce it. Artifact validation,
+release smoke checks, and rollback remain separate deployment gates.
+
+Set `ARUBOT_TEST_POSTGRES_URL` to an isolated local PostgreSQL database with `test`
+in its name to include database integration tests. Without it, local checks report
+that these tests are skipped; CI refuses to run the preflight without it. GitHub
+jobs provide their own PostgreSQL service. Never point these tests at production.
+
+`Backend Safety` also checks newly published production advisories daily without
+deploying anything. `.github/dependabot.yml` proposes patch/minor updates,
+including indirect dependencies and manifest changes for pinned packages such as
+Next.js. Major upgrades require manual review. The reviewed legacy CHZZK chain remains pinned;
+other `ws` release lines can still receive updates. There is no automatic merge,
+no forced dependency upgrade, and no automatic approval of vulnerabilities.
+These workflows take effect after merging them to the default branch. Configure
+the `Backend Safety / verify` check as required in repository rules if merging
+without passing validation must be prohibited; direct pushes to main otherwise
+still rely on the deployment gate. GitHub notification preferences determine
+who receives scheduled failure notifications.
+
+On 2026-10-29, the gate correctly blocked `body-parser@1.20.8`
+([GHSA-27r3-jxmh-p828](https://github.com/advisories/GHSA-27r3-jxmh-p828)) and
+`qs@6.16.0` ([GHSA-6pq8-jhm2-2vcw](https://github.com/advisories/GHSA-6pq8-jhm2-2vcw)).
+Updating only those compatible locked dependencies to `1.20.9` and `6.16.2`
+resolved the findings without changing Express or the CHZZK client. `npm ci`
+reproduces the lockfile; rerunning it does not upgrade vulnerable dependencies.
+New vulnerabilities can still block future deployments and must be fixed rather
+than suppressed.
+
 ## CHZZK Socket.IO 2.x compatibility exception
 
 - Status: approved, required compatibility exception
