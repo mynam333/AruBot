@@ -51,6 +51,67 @@ export function rouletteWheelKeyframes(start: number, finish: number, profile: R
   });
 }
 
+export function animateRouletteWheel(
+  wheel: HTMLElement, start: number, finish: number, durationMs: number,
+  profile: RouletteMotionProfile, onFinish: () => void,
+): () => void {
+  const started = performance.now();
+  let stopped = false;
+  let frameId = 0;
+  let timerId = 0;
+  let animation: Animation | null = null;
+  wheel.style.transform = `rotate(${start}deg)`;
+
+  const cancelNativeAnimation = () => {
+    if (!animation) return;
+    animation.onfinish = animation.oncancel = null;
+    try { animation.cancel(); } catch {}
+    animation = null;
+  };
+  const cleanup = () => {
+    stopped = true;
+    window.cancelAnimationFrame(frameId);
+    window.clearTimeout(timerId);
+    cancelNativeAnimation();
+  };
+  const complete = () => {
+    if (stopped) return;
+    cleanup();
+    wheel.style.transform = `rotate(${finish}deg)`;
+    onFinish();
+  };
+  const tick = (now: number) => {
+    if (stopped) return;
+    const time = Math.max(0, Math.min(1, (now - started) / durationMs));
+    const progress = rouletteMotionProgress(time, profile);
+    wheel.style.transform = `rotate(${start + (finish - start) * progress}deg)`;
+    if (time >= 1) complete();
+    else frameId = window.requestAnimationFrame(tick);
+  };
+  const startFallback = () => {
+    if (stopped) return;
+    cancelNativeAnimation();
+    window.cancelAnimationFrame(frameId);
+    // Keep elapsed time when a browser cancels WAAPI partway through a spin.
+    tick(performance.now());
+  };
+
+  try {
+    if (typeof wheel.animate === 'function') {
+      animation = wheel.animate(rouletteWheelKeyframes(start, finish, profile), {
+        duration: durationMs, easing: 'linear', fill: 'forwards',
+      });
+      animation.onfinish = complete;
+      animation.oncancel = startFallback;
+    } else startFallback();
+  } catch {
+    startFallback();
+  }
+  // OBS/browser suspension can suppress finish events; never leave the queue locked.
+  timerId = window.setTimeout(complete, durationMs + 250);
+  return cleanup;
+}
+
 export function rouletteMotionPhase(time: number, profile: RouletteMotionProfile) {
   if (time >= 1) return 'settled';
   if (time < profile.acceleration) return 'launch';

@@ -41,7 +41,7 @@ describe('roulette material motion', () => {
     expect(rouletteMotionProgress(NaN, getRouletteMotionProfile('studio'))).toBe(0);
   });
 
-  test('reduced-motion keyframes never rotate', () => {
+  test('identical endpoints stay still for an explicitly instant result', () => {
     const frames = rouletteWheelKeyframes(800, 800, getRouletteMotionProfile('arcade'));
     expect(new Set(frames.map(frame => frame.transform))).toEqual(new Set(['rotate(800deg)']));
   });

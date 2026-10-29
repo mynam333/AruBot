@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const sharp = require('sharp');
-const { optimizeImage } = require('next/dist/server/image-optimizer');
+const { optimizeImage } = require('next/dist/server/image-optimizer/transform');
 
 const root = path.join(__dirname, '..');
 

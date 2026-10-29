@@ -156,6 +156,55 @@ test('the BGM window suspends a Mix immediately for video and resumes the same M
   expect(harness.calls.filter((call) => call.url.includes('/activate-by-token'))).toHaveLength(0);
 });
 
+test.each([
+  ['recommended', 'end'], ['recommended', 'skip'], ['custom', 'end'], ['custom', 'skip'],
+])('BGM %s keeps the current idle song until %s before starting the request', async (mode, boundary) => {
+  const idlePlaylist = { ...playlist([track(1), track(2)]), mode };
+  const state = { item: null, idlePlaylist: { enabled: false }, bgm: { enabled: true, idlePlaylist } };
+  const h = mount(state, async () => ({}), 'bgm');
+  await flush(); jest.advanceTimersByTime(3000); await flush();
+  h.emit(1); await flush();
+  const waiting = { ...state, item: { id: 'bgm-1', kind: 'bgm', mediaProvider: 'youtube', videoId: 'request0001' }, paused: true, idleDeferred: true };
+  h.push(waiting);
+  await flush(); jest.advanceTimersByTime(3000); await flush();
+  h.push(waiting); await flush();
+  expect(h.loads).toEqual(['video000001']);
+  expect(h.calls.filter(call => call.url.includes('/activate-by-token'))).toHaveLength(0);
+
+  if (boundary === 'skip') {
+    const status = h.calls.findLast(call => call.body.op === 'idle_status' && call.body.mode === 'idle' && call.body.track)?.body;
+    expect(status).toBeDefined();
+    h.socket.onmessage({ data: JSON.stringify({ type: 'control', op: 'idle-control', command: {
+      op: 'skip', version: 1, clientId: status.clientId, itemId: `idle:${status.clientId}:${status.track.id}`,
+    } }) });
+  } else h.emit(0);
+  await flush();
+  const activations = h.calls.filter(call => call.url.includes('/activate-by-token'));
+  expect(activations).toHaveLength(1);
+  expect(activations[0].body.itemId).toBe('bgm-1');
+  expect(h.loads).toEqual(['video000001', 'request0001']);
+});
+
+test.each([2, 3])('a paused or buffering BGM Mix keeps the request waiting (%s)', async playerState => {
+  const idlePlaylist = playlist([track(1), track(2)]);
+  const state = { item: null, idlePlaylist: { enabled: false }, bgm: { enabled: true, idlePlaylist } };
+  const h = mount(state, async () => ({}), 'bgm');
+  await flush(); jest.advanceTimersByTime(3000); await flush();
+  h.emit(playerState);
+  h.push({ ...state, item: { id: 'bgm-1', kind: 'bgm', mediaProvider: 'youtube', videoId: 'request0001' }, idleDeferred: true, paused: true });
+  await flush();
+  expect(h.loads).toEqual(['video000001']);
+  expect(h.calls.filter(call => call.url.includes('/activate-by-token'))).toHaveLength(0);
+});
+
+test('a newly opened BGM player activates its deferred request when no idle song was playing', async () => {
+  const h = mount({ item: { id: 'bgm-1', kind: 'bgm', mediaProvider: 'youtube', videoId: 'request0001' }, idleDeferred: true, paused: true,
+    idlePlaylist: { enabled: false }, bgm: { enabled: true, idlePlaylist: playlist([track(1)]) } }, async () => ({}), 'bgm');
+  await flush(); jest.advanceTimersByTime(3000); await flush();
+  expect(h.calls.filter(call => call.url.includes('/activate-by-token'))).toHaveLength(1);
+  expect(h.loads).toEqual(['request0001']);
+});
+
 test('BGM request interruption reports an exact checkpoint and ignores the video item', async () => {
   const state = { item: { id: 'bgm-1', kind: 'bgm', mediaProvider: 'youtube', videoId: 'video000001' }, idlePlaylist: { enabled: false }, bgm: { enabled: true, idlePlaylist: { enabled: false } } };
   const harness = mount(state, async () => ({}), 'bgm');

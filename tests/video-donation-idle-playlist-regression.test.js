@@ -73,7 +73,8 @@ describe('영상 후원 대기 플레이리스트 회귀 방지', () => {
   test('지연 중인 head 교체와 대기 음악 비활성화도 안전하게 상태를 전환해야 함', () => {
     expect(serverIndex).toContain('const wasIdleDeferred = pvdPlaybackState.get(sid)?.idleDeferred === true;');
     expect(serverIndex).toContain('broadcastPvdStart(sid, { deferForIdle: wasIdleDeferred })');
-    expect(serverIndex).toContain('if (!viewerIdlePlaylist.enabled && pvdPlaybackState.get(sid)?.idleDeferred)');
+    expect(serverIndex).toContain('if (pvdPlaybackState.get(sid)?.idleDeferred)');
+    expect(serverIndex).toContain('if (!idlePlaylistEnabled) await activateDeferredPvdPlayback(sid)');
     expect(serverIndex).toContain('await activateDeferredPvdPlayback(sid);');
     expect(serverIndex).toContain('idleDeferred: state?.idleDeferred === true');
     expect(pvdViewer).toContain('if (deferredItem) activateDeferredDonation(deferredItem);');

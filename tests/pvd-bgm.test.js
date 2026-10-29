@@ -49,6 +49,13 @@ test('missing or hidden BGM window pauses time and reopening resumes it', () => 
   expect(state).toMatchObject({ paused: false, baseStartMs: 89000 });
 });
 
+test('BGM readiness cannot start a requested song clock before the idle song ends', () => {
+  const item = bgmItem();
+  const state = playback.createPvdPlaybackState(item, { idleDeferred: true });
+  bgm.updateBgmPlaybackAvailability(state, item, true);
+  expect(state).toMatchObject({ paused: true, idleDeferred: true, pausedAtSec: 10, bgmBlocked: false });
+});
+
 test('only one visible BGM player owns playback; expired leases are reclaimed', () => {
   let now = 1000;
   const presence = bgm.createBgmPlayerPresence({ now: () => now });

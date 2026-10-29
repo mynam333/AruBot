@@ -5,6 +5,7 @@ const loadServerFunctions = require('./helpers/load-server-functions.cjs');
 const { assertBotManagerEffects, mergeBotManagerSettings, filterBotManagerSettings } = require('./helpers/load-source.cjs')('shared/bot-management-policy.js');
 const { normalizePointAward } = require('./helpers/load-source.cjs')('server/point-earning-policy.js');
 const { normalizeChzzkVideoDonationSettings } = require('./helpers/load-source.cjs')('server/chzzk-video-donation.js');
+const { getPvdBgmSettings } = require('./helpers/load-source.cjs')('server/pvd-bgm.js');
 
 const source = ts.createSourceFile('supabase.js', fs.readFileSync(path.join(__dirname, '../server/supabase.js'), 'utf8'), ts.ScriptTarget.Latest, true);
 const names = ['setBotSettings', 'patchBotSettings', 'updateBotSettingsAtomically'];
@@ -88,6 +89,19 @@ function harness(initial = {}, extra = {}) {
     },
   };
 }
+
+test.each([false, true])('saving BGM settings preserves idle wait unless its playlist is disabled (%s)', async disableIdle => {
+  const activate = jest.fn(async () => ({}));
+  const h = harness({ videoDonationIdlePlaylist: { enabled: false }, bgmEnabled: true, bgmIdlePlaylist: { enabled: true } }, {
+    pvdPlaybackState: new Map([[sid, { idleDeferred: true }]]),
+    getVideoQueue: () => [{ id: 'bgm-1', kind: 'bgm' }],
+    getPvdBgmViewerSettings: settings => ({ ...getPvdBgmSettings(settings), idlePlaylist: { ...settings.bgmIdlePlaylist, enabled: getPvdBgmSettings(settings).enabled && settings.bgmIdlePlaylist?.enabled === true } }),
+    activateDeferredPvdPlayback: activate,
+  });
+  const body = disableIdle ? { bgm: { idlePlaylist: { enabled: false } } } : { volume: 20 };
+  expect((await h.run('/api/video-donation/settings', body)).statusCode).toBe(200);
+  expect(activate).toHaveBeenCalledTimes(disableIdle ? 1 : 0);
+});
 
 test('partial patches merge the latest locked row and do not retry transactions', async () => {
   const h = harness({ botEnabled: true, drawingDonationViewerToken: 'old' });

@@ -10,7 +10,7 @@ import { createWheelSegments, splitWheelLabel } from './rouletteWheelUtils';
 import { buildRouletteWheelEntries } from './rouletteWheelEntries';
 import { RouletteFitText } from './rouletteFitText';
 import { RouletteHubEmblem, RoulettePanelOrnaments } from './roulettePanelOrnaments';
-import { getRouletteMotionProfile, rouletteMotionPhase, rouletteMotionProgress, rouletteWheelKeyframes } from './rouletteMotion';
+import { animateRouletteWheel, getRouletteMotionProfile, rouletteMotionPhase, rouletteMotionProgress } from './rouletteMotion';
 import './roulettePresentation.css';
 
 type WindowWithLegacyAudioContext = Window & { webkitAudioContext?: typeof AudioContext };
@@ -120,7 +120,6 @@ type WheelSpinPlan = {
   finalRotation: number;
   durationMs: number;
   motionTheme: Theme;
-  reducedMotion: boolean;
 };
 
 type SpinCompletionBarrier = {
@@ -194,7 +193,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
   const [wheelSettled, setWheelSettled] = React.useState(false);
   const [wheelSpinPlan, setWheelSpinPlan] = React.useState<WheelSpinPlan | null>(null);
   const wheelDiscRef = React.useRef<HTMLDivElement | null>(null);
-  const wheelAnimationRef = React.useRef<Animation | null>(null);
+  const wheelAnimationCleanupRef = React.useRef<(() => void) | null>(null);
   const wheelSpinPlanIdRef = React.useRef(0);
   const wheelRotationRef = React.useRef(0);
   const spinCompletionBarrierRef = React.useRef<SpinCompletionBarrier | null>(null);
@@ -479,11 +478,10 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     const wheel = wheelDiscRef.current;
     if (!wheel) return;
 
-    try { wheelAnimationRef.current?.cancel(); } catch {}
+    wheelAnimationCleanupRef.current?.();
 
-    const { id, startRotation, finalRotation, durationMs, motionTheme, reducedMotion } = wheelSpinPlan;
+    const { id, startRotation, finalRotation, durationMs, motionTheme } = wheelSpinPlan;
     const profile = getRouletteMotionProfile(motionTheme);
-    wheel.style.transform = `rotate(${reducedMotion ? finalRotation : startRotation}deg)`;
     const notifyWheelFinished = () => {
       if (wheelSpinPlanIdRef.current !== id) return;
       wheelRotationRef.current = finalRotation;
@@ -496,58 +494,18 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       }
     };
 
-    if (typeof wheel.animate !== 'function') {
-      let completed = false;
-      let frameId = 0;
-      const started = performance.now();
-      const finishFallback = () => {
-        if (completed) return;
-        completed = true;
-        wheel.style.transform = `rotate(${finalRotation}deg)`;
-        notifyWheelFinished();
-      };
-      const tick = (now: number) => {
-        const time = Math.min(1, (now - started) / durationMs);
-        const progress = reducedMotion ? 1 : rouletteMotionProgress(time, profile);
-        wheel.style.transform = `rotate(${startRotation + (finalRotation - startRotation) * progress}deg)`;
-        if (time >= 1) finishFallback();
-        else if (!completed) frameId = window.requestAnimationFrame(tick);
-      };
-      frameId = window.requestAnimationFrame(tick);
-      const settleId = window.setTimeout(finishFallback, durationMs + 250);
-      return () => {
-        window.cancelAnimationFrame(frameId);
-        window.clearTimeout(settleId);
-      };
-    }
-
-    const animation = wheel.animate(
-      rouletteWheelKeyframes(reducedMotion ? finalRotation : startRotation, finalRotation, profile),
-      {
-        duration: durationMs,
-        easing: 'linear',
-        fill: 'forwards',
-      },
+    const cleanup = animateRouletteWheel(
+      wheel, startRotation, finalRotation, durationMs, profile, notifyWheelFinished,
     );
-    wheelAnimationRef.current = animation;
-    animation.onfinish = () => {
-      wheel.style.transform = `rotate(${finalRotation}deg)`;
-      if (wheelAnimationRef.current === animation) wheelAnimationRef.current = null;
-      try { animation.cancel(); } catch {}
-      notifyWheelFinished();
-    };
-
+    wheelAnimationCleanupRef.current = cleanup;
     return () => {
-      animation.onfinish = null;
-      if (wheelAnimationRef.current === animation && animation.playState !== 'finished') {
-        try { animation.cancel(); } catch {}
-        wheelAnimationRef.current = null;
-      }
+      cleanup();
+      if (wheelAnimationCleanupRef.current === cleanup) wheelAnimationCleanupRef.current = null;
     };
   }, [active, layout, wheelSpinPlan]);
 
   React.useEffect(() => () => {
-    try { wheelAnimationRef.current?.cancel(); } catch {}
+    wheelAnimationCleanupRef.current?.();
     if (spinCompletionBarrierRef.current) spinCompletionBarrierRef.current.completed = true;
     spinCompletionBarrierRef.current = null;
     if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current);
@@ -827,9 +785,9 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
             
             updateDebugInfo((prev) => ({ validMessagesReceived: prev.validMessagesReceived + 1 }));
             
-            // If autoplay not yet enabled, try one more prime attempt just-in-time
+            // Audio readiness must never delay or reorder incoming spins.
             if (!canAutoPlayRef.current && sfxOn) {
-              try { await primeAudio(); } catch {}
+              void primeAudio().catch(() => {});
             }
             
             // Build a key to detect duplicate payloads
@@ -1035,8 +993,8 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     wheelSpinPlanIdRef.current += 1;
     if (spinCompletionBarrierRef.current) spinCompletionBarrierRef.current.completed = true;
     spinCompletionBarrierRef.current = null;
-    try { wheelAnimationRef.current?.cancel(); } catch {}
-    wheelAnimationRef.current = null;
+    wheelAnimationCleanupRef.current?.();
+    wheelAnimationCleanupRef.current = null;
     setWheelSpinPlan(null);
     // Fade out whole content layer first
     setActive(false);
@@ -1111,8 +1069,8 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     wheelSpinPlanIdRef.current += 1;
     if (spinCompletionBarrierRef.current) spinCompletionBarrierRef.current.completed = true;
     spinCompletionBarrierRef.current = null;
-    try { wheelAnimationRef.current?.cancel(); } catch {}
-    wheelAnimationRef.current = null;
+    wheelAnimationCleanupRef.current?.();
+    wheelAnimationCleanupRef.current = null;
     // keep reel view; no separate final stage view
     // Build reel with random items and inject final at stop time to avoid blanks
     const baseItems = Array.isArray(itemsFromServer) && itemsFromServer.length > 0
@@ -1136,7 +1094,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     const wheelFinalRotation = equivalentForwardRotation(
       wheelStartRotation,
       wheelStopRotationForIndex(wheelTargetIndex, nextWheelItems.length, wheelStopOffsetRatio, entries.weights),
-      motionProfile.turns + Math.floor(spinRandom() * 3)
+      reducedMotion ? 1 : motionProfile.turns + Math.floor(spinRandom() * 3)
     );
     const wheelResolvedIndex = wheelIndexAtPointer(wheelFinalRotation, nextWheelItems.length, entries.weights);
     const wheelResolvedLabel = nextWheelItems[wheelResolvedIndex] || finalLabel;
@@ -1208,7 +1166,6 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       finalRotation: wheelFinalRotation,
       durationMs: spinDurationMs,
       motionTheme,
-      reducedMotion,
     });
     const rand = () => pool[Math.floor(spinRandom() * pool.length)];
     const seq: string[] = [];
@@ -1232,7 +1189,8 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
     if (rowHpx !== rowH && rowHpx > 0) setRowH(rowHpx);
     const startIdx = rowsHalf; // starting center index (rows)
     // Pick a pleasant number of rows to travel; ensure enough randomness shown
-    const travelRows = Math.max(40, Math.min(120, pool.length * 8));
+    // Reduced motion keeps essential draw progress, with less travel and no recoil.
+    const travelRows = reducedMotion ? Math.min(6, Math.max(1, pool.length)) : Math.max(40, Math.min(120, pool.length * 8));
     const targetIdx = startIdx + travelRows; // virtual absolute target index
     finalIndexRef.current = targetIdx;
     finalLabelRef.current = wheelResolvedLabel;
@@ -1251,7 +1209,7 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
       const t = now - animStartRef.current;
       const clamped = Math.min(T, Math.max(0, t));
       const progress = rouletteMotionProgress(clamped / T, motionProfile);
-      const currentCenter = reducedMotion ? targetIdx : startIdx + travelRows * progress;
+      const currentCenter = startIdx + travelRows * progress;
       setOffsetRows(currentCenter);
       setScrollIndex(Math.floor(currentCenter));
       const surface = presentationRef.current;
@@ -1279,10 +1237,12 @@ export default function RouletteViewer({ viewerToken = '' }: RouletteViewerProps
         setScrollIndex(targetIdx);
         const track = surface?.querySelector('.roulette-reel-track');
         if (!reducedMotion && motionProfile.recoil && track && typeof track.animate === 'function') {
-          track.animate([
-            { translate: '0 0' }, { translate: `0 ${motionProfile.recoil}px` },
-            { translate: `0 ${-motionProfile.recoil / 3}px` }, { translate: '0 0' },
-          ], { duration: 280, easing: 'ease-out' });
+          try {
+            track.animate([
+              { translate: '0 0' }, { translate: `0 ${motionProfile.recoil}px` },
+              { translate: `0 ${-motionProfile.recoil / 3}px` }, { translate: '0 0' },
+            ], { duration: 280, easing: 'ease-out' });
+          } catch {}
         }
         const barrier = spinCompletionBarrierRef.current;
         if (barrier?.id === wheelSpinPlanId) {

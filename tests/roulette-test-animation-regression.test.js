@@ -65,14 +65,20 @@ describe('룰렛 실제 회전 테스트 회귀 방지', () => {
     expect(rouletteViewer).toContain('barrier.wheelDone = true');
     expect(rouletteViewer).toContain('barrier.reelDone = true');
     expect(rouletteViewer).toContain('tryFinishSpinBarrier(barrier)');
-    expect(rouletteViewer).toContain('rouletteWheelKeyframes(reducedMotion ? finalRotation : startRotation, finalRotation, profile)');
-    expect(rouletteViewer).toContain('window.setTimeout(finishFallback, durationMs + 250)');
-    expect(rouletteViewer).toContain('if (time >= 1) finishFallback()');
+    expect(rouletteViewer).toContain('wheel, startRotation, finalRotation, durationMs, profile, notifyWheelFinished');
     expect(rouletteViewer).toContain('startSpinAnimation(final, Array.isArray(payload.items) ? payload.items : null, payload)');
     expect(rouletteViewer).toContain('createRouletteSpinRandom(resolveRouletteSpinSeed(meta, finalLabel))');
     expect(rouletteViewer).toContain('const wheelTargetIndex = entries.selectedIndex');
     expect(rouletteViewer).toContain('const wheelStopOffsetRatio = randomWheelStopOffsetRatio(spinRandom)');
     expect(rouletteViewer).toContain('const rand = () => pool[Math.floor(spinRandom() * pool.length)]');
+  });
+
+  test('sound loading and reduced-motion preferences cannot freeze a draw', () => {
+    expect(rouletteViewer).not.toContain('await primeAudio()');
+    expect(rouletteViewer).toContain('void primeAudio().catch(() => {})');
+    expect(rouletteViewer).not.toContain('reducedMotion ? finalRotation : startRotation');
+    expect(rouletteViewer).not.toContain('reducedMotion ? targetIdx');
+    expect(rouletteViewer).toContain('reducedMotion ? 1 : motionProfile.turns');
   });
 
   test('관리자 테스트는 방송 상태와 무관하며 오프라인 안내를 명확히 보여야 함', () => {

@@ -1335,8 +1335,9 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
     if (playerRole === 'video' && item?.kind === 'bgm' && !bgmEnabledRef.current) item = null;
     const otherPlayerItem = !!item && (item.kind === 'bgm') !== (playerRole === 'bgm');
     if (playerRole === 'bgm') {
-      setBgmPaused(item ? payload.paused === true : idlePausedRef.current);
-      setBgmStatus(!bgmEnabledRef.current ? 'BGM 사용 안 함' : otherPlayerItem ? '영상 후원 재생 중' : !bgmOwnerRef.current ? 'BGM 플레이어 연결 대기' : item ? (payload.paused ? 'BGM 일시정지' : 'BGM 신청곡') : '대기 BGM');
+      const playingRequest = !!item && payload.idleDeferred !== true;
+      setBgmPaused(playingRequest ? payload.paused === true : idlePausedRef.current);
+      setBgmStatus(!bgmEnabledRef.current ? 'BGM 사용 안 함' : otherPlayerItem ? '영상 후원 재생 중' : !bgmOwnerRef.current ? 'BGM 플레이어 연결 대기' : playingRequest ? (payload.paused ? 'BGM 일시정지' : 'BGM 신청곡') : item ? '대기 BGM · 신청곡 대기' : '대기 BGM');
     }
     if (otherPlayerItem && playerRole === 'video') {
       deferredDonationRef.current = null;

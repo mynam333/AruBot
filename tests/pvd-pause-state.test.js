@@ -1,7 +1,8 @@
 const loadServerFunctions = require('./helpers/load-server-functions.cjs');
 const { setChzzkPlaybackBlocked } = require('./helpers/load-source.cjs')('server/pvd-chzzk-pause.js');
+const { insertPvdRequest, updateBgmPlaybackAvailability } = require('./helpers/load-source.cjs')('server/pvd-bgm.js');
 
-function setupServer() {
+function setupServer(viewerSettings = { volume: 100, idlePlaylist: { enabled: true, tracks: [] } }) {
   const sid = 'test';
   const item = { id: 'donation-1', mediaProvider: 'youtube', videoId: 'video000001', startSec: 12 };
   const queue = [item];
@@ -12,14 +13,15 @@ function setupServer() {
     setChzzkPlaybackBlocked,
     chzzkVideoRuntime: { paused: () => false },
     getVideoQueue: () => queue, pvdPlaybackState: states,
-    getPvdViewerSettingsForSid: async () => ({ volume: 100, idlePlaylist: { enabled: true, tracks: [] } }),
+    getPvdViewerSettingsForSid: async () => viewerSettings,
+    updateBgmPlaybackAvailability, bgmPlayerPresence: { current: () => ({ clientId: 'bgm-player' }) },
     refreshChzzkClipPlaybackForItem: async () => {},
     broadcastToChannelBySid: async (_sid, _channel, message) => { broadcasts.push(message); return { success: 1 }; },
     pvdSidSockets: new Map(), videoDonationTimers: new Map(),
     notifyPvdAdminSubscribers: async () => {}, scheduleNextPvdAutoPop: jest.fn(),
     console: { log() {}, error() {} },
   };
-  const server = loadServerFunctions(['getPvdItemStartSec', 'getPvdQueueItemKey', 'createPvdPlaybackState', 'getCurrentAtSec', 'getCurrentPvdElapsedSec', 'broadcastPvdStart'], bindings);
+  const server = loadServerFunctions(['getPvdItemStartSec', 'getPvdQueueItemKey', 'createPvdPlaybackState', 'getCurrentAtSec', 'getCurrentPvdElapsedSec', 'broadcastPvdStart', 'activateDeferredPvdPlayback'], bindings);
   return { sid, item, queue, state, states, broadcasts, server };
 }
 
@@ -46,6 +48,39 @@ test('a Mix without saved seed tracks can still defer an incoming donation', asy
   h.states.clear();
   await h.server.broadcastPvdStart(h.sid, { deferForIdle: true });
   expect(h.states.get(h.sid)).toMatchObject({ paused: true, idleDeferred: true });
+});
+
+test('BGM requests wait for their idle song, then play FIFO without another idle gap', async () => {
+  const h = setupServer({ idlePlaylist: { enabled: false }, bgm: { enabled: true, idlePlaylist: { enabled: true } } });
+  h.states.clear();
+  h.item.kind = 'bgm';
+  await h.server.broadcastPvdStart(h.sid, { deferForIdle: true });
+  expect(h.states.get(h.sid)).toMatchObject({ idleDeferred: true, paused: true, pausedAtSec: 12 });
+  const waitingState = h.states.get(h.sid);
+  expect(insertPvdRequest(h.queue, { id: 'bgm-2', kind: 'bgm', startSec: 0 }, waitingState)).toBe(false);
+  await h.server.broadcastPvdStart(h.sid);
+  expect(h.states.get(h.sid)).toBe(waitingState);
+  expect(h.queue.map(item => item.id)).toEqual(['donation-1', 'bgm-2']);
+  expect(await h.server.activateDeferredPvdPlayback(h.sid, 'donation-1')).toMatchObject({ activated: true });
+  expect(h.states.get(h.sid)).toMatchObject({ idleDeferred: false, bgmBlocked: true, pausedAtSec: 12 });
+  h.queue.shift();
+  await h.server.broadcastPvdStart(h.sid);
+  expect(h.states.get(h.sid)).toMatchObject({ itemKey: 'bgm-2', idleDeferred: false, pausedAtSec: 0 });
+});
+
+test.each([false, true])('video donations still interrupt BGM immediately (idle enabled=%s)', async enabled => {
+  const h = setupServer({ idlePlaylist: { enabled: false }, bgm: { enabled: true, idlePlaylist: { enabled } } });
+  h.states.clear();
+  await h.server.broadcastPvdStart(h.sid, { deferForIdle: true });
+  expect(h.states.get(h.sid)).toMatchObject({ paused: false, idleDeferred: false });
+});
+
+test.each([false, true])('BGM without its own enabled idle playlist is not deferred (video idle=%s)', async videoIdle => {
+  const h = setupServer({ idlePlaylist: { enabled: videoIdle }, bgm: { enabled: true, idlePlaylist: { enabled: false } } });
+  h.states.clear();
+  h.item.kind = 'bgm';
+  await h.server.broadcastPvdStart(h.sid, { deferForIdle: true });
+  expect(h.states.get(h.sid)).toMatchObject({ bgmBlocked: true, idleDeferred: false });
 });
 
 function setupRoute(paused = true, { kind = 'video', playbackEpoch = 'epoch-1', playbackRevision = 0, owner = 'owner-client' } = {}) {

@@ -7714,7 +7714,9 @@ async function broadcastPvdStart(sid, options = {}) {
         && currentState?.idleDeferred === true
         && currentState?.itemKey === itemKey;
       const idleDeferred = options.deferForIdle === true
-        && viewerSettings.idlePlaylist?.enabled === true;
+        && (q[0].kind === 'bgm'
+          ? viewerSettings.bgm?.enabled === true && viewerSettings.bgm.idlePlaylist?.enabled === true
+          : viewerSettings.idlePlaylist?.enabled === true);
       if (!currentState || currentState.itemKey !== itemKey || activateDeferredPlayback) {
         pvdPlaybackState.set(sid, createPvdPlaybackState(q[0], {
           idleDeferred: activateDeferredPlayback ? false : idleDeferred,
@@ -8232,8 +8234,11 @@ app.post('/api/video-donation/settings', async (req, res) => {
       broadcastPvdControl(sid, { op: 'volume', volume }).catch(() => null),
       broadcastPvdControl(sid, { op: 'idle-playlist', idlePlaylist: viewerIdlePlaylist }).catch(() => null),
     ]);
-    if (!viewerIdlePlaylist.enabled && pvdPlaybackState.get(sid)?.idleDeferred) {
-      await activateDeferredPvdPlayback(sid);
+    if (pvdPlaybackState.get(sid)?.idleDeferred) {
+      const idlePlaylistEnabled = getVideoQueue(sid)[0]?.kind === 'bgm'
+        ? getPvdBgmViewerSettings(savedSettings).idlePlaylist.enabled
+        : viewerIdlePlaylist.enabled;
+      if (!idlePlaylistEnabled) await activateDeferredPvdPlayback(sid);
     }
     await broadcastPvdStart(sid);
     return res.json({ ok: true, idlePlaylist, bgm, chzzkVideoDonation: getChzzkVideoDonationPublicSettings(sid, savedSettings) });

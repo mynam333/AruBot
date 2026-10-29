@@ -30,7 +30,7 @@ export function updateBgmPlaybackAvailability(state, item, available, now = Date
     state.paused = true;
   } else {
     state.baseStartMs = now - Math.max(0, Number(state.pausedAtSec ?? start) - start) * 1000;
-    state.paused = state.chzzkBlocked === true || state.bgmResumePaused === true;
+    state.paused = state.idleDeferred === true || state.chzzkBlocked === true || state.bgmResumePaused === true;
     if (!state.paused) state.pausedAtSec = null;
   }
   state.bgmBlocked = !available;
