@@ -4,6 +4,7 @@ const idleModel = loadSource('src/components/pvdIdlePlaylist.ts');
 const { createPvdYouTubeMixPlayer } = loadSource('src/components/pvdYouTubeMixPlayer.ts', {
   '../../shared/youtube-mix.js': mixParsing,
   './pvdIdlePlaylist': idleModel,
+  './youtubePlayerRuntime': loadSource('src/components/youtubePlayerRuntime.ts'),
 });
 const video = (n) => `video${String(n).padStart(6, '0')}`;
 const playlist = (patch = {}) => ({ enabled: true, mode: 'recommended', topic: 'jazz', loop: true, shuffle: false, tracks: [], mixUrl: `https://www.youtube.com/watch?v=${video(1)}&list=RD${video(1)}`, ...patch });
@@ -91,6 +92,43 @@ test('explicit Mix URLs start without a search or metadata request', async () =>
   expect(h.fetchSeed).not.toHaveBeenCalled();
   expect(h.player.options.playerVars.list).toBe(`RD${video(1)}`);
   expect(h.onPlaying).toHaveBeenLastCalledWith(true);
+});
+
+test('Mix snapshots do not repeatedly unmute audio or reload captions', async () => {
+  const h = setup(); h.controller.start(playlist()); await flush(); h.player.ready(); h.player.emit(1);
+  h.player.unMute.mockClear(); h.player.setVolume.mockClear(); h.player.unloadModule.mockClear();
+  for (let i = 0; i < 10; i += 1) {
+    h.controller.setVolume(100); h.controller.setCaptions(false); h.controller.start(playlist());
+  }
+  expect(h.player.unMute).not.toHaveBeenCalled();
+  expect(h.player.setVolume).not.toHaveBeenCalled();
+  expect(h.player.unloadModule).not.toHaveBeenCalled();
+});
+
+test('Mix retries a transient HTML5 error at the same track and position', async () => {
+  const h = setup(); h.controller.start(playlist()); await flush(); h.player.ready(); h.player.emit(1);
+  h.player.time = 67; h.player.emit(3); h.player.error(5); h.player.error(5);
+  jest.advanceTimersByTime(2000); await flush();
+  expect(h.player.loadPlaylist).toHaveBeenCalledTimes(1);
+  expect(h.player.loadPlaylist).toHaveBeenCalledWith({ listType: 'playlist', list: `RD${video(1)}`, index: 0, startSeconds: 67 });
+  expect(h.player.playVideoAt).not.toHaveBeenCalled();
+  expect(h.onBoundary).not.toHaveBeenCalled();
+});
+
+test('Mix recovery waits through a manual pause and is cancelled by a skip', async () => {
+  const h = setup(); h.controller.start(playlist()); await flush(); h.player.ready(); h.player.emit(1);
+  h.player.emit(3); h.player.error(5); h.controller.setPaused(true);
+  jest.advanceTimersByTime(5000);
+  expect(h.player.loadPlaylist).not.toHaveBeenCalled();
+  h.controller.skip(); jest.advanceTimersByTime(1000);
+  expect(h.player.loadPlaylist).not.toHaveBeenCalled();
+  expect(h.player.playVideoAt).toHaveBeenCalledWith(1);
+});
+
+test('Mix recovers naturally before a retry without reloading a healthy player', async () => {
+  const h = setup(); h.controller.start(playlist()); await flush(); h.player.ready(); h.player.emit(1);
+  h.player.error(5); h.player.emit(1); jest.advanceTimersByTime(5000);
+  expect(h.player.loadPlaylist).not.toHaveBeenCalled();
 });
 
 test('topic mode fetches one seed and preserves the Mix player over donation pauses and server polls', async () => {

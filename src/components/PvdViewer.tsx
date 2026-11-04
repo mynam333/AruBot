@@ -8,6 +8,7 @@ import {
 } from '@/components/pvdIdlePlaylist';
 import { createPvdYouTubeMixPlayer } from '@/components/pvdYouTubeMixPlayer';
 import { isPvdDocumentHidden } from '@/components/pvdPlaybackVisibility';
+import { applyYouTubeCaptionState, applyYouTubePlaybackState, applyYouTubeVolume, createYouTubeApiLoader, isRetryableYouTubeError, resetYouTubeOptions } from '@/components/youtubePlayerRuntime';
 import { Pause, Play, SkipForward } from 'lucide-react';
 import { createYouTubeDurationProbeRunner, type YouTubeDurationProbeRequest, type YouTubeDurationProbeResult } from '@/components/youtubeDurationProbe';
 import { getBrowserApiBase } from '@/shared/api/http';
@@ -161,7 +162,10 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
   const currentStartRef = useRef<number>(0);
   const currentEndRef = useRef<number>(Infinity);
   const volumeEmitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const ytReadyPromiseRef = useRef<Promise<YouTubeApi> | null>(null);
+  const ytApiLoaderRef = useRef<(() => Promise<YouTubeApi>) | null>(null);
+  const youtubeRetryRef = useRef<{ key: string; attempts: number; timer: ReturnType<typeof setTimeout> | null }>({ key: '', attempts: 0, timer: null });
+  const youtubeProgressRef = useRef(0);
+  const youtubeApiRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const youtubeDurationProbeRunnerRef = useRef<ReturnType<typeof createYouTubeDurationProbeRunner> | null>(null);
   const ensureSeqRef = useRef<number>(0);
   const lastServerSyncRef = useRef<number>(0);
@@ -250,26 +254,8 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
   }, []);
 
   const getYouTubeApi = useCallback(() => {
-    const win = window as YouTubeWindow;
-    if (win.YT && win.YT.Player) return Promise.resolve(win.YT);
-    if (ytReadyPromiseRef.current) return ytReadyPromiseRef.current;
-
-    ytReadyPromiseRef.current = new Promise((resolve) => {
-      const previousReady = win.onYouTubeIframeAPIReady;
-      win.onYouTubeIframeAPIReady = () => {
-        try { previousReady && previousReady(); } catch {}
-        if (win.YT) resolve(win.YT);
-      };
-
-      if (!document.querySelector('script[src="https://www.youtube.com/iframe_api"]')) {
-        const tag = document.createElement('script');
-        tag.src = 'https://www.youtube.com/iframe_api';
-        tag.async = true;
-        document.body.appendChild(tag);
-      }
-    });
-
-    return ytReadyPromiseRef.current;
+    ytApiLoaderRef.current ||= createYouTubeApiLoader<YouTubeApi>();
+    return ytApiLoaderRef.current();
   }, []);
 
   useEffect(() => {
@@ -455,13 +441,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
       return;
     }
     try {
-      if (normalized <= 0) {
-        player.mute && player.mute();
-      } else {
-        player.unMute && player.unMute();
-      }
-      // YouTube unMute() can raise volumes below 5%; apply the requested value last.
-      if (player.setVolume) player.setVolume(normalized);
+      applyYouTubeVolume(player, normalized);
     } catch {}
     if (externalProviderRef.current === 'tiktok') {
       postToExternalPlayer({ type: normalized <= 0 ? 'mute' : 'unMute' });
@@ -473,13 +453,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
     const player = playerRef.current;
     if (!player) return;
     try {
-      if (enabled) {
-        if (player.loadModule) player.loadModule('captions');
-        if (player.loadModule) player.loadModule('cc');
-      } else {
-        if (player.unloadModule) player.unloadModule('captions');
-        if (player.unloadModule) player.unloadModule('cc');
-      }
+      applyYouTubeCaptionState(player, enabled);
     } catch {}
   }, []);
 
@@ -567,7 +541,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
       : force === true
       ? drift > PVD_FORCE_SYNC_THRESHOLD_SEC
       : (forwardDrift > PVD_FORWARD_SYNC_THRESHOLD_SEC || backwardDrift > PVD_BACKWARD_SYNC_THRESHOLD_SEC));
-    suppressUntilRef.current = Date.now() + 1000;
+    if (shouldSeek) suppressUntilRef.current = Date.now() + 1000;
 
     try {
       if (shouldSeek && player.seekTo) {
@@ -587,10 +561,9 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
     } catch {}
 
     try {
-      if (paused || isPlaybackBlocked() || (playbackModeRef.current === 'idle' && isIdlePlaybackBlocked())) {
-        player.pauseVideo && player.pauseVideo();
-      } else {
-        player.playVideo && player.playVideo();
+      const blocked = paused === true || isPlaybackBlocked() || (playbackModeRef.current === 'idle' && isIdlePlaybackBlocked());
+      if (blocked || !youtubeRetryRef.current.timer) {
+        if (applyYouTubePlaybackState(player, blocked, strict === true)) suppressUntilRef.current = Date.now() + 1000;
       }
     } catch {}
   }, [isIdlePlaybackBlocked, isPlaybackBlocked]);
@@ -638,6 +611,10 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
   }, [clearYouTubePlayerHost]);
 
   const stopPlayer = useCallback(() => {
+    if (youtubeRetryRef.current.timer) clearTimeout(youtubeRetryRef.current.timer);
+    youtubeRetryRef.current = { key: '', attempts: 0, timer: null };
+    if (youtubeApiRetryTimerRef.current) clearTimeout(youtubeApiRetryTimerRef.current);
+    youtubeApiRetryTimerRef.current = null;
     bgmReadyItemIdRef.current = null;
     pendingYouTubeSeekRef.current = null;
     mixPlayerRef.current?.pause();
@@ -851,6 +828,12 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
 
   const ensurePlayer = useCallback((videoId: string, start: number, opts?: PlaybackTarget) => {
     expectedYouTubeMediaIdRef.current = videoId;
+    const recoveryKey = `${opts?.itemId || videoId}:${videoId}`;
+    if (youtubeRetryRef.current.key !== recoveryKey) {
+      if (youtubeRetryRef.current.timer) clearTimeout(youtubeRetryRef.current.timer);
+      youtubeRetryRef.current = { key: recoveryKey, attempts: 0, timer: null };
+      youtubeProgressRef.current = Number(opts?.atSec ?? start) || 0;
+    }
     const seq = ++ensureSeqRef.current;
     const safeStart = Math.max(0, Math.floor(Number(start || 0)));
     const target = Math.max(safeStart, Math.floor(Number(opts?.atSec ?? safeStart)));
@@ -860,6 +843,8 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
 
     void getYouTubeApi().then((YT) => {
       if (seq !== ensureSeqRef.current || !YT || !YT.Player || !playerDivRef.current) return;
+      if (youtubeApiRetryTimerRef.current) clearTimeout(youtubeApiRetryTimerRef.current);
+      youtubeApiRetryTimerRef.current = null;
       setExternalItem(null);
       setYoutubeActive(true);
       externalProviderRef.current = null;
@@ -902,17 +887,49 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
 
       const onError = (event: YouTubePlayerEvent) => {
         if (!isExpectedYouTubePlayerMedia(event?.target)) return;
-        if (playbackModeRef.current === 'idle') {
-          idlePlayingRef.current = false;
-          idleAdvanceRef.current('error');
+        const recovery = youtubeRetryRef.current;
+        if (recovery.timer) return;
+        const failedPlayer = playerRef.current;
+        const failedVideoId = expectedYouTubeMediaIdRef.current;
+        const fail = () => {
+          if (playbackModeRef.current === 'idle') {
+            idlePlayingRef.current = false;
+            idleAdvanceRef.current('error');
+          } else report('error');
+        };
+        console.warn('[pvd:youtube]', { code: event.data, role: playerRole, mediaId: failedVideoId, attempt: recovery.attempts });
+        if (failedPlayer && failedVideoId && isRetryableYouTubeError(event.data) && recovery.attempts < 2) {
+          recovery.attempts += 1;
+          const failedAt = Math.max(currentStartRef.current, Number(failedPlayer.getCurrentTime?.()) || youtubeProgressRef.current);
+          const revision = serverPlaybackRevisionRef.current;
+          const requestedAt = youtubePlaybackTargetRef.current.atSec;
+          recovery.timer = setTimeout(() => {
+            recovery.timer = null;
+            if (youtubeRetryRef.current !== recovery || playerRef.current !== failedPlayer) return;
+            const target = youtubePlaybackTargetRef.current;
+            const atSec = serverPlaybackRevisionRef.current === revision && target.atSec === requestedAt ? failedAt : target.atSec;
+            const paused = target.paused || isPlaybackBlocked() || (playbackModeRef.current === 'idle' && isIdlePlaybackBlocked());
+            suppressUntilRef.current = Date.now() + 1500;
+            pendingYouTubeSeekRef.current = { atSec, expiresAt: Date.now() + 5000 };
+            try {
+              if (paused) failedPlayer.cueVideoById?.({ videoId: failedVideoId, startSeconds: atSec });
+              else failedPlayer.loadVideoById?.({ videoId: failedVideoId, startSeconds: atSec });
+            } catch { fail(); }
+          }, recovery.attempts * 2000);
+          return;
         }
-        else report('error');
+        fail();
       };
       const onStateChange = (e: YouTubePlayerEvent) => {
         try {
           if (!isExpectedYouTubePlayerMedia(e?.target)) return;
+          if (e.data === YT.PlayerState.PLAYING && youtubeRetryRef.current.timer) {
+            clearTimeout(youtubeRetryRef.current.timer);
+            youtubeRetryRef.current.timer = null;
+          }
           const activePlayer = e?.target || playerRef.current;
           const t = activePlayer?.getCurrentTime ? Number(activePlayer.getCurrentTime()) : 0;
+          if (e.data === YT.PlayerState.PLAYING && Number.isFinite(t) && t >= currentStartRef.current) youtubeProgressRef.current = t;
           if (playerRole !== 'bgm') lastTimeRef.current = t;
           const now = Date.now();
           if (bgmReadyItemIdRef.current !== currentItemIdRef.current
@@ -984,6 +1001,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
       };
       const onReady = (event: YouTubePlayerEvent) => {
         if (!isExpectedYouTubePlayerMedia(event?.target)) return;
+        if (playerRef.current) resetYouTubeOptions(playerRef.current);
         bgmReadyItemIdRef.current = currentItemIdRef.current;
         applyYouTubeCaptions();
         applyVolume(volumeRef.current);
@@ -1003,6 +1021,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
         });
       } else {
         try {
+          resetYouTubeOptions(playerRef.current);
           suppressUntilRef.current = Date.now() + 1000;
           if (!shouldAutoplay && playerRef.current.cueVideoById) {
             playerRef.current.cueVideoById({ videoId, startSeconds: target });
@@ -1034,9 +1053,16 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
         applyYouTubeCaptions();
         applyVolume(volumeRef.current);
         const latest = youtubePlaybackTargetRef.current;
-        applyPlaybackTarget(latest.atSec, latest.paused, true);
+        applyPlaybackTarget(null, latest.paused);
       }, 250);
-    }).catch(() => {});
+    }).catch((error) => {
+      if (seq !== ensureSeqRef.current || youtubeApiRetryTimerRef.current) return;
+      console.warn('[pvd:youtube] initialization failed', error instanceof Error ? error.message : String(error));
+      youtubeApiRetryTimerRef.current = setTimeout(() => {
+        youtubeApiRetryTimerRef.current = null;
+        void playbackSyncRef.current(true);
+      }, 5000);
+    });
   }, [applyPlaybackTarget, applyVolume, applyYouTubeCaptions, createYouTubePlayerMount, emitControl, getYouTubeApi, isExpectedYouTubePlayerMedia, isIdlePlaybackBlocked, isPlaybackBlocked, report, reportYouTubeDuration, isPlayerHidden, playerRole, updateAutoplayBlocked]);
 
   const ensureExternalPlayer = useCallback((item: VideoDonationItem, opts?: PlaybackTarget) => {
@@ -1174,10 +1200,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
       };
       applyYouTubeCaptions();
       applyVolume(volumeRef.current);
-      try {
-        if (isIdlePlaybackBlocked()) playerRef.current?.pauseVideo?.();
-        else playerRef.current?.playVideo?.();
-      } catch {}
+      applyPlaybackTarget(null, idlePausedRef.current);
       return;
     }
 
@@ -1188,7 +1211,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
       force: true,
       itemId: `idle:${track.id}`,
     });
-  }, [applyVolume, applyYouTubeCaptions, ensurePlayer, stopPlayer, isIdlePlaybackBlocked, isPlaybackBlocked]);
+  }, [applyPlaybackTarget, applyVolume, applyYouTubeCaptions, ensurePlayer, stopPlayer, isIdlePlaybackBlocked, isPlaybackBlocked]);
 
   const activateDeferredDonation = useCallback((itemOverride?: VideoDonationItem | null) => {
     if (isPlaybackBlocked()) return;
@@ -1295,7 +1318,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
     } else {
       ensureExternalPlayer(item, target);
     }
-    suppressUntilRef.current = Date.now() + 1000;
+    if (syncPosition) suppressUntilRef.current = Date.now() + 1000;
   }, [captureIdlePosition, ensureExternalPlayer, ensurePlayer, getItemProvider]);
 
   const applyServerPlaybackPayload = useCallback((payload: Record<string, unknown>, force = false) => {
@@ -1712,6 +1735,9 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
     return () => {
       disconnect();
       stopPolling();
+      ensureSeqRef.current += 1;
+      if (youtubeRetryRef.current.timer) clearTimeout(youtubeRetryRef.current.timer);
+      if (youtubeApiRetryTimerRef.current) clearTimeout(youtubeApiRetryTimerRef.current);
       youtubeDurationProbeRunnerRef.current?.dispose();
       youtubeDurationProbeRunnerRef.current = null;
       try { playerRef.current && playerRef.current.destroy && playerRef.current.destroy(); } catch {}
@@ -1749,6 +1775,9 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
           return;
         }
         const state = playerRef.current.getPlayerState?.();
+        if (state === YT.PlayerState.PLAYING && t >= currentStartRef.current && isExpectedYouTubePlayerMedia(playerRef.current)) {
+          youtubeProgressRef.current = t;
+        }
         // Video overlays have no native seek controls. Loading/buffering samples (often 0) are not user input.
         if (playerRole !== 'bgm' || !bgmOwnerRef.current || !bgmEnabledRef.current || chzzkDonationPausedRef.current || isPlayerHidden()
           || playbackModeRef.current !== 'donation' || bgmReadyItemIdRef.current !== currentItemIdRef.current

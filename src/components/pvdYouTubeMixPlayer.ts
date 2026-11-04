@@ -1,5 +1,6 @@
 import { parseYouTubeMix } from '../../shared/youtube-mix.js';
 import { getPvdIdlePlaylistSignature, type PvdIdlePlaylist } from './pvdIdlePlaylist';
+import { applyYouTubeCaptionState, applyYouTubePlaybackState, applyYouTubeVolume, isRetryableYouTubeError, resetYouTubeOptions } from './youtubePlayerRuntime';
 
 type MixPlayer = {
   getIframe?: () => HTMLIFrameElement;
@@ -10,7 +11,7 @@ type MixPlayer = {
   getPlaylist?: () => string[];
   getPlaylistIndex?: () => number;
   getVideoData?: () => { video_id?: string; title?: string };
-  loadPlaylist?: (options: { listType: string; list: string; index?: number }) => void;
+  loadPlaylist?: (options: { listType: string; list: string; index?: number; startSeconds?: number }) => void;
   playVideoAt?: (index: number) => void;
   pauseVideo?: () => void;
   playVideo?: () => void;
@@ -77,6 +78,10 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
   let reportedTrackTitle = '';
   let volume = 100;
   let captions = false;
+  let recovery: { at: number; index: number; seconds: number } | null = null;
+  let recoveryAttempts = 0;
+  let lastProgressAt = 0;
+  let lastProgressId = '';
   const seen = new Set<string>();
   const rotationSeeds = new Set<string>();
 
@@ -108,16 +113,13 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
     host.dataset.mixError = error;
   };
   const applyOptions = () => {
-    if (volume <= 0) player?.mute?.();
-    else player?.unMute?.();
-    // YouTube unMute() can raise volumes below 5%; apply the requested value last.
-    player?.setVolume?.(volume);
-    if (captions) player?.loadModule?.('captions');
-    else player?.unloadModule?.('captions');
+    if (!player || !ready) return;
+    applyYouTubeVolume(player, volume);
+    applyYouTubeCaptionState(player, captions);
   };
   const suspend = () => {
     if (suspendedAt === null) suspendedAt = now();
-    player?.pauseVideo?.();
+    if (player) applyYouTubePlaybackState(player, true);
     options.onPlaying(false);
   };
   const clearPlayer = () => {
@@ -130,6 +132,7 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
     advancing = false;
     deadline = 0;
     suspendedAt = null;
+    recovery = null;
     previous?.pauseVideo?.();
     previous?.destroy?.();
     options.getHost()?.replaceChildren();
@@ -178,6 +181,7 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
 
   const advance = () => {
     if (!player || advancing) return;
+    recovery = null;
     options.onPlaying(false);
     if (!canPlay()) { advanceOnResume = true; suspend(); return; }
     const list = tracks();
@@ -210,6 +214,8 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
     const hadCurrent = !!currentId;
     // Native Mix transitions can change the index without an ENDED event.
     if (changed) {
+      recovery = null;
+      recoveryAttempts = 0;
       currentId = id;
       currentIndex = index;
       advancing = false;
@@ -229,6 +235,9 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
       return;
     }
     if (!id) return;
+    recovery = null;
+    lastProgressAt = Number(player.getCurrentTime?.() || 0);
+    lastProgressId = id;
     // Mix metadata may arrive after PLAYING, or omit the playlist in an embedded player.
     const duration = Number(player.getDuration?.() || 0);
     if (!Number.isFinite(duration) || duration <= 0) {
@@ -317,6 +326,7 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
           onReady: (event: MixEvent) => {
             if (version !== generation || event.target !== player) return;
             ready = true;
+            if (player) resetYouTubeOptions(player);
             player?.getIframe?.()?.setAttribute('allow', 'autoplay; encrypted-media; fullscreen; picture-in-picture');
             player?.setLoop?.(false);
             applyOptions();
@@ -327,6 +337,22 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
           onStateChange,
           onError: (event: MixEvent) => {
             if (event.target && event.target !== player) return;
+            if (recovery) return;
+            console.warn('[pvd:mix]', { code: event.data, mediaId: currentId, attempt: recoveryAttempts });
+            if (isRetryableYouTubeError(event.data) && recoveryAttempts < 2) {
+              recoveryAttempts += 1;
+              recovery = {
+                at: now() + recoveryAttempts * 2000,
+                index: Math.max(0, Number(player?.getPlaylistIndex?.() ?? currentIndex)),
+                seconds: Math.max(0, Number(player?.getCurrentTime?.() || 0), lastProgressId === currentId ? lastProgressAt : 0),
+              };
+              deadline = 0;
+              options.onPlaying(false);
+              annotate(`mix_player_retry_${event.data}`);
+              return;
+            }
+            // Missing client identity is not a bad song; do not burn through the playlist.
+            if (Number(event.data) === 153) { fail('mix_player_error_153'); return; }
             remember(currentId);
             consecutiveSkips += 1;
             advancing = false;
@@ -361,12 +387,22 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
       suspendedAt = null;
     }
     if (!player) { void ensure(); return; }
+    if (recovery) {
+      if (now() < recovery.at || !target) return;
+      const retry = recovery;
+      recovery = null;
+      controlSuppressedUntil = now() + 1500;
+      deadline = now() + LOAD_TIMEOUT_MS;
+      // Preserve the Mix and its current position instead of moving to a different recommendation.
+      player.loadPlaylist?.({ listType: 'playlist', list: target.playlistId, index: retry.index, startSeconds: retry.seconds });
+      return;
+    }
     if (deadline && now() >= deadline) { fail('mix_player_timeout'); return; }
     if (ready) {
       if (player.getPlayerState?.() === 1) onStateChange({ data: 1, target: player }, false);
       if (!player) return;
       if (advanceOnResume) { advanceOnResume = false; advancing = false; advance(); }
-      else if (player.getPlayerState?.() !== 1 && player.getPlayerState?.() !== 3) player.playVideo?.();
+      else applyYouTubePlaybackState(player, false);
     }
   };
   const timer = setInterval(sync, 1000);
@@ -387,6 +423,7 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
       rotationSeeds.clear();
       currentId = ''; acceptedId = ''; acceptedIndex = -1; lastAcceptedId = ''; currentIndex = -1;
       consecutiveSkips = 0; rotationsWithoutPlay = 0; advanceOnResume = false;
+      recoveryAttempts = 0; lastProgressAt = 0; lastProgressId = '';
       configuredSeedCursor = next.tracks.length ? Math.floor((options.random || Math.random)() * next.tracks.length) : 0;
       paused = false;
     },

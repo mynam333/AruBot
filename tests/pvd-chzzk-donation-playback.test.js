@@ -1,7 +1,9 @@
 const loadSource = require('./helpers/load-source.cjs');
 const idleModel = loadSource('src/components/pvdIdlePlaylist.ts');
+const youtubeRuntime = loadSource('src/components/youtubePlayerRuntime.ts');
 const mixPlayer = loadSource('src/components/pvdYouTubeMixPlayer.ts', {
   '../../shared/youtube-mix.js': loadSource('shared/youtube-mix.js'), './pvdIdlePlaylist': idleModel,
+  './youtubePlayerRuntime': youtubeRuntime,
 });
 const flush = async () => { for (let i = 0; i < 40; i += 1) await Promise.resolve(); };
 const track = (n) => ({ id: `track-${n}`, mediaId: `video00000${n}`, title: `Track ${n}`, durationSec: 180 });
@@ -115,6 +117,7 @@ function mount(initial = {}, playerRole = 'video') {
     return null;
   };
   const { default: Viewer } = loadSource('src/components/PvdViewer.tsx', {
+    '@/components/youtubePlayerRuntime': youtubeRuntime,
     react: {
       useCallback: (fn) => fn,
       useState: (initialState) => {

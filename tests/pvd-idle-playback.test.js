@@ -1,8 +1,10 @@
 const loadSource = require('./helpers/load-source.cjs');
 const idleModel = loadSource('src/components/pvdIdlePlaylist.ts');
+const youtubeRuntime = loadSource('src/components/youtubePlayerRuntime.ts');
 const mixPlayer = loadSource('src/components/pvdYouTubeMixPlayer.ts', {
   '../../shared/youtube-mix.js': loadSource('shared/youtube-mix.js'),
   './pvdIdlePlaylist': idleModel,
+  './youtubePlayerRuntime': youtubeRuntime,
 });
 const track = (n) => ({ id: `youtube:video00000${n}`, mediaId: `video00000${n}`, title: `Song ${n}`, durationSec: 180 });
 const playlist = (tracks = []) => ({ enabled: true, mode: 'recommended', topic: 'jazz', loop: true, shuffle: false, tracks });
@@ -90,6 +92,7 @@ function mount(initial, getRecommendations, playerRole = 'video') {
   });
   const jsx = (_type, props) => { if (props?.ref) props.ref.current = node(); return null; };
   const { default: Viewer } = loadSource('src/components/PvdViewer.tsx', {
+    '@/components/youtubePlayerRuntime': youtubeRuntime,
     react: { useCallback: (fn) => fn, useState: (initial) => [typeof initial === 'function' ? initial() : initial, () => {}], useRef: (current) => ({ current }), useEffect: (fn) => effects.push(fn) },
     'react/jsx-runtime': { jsx, jsxs: jsx },
     '@/components/pvdIdlePlaylist': idleModel,

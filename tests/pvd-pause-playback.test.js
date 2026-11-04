@@ -1,7 +1,9 @@
 const loadSource = require('./helpers/load-source.cjs');
 const idleModel = loadSource('src/components/pvdIdlePlaylist.ts');
+const youtubeRuntime = loadSource('src/components/youtubePlayerRuntime.ts');
 const mixPlayer = loadSource('src/components/pvdYouTubeMixPlayer.ts', {
   '../../shared/youtube-mix.js': loadSource('shared/youtube-mix.js'), './pvdIdlePlaylist': idleModel,
+  './youtubePlayerRuntime': youtubeRuntime,
 });
 const flush = async () => { for (let i = 0; i < 30; i += 1) await Promise.resolve(); };
 let cleanup;
@@ -32,6 +34,9 @@ function mount(initialPayload = {}, playerRole = 'video') {
     constructor(_mount, options) {
       this.id = options.videoId; this.events = options.events; this.time = 20; this.options = options;
       this.pauseVideo = jest.fn(); this.playVideo = jest.fn();
+      this.loadVideoById = jest.fn(({ videoId }) => { this.id = videoId; });
+      this.cueVideoById = jest.fn(({ videoId }) => { this.id = videoId; });
+      this.unloadModule = jest.fn();
       this.seekTo = jest.fn((time) => { this.time = time; });
       player = this;
       players.push(this);
@@ -93,6 +98,7 @@ function mount(initialPayload = {}, playerRole = 'video') {
     'react/jsx-runtime': { jsx, jsxs: jsx },
     '@/components/pvdIdlePlaylist': idleModel, '@/components/pvdYouTubeMixPlayer': mixPlayer,
     '@/components/pvdPlaybackVisibility': loadSource('src/components/pvdPlaybackVisibility.ts'),
+    '@/components/youtubePlayerRuntime': youtubeRuntime,
     '@/components/youtubeDurationProbe': { createYouTubeDurationProbeRunner: () => ({ dispose() {} }) },
     '@/shared/api/http': { getBrowserApiBase: () => 'http://localhost' },
     '@/shared/api/overlay-socket': loadSource('src/shared/api/overlay-socket.ts'),
@@ -246,6 +252,84 @@ test('video buffering recovery does not emit a new playback command', async () =
   jest.advanceTimersByTime(1500); await flush();
   h.player.emit(3); h.player.emit(1);
   expect(h.calls.filter(({ body }) => body.op === 'play')).toEqual([]);
+});
+
+test.each(['video', 'bgm'])('%s observations leave playing and buffering audio untouched', async (role) => {
+  const h = mount(role === 'bgm' ? bgmPayload() : {}, role);
+  await flush(); h.player.ready(); h.player.emit(1);
+  jest.advanceTimersByTime(1000); await flush();
+  h.player.playVideo.mockClear(); h.player.seekTo.mockClear(); h.player.unloadModule.mockClear();
+  for (const state of [1, 3, 1, 3]) {
+    h.player.emit(state);
+    h.focus(); await flush();
+  }
+  expect(h.player.playVideo).not.toHaveBeenCalled();
+  expect(h.player.seekTo).not.toHaveBeenCalled();
+  expect(h.player.unloadModule).not.toHaveBeenCalled();
+});
+
+test.each(['video', 'bgm'])('%s retries a transient error at the current position without removing the request', async (role) => {
+  const h = mount(role === 'bgm' ? bgmPayload() : {}, role);
+  await flush(); h.player.ready(); h.player.time = 67; h.player.emit(3);
+  h.player.events.onError({ data: 5, target: h.player });
+  h.player.events.onError({ data: 5, target: h.player });
+  h.focus(); await flush();
+  jest.advanceTimersByTime(2000); await flush();
+  expect(h.player.loadVideoById).toHaveBeenCalledTimes(1);
+  expect(h.player.loadVideoById).toHaveBeenLastCalledWith({ videoId: 'video000001', startSeconds: 67 });
+  expect(h.calls.filter(({ url }) => url.includes('/pop-by-token'))).toEqual([]);
+});
+
+test('a web pause during error recovery cues the video without resuming it', async () => {
+  const h = mount(); await flush(); h.player.ready(); h.player.emit(3);
+  h.player.events.onError({ data: 5, target: h.player });
+  h.control('pause', 83);
+  jest.advanceTimersByTime(2000); await flush();
+  expect(h.player.loadVideoById).not.toHaveBeenCalled();
+  expect(h.player.cueVideoById).toHaveBeenCalledWith({ videoId: 'video000001', startSeconds: 83 });
+});
+
+test('a recovery timer cannot reload a previous queue item', async () => {
+  const h = mount(); await flush(); h.player.ready(); h.player.emit(3);
+  h.player.events.onError({ data: 5, target: h.player });
+  h.message({ type: 'start', item: { id: 'next', videoId: 'video000002' }, paused: false, atSec: 0 });
+  await flush(); h.player.loadVideoById.mockClear();
+  jest.advanceTimersByTime(2000); await flush();
+  expect(h.player.loadVideoById).not.toHaveBeenCalled();
+});
+
+test('a transient error that resets the player clock recovers the last observed position', async () => {
+  const h = mount(); await flush(); h.player.ready();
+  h.player.time = 67; h.player.emit(1);
+  h.player.time = 0; h.player.emit(3);
+  h.player.events.onError({ data: 5, target: h.player });
+  jest.advanceTimersByTime(2000); await flush();
+  expect(h.player.loadVideoById).toHaveBeenCalledWith({ videoId: 'video000001', startSeconds: 67 });
+});
+
+test('repeated transient errors have a finite retry budget per request', async () => {
+  const h = mount(); await flush(); h.player.ready(); h.player.emit(3);
+  for (const delay of [2000, 4000]) {
+    h.player.events.onError({ data: 5, target: h.player });
+    jest.advanceTimersByTime(delay); await flush();
+  }
+  h.player.events.onError({ data: 5, target: h.player }); await flush();
+  expect(h.player.loadVideoById).toHaveBeenCalledTimes(2);
+  expect(h.calls.filter(({ url }) => url.includes('/pop-by-token'))).toHaveLength(1);
+});
+
+test('natural recovery cancels a pending reload', async () => {
+  const h = mount(); await flush(); h.player.ready(); h.player.emit(3);
+  h.player.events.onError({ data: 5, target: h.player }); h.player.emit(1);
+  jest.advanceTimersByTime(2500); await flush();
+  expect(h.player.loadVideoById).not.toHaveBeenCalled();
+});
+
+test('permanent embed restrictions skip a request without retrying it', async () => {
+  const h = mount(); await flush(); h.player.ready();
+  h.player.events.onError({ data: 150, target: h.player }); await flush();
+  expect(h.calls.filter(({ url }) => url.includes('/pop-by-token'))).toHaveLength(1);
+  expect(h.player.loadVideoById).not.toHaveBeenCalled();
 });
 
 test('older snapshots and controls cannot overwrite a newer seek revision', async () => {
