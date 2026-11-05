@@ -173,6 +173,47 @@ test('an HTTP response started before a pause cannot overwrite the newer WebSock
   expect(h.player.seekTo).toHaveBeenLastCalledWith(83, true);
 });
 
+test('simultaneous focus and reconnect snapshots share a single in-flight request', async () => {
+  const h = mount(); await flush();
+  let finish;
+  h.deferSnapshot(() => new Promise(resolve => { finish = resolve; }));
+  h.calls.length = 0;
+  for (let i = 0; i < 50; i += 1) h.focus();
+  await flush();
+  expect(h.calls.filter(({ url }) => url.includes('/now-playing'))).toHaveLength(1);
+  finish({ item: null }); await flush();
+});
+
+test('a newer control during a pending snapshot requests one fresh follow-up', async () => {
+  const h = mount(); await flush();
+  let finish;
+  h.deferSnapshot(() => new Promise(resolve => { finish = resolve; }));
+  h.calls.length = 0;
+  h.focus(); await flush(); h.control('pause', 83);
+  for (let i = 0; i < 10; i += 1) h.focus();
+  h.deferSnapshot(async () => ({ item: null }));
+  finish({ item: null }); await flush();
+  expect(h.calls.filter(({ url }) => url.includes('/now-playing'))).toHaveLength(2);
+});
+
+test.each(['video', 'bgm'])('%s requests do not send idle leases while no idle song is playing', async role => {
+  const h = mount(role === 'bgm' ? bgmPayload() : {}, role); await flush();
+  for (let i = 0; i < 12; i += 1) { jest.advanceTimersByTime(5000); await flush(); }
+  expect(h.calls.filter(({ body }) => body.op === 'idle_status')).toHaveLength(0);
+});
+
+test('a storm of identical idle player events is coalesced into a heartbeat', async () => {
+  const h = mount({ item: null, idlePlaylist: { enabled: true, mode: 'custom', loop: true,
+    tracks: [{ id: 'track-1', mediaId: 'video000001', title: 'Track', durationSec: 180 }] } });
+  await flush(); h.player.ready(); h.player.emit(1); await flush();
+  jest.advanceTimersByTime(500); await flush();
+  h.calls.length = 0;
+  for (let i = 0; i < 100; i += 1) { h.player.emit(1); await flush(); }
+  expect(h.calls.filter(({ body }) => body.op === 'idle_status')).toHaveLength(0);
+  jest.advanceTimersByTime(5000); await flush();
+  expect(h.calls.filter(({ body }) => body.op === 'idle_status')).toHaveLength(1);
+});
+
 test('external media respects a pause received before mounting and delayed initial synchronization', async () => {
   const h = mount({ item: { id: 'clip-1', mediaProvider: 'chzzk_clip', mediaId: 'clip1', embedUrl: 'https://example.com/video.mp4', startSec: 12 } });
   await flush();

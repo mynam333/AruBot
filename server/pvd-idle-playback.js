@@ -27,18 +27,21 @@ export function createPvdIdlePlaybackStore({ now = Date.now } = {}) {
       if ((disconnected.get(`${sid}:${clientId}`) || 0) > now()) return { accepted: false };
       let state = get(sid);
       if (state && state.clientId !== clientId && !(report.source === 'obs' && state.source !== 'obs')) return { accepted: false };
-      if (state?.clientId === clientId && sequence <= state.sequence) return { accepted: true, command: state.command };
+      if (state?.clientId === clientId && sequence <= state.sequence) return { accepted: true, changed: false, command: state.command };
       if (report.mode !== 'idle') {
-        if (state?.clientId === clientId) states.delete(sid);
-        return { accepted: true };
+        const changed = state?.clientId === clientId;
+        if (changed) states.delete(sid);
+        return { accepted: true, changed };
       }
       const track = report.track;
       const mediaId = String(track?.mediaId || '');
       const duration = Number(track?.durationSec);
       if (!/^[a-z0-9_-]{11}$/i.test(mediaId) || !Number.isFinite(duration) || duration < 60 || duration > 600) {
-        return { accepted: true, command: state?.command };
+        return { accepted: true, changed: false, command: state?.command };
       }
       const trackKey = String(track?.id || mediaId).slice(0, 100);
+      const previous = snapshot(sid);
+      const previousPlaying = state?.playing;
       if (!state || state.clientId !== clientId) state = { clientId, source: report.source === 'obs' ? 'obs' : 'browser', command: null };
       const pendingControl = state.command && Number(report.controlVersion || 0) < state.command.version;
       state.sequence = sequence;
@@ -53,7 +56,11 @@ export function createPvdIdlePlaybackStore({ now = Date.now } = {}) {
       state.atSec = Math.max(0, Math.min(duration, Number(report.atSec) || 0));
       state.updatedAt = now();
       states.set(sid, state);
-      return { accepted: true, command: state.command };
+      const changed = !previous || previous.item.id !== state.item.id || previous.item.videoId !== mediaId
+        || previous.item.title !== state.item.title || previous.item.durationSec !== duration || previous.item.kind !== state.item.kind
+        || previous.paused !== state.paused || previousPlaying !== state.playing
+        || Math.abs(previous.atSec - state.atSec) > 2;
+      return { accepted: true, changed, command: state.command };
     },
     control(sid, op, expectedItemId = '') {
       const state = get(sid);

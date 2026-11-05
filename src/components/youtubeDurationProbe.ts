@@ -29,6 +29,17 @@ export function createYouTubeDurationProbeRunner(
   getYouTubeApi: () => Promise<ProbeYouTubeApi>,
 ) {
   const jobs = new Map<string, () => void>();
+  const queued = new Map<string, () => void>();
+  const completed = new Map<string, { result: YouTubeDurationProbeResult; expiresAt: number }>();
+  let activeCount = 0;
+  let disposed = false;
+  const drain = () => {
+    while (!disposed && activeCount < 2 && queued.size) {
+      const [id, run] = queued.entries().next().value!;
+      queued.delete(id);
+      run();
+    }
+  };
 
   const probe = (
     request: YouTubeDurationProbeRequest,
@@ -38,12 +49,22 @@ export function createYouTubeDurationProbeRunner(
     const mediaProvider = String(request.mediaProvider || request.provider || '').trim().toLowerCase();
     const mediaId = String(request.mediaId || '').trim();
     if (!probeId || mediaProvider !== 'youtube' || !/^[A-Za-z0-9_-]{6,64}$/.test(mediaId)) return;
-    if (jobs.has(probeId)) return;
+    if (disposed || jobs.has(probeId)) return;
+    for (const [id, entry] of completed) if (entry.expiresAt <= Date.now()) completed.delete(id);
+    const previous = completed.get(probeId);
+    if (previous?.result.mediaId === mediaId) { report(previous.result); return; }
+    const publish = (result: YouTubeDurationProbeResult) => {
+      // A repeated HTTP/WS delivery must not construct another hidden YouTube iframe.
+      completed.set(probeId, { result, expiresAt: Date.now() + 30000 });
+      while (completed.size > 128) completed.delete(completed.keys().next().value!);
+      report(result);
+    };
 
     const requestedTimeoutMs = Number(request.timeoutMs);
     const timeoutMs = Math.min(12_000, Math.max(1_000, Number.isFinite(requestedTimeoutMs) ? requestedTimeoutMs : 10_000));
     const deadline = Date.now() + timeoutMs;
     let cancelled = false;
+    let started = false;
     let apiLoadTimer: number | null = null;
 
     const baseResult = {
@@ -52,22 +73,29 @@ export function createYouTubeDurationProbeRunner(
       mediaProvider: 'youtube' as const,
       mediaId,
     };
+    if (jobs.size >= 32) { publish({ ...baseResult, errorCode: 'probe_busy' }); return; }
+    const releaseSlot = () => {
+      queued.delete(probeId);
+      if (started) { activeCount -= 1; started = false; }
+      void Promise.resolve().then(drain);
+    };
     const disposeBeforePlayer = () => {
       if (cancelled) return;
       cancelled = true;
       if (apiLoadTimer != null) window.clearTimeout(apiLoadTimer);
       jobs.delete(probeId);
+      releaseSlot();
     };
     const failBeforePlayer = (errorCode: string) => {
       if (cancelled) return;
       disposeBeforePlayer();
-      report({ ...baseResult, errorCode });
+      publish({ ...baseResult, errorCode });
     };
 
     jobs.set(probeId, disposeBeforePlayer);
     apiLoadTimer = window.setTimeout(() => failBeforePlayer('iframe_api_timeout'), timeoutMs);
 
-    void getYouTubeApi().then((YT) => {
+    const start = () => getYouTubeApi().then((YT) => {
       if (cancelled || !jobs.has(probeId) || !YT?.Player) return;
       if (apiLoadTimer != null) window.clearTimeout(apiLoadTimer);
 
@@ -86,16 +114,18 @@ export function createYouTubeDurationProbeRunner(
       const cleanup = () => {
         if (finished) return;
         finished = true;
+        cancelled = true;
         jobs.delete(probeId);
         if (pollTimer != null) window.clearInterval(pollTimer);
         if (timeoutTimer != null) window.clearTimeout(timeoutTimer);
         try { player?.destroy?.(); } catch {}
         host.remove();
+        releaseSlot();
       };
       const complete = (result: { durationSec: number } | { errorCode: string }) => {
         if (finished) return;
         cleanup();
-        report({ ...baseResult, ...result });
+        publish({ ...baseResult, ...result });
       };
 
       const readDuration = () => {
@@ -143,11 +173,21 @@ export function createYouTubeDurationProbeRunner(
     }).catch(() => {
       failBeforePlayer('iframe_api_failed');
     });
+    queued.set(probeId, () => {
+      if (cancelled || disposed) return;
+      started = true;
+      activeCount += 1;
+      void start();
+    });
+    drain();
   };
 
   const dispose = () => {
+    disposed = true;
     for (const cleanup of Array.from(jobs.values())) cleanup();
     jobs.clear();
+    queued.clear();
+    completed.clear();
   };
 
   return { probe, dispose };

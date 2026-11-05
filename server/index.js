@@ -4205,7 +4205,7 @@ app.post('/api/video-donation/control-by-token', async (req, res) => {
         return res.json({ ok: true, accepted: false });
       }
       const result = pvdIdlePlayback.report(sid, { ...req.body, kind: isBgm ? 'bgm' : 'video' });
-      if (result.accepted) notifyPvdAdminSubscribers(sid, 'idle_status').catch(() => null);
+      if (result.accepted && result.changed) notifyPvdAdminSubscribers(sid, 'idle_status').catch(() => null);
       return res.json({ ok: true, ...result });
     }
     if (op === 'volume') {

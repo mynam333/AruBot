@@ -188,6 +188,8 @@ test.each(['custom', 'recommended'])('%s idle freezes at its current position an
   expect(h.player.seekTo).not.toHaveBeenCalled();
   expect(h.player.time).toBe(47.5);
   expect(h.loads).toEqual([track(1).mediaId]);
+  // Playback resumes immediately; burst status reports are coalesced for up to 250 ms.
+  jest.advanceTimersByTime(250); await flush();
   expect(h.calls.filter((call) => call.body.op === 'idle_status').at(-1).body.paused).toBe(false);
 });
 

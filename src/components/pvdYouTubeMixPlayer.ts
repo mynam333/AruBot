@@ -82,6 +82,8 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
   let recoveryAttempts = 0;
   let lastProgressAt = 0;
   let lastProgressId = '';
+  let reportedPlaying: boolean | null = null;
+  let reportedBlocked: boolean | null = null;
   const seen = new Set<string>();
   const rotationSeeds = new Set<string>();
 
@@ -104,13 +106,21 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
     if (seen.size > HISTORY_LIMIT) seen.delete(seen.values().next().value!);
   };
   const tracks = () => player?.getPlaylist?.() || [];
+  const reportPlaying = (value: boolean) => {
+    if (reportedPlaying === value) return;
+    reportedPlaying = value;
+    options.onPlaying(value);
+  };
+  const reportBlocked = (value: boolean) => {
+    if (reportedBlocked === value) return;
+    reportedBlocked = value;
+    options.onBlocked?.(value);
+  };
   const annotate = (error = '') => {
     const host = options.getHost();
     if (!host) return;
-    host.dataset.mixPlaylist = target?.playlistId || '';
-    host.dataset.mixVideo = currentId;
-    host.dataset.mixTrackCount = String(tracks().length);
-    host.dataset.mixError = error;
+    const values = { mixPlaylist: target?.playlistId || '', mixVideo: currentId, mixTrackCount: String(tracks().length), mixError: error };
+    for (const [key, value] of Object.entries(values)) if (host.dataset[key] !== value) host.dataset[key] = value;
   };
   const applyOptions = () => {
     if (!player || !ready) return;
@@ -120,7 +130,7 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
   const suspend = () => {
     if (suspendedAt === null) suspendedAt = now();
     if (player) applyYouTubePlaybackState(player, true);
-    options.onPlaying(false);
+    reportPlaying(false);
   };
   const clearPlayer = () => {
     generation += 1;
@@ -136,8 +146,8 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
     previous?.pauseVideo?.();
     previous?.destroy?.();
     options.getHost()?.replaceChildren();
-    options.onPlaying(false);
-    options.onTrack?.(null);
+    reportPlaying(false);
+    if (reportedTrackKey) options.onTrack?.(null);
     reportedTrackKey = '';
     reportedTrackTitle = '';
   };
@@ -182,7 +192,7 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
   const advance = () => {
     if (!player || advancing) return;
     recovery = null;
-    options.onPlaying(false);
+    reportPlaying(false);
     if (!canPlay()) { advanceOnResume = true; suspend(); return; }
     const list = tracks();
     const index = Math.max(currentIndex, Number(player.getPlaylistIndex?.() ?? -1));
@@ -231,7 +241,7 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
       return;
     }
     if (event.data !== 1) {
-      if (event.data === 2) options.onPlaying(false);
+      if (event.data === 2) reportPlaying(false);
       return;
     }
     if (!id) return;
@@ -242,7 +252,7 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
     const duration = Number(player.getDuration?.() || 0);
     if (!Number.isFinite(duration) || duration <= 0) {
       if (!deadline) deadline = now() + LOAD_TIMEOUT_MS;
-      options.onPlaying(false);
+      reportPlaying(false);
       return;
     }
     deadline = 0;
@@ -270,8 +280,8 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
       reportedTrackTitle = title;
       options.onTrack?.({ id: `${id}:${trackSerial}`, mediaId: id, title, durationSec: duration });
     }
-    options.onBlocked?.(false);
-    options.onPlaying(true);
+    reportBlocked(false);
+    reportPlaying(true);
   };
 
   const ensure = async () => {
@@ -347,7 +357,7 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
                 seconds: Math.max(0, Number(player?.getCurrentTime?.() || 0), lastProgressId === currentId ? lastProgressAt : 0),
               };
               deadline = 0;
-              options.onPlaying(false);
+              reportPlaying(false);
               annotate(`mix_player_retry_${event.data}`);
               return;
             }
@@ -364,8 +374,8 @@ export function createPvdYouTubeMixPlayer(options: MixOptions) {
             if (version !== generation) return;
             deadline = 0;
             annotate('mix_autoplay_blocked');
-            options.onPlaying(false);
-            options.onBlocked?.(true);
+            reportPlaying(false);
+            reportBlocked(true);
           },
         },
       });

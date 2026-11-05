@@ -105,6 +105,21 @@ test('Mix snapshots do not repeatedly unmute audio or reload captions', async ()
   expect(h.player.unloadModule).not.toHaveBeenCalled();
 });
 
+test('healthy Mix monitoring does not emit duplicate UI callbacks or DOM mutations', async () => {
+  const blocked = jest.fn();
+  const h = setup({ onBlocked: blocked });
+  h.controller.start(playlist()); await flush(); h.player.ready(); h.player.emit(1);
+  const mutations = jest.fn();
+  h.host.dataset = new Proxy(h.host.dataset, { set(target, key, value) { mutations(key, value); target[key] = value; return true; } });
+  h.onPlaying.mockClear(); blocked.mockClear();
+  jest.advanceTimersByTime(60000);
+  expect(h.onPlaying).not.toHaveBeenCalled();
+  expect(blocked).not.toHaveBeenCalled();
+  expect(mutations).not.toHaveBeenCalled();
+  h.player.emit(2);
+  expect(h.onPlaying).toHaveBeenCalledWith(false);
+});
+
 test('Mix retries a transient HTML5 error at the same track and position', async () => {
   const h = setup(); h.controller.start(playlist()); await flush(); h.player.ready(); h.player.emit(1);
   h.player.time = 67; h.player.emit(3); h.player.error(5); h.player.error(5);

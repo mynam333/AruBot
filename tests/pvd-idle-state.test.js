@@ -39,6 +39,21 @@ test('an out-of-order heartbeat cannot restore an older track or cancel a web pa
   expect(store.snapshot('sid').paused).toBe(false);
 });
 
+test('idle heartbeats renew the lease without rebuilding unchanged admin queues', () => {
+  let now = 100;
+  const store = createPvdIdlePlaybackStore({ now: () => now });
+  expect(store.report('sid', report()).changed).toBe(true);
+  for (let i = 1; i <= 12; i += 1) {
+    now += 5000;
+    expect(store.report('sid', report({ sequence: i + 1, atSec: 10 + i * 5 })).changed).toBe(false);
+  }
+  expect(store.snapshot('sid').atSec).toBe(70);
+  expect(store.report('sid', report({ sequence: 20, atSec: 100 })).changed).toBe(true);
+  expect(store.report('sid', report({ sequence: 21, atSec: 100, paused: true })).changed).toBe(true);
+  expect(store.report('sid', report({ sequence: 22, mode: 'none' })).changed).toBe(true);
+  expect(store.report('sid', report({ sequence: 23, mode: 'none' })).changed).toBe(false);
+});
+
 test('OBS reports take precedence over a second browser preview', () => {
   const store = createPvdIdlePlaybackStore();
   store.report('sid', report({ source: 'browser' }));

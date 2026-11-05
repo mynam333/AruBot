@@ -169,6 +169,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
   const youtubeDurationProbeRunnerRef = useRef<ReturnType<typeof createYouTubeDurationProbeRunner> | null>(null);
   const ensureSeqRef = useRef<number>(0);
   const lastServerSyncRef = useRef<number>(0);
+  const serverSyncInFlightRef = useRef<{ version: number; controller: AbortController; repeat: boolean } | null>(null);
   const playbackPayloadVersionRef = useRef(0);
   const serverPlaybackRevisionRef = useRef(0);
   const serverPlaybackEpochRef = useRef('');
@@ -1413,24 +1414,38 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
 
   const resyncFromServer = useCallback(async (force = false) => {
     if (!token || pendingPlaybackControlsRef.current > 0) return;
+    const inFlight = serverSyncInFlightRef.current;
+    if (inFlight) {
+      if (force && inFlight.version !== playbackPayloadVersionRef.current) inFlight.repeat = true;
+      return;
+    }
     const now = Date.now();
     if (!force && now - lastServerSyncRef.current < 1000) return;
     lastServerSyncRef.current = now;
     const version = playbackPayloadVersionRef.current;
     const controller = new AbortController();
+    const request = { version, controller, repeat: false };
+    serverSyncInFlightRef.current = request;
     const timeout = setTimeout(() => controller.abort(), 5000);
     try {
       const apiBase = getViewerApiBase();
       const r = await fetch(`${apiBase}/api/video-donation/now-playing?token=${encodeURIComponent(token)}`, { cache: 'no-store', signal: controller.signal });
       if (!r.ok) return;
       const data = await r.json() as Record<string, unknown>;
-      if (version !== playbackPayloadVersionRef.current || pendingPlaybackControlsRef.current > 0) return;
+      if (controller.signal.aborted || serverSyncInFlightRef.current !== request
+        || version !== playbackPayloadVersionRef.current || pendingPlaybackControlsRef.current > 0) return;
       const durationProbes = Array.isArray(data.durationProbes) ? data.durationProbes : [];
       for (const probe of durationProbes) {
         if (isUnknownRecord(probe)) handleDurationProbe(probe);
       }
       applyServerPlaybackPayload(data, force);
-    } catch {} finally { clearTimeout(timeout); }
+    } catch {} finally {
+      clearTimeout(timeout);
+      if (serverSyncInFlightRef.current === request) {
+        serverSyncInFlightRef.current = null;
+        if (request.repeat && !controller.signal.aborted) void playbackSyncRef.current(true);
+      }
+    }
   }, [applyServerPlaybackPayload, getViewerApiBase, handleDurationProbe, token]);
 
   useEffect(() => {
@@ -1544,11 +1559,34 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
     let sending = false;
     let pending = false;
     let controller: AbortController | null = null;
+    let trailingTimer: ReturnType<typeof setTimeout> | null = null;
+    let lastSentAt = 0;
+    let lastKey = '';
+    let announcedIdle = false;
     const reportIdle = async () => {
       if (disposed) return;
+      const mode = playbackModeRef.current;
+      // Only idle players need this lease. Send one release when leaving idle playback.
+      if (mode !== 'idle' && !announcedIdle) return;
+      const status = {
+        mode, track: idleTrackRef.current, playing: idlePlayingRef.current,
+        paused: idlePausedRef.current || isPlaybackBlocked(), controlVersion: idleControlVersionRef.current,
+      };
+      const key = JSON.stringify(status);
+      const elapsed = Date.now() - lastSentAt;
+      if (key === lastKey && elapsed < 5000) return;
       if (sending) { pending = true; return; }
+      if (elapsed < 250) {
+        trailingTimer ||= setTimeout(() => { trailingTimer = null; void reportIdle(); }, 250 - elapsed);
+        return;
+      }
+      if (trailingTimer) clearTimeout(trailingTimer);
+      trailingTimer = null;
       sending = true;
       pending = false;
+      lastKey = key;
+      lastSentAt = Date.now();
+      if (mode === 'idle') announcedIdle = true;
       controller = new AbortController();
       const timeout = setTimeout(() => controller?.abort(), 5000);
       try {
@@ -1558,21 +1596,20 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
           body: JSON.stringify({
             token, op: 'idle_status', playerRole, clientId: idleClientIdRef.current, sequence: ++idleSequenceRef.current,
             source: (window as Window & { obsstudio?: unknown }).obsstudio ? 'obs' : 'browser',
-            mode: playbackModeRef.current, track: idleTrackRef.current,
-            playing: idlePlayingRef.current, paused: idlePausedRef.current || isPlaybackBlocked(),
+            ...status,
             atSec: mixActiveRef.current ? mixPlayerRef.current?.getCurrentTime() : playerRef.current?.getCurrentTime?.(),
-            controlVersion: idleControlVersionRef.current,
           }),
         });
         if (!response.ok || disposed) return;
         const result = await response.json();
         if (disposed) return;
+        if (mode !== 'idle') announcedIdle = false;
         const wasOwner = idleOwnerRef.current;
         idleOwnerRef.current = result.accepted !== false;
-        if (!idleOwnerRef.current && playbackModeRef.current === 'idle') {
+        if (wasOwner && !idleOwnerRef.current && playbackModeRef.current === 'idle') {
           mixPlayerRef.current?.setPaused(true);
-          playerRef.current?.pauseVideo?.();
-        } else if (!wasOwner && playbackModeRef.current === 'idle') startIdlePlayback();
+          if (playerRef.current) applyYouTubePlaybackState(playerRef.current, true);
+        } else if (!wasOwner && idleOwnerRef.current && playbackModeRef.current === 'idle') startIdlePlayback();
         if (isUnknownRecord(result.command)) idleControlRef.current(result.command);
       } catch {
         // Keep local playback alive through a temporary API outage.
@@ -1589,6 +1626,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
     return () => {
       disposed = true;
       controller?.abort();
+      if (trailingTimer) clearTimeout(trailingTimer);
       clearInterval(interval);
       idleReportRef.current = () => {};
     };
@@ -1735,6 +1773,8 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
     return () => {
       disconnect();
       stopPolling();
+      serverSyncInFlightRef.current?.controller.abort();
+      serverSyncInFlightRef.current = null;
       ensureSeqRef.current += 1;
       if (youtubeRetryRef.current.timer) clearTimeout(youtubeRetryRef.current.timer);
       if (youtubeApiRetryTimerRef.current) clearTimeout(youtubeApiRetryTimerRef.current);
