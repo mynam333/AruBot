@@ -6,7 +6,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Tooltip } from '@/components/ui/tooltip';
 import { readJsonResult } from '@/shared/api/http';
-import { DEFAULT_SONGBOOK_OVERLAY, normalizeSongbookOverlay, type SongbookBlock, type SongbookOrientation, type SongbookOverlayConfig, type SongbookOverlaySnapshot } from '../../../shared/songbook-overlay';
+import { DEFAULT_SONGBOOK_OVERLAY, normalizeSongbookOverlay, songbookOverlaySnapshot, type SongbookBlock, type SongbookOrientation, type SongbookOverlayConfig } from '../../../shared/songbook-overlay';
 import { SongbookOverlayStage } from './songbook-overlay-stage';
 import { useSongbookRequests } from './use-songbook-requests';
 import { SongbookModal } from './songbook-ui';
@@ -35,7 +35,8 @@ export function SongbookOverlayEditor({ canWrite, requestsEnabled }: { canWrite:
   const [confirmation, setConfirmation] = useState<'rotate' | 'reload' | null>(null);
   const lock = useRef(false);
   const mounted = useRef(true);
-  const requests = useSongbookRequests('/api/songbook/requests');
+  const requests = useSongbookRequests('/api/songbook/requests', !example);
+  const history = useSongbookRequests('/api/songbook/requests?history=1', !example);
   const dirty = saved !== null && JSON.stringify(config) !== JSON.stringify(saved.config);
   const accept = useCallback((data: SavedOverlay) => { setSaved(data); setConfig(normalizeSongbookOverlay(data.config)); setError(''); }, []);
   const load = useCallback(async (signal?: AbortSignal) => {
@@ -79,12 +80,10 @@ export function SongbookOverlayEditor({ canWrite, requestsEnabled }: { canWrite:
     } finally { lock.current = false; if (mounted.current) setBusy(false); }
   };
   const url = saved && typeof window !== 'undefined' ? new URL(saved.viewerPath, window.location.origin).href : '';
-  const current = requests.items.find(item => item.status === 'singing');
-  const mapRequest = (item: typeof requests.items[number]) => ({ id: item.id, title: item.song.title, artist: item.song.artist, videoId: item.song.videoId, username: item.username, keyShift: item.song.keyShift });
-  const data: SongbookOverlaySnapshot = { config, requestsEnabled: example ? true : requestsEnabled,
-    current: example ? samples[0] : current ? mapRequest(current) : null,
-    queueCount: example ? samples.length - 1 : requests.items.filter(item => item.status === 'pending').length,
-    queue: example ? samples.slice(1) : requests.items.filter(item => item.status === 'pending').map(mapRequest) };
+  const previewRequests = example ? samples.map((song, index) => ({ id: song.id, song, username: song.username,
+    status: index === 0 ? 'done' : index === 1 ? 'singing' : 'pending', createdAt: new Date(index * 1000).toISOString() }))
+    : Array.from(new Map([...requests.items, ...history.items].map(item => [item.id, item])).values());
+  const data = songbookOverlaySnapshot({ overlay_config: config, requests_enabled: example || requestsEnabled }, previewRequests);
   const blocked = !canWrite || busy || !saved;
   const placement = config.layouts[orientation][selected];
   return <section className="space-y-5" aria-label="노래방 오버레이 설정">
@@ -101,7 +100,7 @@ export function SongbookOverlayEditor({ canWrite, requestsEnabled }: { canWrite:
         <div className={styles.segmented} aria-label="미리보기 데이터"><button type="button" aria-pressed={example} onClick={() => setExample(true)}>예시 데이터</button><button type="button" aria-pressed={!example} onClick={() => setExample(false)}>실제 신청</button></div>
       </div><div className={styles.preview} data-orientation={orientation}><SongbookOverlayStage data={data} orientation={orientation} editable={!blocked} selected={selected} onSelect={setSelected} onLayout={layout} /></div>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground"><span>{orientation === 'landscape' ? '가로 배치 · 1920 × 1080' : '세로 배치 · 1080 × 1920'}</span><span role="status">{busy ? '불러오는 중' : dirty ? '저장하지 않은 변경 사항' : saved ? '저장된 배치' : '연결 대기'}</span></div>
-        {!example && requests.error ? <p role="alert" className="mt-3 text-sm text-destructive">{requests.error}</p> : null}
+        {!example && (requests.error || history.error) ? <p role="alert" className="mt-3 text-sm text-destructive">{requests.error || history.error}</p> : null}
         <div className="mt-4 flex flex-wrap justify-end gap-2"><Tooltip content="선택한 화면비 배치 초기화"><Button variant="ghost" size="sm" disabled={blocked} onClick={() => update({ layouts: { ...config.layouts, [orientation]: DEFAULT_SONGBOOK_OVERLAY.layouts[orientation] } })}><RotateCcw className="h-4 w-4" />배치 초기화</Button></Tooltip><Button variant="outline" size="sm" disabled={blocked || !dirty} onClick={() => saved && accept(saved)}><Undo2 className="h-4 w-4" />변경 취소</Button><Button size="sm" disabled={blocked || !dirty} onClick={() => void persist()}><Save className="h-4 w-4" />{busy ? '저장 중' : '배치 저장'}</Button></div>
       </div>
       <div className={styles.controls}>

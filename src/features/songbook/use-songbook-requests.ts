@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { readJsonResult } from '@/shared/api/http';
 import type { SongbookRequest } from './types';
 
-export function useSongbookRequests(endpoint: string) {
+export function useSongbookRequests(endpoint: string, enabled = true) {
   const [items, setItems] = useState<SongbookRequest[]>([]);
   const [auth, setAuth] = useState<'loading' | 'ready' | 'login' | 'error'>('loading');
   const [error, setError] = useState('');
@@ -12,6 +12,7 @@ export function useSongbookRequests(endpoint: string) {
   const previousEndpoint = useRef(endpoint);
   const refresh = useCallback(() => setRevision(value => value + 1), []);
   useEffect(() => {
+    if (!enabled) return;
     if (previousEndpoint.current !== endpoint) {
       previousEndpoint.current = endpoint;
       setItems([]); setAuth('loading'); setError('');
@@ -33,6 +34,6 @@ export function useSongbookRequests(endpoint: string) {
     const timer = window.setInterval(() => void load(), 10_000);
     document.addEventListener('visibilitychange', load);
     return () => { controller.abort(); window.clearInterval(timer); document.removeEventListener('visibilitychange', load); };
-  }, [endpoint, revision]);
+  }, [endpoint, revision, enabled]);
   return { items, auth, error, refresh };
 }

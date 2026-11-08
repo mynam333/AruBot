@@ -75,6 +75,10 @@ export function songbookOverlaySnapshot(row, requests) {
   const config = normalizeSongbookOverlay(row.overlay_config || {});
   const current = requests.find(r => r.status === 'singing');
   const pending = requests.filter(r => r.status === 'pending');
+  const entries = requests.filter(r => ['pending', 'singing', 'done'].includes(r.status))
+    .map((value, index) => ({ value, index, time: Date.parse(value.created_at || value.createdAt || '') }))
+    .sort((a, b) => Number.isFinite(a.time) && Number.isFinite(b.time)
+      ? a.time - b.time || String(a.value.id).localeCompare(String(b.value.id)) : a.index - b.index);
   const item = value => ({
     id: String(value.id), title: String(value.song?.title || '').slice(0, 200),
     artist: String(value.song?.artist || '').slice(0, 120), username: String(value.username || '').slice(0, 100),
@@ -85,5 +89,6 @@ export function songbookOverlaySnapshot(row, requests) {
     config, requestsEnabled: row.requests_enabled === true,
     current: current ? item(current) : null, queueCount: pending.length,
     queue: pending.slice(0, config.maxRows).map(item),
+    entries: entries.map(({ value }) => ({ ...item(value), status: value.status })),
   };
 }

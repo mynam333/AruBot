@@ -43,9 +43,35 @@ describe('songbook overlay layout and privacy', () => {
     const item = { id: 'request', status: 'pending', username: 'Viewer', viewer_user_id: 'secret-viewer', message: 'private message', song: { title: 'Song', artist: 'Artist', privateNote: 'secret note', videoId: 'abcdefghijk', keyShift: -1 } };
     const data = snapshot({ overlay_config: { maxRows: 2 }, requests_enabled: true, overlay_token: 'secret-token' }, [{ ...item, id: 'now', status: 'singing' }, ...Array.from({ length: 10 }, (_, i) => ({ ...item, id: String(i) })), { ...item, status: 'done' }]);
     expect(data.current.id).toBe('now'); expect(data.queueCount).toBe(10); expect(data.queue.map(i => i.id)).toEqual(['0', '1']);
+    expect(data.entries).toHaveLength(12);
+    expect(data.entries.at(-1)).toMatchObject({ id: 'request', status: 'done' });
     expect(JSON.stringify(data)).not.toMatch(/secret|private/);
     expect(Object.keys(data.current).sort()).toEqual(['artist', 'id', 'keyShift', 'title', 'username', 'videoId']);
     expect(snapshot({}, [{ ...item, song: { videoId: 'https://evil.test' } }]).queue[0].videoId).toBeNull();
+  });
+  test('completed requests keep their original order across reloads and never count as waiting', () => {
+    const requests = [
+      { id: 'third', status: 'pending', created_at: '2026-11-09T12:02:00Z', song: { title: 'Third' } },
+      { id: 'first', status: 'done', createdAt: '2026-11-09T12:00:00Z', song: { title: 'First' } },
+      { id: 'second', status: 'singing', created_at: '2026-11-09T12:01:00Z', song: { title: 'Second' } },
+      { id: 'cancelled', status: 'cancelled', song: { title: 'Cancelled' } },
+      { id: 'rejected', status: 'rejected', song: { title: 'Rejected' } },
+    ];
+    const initial = snapshot({}, requests);
+    expect(initial.entries.map(item => item.id)).toEqual(['first', 'second', 'third']);
+    expect(initial.queueCount).toBe(1);
+    const after = snapshot({}, requests.map(item => item.id === 'second' ? { ...item, status: 'done' } : item));
+    expect(after.entries.map(item => item.id)).toEqual(initial.entries.map(item => item.id));
+    expect(after.entries.map(item => item.status)).toEqual(['done', 'done', 'pending']);
+    expect(after.current).toBeNull();
+    expect(after.queueCount).toBe(1);
+  });
+  test('history remains available for paged layouts and completed-only overlays', () => {
+    const rows = Array.from({ length: 20 }, (_, index) => ({ id: String(index), status: 'done', song: { title: `Song ${index}` } }));
+    const result = snapshot({ overlay_config: { maxRows: 2, hideEmpty: true } }, rows);
+    expect(result.entries).toHaveLength(20);
+    expect(result.queueCount).toBe(0);
+    expect(result.queue).toEqual([]);
   });
 });
 
@@ -98,6 +124,9 @@ describe('songbook overlay persistence and capability', () => {
     expect(await h.store.getOverlaySnapshot(token)).not.toHaveProperty('owner_user_id');
     const query = h.query.mock.calls.find(([sql]) => sql.startsWith('select s.overlay_config'));
     expect(query[0]).toContain("status in ('pending','singing')"); expect(query[0]).toContain('order by created_at,id');
+    expect(query[0]).toContain("status='done' order by created_at desc,id desc limit 100");
+    expect(query[0]).toContain('union all');
+    expect(query[0]).toContain('jsonb_agg(r order by r.created_at,r.id)');
     expect(query[1]).toEqual([old]);
   });
   test.each(['', [], 'abc', 'a'.repeat(65), "' or 1=1 --"])('invalid capability %p never queries database', async token => {

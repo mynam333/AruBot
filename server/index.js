@@ -46,6 +46,7 @@ import { appendVideoDonationQueueCount, countNonDurableVideoDonationItems, count
 import { createPvdQueueDisplay } from './pvd-queue-display.js';
 import { songbookStore } from './supabase.js';
 import { registerSongbookRoutes } from './songbook-routes.js';
+import { startSongbookOverlayCleanup } from './songbook-overlay-cleanup.js';
 import { createSongbookCommandExecutor } from './songbook-command-runtime.js';
 import { commandEditVersion, hasSongbookCommandToken, songbookTriggerConflict } from '../shared/songbook-commands.js';
 import { emoteOverlayStore } from './supabase.js';
@@ -22095,6 +22096,7 @@ registerSongbookRoutes(app, {
     return uid ? `/c/${encodeURIComponent(uid)}/songbook` : null;
   },
 });
+const stopSongbookOverlayCleanup = startSongbookOverlayCleanup({ store: songbookStore });
 
 // Public identity does not depend on a live broadcast or upstream platform availability.
 app.get('/api/public/:uid/profile', async (req, res) => {
@@ -29533,6 +29535,7 @@ async function gracefulShutdown(signal, { exitCode = 0 } = {}) {
       await closeHttpServer();
       await localAvatarRelay.stop();
       await emoteOverlayRuntime.stop();
+      await stopSongbookOverlayCleanup();
       await closeDatabaseConnections();
 
       clearTimeout(forceTimer);

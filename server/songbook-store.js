@@ -7,6 +7,7 @@ import { matchSongbookSongs } from '../shared/songbook-commands.js';
 const MIGRATION = new URL('./migrations/027_songbook.sql', import.meta.url);
 const OVERLAY_MIGRATION = new URL('./migrations/030_songbook_overlay.sql', import.meta.url);
 const CHAT_MIGRATION = new URL('./migrations/031_songbook_chat_requests.sql', import.meta.url);
+const CLEANUP_MIGRATION = new URL('./migrations/036_songbook_overlay_cleanup.sql', import.meta.url);
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const requireId = (value) => { if (typeof value !== 'string' || !UUID.test(value)) throw songbookError('항목 ID를 확인해 주세요.'); return value.toLowerCase(); };
 const song = row => row ? { ...publicSongbookSong({ ...row.data, id: row.id }), privateNote: row.data.privateNote || '', visible: row.data.visible !== false, revision: row.revision } : null;
@@ -32,11 +33,13 @@ export function createSongbookStore({ withPgClient, ensureIdentityTables }) {
       const sql = await readFile(MIGRATION, 'utf8');
       const overlaySql = await readFile(OVERLAY_MIGRATION, 'utf8');
       const chatSql = await readFile(CHAT_MIGRATION, 'utf8');
+      const cleanupSql = await readFile(CLEANUP_MIGRATION, 'utf8');
       await transaction(async pg => {
         await pg.query('select pg_advisory_xact_lock(hashtext($1))', ['songbook-schema:027']);
         await pg.query(sql);
         await pg.query(overlaySql);
         await pg.query(chatSql);
+        await pg.query(cleanupSql);
       });
     })().catch(error => { schema = null; throw error; });
     return schema;
@@ -106,7 +109,10 @@ export function createSongbookStore({ withPgClient, ensureIdentityTables }) {
   async function updateSettings(owner, input) {
     const next = normalizeSongbookSettings(input);
     return locked(owner, async pg => {
-      await pg.query('update songbook_settings set requests_enabled=$2,per_user_limit=$3 where owner_user_id=$1', [owner, next.requestsEnabled, next.perUserLimit]);
+      await pg.query(`update songbook_settings set requests_enabled=$2,per_user_limit=$3,
+        completed_cleanup_after=case when $2 then null
+          else coalesce(completed_cleanup_after,now()+interval '2 minutes') end
+        where owner_user_id=$1`, [owner, next.requestsEnabled, next.perUserLimit]);
       return next;
     });
   }
@@ -192,6 +198,10 @@ export function createSongbookStore({ withPgClient, ensureIdentityTables }) {
         if (singing.rows.length) throw songbookError('현재 부르는 곡을 먼저 완료해 주세요.', 409);
       }
       const { rows } = await pg.query('update songbook_requests set status=$3,updated_at=now() where owner_user_id=$1 and id=$2 returning *', [owner, id, status]);
+      if (status === 'done') {
+        await pg.query(`update songbook_settings set completed_cleanup_after=coalesce(completed_cleanup_after,now()+interval '2 minutes')
+          where owner_user_id=$1 and requests_enabled=false`, [owner]);
+      }
       return request(rows[0]);
     });
   }
@@ -221,15 +231,37 @@ export function createSongbookStore({ withPgClient, ensureIdentityTables }) {
   async function getOverlaySnapshot(token) {
     if (typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) throw songbookError('오버레이 주소를 확인해 주세요.', 404);
     await ensureSchema();
+    // All overlay windows renew one durable lease. Polls need no extra HTTP heartbeat,
+    // and a short reload or API restart cannot immediately erase completed requests.
+    await withPgClient(pg => pg.query(`update songbook_settings set completed_cleanup_after=now()+interval '2 minutes'
+      where overlay_token=$1 and requests_enabled=false
+        and (completed_cleanup_after is null or completed_cleanup_after<now()+interval '110 seconds')`, [token]));
     // One statement observes layout and queue from the same database snapshot.
     const { rows } = await withPgClient(pg => pg.query(`select s.overlay_config,s.requests_enabled,
       coalesce((select jsonb_agg(r order by r.created_at,r.id) from
-        (select id,song,username,status,created_at from songbook_requests where owner_user_id=s.owner_user_id
-          and status in ('pending','singing') order by created_at,id limit 500) r), '[]'::jsonb) as requests
+        ((select id,song,username,status,created_at from songbook_requests where owner_user_id=s.owner_user_id
+          and status in ('pending','singing') order by created_at,id limit 500)
+         union all
+         (select id,song,username,status,created_at from songbook_requests where owner_user_id=s.owner_user_id
+          and status='done' order by created_at desc,id desc limit 100)) r), '[]'::jsonb) as requests
       from songbook_settings s where s.overlay_token=$1`, [token]));
     if (!rows[0]) throw songbookError('오버레이 주소가 만료되었습니다.', 404);
     return songbookOverlaySnapshot(rows[0], rows[0].requests);
   }
+  async function cleanupCompletedRequests() {
+    await ensureSchema();
+    return transaction(async pg => {
+      // Settings changes and heartbeats take the same row lock, including across API instances.
+      const { rows } = await pg.query(`select owner_user_id from songbook_settings
+        where requests_enabled=false and completed_cleanup_after<=now()
+        order by completed_cleanup_after,owner_user_id limit 100 for update skip locked`);
+      if (!rows.length) return { deleted: 0 };
+      const owners = rows.map(row => row.owner_user_id);
+      const removed = await pg.query("delete from songbook_requests where owner_user_id=any($1::text[]) and status='done'", [owners]);
+      await pg.query('update songbook_settings set completed_cleanup_after=null where owner_user_id=any($1::text[])', [owners]);
+      return { deleted: removed.rowCount };
+    });
+  }
   return { ensureSchema, getSettings, listSongs, upsertSong, deleteSong, updateSettings, listRequests, requestSong, requestSongFromChat, changeRequest,
-    getOverlay, saveOverlay, rotateOverlay, getOverlaySnapshot };
+    getOverlay, saveOverlay, rotateOverlay, getOverlaySnapshot, cleanupCompletedRequests };
 }

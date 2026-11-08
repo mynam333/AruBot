@@ -28,6 +28,9 @@
 .count small { margin-left: 5px; font-size: calc(16 * var(--karaoke-unit)); }
 .queueRows { list-style: none; padding: 0; margin: 0; flex: 1; overflow: hidden; }
 .queueRow { display: flex; align-items: center; gap: calc(16 * var(--karaoke-unit)); height: calc(78 * var(--karaoke-unit)); border-bottom: 1px solid #ffffff0d; animation: song-arrive 320ms ease-out both; }
+.queueRow[data-status=done] { opacity: .48; animation: none; }
+.queueRow[data-status=done] .scrolling > span, .queueRow[data-status=done] .rowMeta > span { text-decoration-line: line-through; text-decoration-thickness: 1px; }
+.queueRow[data-status=singing] .rank { opacity: 1; font-weight: 750; }
 .rank { font-size: calc(17 * var(--karaoke-unit)); font-variant-numeric: tabular-nums; color: var(--karaoke-accent); opacity: .85; min-width: calc(24 * var(--karaoke-unit)); }
 .rowInfo > .scrolling { font-size: calc(24 * var(--karaoke-unit)); font-weight: 600; }
 .rowMeta { display: flex; justify-content: space-between; gap: calc(12 * var(--karaoke-unit)); font-size: calc(17 * var(--karaoke-unit)); margin-top: calc(5 * var(--karaoke-unit)); opacity: .78; }

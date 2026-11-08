@@ -7,7 +7,8 @@ export type SongbookOverlayConfig = {
   layouts: Record<SongbookOrientation, Record<SongbookBlock, SongbookBlockLayout>>;
 };
 export type SongbookOverlayItem = { id: string; title: string; artist: string; username: string; videoId: string | null; keyShift: number };
-export type SongbookOverlaySnapshot = { config: SongbookOverlayConfig; requestsEnabled: boolean; current: SongbookOverlayItem | null; queue: SongbookOverlayItem[]; queueCount: number };
+export type SongbookOverlayEntry = SongbookOverlayItem & { status: 'pending' | 'singing' | 'done' };
+export type SongbookOverlaySnapshot = { config: SongbookOverlayConfig; requestsEnabled: boolean; current: SongbookOverlayItem | null; queue: SongbookOverlayItem[]; queueCount: number; entries?: SongbookOverlayEntry[] };
 export const SONGBOOK_OVERLAY_SIZES: Record<SongbookOrientation, { width: number; height: number }>;
 export const DEFAULT_SONGBOOK_OVERLAY: SongbookOverlayConfig;
 export function normalizeSongbookOverlay(input?: unknown): SongbookOverlayConfig;

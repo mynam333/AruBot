@@ -65,6 +65,16 @@ export function SongbookOverlayStage({ data, orientation: forced, selected, edit
   const zoom = Math.max(0.01, Math.min(viewport.width / canvas.width, viewport.height / canvas.height));
   const config = data.config;
   const capacity = songbookOverlayCapacity(config, orientation);
+  const entries = data.entries ?? data.queue.map(item => ({ ...item, status: 'pending' as const }));
+  const [page, setPage] = useState(0);
+  const pageCount = Math.max(1, Math.ceil(entries.length / capacity));
+  const visiblePage = Math.min(page, pageCount - 1);
+  useEffect(() => {
+    if (pageCount <= 1) return;
+    const timer = window.setInterval(() => setPage(value => (value + 1) % pageCount), 8000);
+    return () => window.clearInterval(timer);
+  }, [pageCount]);
+  const offset = visiblePage * capacity;
   const variables = {
     '--karaoke-accent': config.accent, '--karaoke-text': config.text,
     '--karaoke-bg': `${config.background}${Math.round(config.opacity / 100 * 255).toString(16).padStart(2, '0')}`,
@@ -111,7 +121,7 @@ export function SongbookOverlayStage({ data, orientation: forced, selected, edit
   });
   const handle = (block: SongbookBlock) => editable ? <button type="button" className={styles.resize} aria-label={`${block === 'current' ? '현재 곡' : '신청 목록'} 너비 조절`} title="드래그하여 너비 조절" onPointerDown={event => begin(event, block, true)}><Grip /></button> : null;
   const currentVisible = config.layouts[orientation].current.visible && (editable || !config.hideEmpty || data.current);
-  const queueVisible = config.layouts[orientation].queue.visible && (editable || !config.hideEmpty || data.queue.length > 0);
+  const queueVisible = config.layouts[orientation].queue.visible && (editable || !config.hideEmpty || entries.length > 0);
   return <div ref={root} className={styles.viewport} aria-label="노래방 오버레이" data-orientation={orientation}>
     <div className={styles.stage} style={{ ...variables, width: canvas.width, height: canvas.height, left: (viewport.width - canvas.width * zoom) / 2, top: (viewport.height - canvas.height * zoom) / 2, transform: `scale(${zoom})` }}>
       {currentVisible ? <section {...blockProps('current')} className={`${styles.block} ${styles.current}`} aria-label="현재 곡 위치" title={editable ? '드래그 이동 · 방향키 미세 이동 · Shift + 방향키 10px 이동' : undefined}>
@@ -125,12 +135,12 @@ export function SongbookOverlayStage({ data, orientation: forced, selected, edit
         {handle('current')}
       </section> : null}
       {queueVisible ? <section {...blockProps('queue')} className={`${styles.block} ${styles.queue}`} aria-label="신청 목록 위치" title={editable ? '드래그 이동 · 방향키 미세 이동' : undefined}>
-        <header className={styles.queueHeader}><span><ListMusic />신청곡</span><span className={styles.count}>{data.queueCount}<small>곡</small></span></header>
-        <ol className={styles.queueRows}>{data.queue.slice(0, capacity).map((item, i) => <li key={item.id} className={styles.queueRow}>
-          <span className={styles.rank}>{String(i + 1).padStart(2, '0')}</span><div className={styles.rowInfo}><MovingText>{item.title}</MovingText><div className={styles.rowMeta}><span>{item.artist}</span>{config.requester ? <span>{item.username || '시청자'}</span> : null}</div></div>
+        <header className={styles.queueHeader}><span><ListMusic />신청곡</span><span className={styles.count}><small>대기 </small>{data.queueCount}<small>곡</small></span></header>
+        <ol className={styles.queueRows} start={offset + 1}>{entries.slice(offset, offset + capacity).map((item, i) => <li key={item.id} className={styles.queueRow} data-status={item.status} aria-label={`${item.status === 'done' ? '완료' : item.status === 'singing' ? '부르는 중' : '대기'}: ${item.title}`} aria-current={item.status === 'singing' ? true : undefined}>
+          <span className={styles.rank}>{String(offset + i + 1).padStart(2, '0')}</span><div className={styles.rowInfo}><MovingText>{item.title}</MovingText><div className={styles.rowMeta}><span>{item.artist}</span>{config.requester ? <span>{item.username || '시청자'}</span> : null}</div></div>
         </li>)}</ol>
-        {!data.queue.length ? <div className={styles.emptyQueue}><Music2 /><span>첫 신청곡을 기다려요</span></div> : null}
-        <footer className={styles.queueFooter}><span className={styles.openState} data-open={data.requestsEnabled}>{data.requestsEnabled ? '신청 받는 중' : '신청 마감'}</span><span>{data.queueCount > capacity ? `+${data.queueCount - capacity}곡` : '노래책'}</span></footer>
+        {!entries.length ? <div className={styles.emptyQueue}><Music2 /><span>첫 신청곡을 기다려요</span></div> : null}
+        <footer className={styles.queueFooter}><span className={styles.openState} data-open={data.requestsEnabled}>{data.requestsEnabled ? '신청 받는 중' : '신청 마감'}</span><span>{pageCount > 1 ? `${visiblePage + 1} / ${pageCount}` : !data.entries && data.queueCount > capacity ? `+${data.queueCount - capacity}곡` : '노래책'}</span></footer>
         {handle('queue')}
       </section> : null}
     </div>
