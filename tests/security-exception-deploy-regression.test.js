@@ -233,6 +233,52 @@ describe('production security exception and deployment gates', () => {
     for (const [, entry] of axiosEntries) expect(semver.satisfies(entry.version, safeRange)).toBe(true);
   });
 
+  test('all follow-redirects copies retain the cross-realm sensitive header fix', () => {
+    const packageLock = JSON.parse(fs.readFileSync(path.join(root, 'package-lock.json'), 'utf8'));
+    const entries = Object.entries(packageLock.packages)
+      .filter(([node]) => node.endsWith('/node_modules/follow-redirects') || node === 'node_modules/follow-redirects');
+    expect(entries.length).toBeGreaterThan(0);
+    for (const [, entry] of entries) expect(semver.satisfies(entry.version, '>=1.16.2 <2.0.0')).toBe(true);
+  });
+
+  test('cross-origin redirects strip cross-realm custom credentials but retain harmless headers', async () => {
+    const http = require('node:http');
+    const { runInNewContext } = require('node:vm');
+    const redirects = require('follow-redirects');
+    const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const close = server => new Promise(resolve => server.close(resolve));
+    const destination = http.createServer((req, res) => res.end(JSON.stringify(req.headers)));
+    const origin = http.createServer((_req, res) => {
+      res.writeHead(302, { Location: `http://127.0.0.1:${destination.address().port}/` });
+      res.end();
+    });
+    try {
+      await listen(destination);
+      await listen(origin);
+      const sensitiveHeaders = runInNewContext("['X-API-Key']");
+      expect(Array.isArray(sensitiveHeaders)).toBe(true);
+      expect(sensitiveHeaders instanceof Array).toBe(false);
+      const received = await new Promise((resolve, reject) => {
+        const request = redirects.http.get(`http://127.0.0.1:${origin.address().port}/`, {
+          sensitiveHeaders, headers: { 'X-API-Key': 'fixture-credential', 'X-Harmless': 'preserved' },
+        }, response => {
+          let body = '';
+          response.setEncoding('utf8');
+          response.on('data', chunk => { body += chunk; });
+          response.on('end', () => { try { resolve(JSON.parse(body)); } catch (error) { reject(error); } });
+          response.on('error', reject);
+        });
+        request.setTimeout(3000, () => request.destroy(new Error('redirect test timed out')));
+        request.on('error', reject);
+      });
+      expect(received['x-api-key']).toBeUndefined();
+      expect(received['x-harmless']).toBe('preserved');
+    } finally {
+      await close(origin);
+      await close(destination);
+    }
+  });
+
   test('Socket.IO stays exactly pinned to the reviewed CHZZK dependency chain', () => {
     const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
     const packageLock = JSON.parse(fs.readFileSync(path.join(root, 'package-lock.json'), 'utf8'));
