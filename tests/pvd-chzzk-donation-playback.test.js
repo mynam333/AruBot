@@ -204,6 +204,7 @@ test.each(['custom', 'recommended'])('%s idle does not start from an interrupted
 test.each(['video', 'bgm'].flatMap(role => ['http', 'now-playing', 'start', 'state', 'init'].map(type => [role, type])))('%s %s snapshots both apply and release interruption', async (role, type) => {
   const config = role === 'bgm' ? { bgm: { enabled: true, idlePlaylist: playlist('custom') } } : { idlePlaylist: playlist('custom') };
   const h = mount(config, role); await flush();
+  if (role === 'bgm') { jest.advanceTimersByTime(3000); await flush(); }
   h.player.ready(); jest.advanceTimersByTime(1000); await flush(); h.player.time = 51;
   h.snapshot({ paused: true, chzzkDonationPaused: true }, type); await flush();
   h.player.playVideo.mockClear(); h.player.emit(0);
