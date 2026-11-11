@@ -565,7 +565,9 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
     try {
       const blocked = paused === true || isPlaybackBlocked() || (playbackModeRef.current === 'idle' && isIdlePlaybackBlocked());
       if (blocked || !youtubeRetryRef.current.timer) {
-        if (applyYouTubePlaybackState(player, blocked, strict === true)) suppressUntilRef.current = Date.now() + 1000;
+        // Idle playback owns its transitions and can resume an ENDED state ignored during interruption.
+        const resumeIdle = playbackModeRef.current === 'idle' && player.getPlayerState?.() === 0;
+        if (applyYouTubePlaybackState(player, blocked, strict === true || resumeIdle)) suppressUntilRef.current = Date.now() + 1000;
       }
     } catch {}
   }, [isIdlePlaybackBlocked, isPlaybackBlocked]);
