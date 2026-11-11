@@ -568,6 +568,45 @@ test.each(['video', 'bgm'])('a failed %s completion report retries without repla
   expect(h.player.id).toBe('video000002');
 });
 
+test.each(['video', 'bgm'])('%s finishes a short whose ENDED event was missed instead of replaying it on sync', async role => {
+  const payload = { ...bgmPayload(), item: { id: 'short-1', kind: role, mediaProvider: 'youtube', videoId: 'vqnH0sMbBog', startSec: 0, durationSec: 37 }, atSec: 0 };
+  const h = mount(payload, role); await flush(); h.player.ready(); h.player.emit(1);
+  jest.advanceTimersByTime(1500); await flush();
+  const player = h.player;
+  player.getDuration = () => 36.64;
+  player.time = 36.64;
+  player.state = 0; // The iframe state changes before its postMessage callback is delivered.
+  player.playVideo.mockClear();
+  h.focus(); await flush();
+  jest.advanceTimersByTime(300); await flush();
+  expect(player.playVideo).not.toHaveBeenCalled();
+  expect(h.calls.filter(({ url }) => url.includes('/pop-by-token')).map(({ body }) => body))
+    .toEqual([{ token: 'test', cause: 'end', itemId: 'short-1' }]);
+  expect(h.players).toHaveLength(1);
+});
+
+test('BGM end-state polling waits for actual playback and preserves explicitly paused requests', async () => {
+  const h = mount(bgmPayload(), 'bgm'); await flush(); h.player.ready();
+  h.player.state = 0;
+  jest.advanceTimersByTime(600); await flush();
+  expect(h.calls.some(({ url }) => url.includes('/pop-by-token'))).toBe(false);
+  h.player.emit(1);
+  h.control('pause', 30); h.player.state = 0;
+  jest.advanceTimersByTime(600); await flush();
+  expect(h.calls.some(({ url }) => url.includes('/pop-by-token'))).toBe(false);
+});
+
+test('BGM end-state polling ignores stale media, then completes once without a snapshot or event', async () => {
+  const h = mount(bgmPayload(), 'bgm'); await flush(); h.player.ready(); h.player.emit(1);
+  h.player.state = 0; h.player.id = 'wrong000001';
+  jest.advanceTimersByTime(600); await flush();
+  expect(h.calls.some(({ url }) => url.includes('/pop-by-token'))).toBe(false);
+  h.player.id = bgmPayload().item.videoId;
+  jest.advanceTimersByTime(600); await flush();
+  expect(h.calls.filter(({ url }) => url.includes('/pop-by-token'))).toHaveLength(1);
+  expect(h.players).toHaveLength(1);
+});
+
 test('BGM keeps playing through a short presence outage and releases an expired lease', async () => {
   const h = mount(bgmPayload(), 'bgm'); await flush(); h.player.ready(); h.player.emit(1);
   h.player.pauseVideo.mockClear();

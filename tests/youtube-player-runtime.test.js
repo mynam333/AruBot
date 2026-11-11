@@ -15,12 +15,18 @@ test('settings are applied once per value and player without repeated low-volume
   expect(player.setVolume).toHaveBeenLastCalledWith(2);
 });
 
-test.each([1, 3])('state %i never receives a redundant play command', (state) => {
+test.each([0, 1, 3])('state %i never receives a redundant play command', (state) => {
   const player = { getPlayerState: () => state, playVideo: jest.fn(), pauseVideo: jest.fn() };
   expect(applyYouTubePlaybackState(player, false)).toBe(false);
   expect(player.playVideo).not.toHaveBeenCalled();
   applyYouTubePlaybackState(player, true);
   expect(player.pauseVideo).toHaveBeenCalledTimes(1);
+});
+
+test('an explicit play action may restart an ended player', () => {
+  const player = { getPlayerState: () => 0, playVideo: jest.fn() };
+  expect(applyYouTubePlaybackState(player, false, true)).toBe(true);
+  expect(player.playVideo).toHaveBeenCalledTimes(1);
 });
 
 describe('recoverable YouTube script loading', () => {

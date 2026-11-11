@@ -39,8 +39,9 @@ export function applyYouTubePlaybackState(player: PlayerControls, paused: boolea
     if (state === 2) return false;
     player.pauseVideo?.();
   } else {
-    // PLAYING and BUFFERING already express the intent to play. Do not restart them.
-    if (!explicit && (state === 1 || state === 3)) return false;
+    // An observed ENDED state belongs to completion handling, not automatic replay.
+    // PLAYING and BUFFERING already express the intent to play.
+    if (!explicit && (state === 0 || state === 1 || state === 3)) return false;
     player.playVideo?.();
   }
   return true;
