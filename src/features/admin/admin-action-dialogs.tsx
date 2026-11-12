@@ -30,6 +30,8 @@ import { RouletteThemeSwatch } from '@/components/rouletteThemeSwatch';
 import { CommandVariableHelpButton } from '@/features/admin/command-variable-help';
 import { parseCommandTriggers } from '@/features/admin/command-triggers';
 import { RegexSwitch } from './regex-switch';
+import { CommandPermissionSelect } from './command-permission-select';
+import type { CommandPermission } from '../../../shared/command-permissions';
 import {
   RouletteItemsEditor,
 } from '@/features/admin/roulette-item-editor';
@@ -46,7 +48,7 @@ import {
   normalizeVideoDonationIdlePlaylist,
   type VideoDonationIdlePlaylist,
 } from '@/features/admin/video-donation-idle-playlist-model';
-import { apiUrl } from '@/shared/api/http';
+import { apiUrl, readJson } from '@/shared/api/http';
 import { cn } from '@/shared/lib/utils';
 import {
   deriveLegacyAmountFields,
@@ -302,6 +304,8 @@ function Textarea({
 }
 
 export function CommandCreateDialog({ variant = 'secondary', label = '명령어 만들기', className, trailingChevron }: ActionDialogButtonProps) {
+  const [executionPermission, setExecutionPermission] = useState<CommandPermission>('everyone');
+  const [supportsExecutionPermission, setSupportsExecutionPermission] = useState(false);
   const [name, setName] = useState('');
   const [command, setCommand] = useState('!');
   const [regex, setRegex] = useState(false);
@@ -317,6 +321,7 @@ export function CommandCreateDialog({ variant = 'secondary', label = '명령어 
     const message = response.trim();
     if (!primaryKeyword) return toast.warning('명령어를 입력해 주세요.');
     if (!message) return toast.warning('응답 문구를 입력해 주세요.');
+    if (executionPermission !== 'everyone' && !supportsExecutionPermission) return toast.warning('서버 업데이트 후 다시 시도해 주세요.');
     startTransition(async () => {
       try {
         await postJson('/api/bot/rules/upsert', {
@@ -329,6 +334,7 @@ export function CommandCreateDialog({ variant = 'secondary', label = '명령어 
             enabled,
             adminOnly: false,
             requiredRoleLevel: 1,
+            ...(supportsExecutionPermission ? { executionPermission } : {}),
             pointsCost: Math.max(0, Number(pointsCost || 0)),
             cooldown: Math.max(1, Number(cooldownSec || 1)) * 1000,
             lastUsed: 0,
@@ -339,6 +345,7 @@ export function CommandCreateDialog({ variant = 'secondary', label = '명령어 
         setName('');
         setCommand('!');
         setRegex(false);
+        setExecutionPermission('everyone');
         setResponse('');
         setPointsCost('0');
         close();
@@ -363,6 +370,11 @@ export function CommandCreateDialog({ variant = 'secondary', label = '명령어 
       className={className}
       trailingChevron={trailingChevron}
       testId="command-create-trigger"
+      onOpen={async () => {
+        setSupportsExecutionPermission(false);
+        const data = await readJson<{ supportsExecutionPermission?: boolean }>('/api/bot/rules');
+        setSupportsExecutionPermission(data?.supportsExecutionPermission === true);
+      }}
       headerAction={<CommandVariableHelpButton />}
     >
       <div className="grid gap-[clamp(1rem,2vw,1.35rem)] md:grid-cols-[repeat(2,minmax(0,1fr))]">
@@ -375,6 +387,7 @@ export function CommandCreateDialog({ variant = 'secondary', label = '명령어 
         </Field>
       </div>
       <RegexSwitch checked={regex} onCheckedChange={setRegex} />
+      <CommandPermissionSelect value={executionPermission} onChange={setExecutionPermission} disabled={isPending || !supportsExecutionPermission} />
       <Field label="응답 문구">
         <Textarea
           value={response}

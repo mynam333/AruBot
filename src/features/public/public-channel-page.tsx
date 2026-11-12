@@ -108,7 +108,10 @@ function PublicCommands({ data }: { data: unknown }) {
                     )) : <Badge tone="neutral">명령어 없음</Badge>}
                   </div>
                 </div>
-                {Number(row.cooldown || 0) > 0 ? <Badge tone="sky">쿨다운 {Math.round(Number(row.cooldown || 0) / 1000)}초</Badge> : null}
+                <div className="flex flex-wrap gap-2">
+                  {row.executionPermission === 'subscriber' ? <Badge tone="mint">구독자 이상</Badge> : null}
+                  {Number(row.cooldown || 0) > 0 ? <Badge tone="sky">쿨다운 {Math.round(Number(row.cooldown || 0) / 1000)}초</Badge> : null}
+                </div>
               </div>
               {responses.length ? (
                 <div className="mt-4 grid gap-2">

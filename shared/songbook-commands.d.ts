@@ -2,6 +2,7 @@ export type SongbookCommandKind = 'request' | 'url';
 export type SongbookCommandRule = {
   id: string; name?: string; keywords?: string[]; responses?: string[]; enabled?: boolean; regex?: boolean;
   adminOnly?: boolean; requiredRoleLevel?: number; pointsCost?: number; cooldown?: number; lastUsed?: number;
+  executionPermission?: import('./command-permissions').CommandPermission | null;
   [key: string]: unknown;
 };
 export function songbookCommandKinds(rule: SongbookCommandRule): SongbookCommandKind[];

@@ -9,6 +9,8 @@ import { CommandCreateDialog } from '@/features/admin/admin-action-dialogs';
 import { CommandVariableHelpButton } from '@/features/admin/command-variable-help';
 import { formatCommandTriggers, parseCommandTriggers } from '@/features/admin/command-triggers';
 import { RegexSwitch } from './regex-switch';
+import { CommandPermissionSelect } from './command-permission-select';
+import { commandPermissionLabel, getCommandPermission, type CommandPermission } from '../../../shared/command-permissions';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -26,6 +28,7 @@ type BotRule = {
   enabled?: boolean;
   adminOnly?: boolean;
   requiredRoleLevel?: number;
+  executionPermission?: CommandPermission | null;
   pointsCost?: number;
   cooldown?: number;
   lastUsed?: number;
@@ -33,6 +36,7 @@ type BotRule = {
 
 type RulesResponse = {
   rules?: BotRule[];
+  supportsExecutionPermission?: boolean;
 };
 
 type BotSettingsResponse = {
@@ -47,6 +51,8 @@ type BotSettingsResponse = {
 };
 
 type CommandForm = {
+  executionPermission: CommandPermission;
+  permissionChanged: boolean;
   name: string;
   command: string;
   regex: boolean;
@@ -84,6 +90,8 @@ function normalizeCommand(value: string) {
 
 function toForm(rule: BotRule): CommandForm {
   return {
+    executionPermission: getCommandPermission(rule),
+    permissionChanged: false,
     name: rule.name || '',
     command: formatCommandTriggers(rule.keywords, { regex: rule.regex === true }) || '!',
     regex: rule.regex === true,
@@ -100,6 +108,7 @@ export function CommandsPage() {
   const pointsReadable = canRead('commands') || canRead('points');
   const pointsWritable = writable || canWrite('points');
   const [rules, setRules] = useState<BotRule[]>([]);
+  const [supportsExecutionPermission, setSupportsExecutionPermission] = useState(false);
   const [query, setQuery] = useState('');
   const [editingRule, setEditingRule] = useState<BotRule | null>(null);
   const [form, setForm] = useState<CommandForm | null>(null);
@@ -123,6 +132,7 @@ export function CommandsPage() {
         return;
       }
       setRules(data?.rules || []);
+      setSupportsExecutionPermission(data.supportsExecutionPermission === true);
     });
   }, []);
 
@@ -212,6 +222,7 @@ export function CommandsPage() {
           enabled: form.enabled,
           adminOnly: editingRule.adminOnly ?? false,
           requiredRoleLevel: editingRule.requiredRoleLevel ?? 1,
+          ...(form.permissionChanged ? { executionPermission: form.executionPermission, adminOnly: false, requiredRoleLevel: 1 } : {}),
           pointsCost: Math.max(0, Number(form.pointsCost || 0)),
           cooldown: Math.max(1, Number(form.cooldownSec || 1)) * 1000,
           lastUsed: editingRule.lastUsed ?? 0,
@@ -337,7 +348,7 @@ export function CommandsPage() {
                     : <code className="shrink-0 rounded-full bg-muted px-2.5 py-1 text-xs font-bold">-</code>}
                 </div>
                 <div className="mt-2 truncate text-base font-bold">{rule.name || rule.keywords?.[0] || '이름 없는 명령어'}</div>
-                <div className="mt-1 text-xs text-muted-foreground">포인트 {Number(rule.pointsCost || 0).toLocaleString('ko-KR')} · 쿨다운 {Math.round((rule.cooldown || 0) / 1000)}초</div>
+                <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-xs text-muted-foreground"><span>{commandPermissionLabel(rule)}</span><span>포인트 {Number(rule.pointsCost || 0).toLocaleString('ko-KR')}</span><span>쿨다운 {Math.round((rule.cooldown || 0) / 1000)}초</span></div>
               </div>
               <div className="min-w-0 max-w-full overflow-x-auto rounded-[var(--radius-control)] bg-background/45 p-[clamp(0.75rem,1.4vw,1rem)]">
                 <p className="w-max max-w-[42rem] whitespace-pre-wrap break-words text-sm leading-6 text-muted-foreground">{rule.responses?.join('\n') || '응답 문구가 없습니다.'}</p>
@@ -388,6 +399,7 @@ export function CommandsPage() {
               </label>
             </div>
             <RegexSwitch checked={form.regex} onCheckedChange={(regex) => setForm({ ...form, regex })} disabled={!writable} />
+            <CommandPermissionSelect value={form.executionPermission} onChange={(executionPermission) => setForm({ ...form, executionPermission, permissionChanged: true })} disabled={!writable || !supportsExecutionPermission} />
             <label className="grid gap-2 text-sm font-semibold">
               응답 문구
               <textarea disabled={!writable}

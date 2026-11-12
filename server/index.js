@@ -40,6 +40,8 @@ import { setChzzkPlaybackBlocked } from './pvd-chzzk-pause.js';
 import { chzzkVideoStore } from './supabase.js';
 import { executeAndStripLiveChangeTokens, filterLiveInfoByProvider, selectCategorySearchResult } from './live-command-actions.js';
 import { canManageLiveSettings, createLiveManagerRoleResolver, getLiveRoleLevel } from './live-command-permissions.js';
+import { createCommandPermissionChecker, isCimeChatSubscriber, validateCommandPermission } from './command-permissions.js';
+import { getCommandPermission } from '../shared/command-permissions.js';
 import { buildYoutubeLiveInfoFallback, buildYoutubeLiveLookupContext, buildYoutubeOfflineLiveInfo } from './youtube-live-info.js';
 import { resolveVideoDonationTiming } from './video-donation-timing.js';
 import { appendVideoDonationQueueCount, countNonDurableVideoDonationItems, countVideoDonationQueueIncludingItem } from './video-donation-queue.js';
@@ -14779,6 +14781,22 @@ const chzzkInfoClient = createChzzkInfoClient({
     headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AruBot/1.0)', ...options.headers },
   }, 0)).data,
 });
+const canRunChatCommand = createCommandPermissionChecker({
+  loadSubscribers: async (sid) => {
+    const accessToken = await getValidAccessToken(sid);
+    const deadlineAt = Date.now() + 8000;
+    const ids = new Set();
+    for (let page = 0; page < 100; page++) {
+      if (Date.now() >= deadlineAt) throw new Error('CHZZK subscriber permission lookup timed out');
+      const list = await chzzkInfoClient.getSubscribersPage(accessToken, page, { timeout: Math.min(3000, deadlineAt - Date.now()), deadlineAt });
+      for (const item of list) {
+        if (item?.channelId) ids.add(String(item.channelId));
+      }
+      if (list.length < 50) return ids;
+    }
+    throw new Error('CHZZK subscriber permission lookup is incomplete');
+  },
+});
 const platformProfiles = createPlatformProfileService({
   chzzkApiBase: CHZZK_UNOFFICIAL_API_BASE,
   chzzkInfoClient,
@@ -21317,6 +21335,7 @@ app.post('/api/local-remote/commands/upsert', requireAutomationLocalAgent, async
       enabled: input.enabled !== false,
       adminOnly: input.adminOnly === true,
       requiredRoleLevel: Math.max(0, Number(input.requiredRoleLevel ?? 1)),
+      ...(input.executionPermission !== undefined ? { executionPermission: input.executionPermission } : {}),
       pointsCost: Math.max(0, Number(input.pointsCost || 0)),
       cooldown: Math.max(1000, Number(input.cooldown || 3000)),
       lastUsed: Number(input.lastUsed || 0),
@@ -21327,6 +21346,7 @@ app.post('/api/local-remote/commands/upsert', requireAutomationLocalAgent, async
     return res.json({ rule, runtimeRevision });
   } catch (e) {
     console.error('[Local Remote] command upsert error', e?.message || e);
+    if (e?.status === 400 || e?.status === 503) return res.status(e.status).json({ error: e.message });
     return res.status(500).json({ error: 'Failed to save command' });
   }
 });
@@ -22480,7 +22500,7 @@ app.get('/api/bot/rules', async (req, res) => {
     if (!sid) return res.status(401).json({ error: 'Login required', rules: [] });
     const rules = req.botManagement?.role === 'manager' && !hasBotManagerScope(req.botManagement, 'commands', 'write')
       ? await getBotRules(sid) : await getBotRulesWithDefaults(sid);
-    return res.json({ rules });
+    return res.json({ rules, supportsExecutionPermission: true });
   } catch (e) {
     console.error('Rule load failed:', e?.message || e, e?.hint || '', e?.details || '');
     return res.status(500).json({ error: 'Failed to load rules', rules: [] });
@@ -22495,6 +22515,7 @@ app.post('/api/bot/rules/upsert', async (req, res) => {
 
   try {
     validateCommandRuleRegex(rule);
+    validateCommandPermission(rule);
     const rules = await getBotRules(sid);
     if (req.body.expectedVersion !== undefined && commandEditVersion(rules.find(item => item.id === rule.id) || null) !== req.body.expectedVersion) {
       return res.status(409).json({ error: '다른 곳에서 명령어가 변경되었거나 삭제되었습니다. 다시 불러온 후 수정해 주세요.' });
@@ -23416,6 +23437,7 @@ function normalizePublicCommandArray(value) {
 
 function toPublicCommandRule(rule) {
   if (!rule || rule.enabled === false || rule.adminOnly === true || rule.adminonly === true) return null;
+  if (rule.executionPermission === 'streamer' || rule.executionPermission === 'manager') return null;
   const keywords = normalizePublicCommandArray(rule.keywords);
   if (!keywords.length) return null;
   return {
@@ -23425,6 +23447,7 @@ function toPublicCommandRule(rule) {
     responses: normalizePublicCommandArray(rule.responses),
     cooldown: Math.max(0, Number(rule.cooldown || 0)),
     requiredRoleLevel: Math.max(1, Number(rule.requiredRoleLevel || rule.required_role_level || 1)),
+    executionPermission: getCommandPermission(rule),
   };
 }
 
@@ -25191,9 +25214,7 @@ async function ensureChzzkSessionOwned(sid, channelId) {
           let commandAdmitted = false;
           for (const { rule: r, match: commandMatch } of getCommandRuleMatches(text, rules)) {
             if (!r.enabled) continue;
-            // Role permission check
-            const required = Number(r.requiredRoleLevel || (r.adminOnly ? 3 : 1));
-            if (roleLevel < required) continue;
+            if (!await canRunChatCommand(r, { provider: 'chzzk', sid, userId: resolvedUserId, roleLevel, isOwner, isManager: canManageLive })) continue;
             if (!commandAdmitted) {
               if (!await admitChatCommand(sid, 'chzzk', resolvedUserId)) return;
               commandAdmitted = true;
@@ -26738,8 +26759,7 @@ async function processYoutubeChatAutomation(entry, ev) {
     let commandAdmitted = false;
     for (const { rule: r, match: commandMatch } of getCommandRuleMatches(text, rules)) {
       if (!r || r.enabled === false) continue;
-      const required = Number(r.requiredRoleLevel || (r.adminOnly ? 3 : 1));
-      if (roleLevel < required) continue;
+      if (!await canRunChatCommand(r, { provider: 'youtube', roleLevel, isOwner, isManager: ev.role?.moderator === true, isSubscriber: ev.role?.sponsor === true })) continue;
       if (!commandAdmitted) {
         if (!await admitChatCommand(sid, 'youtube', resolvedUserId)) return;
         commandAdmitted = true;
@@ -27985,7 +28005,9 @@ async function processCimeChatAutomation(entry, ev) {
     const needsManagerLookup = !isOwner && commandMatches.some(({ rule }) => {
       if (!rule || rule.enabled === false) return false;
       const required = Number(rule.requiredRoleLevel || (rule.adminOnly ? 3 : 1));
-      return required > 1 || (Array.isArray(rule.responses) && rule.responses.some((response) => /\$\{\s*memo\b/i.test(String(response))));
+      const needsRole = rule.executionPermission == null ? required > 1
+        : rule.executionPermission === 'manager' || (rule.executionPermission === 'subscriber' && !isCimeChatSubscriber(ev));
+      return needsRole || (Array.isArray(rule.responses) && rule.responses.some((response) => /\$\{\s*memo\b/i.test(String(response))));
     });
     let roleLevel = isOwner ? 4 : 1;
     if (needsManagerLookup) {
@@ -28003,8 +28025,7 @@ async function processCimeChatAutomation(entry, ev) {
     let commandAdmitted = false;
     for (const { rule: r, match: commandMatch } of commandMatches) {
       if (!r || r.enabled === false) continue;
-      const required = Number(r.requiredRoleLevel || (r.adminOnly ? 3 : 1));
-      if (roleLevel < required) continue;
+      if (!await canRunChatCommand(r, { provider: 'cime', roleLevel, isOwner, isManager: canManageLiveSettings({ roleLevel }), isSubscriber: isCimeChatSubscriber(ev) })) continue;
       if (!commandAdmitted) {
         if (!await admitChatCommand(sid, 'cime', resolvedUserId)) return;
         commandAdmitted = true;

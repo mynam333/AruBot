@@ -3,12 +3,19 @@ const path = require('path');
 const ts = require('typescript');
 const textSafety = require('./load-source.cjs')('shared/text-safety.js');
 const rulePatterns = require('./load-source.cjs')('server/rule-pattern.js');
+const commandPermissions = require('./load-source.cjs')('shared/command-permissions.js');
+const serverPermissions = require('./load-source.cjs')('server/command-permissions.js', { '../shared/command-permissions.js': commandPermissions });
+const livePermissions = require('./load-source.cjs')('server/live-command-permissions.js');
 const memoVariables = require('./load-source.cjs')('server/memo-variables.js', { '../shared/text-safety.js': textSafety });
 const { createCommandExecutionSafety, isCommandSafetyError } = require('./load-source.cjs')('server/command-execution-safety.js');
 const { createCommandAdmission } = require('./load-source.cjs')('server/command-admission.js');
 function safetyBindings() {
   const commandAdmission = createCommandAdmission();
   return {
+    ...commandPermissions,
+    ...serverPermissions,
+    ...livePermissions,
+    canRunChatCommand: serverPermissions.createCommandPermissionChecker({ loadSubscribers: async () => [] }),
     chatIngress: { enabled: false, canRun: () => true },
     runtimeBackgroundInFlight: 0,
     ...memoVariables,

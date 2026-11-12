@@ -21,6 +21,7 @@ import { createMarbleStore } from './marble-store.js';
 import { lockUnlinkedAccount, cleanupUnlinkedAccountBatch } from './unlinked-account-cleanup.js';
 import { platformTokenSnapshotMatches } from './platform-token-guard.js';
 import { validateCommandRuleRegex } from './rule-pattern.js';
+import { validateCommandPermission } from './command-permissions.js';
 const { Client, Pool } = pkg;
 
 export const botManagementStore = createBotManagementStore({ withPgClient, ensureIdentityTables: ensurePlatformIdentityTables });
@@ -8496,6 +8497,7 @@ function normalizeBotRuleRow(row = {}, columns = {}) {
     regex: columns.regex ? row.regex_enabled === true : false,
     adminOnly: columns.adminOnly ? !!row.admin_only : !!row.adminOnly,
     requiredRoleLevel: columns.requiredRoleLevel ? Number(row.required_role_level || 1) : Number(row.requiredRoleLevel || 1),
+    executionPermission: columns.executionPermission ? row.execution_permission ?? null : null,
     pointsCost: columns.pointsCost ? Math.max(0, Number(row.points_cost || 0)) : Math.max(0, Number(row.pointsCost || 0)),
     cooldown: columns.cooldown ? Number(row.cooldown || 1000) : Number(row.cooldown || 1000),
     lastUsed: columns.lastUsed ? Number(row.last_used || 0) : Number(row.lastUsed || 0),
@@ -8507,6 +8509,7 @@ export async function getBotRules(sid) {
   const hasRegex = await tableHasColumn('bot_rules', 'regex_enabled');
   const hasAdminOnly = await tableHasColumn('bot_rules', 'admin_only');
   const hasReq = await tableHasColumn('bot_rules', 'required_role_level');
+  const hasExecutionPermission = await tableHasColumn('bot_rules', 'execution_permission');
   const hasPointsCost = await tableHasColumn('bot_rules', 'points_cost');
   const hasCooldown = await tableHasColumn('bot_rules', 'cooldown');
   const hasLastUsed = await tableHasColumn('bot_rules', 'last_used');
@@ -8514,6 +8517,7 @@ export async function getBotRules(sid) {
     regex: hasRegex,
     adminOnly: hasAdminOnly,
     requiredRoleLevel: hasReq,
+    executionPermission: hasExecutionPermission,
     pointsCost: hasPointsCost,
     cooldown: hasCooldown,
     lastUsed: hasLastUsed,
@@ -8522,6 +8526,7 @@ export async function getBotRules(sid) {
     .concat(hasRegex ? ['regex_enabled'] : [])
     .concat(hasAdminOnly ? ['admin_only'] : [])
     .concat(hasReq ? ['required_role_level'] : [])
+    .concat(hasExecutionPermission ? ['execution_permission'] : [])
     .concat(hasPointsCost ? ['points_cost'] : [])
     .concat(hasCooldown ? ['cooldown'] : [])
     .concat(hasLastUsed ? ['last_used'] : []);
@@ -8942,6 +8947,11 @@ export async function listRouletteSessionsByToken(token, { q, limit = 50, offset
 export async function upsertBotRule(sid, rule) {
   ensure();
   validateCommandRuleRegex(rule);
+  validateCommandPermission(rule);
+  const hasExecutionPermission = await tableHasColumn('bot_rules', 'execution_permission');
+  if (rule.executionPermission != null && !hasExecutionPermission) {
+    throw Object.assign(new Error('실행 권한 저장을 위해 데이터베이스 업데이트가 필요합니다.'), { status: 503 });
+  }
   const hasRegex = await tableHasColumn('bot_rules', 'regex_enabled');
   if (rule.regex === true && !hasRegex) throw Object.assign(new Error('정규식 저장을 위해 데이터베이스 업데이트가 필요합니다.'), { status: 503 });
   const hasAdminOnly = await tableHasColumn('bot_rules', 'admin_only');
@@ -8951,6 +8961,8 @@ export async function upsertBotRule(sid, rule) {
   const hasLastUsed = await tableHasColumn('bot_rules', 'last_used');
   const keywords = normalizeBotRuleStringArray(rule.keywords);
   const responses = normalizeBotRuleStringArray(rule.responses);
+  // Old workers must deny, not broaden, restricted commands during a rolling deploy.
+  const legacyPermissionLevel = { everyone: 1, subscriber: 4, manager: 3, streamer: 4 }[rule.executionPermission];
   const row = {
     sid,
     id: rule.id,
@@ -8959,8 +8971,9 @@ export async function upsertBotRule(sid, rule) {
     responses,
     enabled: !!rule.enabled,
     ...(hasRegex ? { regex_enabled: rule.regex === true } : {}),
-    ...(hasAdminOnly ? { admin_only: !!rule.adminOnly } : {}),
-    ...(hasReq ? { required_role_level: Math.max(1, Math.min(4, Number(rule.requiredRoleLevel || 1))) } : {}),
+    ...(hasExecutionPermission && rule.executionPermission !== undefined ? { execution_permission: rule.executionPermission } : {}),
+    ...(hasAdminOnly ? { admin_only: legacyPermissionLevel == null ? !!rule.adminOnly : ['manager', 'streamer'].includes(rule.executionPermission) } : {}),
+    ...(hasReq ? { required_role_level: legacyPermissionLevel ?? Math.max(1, Math.min(4, Number(rule.requiredRoleLevel || 1))) } : {}),
     ...(hasPointsCost ? { points_cost: Math.max(0, Number(rule.pointsCost || 0)) } : {}),
     ...(hasCooldown ? { cooldown: Math.max(1000, Number(rule.cooldown || 0)) } : {}),
     ...(hasLastUsed ? { last_used: Number(rule.lastUsed || 0) } : {}),
