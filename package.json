@@ -132,8 +132,8 @@
     "globals": "^15.9.0",
     "jest": "^30.2.0",
     "playwright": "^1.61.1",
-    "postcss": "8.5.23",
-    "semver": "7.8.5",
+    "postcss": "8.5.32",
+    "semver": "7.8.6",
     "tailwindcss": "^3.4.1",
     "typescript": "^5.5.3",
     "typescript-eslint": "^8.62.1"
