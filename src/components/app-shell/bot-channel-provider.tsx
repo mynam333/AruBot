@@ -45,6 +45,7 @@ export function BotChannelProvider({ children }: { children: React.ReactNode }) 
   const [connectionError, setConnectionError] = useState('');
   const [switching, setSwitching] = useState(false);
   const request = useRef<AbortController | null>(null);
+  const refreshTask = useRef<Promise<void> | null>(null);
   const switchRequest = useRef<AbortController | null>(null);
   const dataRef = useRef<BotManagementContext | null>(null);
   const targetRef = useRef<string | null | undefined>(undefined);
@@ -52,6 +53,7 @@ export function BotChannelProvider({ children }: { children: React.ReactNode }) 
   const retryTimer = useRef<number | null>(null);
   const retryAttempt = useRef(0);
   const lastVerifiedAt = useRef(0);
+  const stopped = useRef(false);
 
   const cancelRetry = useCallback(() => {
     if (retryTimer.current !== null) window.clearTimeout(retryTimer.current);
@@ -65,9 +67,10 @@ export function BotChannelProvider({ children }: { children: React.ReactNode }) 
     if (ownerId) retainBotManagementOwner(ownerId);
   }, []);
 
-  const refresh = useCallback(async (): Promise<void> => {
+  const refresh = useCallback((): Promise<void> => {
+    if (request.current && refreshTask.current) return refreshTask.current;
     cancelRetry();
-    request.current?.abort();
+    stopped.current = false;
     const controller = new AbortController();
     request.current = controller;
     const url = new URL(window.location.href);
@@ -77,58 +80,66 @@ export function BotChannelProvider({ children }: { children: React.ReactNode }) 
     if (targetRef.current === undefined) targetRef.current = explicitOwner || storedOwner;
     if (!actorRef.current) actorRef.current = storedActor;
     const target = targetRef.current;
-    try {
-      const next = await readContext(target, controller.signal);
-      const previousActor = actorRef.current;
-      if (previousActor && previousActor !== next.actorUserId) {
-        throw new Error('로그인 계정이 변경되었습니다. 내 채널로 돌아가 다시 선택해 주세요.');
+    const task = (async () => {
+      try {
+        const next = await readContext(target, controller.signal);
+        const previousActor = actorRef.current;
+        if (previousActor && previousActor !== next.actorUserId) {
+          throw new Error('로그인 계정이 변경되었습니다. 내 채널로 돌아가 다시 선택해 주세요.');
+        }
+        if (controller.signal.aborted) return;
+        if (dataRef.current && (dataRef.current.actorUserId !== next.actorUserId
+          || dataRef.current.active.ownerUserId !== next.active.ownerUserId)) {
+          throw new Error('관리 채널이 변경되었습니다. 내 채널로 돌아가 다시 선택해 주세요.');
+        }
+        setBotManagementActor(next.actorUserId);
+        setBotManagementOwner(next.active.ownerUserId === next.actorUserId ? null : next.active.ownerUserId);
+        actorRef.current = next.actorUserId;
+        targetRef.current = next.active.ownerUserId === next.actorUserId ? null : next.active.ownerUserId;
+        if (url.searchParams.has('botOwner')) {
+          url.searchParams.delete('botOwner');
+          window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+        }
+        // Keep permission callbacks and dependent page effects stable on a no-op poll.
+        if (JSON.stringify(dataRef.current) !== JSON.stringify(next)) {
+          dataRef.current = next;
+          setData(next);
+        }
+        lastVerifiedAt.current = Date.now();
+        setStatus('ready');
+        setError('');
+        setConnectionError('');
+        retryAttempt.current = 0;
+      } catch (cause) {
+        if (controller.signal.aborted) return;
+        preserveRequestOwner();
+        if (isRetryableContextError(cause)) {
+          // A failed background check must not unmount editors or erase drafts.
+          // Keep the owner pinned; the server still authorizes every API operation.
+          setConnectionError(cause.message);
+          setError(cause.message);
+          setStatus(dataRef.current ? 'ready' : 'error');
+          retryTimer.current = window.setTimeout(() => {
+            retryTimer.current = null;
+            void refresh();
+          }, contextRetryDelay(retryAttempt.current++, cause));
+          return;
+        }
+        setConnectionError('');
+        stopped.current = true;
+        setData(null);
+        dataRef.current = null;
+        setStatus(cause instanceof ContextRequestError && cause.status === 401 ? 'session' : 'error');
+        setError(cause instanceof Error ? cause.message : '채널 관리 정보를 불러오지 못했습니다.');
+      } finally {
+        if (request.current === controller) {
+          request.current = null;
+          refreshTask.current = null;
+        }
       }
-      if (controller.signal.aborted) return;
-      if (dataRef.current && (dataRef.current.actorUserId !== next.actorUserId
-        || dataRef.current.active.ownerUserId !== next.active.ownerUserId)) {
-        throw new Error('관리 채널이 변경되었습니다. 내 채널로 돌아가 다시 선택해 주세요.');
-      }
-      setBotManagementActor(next.actorUserId);
-      setBotManagementOwner(next.active.ownerUserId === next.actorUserId ? null : next.active.ownerUserId);
-      actorRef.current = next.actorUserId;
-      targetRef.current = next.active.ownerUserId === next.actorUserId ? null : next.active.ownerUserId;
-      if (url.searchParams.has('botOwner')) {
-        url.searchParams.delete('botOwner');
-        window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
-      }
-      // Keep permission callbacks and dependent page effects stable on a no-op poll.
-      if (JSON.stringify(dataRef.current) !== JSON.stringify(next)) {
-        dataRef.current = next;
-        setData(next);
-      }
-      lastVerifiedAt.current = Date.now();
-      setStatus('ready');
-      setError('');
-      setConnectionError('');
-      retryAttempt.current = 0;
-    } catch (cause) {
-      if (controller.signal.aborted) return;
-      preserveRequestOwner();
-      if (isRetryableContextError(cause)) {
-        // A failed background check must not unmount editors or erase drafts.
-        // Keep the owner pinned; the server still authorizes every API operation.
-        setConnectionError(cause.message);
-        setError(cause.message);
-        setStatus(dataRef.current ? 'ready' : 'error');
-        retryTimer.current = window.setTimeout(() => {
-          retryTimer.current = null;
-          void refresh();
-        }, contextRetryDelay(retryAttempt.current++, cause));
-        return;
-      }
-      setConnectionError('');
-      setData(null);
-      dataRef.current = null;
-      setStatus(cause instanceof ContextRequestError && cause.status === 401 ? 'session' : 'error');
-      setError(cause instanceof Error ? cause.message : '채널 관리 정보를 불러오지 못했습니다.');
-    } finally {
-      if (request.current === controller) request.current = null;
-    }
+    })();
+    refreshTask.current = task;
+    return task;
   }, [preserveRequestOwner, cancelRetry]);
 
   useEffect(() => {
@@ -136,7 +147,11 @@ export function BotChannelProvider({ children }: { children: React.ReactNode }) 
     const expired = () => {
       cancelRetry();
       request.current?.abort();
+      request.current = null;
+      refreshTask.current = null;
+      stopped.current = true;
       switchRequest.current?.abort();
+      setSwitching(false);
       preserveRequestOwner();
       dataRef.current = null;
       setData(null);
@@ -144,12 +159,16 @@ export function BotChannelProvider({ children }: { children: React.ReactNode }) 
       setConnectionError('');
     };
     const revalidate = () => {
-      if (document.visibilityState !== 'visible' || request.current || retryTimer.current !== null) return;
+      if (stopped.current || document.visibilityState !== 'visible' || request.current || retryTimer.current !== null) return;
       if (dataRef.current && Date.now() - lastVerifiedAt.current < REVALIDATE_INTERVAL_MS) return;
       void refresh();
     };
-    const online = () => { if (document.visibilityState === 'visible' && !request.current) void refresh(); };
-    const authChanged = () => { void refresh(); };
+    const online = () => { if (!stopped.current && document.visibilityState === 'visible' && !request.current) void refresh(); };
+    const authChanged = () => {
+      expired();
+      setStatus('loading');
+      void refresh();
+    };
     const interval = window.setInterval(() => {
       if (dataRef.current) revalidate();
     }, REVALIDATE_INTERVAL_MS);
@@ -168,6 +187,8 @@ export function BotChannelProvider({ children }: { children: React.ReactNode }) 
     document.addEventListener('visibilitychange', revalidate);
     return () => {
       request.current?.abort();
+      request.current = null;
+      refreshTask.current = null;
       switchRequest.current?.abort();
       cancelRetry();
       window.clearInterval(interval);
@@ -190,6 +211,7 @@ export function BotChannelProvider({ children }: { children: React.ReactNode }) 
     setSwitching(true);
     try {
       const next = await readContext(target, controller.signal);
+      if (controller.signal.aborted) return;
       if (next.actorUserId !== current.actorUserId) {
         await refresh();
         throw new Error('로그인 계정이 변경되었습니다. 채널을 다시 선택해 주세요.');

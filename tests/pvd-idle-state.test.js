@@ -13,7 +13,7 @@ test('reports the real playing song without adding it to the paid donation queue
   const bindings = {
     pvdIdlePlayback: idle, getVideoQueue: () => queue,
     pvdPlaybackState: new Map([['sid', { idleDeferred: true, paused: true }]]),
-    getPvdVolumeForSid: async () => 80, getCurrentAtSec: () => 0, getCurrentPvdElapsedSec: () => 0,
+    getPvdVolumesForSid: async () => ({ video: 80, bgm: 25 }), getCurrentAtSec: () => 0, getCurrentPvdElapsedSec: () => 0,
   };
   const api = loadServerFunctions(['getActivePvdIdlePlayback', 'getPvdQueueSnapshot', 'controlPvdIdlePlayback'], {
     ...bindings, broadcastPvdControl: jest.fn(),
@@ -141,11 +141,12 @@ describe('OBS connection lifecycle', () => {
       pvdDurationProbeCoordinator: { dispatchPendingToSocket: () => 0 },
       notifyPvdAdminSubscribers: notify, getVideoQueue: () => [],
       getPvdViewerSettingsForSid: settings, pvdPlaybackState: new Map(),
+      setChzzkPlaybackBlocked() {},
     }).registerPvdRoutes();
     const connect = (clientId) => {
       const socket = new EventEmitter();
       socket.readyState = 1; socket.send = jest.fn(); socket.ping = jest.fn();
-      socket.close = () => { socket.readyState = 3; socket.emit('close', 1000, ''); };
+      socket.close = jest.fn((code = 1000, reason = '') => { socket.readyState = 3; socket.emit('close', code, reason); });
       const ready = server.listeners('connection')[0](socket, { url: `/api/pvd/ws?token=test&clientId=${clientId}`, headers: {} });
       return { socket, ready };
     };
@@ -177,6 +178,14 @@ describe('OBS connection lifecycle', () => {
     expect(h.store.snapshot('sid')).toBeNull();
     expect(h.sockets.has('sid')).toBe(false);
     finish({}); await connection.ready;
+    expect(h.sockets.has('sid')).toBe(false);
+  });
+
+  test('failed initial playback settings close the socket so the viewer can retry', async () => {
+    const h = harness(async () => { throw new Error('database temporarily unavailable'); });
+    const connection = h.connect('viewer-aaaa'); await connection.ready;
+    expect(connection.socket.close).toHaveBeenCalledWith(1013, 'Playback state temporarily unavailable');
+    expect(connection.socket.send).not.toHaveBeenCalled();
     expect(h.sockets.has('sid')).toBe(false);
   });
 });

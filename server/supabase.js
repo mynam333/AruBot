@@ -2066,7 +2066,7 @@ export async function revokeSession(sid) {
   return true;
 }
 
-export async function getSessionUserId(sid) {
+export async function getSessionUserId(sid, { strict = false } = {}) {
   ensure();
   if (!sid) return null;
   
@@ -2092,6 +2092,7 @@ export async function getSessionUserId(sid) {
     return result;
   } catch (error) {
     console.error('[getSessionUserId] Error:', error.message);
+    if (strict) throw error;
     return null;
   }
 }

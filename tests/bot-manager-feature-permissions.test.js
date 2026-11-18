@@ -162,12 +162,13 @@ describe('Delegated feature controls', () => {
     const noop = () => {};
     const load = callback('dashboard-page', 'loadDashboard', {
       connectionReadable: false, settingsReadable: false, commandsReadable: false, videoReadable: false,
-      hasLoadedRef: { current: false }, setRefreshing: noop, setLoading: noop, setPendingDetails: noop,
+      hasLoadedRef: { current: false }, loadRequest: { current: null }, AbortController,
+      setRefreshing: noop, setLoading: noop, setPendingDetails: noop,
       setError: noop, setDashboardData: noop, DOMException,
       readJsonResult: async (url) => { requests.push(url); return { ok: true, data: { platforms: [{ provider: 'chzzk' }] } }; },
     });
     await load();
-    expect(requests).toEqual(['/api/account/platforms', '/api/platforms/status?refresh=true']);
+    expect(requests).toEqual(['/api/account/platforms', '/api/platforms/status']);
   });
 
   test('drawing review is not blocked by an unrelated denied lookup or owner-only viewer URL', async () => {

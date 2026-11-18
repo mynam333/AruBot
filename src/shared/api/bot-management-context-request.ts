@@ -1,6 +1,8 @@
 import { getBrowserApiBase } from '@/shared/api/http';
 import type { BotChannel, BotManagementContext } from '@/shared/lib/bot-management-context';
 
+export const CONTEXT_REQUEST_TIMEOUT_MS = 30_000;
+
 export class ContextRequestError extends Error {
   constructor(message: string, readonly status: number, readonly retryAfterMs = 0) { super(message); }
 }
@@ -24,18 +26,25 @@ function isChannel(value: unknown): value is BotChannel {
 }
 
 export async function readContext(ownerId: string | null, signal: AbortSignal): Promise<BotManagementContext> {
+  signal.throwIfAborted();
   const controller = new AbortController();
   const cancel = () => controller.abort(signal.reason);
   signal.addEventListener('abort', cancel, { once: true });
   if (signal.aborted) cancel();
   let timedOut = false;
-  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, 10_000);
+  const timeoutError = new ContextRequestError('채널 권한 확인이 지연되고 있습니다. 자동으로 다시 확인합니다.', 408);
+  const timer = setTimeout(() => { timedOut = true; controller.abort(timeoutError); }, CONTEXT_REQUEST_TIMEOUT_MS);
+  let rejectAborted: () => void = () => {};
+  const aborted = new Promise<never>((_resolve, reject) => {
+    rejectAborted = () => reject(controller.signal.reason);
+    controller.signal.addEventListener('abort', rejectAborted, { once: true });
+  });
   try {
     const query = ownerId ? `?botOwner=${encodeURIComponent(ownerId)}` : '';
     // Bootstrap uses the actor's session directly, never the generic bot URL resolver.
-    const response = await fetch(`${getBrowserApiBase()}/api/bot-management/context${query}`, {
+    const response = await Promise.race([fetch(`${getBrowserApiBase()}/api/bot-management/context${query}`, {
       credentials: 'include', cache: 'no-store', signal: controller.signal,
-    });
+    }), aborted]);
     if (!response.ok) {
       const retryAfter = response.headers.get('Retry-After');
       const delay = retryAfter ? (/^\d+(?:\.\d+)?$/.test(retryAfter) ? Number(retryAfter) * 1000 : Date.parse(retryAfter) - Date.now()) : 0;
@@ -48,7 +57,8 @@ export async function readContext(ownerId: string | null, signal: AbortSignal): 
         response.status, Number.isFinite(delay) ? Math.max(0, Math.min(300_000, delay)) : 0,
       );
     }
-    const result: unknown = await response.json();
+    const result: unknown = await Promise.race([response.json(), aborted]);
+    controller.signal.throwIfAborted();
     const data = result as Partial<BotManagementContext> | null;
     if (!data || typeof data.actorUserId !== 'string' || !data.actorUserId
       || typeof data.isSiteAdmin !== 'boolean' || !isChannel(data.active)
@@ -58,13 +68,15 @@ export async function readContext(ownerId: string | null, signal: AbortSignal): 
     return data as BotManagementContext;
   } catch (cause) {
     if (signal.aborted) throw cause;
-    if (timedOut) throw new ContextRequestError('채널 권한 확인이 지연되고 있습니다. 자동으로 다시 확인합니다.', 408);
-    if (cause instanceof TypeError || (cause instanceof Error && cause.name === 'NetworkError')) {
+    const name = cause && typeof cause === 'object' && 'name' in cause ? cause.name : '';
+    if (timedOut || name === 'TimeoutError') throw timeoutError;
+    if (cause instanceof TypeError || name === 'NetworkError' || name === 'AbortError') {
       throw new ContextRequestError('서버 연결이 잠시 끊겼습니다. 자동으로 다시 연결합니다.', 0);
     }
     throw cause;
   } finally {
     clearTimeout(timer);
     signal.removeEventListener('abort', cancel);
+    controller.signal.removeEventListener('abort', rejectAborted);
   }
 }

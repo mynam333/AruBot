@@ -6,6 +6,7 @@ const { assertBotManagerEffects, mergeBotManagerSettings, filterBotManagerSettin
 const { normalizePointAward } = require('./helpers/load-source.cjs')('server/point-earning-policy.js');
 const { normalizeChzzkVideoDonationSettings } = require('./helpers/load-source.cjs')('server/chzzk-video-donation.js');
 const { getPvdBgmSettings } = require('./helpers/load-source.cjs')('server/pvd-bgm.js');
+const pvdVolume = require('./helpers/load-source.cjs')('shared/pvd-volume.js');
 
 const source = ts.createSourceFile('supabase.js', fs.readFileSync(path.join(__dirname, '../server/supabase.js'), 'utf8'), ts.ScriptTarget.Latest, true);
 const names = ['setBotSettings', 'patchBotSettings', 'updateBotSettingsAtomically'];
@@ -47,7 +48,7 @@ function harness(initial = {}, extra = {}) {
     normalizeRouletteDefinition: (value) => value,
     normalizeBlockedBotUsers: (value) => value || [],
     buildBotUserBlockKeys: (value) => new Set([value.toLowerCase()]),
-    normalizePvdVolume: Number,
+    ...pvdVolume,
     normalizeChzzkVideoDonationSettings,
     chzzkVideoRuntime: { configure: jest.fn() },
     getChzzkVideoDonationPublicSettings: (_sid, settings) => {

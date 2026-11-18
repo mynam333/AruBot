@@ -534,6 +534,8 @@ export function VideoDonationSettingsDialog({ variant = 'secondary', label = '�
   const [maxDurationMinutes, setMaxDurationMinutes] = useState('10');
   const [perUserLimit, setPerUserLimit] = useState('0');
   const [volume, setVolume] = useState('100');
+  const [bgmVolume, setBgmVolume] = useState('100');
+  const volumeDirtyRef = useRef({ video: false, bgm: false });
   const [providers, setProviders] = useState({
     youtube: true,
     tiktok: false,
@@ -588,6 +590,8 @@ export function VideoDonationSettingsDialog({ variant = 'secondary', label = '�
       setMaxDurationMinutes(String(Math.max(1, Math.round(Number(payload.maxDurationSec || 600) / 60))));
       setPerUserLimit(String(payload.perUserLimit ?? 0));
       setVolume(String(Math.max(0, Math.min(100, Math.round(Number(payload.volume ?? 100))))));
+      setBgmVolume(String(Math.max(0, Math.min(100, Math.round(Number(payload.bgm?.volume ?? payload.volume ?? 100))))));
+      volumeDirtyRef.current = { video: false, bgm: false };
       setProviders({
         youtube: payload.providers?.youtube !== false,
         tiktok: payload.providers?.tiktok === true,
@@ -644,10 +648,13 @@ export function VideoDonationSettingsDialog({ variant = 'secondary', label = '�
         pointsPerSecond: Math.max(0, Number(pointsPerSecond || 0)),
         maxDurationSec: Math.max(1, Number(maxDurationMinutes || 1)) * 60,
         perUserLimit: Math.max(0, Number(perUserLimit || 0)),
-        volume: Math.max(0, Math.min(100, Math.round(Number(volume || 0)))),
+        ...(volumeDirtyRef.current.video ? { volume: Math.max(0, Math.min(100, Math.round(Number(volume || 0)))) } : {}),
         providers,
         idlePlaylist,
-        bgm: { enabled: bgmEnabled, acceptEnabled: bgmAcceptEnabled, pointsPerSecond: Number(bgmPointsPerSecond), idlePlaylist: bgmIdlePlaylist },
+        bgm: {
+          enabled: bgmEnabled, acceptEnabled: bgmAcceptEnabled, pointsPerSecond: Number(bgmPointsPerSecond), idlePlaylist: bgmIdlePlaylist,
+          ...(volumeDirtyRef.current.bgm ? { volume: Math.max(0, Math.min(100, Math.round(Number(bgmVolume || 0)))) } : {}),
+        },
         chzzkVideoDonation: {
           pauseEnabled: !chzzkUrlRemoving && chzzkVideoDonation.pauseEnabled,
           queueEnabled: !chzzkUrlRemoving && chzzkVideoDonation.queueEnabled,
@@ -837,6 +844,20 @@ export function VideoDonationSettingsDialog({ variant = 'secondary', label = '�
         <Field label="BGM 초당 포인트">
           <Input type="number" min={0} step="any" value={bgmPointsPerSecond} onChange={(event) => setBgmPointsPerSecond(event.target.value)} />
         </Field>
+        <Field label={`BGM 소리 크기 ${Math.max(0, Math.min(100, Math.round(Number(bgmVolume || 0))))}%`}>
+          <div className="flex min-h-[var(--control-height)] min-w-0 items-center gap-3 rounded-[var(--radius-control)] border bg-background/80 px-4">
+            <input
+              type="range"
+              min="0"
+              max="100"
+              value={bgmVolume}
+              onChange={(event) => { volumeDirtyRef.current.bgm = true; setBgmVolume(event.target.value); }}
+              className="min-w-0 flex-1 accent-primary"
+              aria-label="BGM 소리 크기"
+            />
+            <span className="w-[4ch] text-right text-sm font-semibold tabular-nums">{Math.max(0, Math.min(100, Math.round(Number(bgmVolume || 0))))}%</span>
+          </div>
+        </Field>
         <fieldset disabled={!bgmEnabled} className="min-w-0 disabled:opacity-50">
           <VideoDonationIdlePlaylistEditor value={bgmIdlePlaylist} onChange={setBgmIdlePlaylist} title="대기 BGM" idPrefix="bgm-idle" />
         </fieldset>
@@ -851,14 +872,14 @@ export function VideoDonationSettingsDialog({ variant = 'secondary', label = '�
         <Field label="1인 대기열 제한">
           <Input value={perUserLimit} onChange={(event) => setPerUserLimit(event.target.value)} inputMode="numeric" />
         </Field>
-        <Field label={`기본 소리 크기 ${Math.max(0, Math.min(100, Math.round(Number(volume || 0))))}%`}>
+        <Field label={`영상 후원 소리 크기 ${Math.max(0, Math.min(100, Math.round(Number(volume || 0))))}%`}>
           <div className="flex min-h-[var(--control-height)] min-w-0 items-center gap-[clamp(0.75rem,1.5vw,1rem)] rounded-[var(--radius-control)] border bg-background/80 px-[clamp(0.85rem,1.6vw,1.1rem)]">
             <input
               type="range"
               min="0"
               max="100"
               value={volume}
-              onChange={(event) => setVolume(event.target.value)}
+              onChange={(event) => { volumeDirtyRef.current.video = true; setVolume(event.target.value); }}
               className="min-w-0 flex-1 accent-primary"
               aria-label="영상 후원 기본 소리 크기"
             />

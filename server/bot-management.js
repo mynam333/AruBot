@@ -22,14 +22,20 @@ function requestPath(req) {
 export function createBotManagement({ store, getActorUserId, getAdminStatus, getStoredSettings, logger = console }) {
   const sockets = new Set();
 
-  async function context(req) {
+  async function context(req, { includeChannels = false } = {}) {
     const actorUserId = await getActorUserId(req);
     if (!actorUserId) throw failure('로그인이 필요합니다.', 401, 'login_required');
     const ownerUserId = requestedBotOwner(req) || String(actorUserId);
+    if (typeof store.getContext === 'function') {
+      const current = await store.getContext(String(actorUserId), ownerUserId, { includeChannels });
+      if (!current) throw failure('이 채널의 봇 관리 권한이 없거나 회수되었습니다.');
+      return current;
+    }
     const isSiteAdmin = (await getAdminStatus(actorUserId))?.isAdmin === true;
     const active = await store.getAccess(String(actorUserId), ownerUserId, isSiteAdmin);
     if (!active) throw failure('이 채널의 봇 관리 권한이 없거나 회수되었습니다.');
-    return { actorUserId: String(actorUserId), isSiteAdmin, active };
+    return { actorUserId: String(actorUserId), isSiteAdmin, active,
+      ...(includeChannels ? { channels: await store.listChannels(String(actorUserId), { isSiteAdmin }) } : {}) };
   }
 
   async function authorize(req) {
@@ -119,10 +125,10 @@ export function createBotManagement({ store, getActorUserId, getAdminStatus, get
   }
 
   function registerRoutes(app, writeMiddleware) {
-    const route = (handler, ownerOnly = false) => async (req, res) => {
+    const route = (handler, ownerOnly = false, includeChannels = false) => async (req, res) => {
       res.setHeader('Cache-Control', 'private, no-store');
       try {
-        const auth = await context(req);
+        const auth = await context(req, { includeChannels });
         if (ownerOnly && auth.active.role !== 'owner' && auth.active.role !== 'site_admin') {
           throw failure('봇 관리자 추가와 권한 변경은 채널 주인만 할 수 있습니다.');
         }
@@ -130,7 +136,7 @@ export function createBotManagement({ store, getActorUserId, getAdminStatus, get
       } catch (error) { return sendError(res, error); }
     };
     app.get('/api/bot-management/context', route(async (_req, auth) => ({ ...auth,
-      channels: await store.listChannels(auth.actorUserId, { isSiteAdmin: auth.isSiteAdmin }), scopeGroups: BOT_MANAGER_SCOPE_GROUPS })));
+      scopeGroups: BOT_MANAGER_SCOPE_GROUPS }), false, true));
     app.get('/api/bot-management/channels', route(async (req, auth) => ({
       channels: await store.listChannels(auth.actorUserId, { isSiteAdmin: auth.isSiteAdmin, query: String(req.query.q || '').slice(0, 100), limit: 30 }),
     })));

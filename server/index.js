@@ -34,6 +34,7 @@ import { createPlatformProfileService } from './platform-profiles.js';
 import { createChzzkInfoClient, chzzkChannelIdentityMatches, chzzkNonNegativeNumber } from './chzzk-info.js';
 import { createPvdIdlePlaybackStore } from './pvd-idle-playback.js';
 import { createBgmPlayerPresence, getPvdBgmSettings, insertPvdRequest, updateBgmPlaybackAvailability } from './pvd-bgm.js';
+import { normalizePvdVolume, getPvdVolumes, getPvdVolumePatch } from '../shared/pvd-volume.js';
 import { normalizeChzzkVideoDonationSettings } from './chzzk-video-donation.js';
 import { createChzzkVideoRuntime } from './chzzk-video-runtime.js';
 import { setChzzkPlaybackBlocked } from './pvd-chzzk-pause.js';
@@ -1107,7 +1108,7 @@ app.use(rejectUnsafeTextInput);
 
 const botManagement = createBotManagement({
   store: botManagementStore,
-  getActorUserId: getSessionActorUserId,
+  getActorUserId: (req) => getSessionActorUserId(req, { strict: true }),
   getAdminStatus: getAppUserAdminStatus,
   getStoredSettings: getBotSettingsStrict,
 });
@@ -4212,9 +4213,7 @@ app.post('/api/video-donation/control-by-token', async (req, res) => {
       return res.json({ ok: true, ...result });
     }
     if (op === 'volume') {
-      const volume = normalizePvdVolume(req.body?.volume ?? req.body?.value ?? 100);
-      await patchBotSettings(sid, { videoDonationVolume: volume });
-      const message = await broadcastPvdControl(sid, { op, volume });
+      const message = await controlPvdVolumeForSid(sid, req.body);
       return res.json({ ok: true, message });
     }
     if (op === 'duration_probe_result') {
@@ -7150,7 +7149,7 @@ async function getPvdQueueSnapshot(sid, reason = 'sync') {
   const state = pvdPlaybackState.get(sid) || null;
   const idle = getActivePvdIdlePlayback(sid);
   const current = idle?.item || (state?.idleDeferred ? null : q[0]) || null;
-  const volume = await getPvdVolumeForSid(sid).catch(() => 100);
+  const volumes = await getPvdVolumesForSid(sid).catch(() => ({ video: 100, bgm: 100 }));
   return {
     type: 'video-donation.queue',
     reason,
@@ -7165,7 +7164,8 @@ async function getPvdQueueSnapshot(sid, reason = 'sync') {
     idleDeferred: !!q[0] && state?.idleDeferred === true,
     atSec: idle ? idle.atSec : current ? getCurrentAtSec(sid) : 0,
     elapsedSec: idle ? idle.atSec : current ? getCurrentPvdElapsedSec(sid) : 0,
-    volume,
+    volume: volumes.video,
+    bgm: { volume: volumes.bgm },
     serverNow: Date.now(),
   };
 }
@@ -7307,15 +7307,24 @@ async function renewChzzkVideoQueueJobs() {
   }
 }
 
-function normalizePvdVolume(value, fallback = 100) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return Math.max(0, Math.min(100, Math.round(Number(fallback || 100))));
-  return Math.max(0, Math.min(100, Math.round(n)));
+async function getPvdVolumesForSid(sid) {
+  const settings = await getBotSettings(sid).catch(() => ({})) || {};
+  return getPvdVolumes(settings);
 }
 
 async function getPvdVolumeForSid(sid) {
-  const settings = await getBotSettings(sid).catch(() => ({})) || {};
-  return normalizePvdVolume(settings.videoDonationVolume ?? 100);
+  return (await getPvdVolumesForSid(sid)).video;
+}
+
+async function controlPvdVolumeForSid(sid, body = {}) {
+  const target = String(body.target ?? 'video').toLowerCase();
+  if (target !== 'video' && target !== 'bgm') {
+    throw Object.assign(new Error('invalid volume target'), { statusCode: 400 });
+  }
+  const volume = normalizePvdVolume(body.volume ?? body.value ?? 100);
+  const input = target === 'bgm' ? { bgm: { volume } } : { volume };
+  await updateBotSettingsAtomically(sid, (settings) => ({ ...settings, ...getPvdVolumePatch(settings, input) }));
+  return broadcastPvdControl(sid, { op: target === 'bgm' ? 'bgm-volume' : 'volume', target, volume });
 }
 
 async function getPvdViewerSettingsForSid(sid) {
@@ -7331,7 +7340,7 @@ async function getPvdViewerSettingsForSid(sid) {
 
 function getPvdBgmViewerSettings(settings) {
   const bgm = getPvdBgmSettings(settings);
-  return { ...bgm, idlePlaylist: getPvdIdlePlaylistForViewer({ ...settings.bgmIdlePlaylist, enabled: bgm.enabled && settings.bgmIdlePlaylist?.enabled === true }) };
+  return { ...bgm, volume: getPvdVolumes(settings).bgm, idlePlaylist: getPvdIdlePlaylistForViewer({ ...settings.bgmIdlePlaylist, enabled: bgm.enabled && settings.bgmIdlePlaylist?.enabled === true }) };
 }
 
 function getPvdItemStartSec(item) {
@@ -7500,7 +7509,7 @@ async function broadcastPvdControl(sid, message) {
       try { if (ws.readyState === 1) ws.send(text, { compress: false }); } catch { }
     }
   }
-  notifyPvdAdminSubscribers(sid, payload.op === 'volume' ? 'volume_changed' : 'playback_control').catch(() => null);
+  notifyPvdAdminSubscribers(sid, payload.op === 'volume' || payload.op === 'bgm-volume' ? 'volume_changed' : 'playback_control').catch(() => null);
   return payload;
 }
 
@@ -8000,7 +8009,7 @@ app.get('/api/video-donation/settings', async (req, res) => {
     const idlePlaylist = normalizePvdIdlePlaylist(settings.videoDonationIdlePlaylist);
     chzzkVideoRuntime.configure(sid, settings);
     return res.json({ pointsPerSecond: pps, acceptEnabled: enabled, maxDurationSec: maxDur, perUserLimit, volume, providers, idlePlaylist,
-      bgm: { ...getPvdBgmSettings(settings), idlePlaylist: normalizePvdIdlePlaylist(settings.bgmIdlePlaylist) },
+      bgm: { ...getPvdBgmSettings(settings), volume: getPvdVolumes(settings).bgm, idlePlaylist: normalizePvdIdlePlaylist(settings.bgmIdlePlaylist) },
       chzzkVideoDonation: getChzzkVideoDonationPublicSettings(sid, settings),
     });
   } catch (e) {
@@ -8177,7 +8186,6 @@ app.post('/api/video-donation/settings', async (req, res) => {
     const enabled = body.acceptEnabled === true;
     const maxDur = Math.max(1, Number(body.maxDurationSec ?? 600));
     const perUserLimit = Math.max(0, Number(body.perUserLimit ?? 0));
-    const volume = normalizePvdVolume(body.volume ?? 100);
     let idlePlaylist;
     let bgm;
     const savedSettings = await updateBotSettingsAtomically(sid, (settings) => {
@@ -8219,7 +8227,7 @@ app.post('/api/video-donation/settings', async (req, res) => {
         videoDonationAcceptEnabled: enabled,
         videoDonationMaxDurationSec: maxDur,
         videoDonationPerUserQueueLimit: perUserLimit,
-        videoDonationVolume: volume,
+        ...getPvdVolumePatch(settings, body),
         videoDonationProviders: providers,
         videoDonationIdlePlaylist: idlePlaylist,
         bgmEnabled: bgm.enabled === true,
@@ -8232,9 +8240,12 @@ app.post('/api/video-donation/settings', async (req, res) => {
       };
     });
     chzzkVideoRuntime.configure(sid, savedSettings);
+    const volumes = getPvdVolumes(savedSettings);
+    bgm.volume = volumes.bgm;
     const viewerIdlePlaylist = getPvdIdlePlaylistForViewer(idlePlaylist);
     await Promise.all([
-      broadcastPvdControl(sid, { op: 'volume', volume }).catch(() => null),
+      ...(body.volume != null ? [broadcastPvdControl(sid, { op: 'volume', target: 'video', volume: volumes.video }).catch(() => null)] : []),
+      ...(body.bgm?.volume != null ? [broadcastPvdControl(sid, { op: 'bgm-volume', target: 'bgm', volume: volumes.bgm }).catch(() => null)] : []),
       broadcastPvdControl(sid, { op: 'idle-playlist', idlePlaylist: viewerIdlePlaylist }).catch(() => null),
     ]);
     if (pvdPlaybackState.get(sid)?.idleDeferred) {
@@ -12572,9 +12583,7 @@ app.post('/api/video-donation/control', async (req, res) => {
     const q = getVideoQueue(sid);
     const op = String(req.body?.op || '').toLowerCase();
     if (op === 'volume') {
-      const volume = normalizePvdVolume(req.body?.volume ?? req.body?.value ?? 100);
-      await patchBotSettings(sid, { videoDonationVolume: volume });
-      const message = await broadcastPvdControl(sid, { op, volume });
+      const message = await controlPvdVolumeForSid(sid, req.body);
       return res.json({ ok: true, message });
     }
     if (['pause', 'play', 'skip'].includes(op)) {
@@ -17339,10 +17348,14 @@ function normalizeCimeProfile(content) {
   };
 }
 
-async function getSessionActorUserId(req) {
+async function getSessionActorUserId(req, { strict = false } = {}) {
   const sidToken = getCookieSid(req);
   if (!sidToken) return null;
-  try { return await getSessionUserId(sidToken); } catch { return null; }
+  try { return await getSessionUserId(sidToken, { strict }); }
+  catch (error) {
+    if (strict) throw error;
+    return null;
+  }
 }
 
 async function getCurrentSessionUserId(req) {
@@ -21309,6 +21322,7 @@ app.get('/api/local-remote/overview', requireAutomationLocalAgent, async (req, r
         botEnabled: settings.botEnabled !== false,
         videoDonationAcceptEnabled: settings.videoDonationAcceptEnabled === true,
         videoDonationVolume: normalizePvdVolume(settings.videoDonationVolume ?? 100),
+        videoDonationBgmVolume: getPvdVolumes(settings).bgm,
         drawingDonation: normalizeDrawingDonationSettings(settings.drawingDonation),
       },
     });
@@ -21418,9 +21432,7 @@ app.post('/api/local-remote/video-donation/control', requireAutomationLocalAgent
     const q = getVideoQueue(sid);
     const op = String(req.body?.op || '').toLowerCase();
     if (op === 'volume') {
-      const volume = normalizePvdVolume(req.body?.volume ?? req.body?.value ?? 100);
-      await patchBotSettings(sid, { videoDonationVolume: volume });
-      const message = await broadcastPvdControl(sid, { op, volume });
+      const message = await controlPvdVolumeForSid(sid, req.body);
       return res.json({ ok: true, message });
     }
     if (!q[0]) return res.json({ ok: true, empty: true, paused: null, idleDeferred: false, atSec: 0 });
@@ -29955,7 +29967,7 @@ async function validateWebSocketTokenConnection(token, tokenType, req) {
 
       if (sid) {
         try {
-          const settings = await getBotSettings(sid);
+          const settings = await getBotSettingsStrict(sid);
           if (!settings) {
             pvdTokenToSid.delete(token);
             const error = new Error('Bot settings not found');
@@ -30307,6 +30319,8 @@ function registerPvdRoutes() {
         ws.send(JSON.stringify(payload), { compress: false });
       } catch (error) {
         console.error('[PVD WS] Error sending initial payload:', error);
+        // Do not leave a heartbeat-only connection that never received playback state.
+        try { ws.close(1013, 'Playback state temporarily unavailable'); } catch { }
       }
 
       ws.on('error', (error) => {

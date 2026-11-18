@@ -144,6 +144,41 @@ export function createBotManagementStore({ withPgClient, ensureIdentityTables, n
     return rows[0] ? access(rows[0], actor, isSiteAdmin) : null;
   }
 
+  async function getContext(actorUserId, ownerUserId, { includeChannels = false } = {}) {
+    const actor = identity(actorUserId);
+    const owner = identity(ownerUserId);
+    await ensureSchema();
+    // Read admin status, the grant and optional switcher entries in one fresh
+    // snapshot. Do not cache authorization or acquire a pool client per lookup.
+    const { rows } = await withPgClient((pg) => pg.query(
+      `with active as (
+         select ${USER_FIELDS}, m.scopes, actor.is_admin
+         from app_users actor join app_users u on u.id = $2
+         left join bot_managers m on m.owner_user_id = u.id and m.member_user_id = actor.id
+         where actor.id = $1 and (u.id = actor.id or actor.is_admin = true or m.id is not null)
+       )
+       select active.*, case when $3::boolean then (
+         select coalesce(jsonb_agg(channels), '[]'::jsonb) from (
+           select ${USER_FIELDS}, m.scopes from app_users u
+           left join bot_managers m on m.owner_user_id = u.id and m.member_user_id = $1
+           where u.id = $1 or m.id is not null
+           order by (u.id = $1) desc, (m.id is not null) desc,
+             coalesce(u.display_name, u.id), u.id limit 50
+         ) channels
+       ) else null end as channels from active`,
+      [actor, owner, includeChannels === true],
+    ));
+    const row = rows[0];
+    if (!row) return null;
+    const isSiteAdmin = row.is_admin === true;
+    return {
+      actorUserId: actor, isSiteAdmin, active: await access(row, actor, isSiteAdmin),
+      ...(includeChannels === true ? {
+        channels: await Promise.all(row.channels.map((channel) => access(channel, actor, isSiteAdmin))),
+      } : {}),
+    };
+  }
+
   const matchesUser = `(u.id ilike $2 escape '!' or u.display_name ilike $2 escape '!'
     or exists (select 1 from platform_accounts p where p.user_id = u.id
       and (p.channel_name ilike $2 escape '!' or p.channel_id ilike $2 escape '!'
@@ -319,5 +354,5 @@ export function createBotManagementStore({ withPgClient, ensureIdentityTables, n
     return auditEntry(rows[0]);
   }
 
-  return { ensureSchema, getAccess, listChannels, listMembers, searchUsers, addMember, updateMember, removeMember, listAudit, recordAction };
+  return { ensureSchema, getAccess, getContext, listChannels, listMembers, searchUsers, addMember, updateMember, removeMember, listAudit, recordAction };
 }

@@ -68,9 +68,45 @@ test('a hanging permission request times out and can recover', async () => {
     signal.addEventListener('abort', () => reject(signal.reason));
   }));
   const result = api.readContext('target', new AbortController().signal).catch((cause) => cause);
-  await jest.advanceTimersByTimeAsync(10_000);
+  await jest.advanceTimersByTimeAsync(api.CONTEXT_REQUEST_TIMEOUT_MS);
   expect(api.isRetryableContextError(await result)).toBe(true);
   expect((await result).status).toBe(408);
+});
+
+test('a valid slow context is not abandoned at the old ten-second deadline', async () => {
+  const api = requests();
+  fetch.mockImplementationOnce(() => new Promise((resolve) => setTimeout(() => resolve(response()), 15_000)));
+  const pending = api.readContext('target', new AbortController().signal);
+  await jest.advanceTimersByTimeAsync(15_000);
+  await expect(pending).resolves.toEqual(context());
+  expect(fetch).toHaveBeenCalledTimes(1);
+  expect(jest.getTimerCount()).toBe(0);
+});
+
+test.each(['fetch', 'body'])('the context deadline bounds a hanging %s even if it ignores abort', async (stage) => {
+  const api = requests();
+  const hanging = new Promise(() => {});
+  fetch.mockImplementationOnce(() => stage === 'fetch' ? hanging : Promise.resolve({ ok: true, json: () => hanging }));
+  const pending = api.readContext('target', new AbortController().signal).catch((error) => error);
+  await jest.advanceTimersByTimeAsync(api.CONTEXT_REQUEST_TIMEOUT_MS);
+  expect(await pending).toMatchObject({ status: 408 });
+  expect(jest.getTimerCount()).toBe(0);
+});
+
+test('pre-cancelled context requests never reach the network', async () => {
+  const api = requests(), controller = new AbortController();
+  controller.abort();
+  await expect(api.readContext('target', controller.signal)).rejects.toBe(controller.signal.reason);
+  expect(fetch).not.toHaveBeenCalled();
+  expect(jest.getTimerCount()).toBe(0);
+});
+
+test('an unexpected transport abort has a localized retryable error', async () => {
+  const api = requests();
+  fetch.mockRejectedValueOnce(new DOMException('signal is aborted without reason', 'AbortError'));
+  const error = await api.readContext('target', new AbortController().signal).catch((cause) => cause);
+  expect(api.isRetryableContextError(error)).toBe(true);
+  expect(error.message).not.toContain('aborted');
 });
 
 test('parent cancellation is not mistaken for a recoverable network failure', async () => {
@@ -198,7 +234,41 @@ test.each([401, 403, 404])('HTTP %i removes protected content and does not retry
   expect(h.value()).toBeNull();
   expect(h.ownerStorage.getBotManagementOwner()).toBe('target');
   await h.advance(60_000);
+  await h.visible();
+  await h.event('online');
   expect(fetch).toHaveBeenCalledTimes(2);
+});
+
+test('repeated manual refreshes share an in-flight request without aborting it', async () => {
+  const h = mount(); await h.settle();
+  let resolve;
+  fetch.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+  const first = h.value().refresh(), second = h.value().refresh();
+  expect(first).toBe(second);
+  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(fetch.mock.calls[1][1].signal.aborted).toBe(false);
+  resolve(response()); await first; await h.settle();
+  expect(h.value().active.ownerUserId).toBe('target');
+});
+
+test('an auth change clears old permissions before its new verification completes', async () => {
+  const h = mount(); await h.settle();
+  fetch.mockImplementationOnce(() => new Promise(() => {}));
+  await h.event('arubot:auth-changed');
+  expect(h.value()).toBeNull();
+  await h.advance(30_000);
+  expect(h.value()).toBeNull();
+});
+
+test('a response arriving after logout cannot restore protected content', async () => {
+  let resolve;
+  fetch.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+  const h = mount(); await h.settle();
+  await h.event('arubot:logout');
+  resolve(response()); await h.settle();
+  await h.visible(); await h.event('online'); await h.advance(60_000);
+  expect(h.value()).toBeNull();
+  expect(fetch).toHaveBeenCalledTimes(1);
 });
 
 test('auth changes bypass freshness and account changes never reuse the previous editor', async () => {

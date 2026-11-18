@@ -83,7 +83,7 @@ function mount(initial = {}, playerRole = 'video') {
   global.document = { hidden: false, createElement: node, addEventListener: listen, removeEventListener() {} };
   global.WebSocket = class {
     static OPEN = 1; static CLOSING = 2; static CLOSED = 3;
-    constructor() { socket = this; this.readyState = 1; }
+    constructor() { socket = this; this.readyState = 1; Promise.resolve().then(() => this.onopen?.()); }
     close() { this.readyState = 3; }
     send(data) { if (JSON.parse(data).type === 'ping') this.onmessage?.({ data: '{"type":"pong"}' }); }
   };

@@ -10,7 +10,7 @@ function snapshot(queue, state = {}, idle = null) {
     getVideoQueue: () => queue,
     pvdPlaybackState: new Map([['sid', state]]),
     getActivePvdIdlePlayback: () => idle,
-    getPvdVolumeForSid: async () => 30,
+    getPvdVolumesForSid: async () => ({ video: 30, bgm: 70 }),
     getCurrentAtSec: () => 40,
     getCurrentPvdElapsedSec: () => 30,
   }).getPvdQueueSnapshot('sid');

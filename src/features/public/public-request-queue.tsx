@@ -103,7 +103,9 @@ export function PublicRequestQueue({ channelUid, initialData }: { channelUid: st
       if (document.hidden) { timer = setTimeout(sync, 5000); return; }
       inFlight = true;
       controller = new AbortController();
-      const timeout = setTimeout(() => controller?.abort(), 8000);
+      const requestController = controller;
+      let timedOut = false;
+      const timeout = setTimeout(() => { timedOut = true; requestController.abort(); }, 8000);
       setRefreshing(true);
       try {
         const response = await fetch(apiUrl(endpoint), { signal: controller.signal, credentials: 'omit', cache: 'no-store' });
@@ -122,7 +124,11 @@ export function PublicRequestQueue({ channelUid, initialData }: { channelUid: st
         }
         failures = 0;
       } catch (cause) {
-        if (!disposed) setError(cause instanceof Error ? cause.message : '대기열을 불러오지 못했습니다.');
+        if (!disposed) setError(timedOut
+          ? '대기열 응답이 지연되고 있습니다. 자동으로 다시 확인합니다.'
+          : cause instanceof TypeError || (cause && typeof cause === 'object' && 'name' in cause && ['AbortError', 'TimeoutError', 'NetworkError'].includes(String(cause.name)))
+            ? '대기열 연결이 잠시 끊겼습니다. 자동으로 다시 연결합니다.'
+            : cause instanceof Error ? cause.message : '대기열을 불러오지 못했습니다.');
         failures += 1;
       } finally {
         clearTimeout(timeout);

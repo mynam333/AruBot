@@ -172,6 +172,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
   const lastServerSyncRef = useRef<number>(0);
   const serverSyncInFlightRef = useRef<{ version: number; controller: AbortController; repeat: boolean } | null>(null);
   const playbackPayloadVersionRef = useRef(0);
+  const playbackSnapshotVersionRef = useRef(0);
   const serverPlaybackRevisionRef = useRef(0);
   const serverPlaybackEpochRef = useRef('');
   const retiredPlaybackEpochsRef = useRef(new Set<string>());
@@ -475,7 +476,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
       localPlaybackControlsRef.current.add(controlId);
       if (localPlaybackControlsRef.current.size > 64) localPlaybackControlsRef.current.delete(localPlaybackControlsRef.current.values().next().value!);
     }
-    const body = { token, op, atSec, volume: nextVolume, durationSec, source, itemId: currentItemIdRef.current,
+    const body = { token, op, atSec, volume: nextVolume, target: op === 'volume' ? playerRole : undefined, durationSec, source, itemId: currentItemIdRef.current,
       clientId: idleClientIdRef.current, controlId, playbackEpoch: serverPlaybackEpochRef.current,
       playbackRevision: serverPlaybackRevisionRef.current,
     };
@@ -1348,10 +1349,12 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
     }
     serverPlaybackRevisionRef.current = revision;
     playbackPayloadVersionRef.current += 1;
+    playbackSnapshotVersionRef.current += 1;
     applyServerPauseState(payload);
-    if (payload.volume != null) applyVolume(Number(payload.volume));
     if (isUnknownRecord(payload.bgm)) bgmConfigRef.current = payload.bgm;
     const bgm = bgmConfigRef.current;
+    const ownVolume = playerRole === 'bgm' ? bgm.volume ?? payload.volume : payload.volume;
+    if (ownVolume != null) applyVolume(Number(ownVolume));
     bgmEnabledRef.current = bgm.enabled === true;
     const playlist = Object.prototype.hasOwnProperty.call(payload, 'idlePlaylist') || playerRole === 'bgm'
       ? applyIdlePlaylistConfig(playerRole === 'bgm' ? bgm.idlePlaylist : payload.idlePlaylist)
@@ -1684,11 +1687,19 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
     let apiUrl: URL;
     try { apiUrl = new URL(apiBase); } catch { apiUrl = new URL(window.location.origin); }
     const wsProto = apiUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+    let disposed = false;
+    let socketOpen = false;
+    let snapshotAtConnect = playbackSnapshotVersionRef.current;
+
+    const syncSnapshot = async (force = false) => {
+      await resyncFromServer(force);
+      if (!disposed && socketOpen && playbackSnapshotVersionRef.current > snapshotAtConnect) stopPolling();
+    };
 
     const startPolling = () => {
       if (pollTimerRef.current) return; // already polling
-      pollTimerRef.current = setInterval(async () => {
-        if (!isPlayerHidden()) void resyncFromServer(false);
+      pollTimerRef.current = setInterval(() => {
+        if (!isPlayerHidden()) void syncSnapshot();
       }, 2500);
     };
 
@@ -1699,10 +1710,16 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
 
     const disconnect = connectOverlaySocket({
       url: `${wsProto}//${apiUrl.host}/api/pvd/ws?token=${encodeURIComponent(token)}&clientId=${encodeURIComponent(idleClientIdRef.current)}`,
-      onRetry: startPolling,
+      onConnecting: () => {
+        socketOpen = false;
+        snapshotAtConnect = playbackSnapshotVersionRef.current;
+        startPolling();
+      },
+      onRetry: () => { socketOpen = false; startPolling(); },
       onOpen: () => {
-        stopPolling();
-        void resyncFromServer(true);
+        socketOpen = true;
+        // An open socket/pong is not proof that its initial settings were loaded.
+        void syncSnapshot(true);
       },
       onMessage: (ev, ws) => {
         try {
@@ -1713,6 +1730,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
           }
           if (data?.type === 'start' || data?.type === 'state' || data?.type === 'init' || data?.type === 'now-playing') {
             applyServerPlaybackPayload(data, true);
+            if (playbackSnapshotVersionRef.current > snapshotAtConnect) stopPolling();
           } else if (data?.type === 'control') {
             const op = String(data.op || '').toLowerCase();
             const positionedControl = op === 'play' || op === 'pause' || op === 'seek';
@@ -1740,8 +1758,9 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
               idleReportRef.current();
               return;
             }
-            if (op === 'volume') {
-              applyVolume(Number(data.volume));
+            if (op === 'volume' || op === 'bgm-volume') {
+              const target = op === 'bgm-volume' ? 'bgm' : String(data.target || 'video');
+              if (target === playerRole) applyVolume(Number(data.volume));
               return;
             }
             if (op === 'idle-playlist') {
@@ -1780,6 +1799,7 @@ export default function PvdViewer({ viewerToken, playerRole = 'video' }: { viewe
     });
 
     return () => {
+      disposed = true;
       disconnect();
       stopPolling();
       serverSyncInFlightRef.current?.controller.abort();

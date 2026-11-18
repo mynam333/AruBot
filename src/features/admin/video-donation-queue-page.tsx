@@ -36,6 +36,7 @@ type VideoDonationQueueResponse = {
   items?: VideoDonationItem[];
   currentItem?: VideoDonationItem | null;
   volume?: number;
+  bgm?: { volume?: number };
   paused?: boolean | null;
   idleDeferred?: boolean;
   atSec?: number;
@@ -47,6 +48,7 @@ type VideoDonationQueueResponse = {
 
 type VideoDonationSettingsResponse = {
   volume?: number;
+  bgm?: { volume?: number };
 };
 
 async function postJson<T>(path: string, body: unknown): Promise<T> {
@@ -248,7 +250,9 @@ export function VideoDonationQueuePage() {
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [volume, setVolume] = useState(100);
-  const [volumePending, setVolumePending] = useState(false);
+  const [bgmVolume, setBgmVolume] = useState(100);
+  const [volumePending, setVolumePending] = useState<'video' | 'bgm' | null>(null);
+  const volumeDirtyRef = useRef({ video: false, bgm: false });
   const [paused, setPaused] = useState(false);
   const [idleDeferred, setIdleDeferred] = useState(false);
   const [playbackPending, setPlaybackPending] = useState<'pause' | 'play' | 'skip' | null>(null);
@@ -281,8 +285,12 @@ export function VideoDonationQueuePage() {
     setCurrentItem(nextCurrent);
     setPaused(!!nextCurrent && data?.paused === true);
     setIdleDeferred(nextItems.length > 0 && data?.idleDeferred === true);
-    if (data?.volume != null) {
+    if (data?.volume != null && !volumeDirtyRef.current.video) {
       setVolume(Math.max(0, Math.min(100, Math.round(Number(data.volume)))));
+    }
+    const nextBgmVolume = data?.bgm?.volume ?? data?.volume;
+    if (nextBgmVolume != null && !volumeDirtyRef.current.bgm) {
+      setBgmVolume(Math.max(0, Math.min(100, Math.round(Number(nextBgmVolume)))));
     }
   }, []);
 
@@ -295,8 +303,12 @@ export function VideoDonationQueuePage() {
       ]);
       if (version !== queuePayloadVersionRef.current) return;
       applyQueuePayload(data);
-      if (settings?.volume != null) {
+      if (settings?.volume != null && !volumeDirtyRef.current.video) {
         setVolume(Math.max(0, Math.min(100, Math.round(Number(settings.volume)))));
+      }
+      const nextBgmVolume = settings?.bgm?.volume ?? settings?.volume;
+      if (nextBgmVolume != null && !volumeDirtyRef.current.bgm) {
+        setBgmVolume(Math.max(0, Math.min(100, Math.round(Number(nextBgmVolume)))));
       }
     });
   }, [applyQueuePayload]);
@@ -421,18 +433,19 @@ export function VideoDonationQueuePage() {
     }
   };
 
-  const applyVolume = async () => {
-    if (!writable) return;
-    const nextVolume = Math.max(0, Math.min(100, Math.round(Number(volume || 0))));
-    setVolumePending(true);
+  const applyVolume = async (target: 'video' | 'bgm') => {
+    if (!writable || volumePending) return;
+    const nextVolume = Math.max(0, Math.min(100, Math.round(Number((target === 'bgm' ? bgmVolume : volume) || 0))));
+    setVolumePending(target);
     try {
-      await postJson('/api/video-donation/control', { op: 'volume', volume: nextVolume });
-      toast.success(`영상 후원 소리를 ${nextVolume}%로 조절했어요.`);
+      await postJson('/api/video-donation/control', { op: 'volume', target, volume: nextVolume });
+      volumeDirtyRef.current[target] = false;
+      toast.success(`${target === 'bgm' ? 'BGM' : '영상 후원'} 소리를 ${nextVolume}%로 조절했어요.`);
       load();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '소리 크기를 조절하지 못했어요.');
     } finally {
-      setVolumePending(false);
+      setVolumePending(null);
     }
   };
 
@@ -505,23 +518,35 @@ export function VideoDonationQueuePage() {
                 {playbackPending === 'skip' ? <Loader2 className="h-4 w-4 animate-spin" /> : <SkipForward className="h-4 w-4" />}
               </Button>
             </div>
-            <div className="flex min-h-[var(--control-height)] min-w-[min(100%,18rem)] items-center gap-2 rounded-[var(--radius-control)] border bg-card/74 px-[clamp(0.8rem,1.4vw,1rem)] shadow-subtle backdrop-blur">
-              {volume <= 0 ? <VolumeX className="h-[1em] w-[1em] text-muted-foreground" /> : <Volume2 className="h-[1em] w-[1em] text-primary" />}
-              <input disabled={!writable}
-                type="range"
-                min="0"
-                max="100"
-                value={volume}
-                onChange={(event) => setVolume(Math.max(0, Math.min(100, Number(event.target.value || 0))))}
-                className="min-w-0 flex-1 accent-primary"
-                aria-label="영상 후원 소리 크기"
-              />
-              <span className="w-[4ch] text-right text-sm font-semibold tabular-nums">{volume}%</span>
-            </div>
-            <Button type="button" variant="secondary" onClick={() => void applyVolume()} disabled={!writable || (volumePending)}>
-              {volumePending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Volume2 className="h-4 w-4" />}
-              소리 적용
-            </Button>
+            {(['video', 'bgm'] as const).map((target) => {
+              const label = target === 'bgm' ? 'BGM' : '영상 후원';
+              const value = target === 'bgm' ? bgmVolume : volume;
+              return (
+                <div key={target} className="flex min-h-[var(--control-height)] w-full min-w-0 items-center gap-2 rounded-[var(--radius-control)] border bg-card/74 px-3 py-1 shadow-subtle backdrop-blur sm:w-80">
+                  <span className="shrink-0 text-xs font-semibold">{label}</span>
+                  {value <= 0 ? <VolumeX className="h-4 w-4 shrink-0 text-muted-foreground" /> : <Volume2 className="h-4 w-4 shrink-0 text-primary" />}
+                  <input disabled={!writable || volumePending === target}
+                    type="range"
+                    min="0"
+                    max="100"
+                    value={value}
+                    onChange={(event) => {
+                      volumeDirtyRef.current[target] = true;
+                      const next = Math.max(0, Math.min(100, Number(event.target.value || 0)));
+                      if (target === 'bgm') setBgmVolume(next);
+                      else setVolume(next);
+                    }}
+                    className="min-w-0 flex-1 accent-primary"
+                    aria-label={`${label} 소리 크기`}
+                  />
+                  <span className="w-[4ch] shrink-0 text-right text-sm font-semibold tabular-nums">{value}%</span>
+                  <Button type="button" size="icon" variant="ghost" onClick={() => void applyVolume(target)} disabled={!writable || volumePending !== null}
+                    aria-label={`${label} 소리 적용`} title={`${label} 소리 적용`}>
+                    {volumePending === target ? <Loader2 className="h-4 w-4 animate-spin" /> : <Volume2 className="h-4 w-4" />}
+                  </Button>
+                </div>
+              );
+            })}
             <VideoDonationSettingsDialog />
             <Button type="button" variant="outline" onClick={load} disabled={isPending}>
               <RefreshCw className={isPending ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />

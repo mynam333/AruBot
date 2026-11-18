@@ -64,6 +64,24 @@ function jsonReadKey(path: string, init?: RequestInit) {
   });
 }
 
+function readDeadline(init?: RequestInit) {
+  // Bound only reads: aborting a mutation cannot undo its server-side effects.
+  if (!['GET', 'HEAD'].includes(String(init?.method || 'GET').toUpperCase())) {
+    return { signal: init?.signal, timedOut: () => false, dispose: () => {} };
+  }
+  const controller = new AbortController();
+  const cancel = () => controller.abort(init?.signal?.reason);
+  init?.signal?.addEventListener('abort', cancel, { once: true });
+  if (init?.signal?.aborted) cancel();
+  let expired = false;
+  const timer = setTimeout(() => { expired = true; controller.abort(); }, 15_000);
+  return {
+    signal: controller.signal,
+    timedOut: () => expired,
+    dispose: () => { clearTimeout(timer); init?.signal?.removeEventListener('abort', cancel); },
+  };
+}
+
 export async function readJson<T>(path: string, init?: RequestInit): Promise<T | null> {
   const dedupe = canDedupeJsonRead(init);
   const key = dedupe ? jsonReadKey(path, init) : '';
@@ -72,17 +90,20 @@ export async function readJson<T>(path: string, init?: RequestInit): Promise<T |
   }
 
   const request = (async () => {
+    const deadline = readDeadline(init);
     try {
       const response = await fetch(apiUrl(path), {
         ...init,
         credentials: init?.credentials ?? 'include',
         cache: init?.cache ?? 'no-store',
+        signal: deadline.signal,
       });
       if (!response.ok) return null;
       return (await response.json()) as T;
     } catch {
       return null;
     } finally {
+      deadline.dispose();
       if (dedupe) pendingJsonReads.delete(key);
     }
   })();
@@ -103,11 +124,13 @@ export async function readJsonResult<T>(path: string, init?: RequestInit): Promi
   }
 
   const request = (async (): Promise<JsonResult<T>> => {
+    const deadline = readDeadline(init);
     try {
       const response = await fetch(apiUrl(path), {
         ...init,
         credentials: init?.credentials ?? 'include',
         cache: init?.cache ?? 'no-store',
+        signal: deadline.signal,
       });
       if (!response.ok) {
         const body = await response.json().catch(() => null) as { error?: string; message?: string; code?: string } | null;
@@ -121,14 +144,20 @@ export async function readJsonResult<T>(path: string, init?: RequestInit): Promi
       }
       return { ok: true, data: await response.json() as T, status: response.status };
     } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') throw error;
+      if (init?.signal?.aborted) throw error;
+      if (deadline.timedOut()) return { ok: false, data: null, status: 408, code: 'request_timeout', message: '서버 응답이 지연되고 있습니다. 잠시 후 다시 시도해 주세요.' };
+      const interrupted = error && typeof error === 'object' && 'name' in error
+        && ['AbortError', 'TimeoutError', 'NetworkError'].includes(String(error.name));
       return {
         ok: false,
         data: null,
         status: null,
-        message: error instanceof Error ? error.message : '서버에 연결할 수 없습니다.',
+        message: interrupted || error instanceof TypeError
+          ? '서버 연결이 잠시 끊겼습니다. 잠시 후 다시 시도해 주세요.'
+          : error instanceof Error ? error.message : '서버에 연결할 수 없습니다.',
       };
     } finally {
+      deadline.dispose();
       if (dedupe) pendingJsonResultReads.delete(key);
     }
   })();

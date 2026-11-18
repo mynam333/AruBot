@@ -62,6 +62,13 @@ describe('bot management isolated PostgreSQL integration', () => {
         const count = async (table) => (await query('select count(*)::integer as n from ' + table)).rows[0].n;
 
         assert.equal(await store.getAccess('manager', 'owner'), null);
+        assert.equal(await store.getContext('manager', 'owner', { includeChannels: true }), null);
+        assert.equal(await store.getContext('missing', 'owner'), null);
+        assert.equal((await store.getContext('owner', 'owner')).active.role, 'owner');
+        const adminContext = await store.getContext('admin', 'owner', { includeChannels: true });
+        assert.equal(adminContext.active.role, 'site_admin');
+        assert.equal(adminContext.isSiteAdmin, true);
+        assert.deepEqual(adminContext.channels.map((channel) => channel.ownerUserId), ['admin']);
         assert.equal((await store.getAccess('owner', 'owner')).role, 'owner');
         assert.equal((await store.getAccess('admin', 'owner', true)).role, 'site_admin');
         assert.equal(await count('bot_managers'), 0);
@@ -79,6 +86,9 @@ describe('bot management isolated PostgreSQL integration', () => {
         assert.deepEqual(unchanged.scopes, grant.scopes);
         assert.equal((await store.getAccess('manager', 'owner')).role, 'manager');
         assert.deepEqual((await store.listChannels('manager')).map((item) => item.ownerUserId), ['manager', 'owner']);
+        const managerContext = await store.getContext('manager', 'owner', { includeChannels: true });
+        assert.deepEqual(managerContext.active.scopes, ['commands:read', 'commands:write']);
+        assert.deepEqual(managerContext.channels.map((channel) => channel.ownerUserId), ['manager', 'owner']);
         assert.equal(await store.updateMember('other', 'other', grant.id, ['*']), null);
         assert.equal(await store.removeMember('other', 'other', grant.id), null);
         assert.equal(await count('bot_management_audit'), 1);
@@ -107,9 +117,11 @@ describe('bot management isolated PostgreSQL integration', () => {
 
         // Promotion hides an old explicit grant without inserting hidden admin rows.
         await query("update app_users set is_admin = true where id = 'manager'");
+        assert.equal((await store.getContext('manager', 'other')).active.role, 'site_admin');
         assert.equal((await store.listMembers('owner')).length, 0);
         assert.equal((await store.searchUsers('Public Manager')).length, 0);
         await query("update app_users set is_admin = false where id = 'manager'");
+        assert.equal(await store.getContext('manager', 'other'), null);
         assert.equal((await store.listMembers('owner')).length, 1);
 
         for (const scopes of ['{}', '[]', '[1]', '["*","commands:read"]']) {
@@ -124,6 +136,7 @@ describe('bot management isolated PostgreSQL integration', () => {
         assert.deepEqual(await store.removeMember('owner', 'admin', grant.id), { id: grant.id, memberUserId: 'manager', scopes: ['points:read'] });
         assert.equal(await store.removeMember('owner', 'admin', grant.id), null);
         assert.equal(await store.getAccess('manager', 'owner'), null);
+        assert.equal(await store.getContext('manager', 'owner'), null);
         audit = await store.listAudit('owner');
         assert.equal(audit.length, 4);
         assert.equal(audit[0].action, 'manager.remove');

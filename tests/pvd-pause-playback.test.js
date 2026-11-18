@@ -20,14 +20,17 @@ afterEach(() => {
   jest.clearAllTimers(); jest.useRealTimers();
 });
 
-function mount(initialPayload = {}, playerRole = 'video') {
+function mount(initialPayload = {}, playerRole = 'video', { snapshotFailures = 0 } = {}) {
   const effects = [];
   const listeners = new Map();
   let socket;
   let player;
   const players = [];
   let payload = { item: { id: 'donation-1', mediaProvider: 'youtube', videoId: 'video000001', startSec: 12 }, paused: false, atSec: 20, ...initialPayload };
-  let getSnapshot = async () => payload;
+  let getSnapshot = async () => {
+    if (snapshotFailures-- > 0) throw new Error('temporary settings failure');
+    return payload;
+  };
   const calls = [];
   const node = () => ({ style: {}, dataset: {}, appendChild() {}, replaceChildren() {} });
   class Player {
@@ -57,7 +60,7 @@ function mount(initialPayload = {}, playerRole = 'video') {
   global.document = { hidden: false, createElement: node, addEventListener() {}, removeEventListener() {} };
   global.WebSocket = class {
     static OPEN = 1; static CLOSING = 2; static CLOSED = 3;
-    constructor() { socket = this; this.readyState = 1; }
+    constructor() { socket = this; this.readyState = 1; Promise.resolve().then(() => this.onopen?.()); }
     close() { this.readyState = 3; }
     send(data) { if (JSON.parse(data).type === 'ping') this.onmessage?.({ data: '{"type":"pong"}' }); }
   };
@@ -73,7 +76,9 @@ function mount(initialPayload = {}, playerRole = 'video') {
   let firstRender = true;
   let externalVideo;
   let externalVideoProps;
+  let volumeInput;
   const jsx = (type, props) => {
+    if (type === 'input' && props.type === 'range') volumeInput = props;
     if (props?.ref && !props.ref.current) props.ref.current = node();
     if (type === 'video') {
       externalVideo = props.ref.current;
@@ -109,6 +114,8 @@ function mount(initialPayload = {}, playerRole = 'video') {
   cleanup = () => disposers.reverse().forEach((dispose) => { if (typeof dispose === 'function') dispose(); });
   return {
     calls, render, players, get player() { return player; },
+    changeVolume: (value) => volumeInput.onChange({ currentTarget: { value: String(value) } }),
+    openSocket: () => socket.onopen?.(),
     get externalVideo() { return externalVideo; },
     get externalVideoProps() { return externalVideoProps; },
     control: (op, atSec = 83) => socket.onmessage({ data: JSON.stringify({ type: 'control', op, atSec, paused: op === 'pause' }) }),
@@ -119,6 +126,36 @@ function mount(initialPayload = {}, playerRole = 'video') {
     focus: () => listeners.get('focus')(),
   };
 }
+
+test.each(['video', 'bgm'])('%s retries initial state when an open socket only returns heartbeats', async role => {
+  const initial = role === 'bgm' ? bgmPayload() : {};
+  const h = mount(initial, role, { snapshotFailures: 2 });
+  await flush();
+  expect(h.player).toBeUndefined();
+  jest.advanceTimersByTime(2600); await flush();
+  jest.advanceTimersByTime(2600); await flush();
+  expect(h.player).toBeDefined();
+  h.player.ready();
+  expect(h.player.playVideo).toHaveBeenCalled();
+  expect(h.calls.filter(({ url }) => url.includes('/now-playing')).length).toBeGreaterThanOrEqual(3);
+});
+
+test.each(['video', 'bgm'])('%s volume uses its own snapshot, control and save target', async role => {
+  const h = mount({ ...(role === 'bgm' ? bgmPayload() : {}), volume: 17, bgm: { ...bgmPayload().bgm, volume: 63 } }, role);
+  await flush(); h.player.ready();
+  expect(h.player.volume).toBe(role === 'bgm' ? 63 : 17);
+  h.message({ type: 'control', op: 'volume', target: 'video', volume: 2 });
+  expect(h.player.volume).toBe(role === 'bgm' ? 63 : 2);
+  h.message({ type: 'control', op: 'bgm-volume', target: 'bgm', volume: 0 });
+  expect(h.player.volume).toBe(role === 'bgm' ? 0 : 2);
+  h.changeVolume(4); jest.advanceTimersByTime(400); await flush();
+  expect(h.calls.filter(({ body }) => body.op === 'volume').at(-1).body).toMatchObject({ target: role, volume: 4 });
+});
+
+test('legacy BGM settings keep the old shared volume until a separate value is saved', async () => {
+  const h = mount({ ...bgmPayload(), volume: 7 }, 'bgm'); await flush(); h.player.ready();
+  expect(h.player.volume).toBe(7);
+});
 
 test.each([0, 1, 2, 4, 5, 100])('YouTube keeps the configured %i%% volume after readiness and synchronization', async (volume) => {
   const h = mount({ volume }); await flush();

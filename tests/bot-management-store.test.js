@@ -113,6 +113,36 @@ describe('bot management schema bootstrap', () => {
 });
 
 describe('bot access and safe public listings', () => {
+  test('context reads current admin, active grant and channels with one pool checkout', async () => {
+    const row = { id: 'owner', display_name: 'Owner', is_admin: false, scopes: ['commands:write'],
+      channels: [{ id: 'actor', display_name: 'Actor' }, { id: 'owner', scopes: ['commands:write'] }] };
+    const h = await ready(harness(() => ({ rows: [row] })));
+    const result = await h.store.getContext('actor', 'owner', { includeChannels: true });
+    expect(result).toMatchObject({ actorUserId: 'actor', isSiteAdmin: false,
+      active: { ownerUserId: 'owner', role: 'manager', scopes: ['commands:read', 'commands:write'] } });
+    expect(result.channels.map((channel) => channel.role)).toEqual(['owner', 'manager']);
+    expect(h.withPgClient).toHaveBeenCalledTimes(1);
+    expect(h.calls).toHaveLength(1);
+    expect(h.calls[0].values).toEqual(['actor', 'owner', true]);
+    expect(h.calls[0].text).toContain('actor.id = $1 and (u.id = actor.id or actor.is_admin = true or m.id is not null)');
+    row.is_admin = true;
+    expect((await h.store.getContext('actor', 'owner')).active.role).toBe('site_admin');
+    row.is_admin = false;
+    row.scopes = ['points:read'];
+    expect((await h.store.getContext('actor', 'owner')).active.scopes).toEqual(['points:read']);
+    expect(h.withPgClient).toHaveBeenCalledTimes(3);
+    expect(h.calls.at(-1).values).toEqual(['actor', 'owner', false]);
+  });
+
+  test('context denies missing grants and fails closed on malformed scopes or database failures', async () => {
+    const h = await ready(harness());
+    expect(await h.store.getContext('actor', 'owner')).toBeNull();
+    h.pg.query.mockResolvedValueOnce({ rows: [{ id: 'owner', is_admin: false, scopes: null }] });
+    await expect(h.store.getContext('actor', 'owner')).rejects.toMatchObject({ code: 'invalid_manager_scopes' });
+    h.pg.query.mockRejectedValueOnce(new Error('database unavailable'));
+    await expect(h.store.getContext('actor', 'owner')).rejects.toThrow('database unavailable');
+  });
+
   test.each([
     ['owner', 'owner', false, 'owner', ['*']],
     ['manager', 'owner', false, 'manager', ['commands:read', 'commands:write']],
