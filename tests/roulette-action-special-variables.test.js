@@ -42,6 +42,13 @@ function renderer(overrides = {}) {
 }
 
 describe('roulette result special variables', () => {
+  test('a display suffix is not passed to a result command or used as a media argument', async () => {
+    const r = renderer({ substituteAllPlaceholders: async (s, _sid, _id, _name, ctx) =>
+      s.replace('{user.points}', '500' + ctx.projectPointSuffix(' (+25)')) });
+    expect(await r.render('!bet {user.points}')).toMatchObject({text:'!bet 500 (+25)',commandText:'!bet 500'});
+    await r.render('${video_donation} sample 0 {user.points}');
+    expect(r.executeMediaRequest).toHaveBeenCalledWith('${video_donation}', 'sample 0 500', expect.any(Object));
+  });
   test('runs direct roulette and all action aliases through existing pipelines', async () => {
     const r = renderer();
     const result = await r.render('${roulette::Wheel B} ${action::fx} ${automation::fx2} ${blueprint::fx3} {user.name}');

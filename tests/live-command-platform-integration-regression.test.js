@@ -60,9 +60,10 @@ describe('platform-specific live command integration regression', () => {
 
   test('loads placeholders and action chat replies from the triggering provider', () => {
     expect(server).toContain("getLiveInfoForSid(sid, { provider })");
-    expect(server).toContain("substituteAllPlaceholders(responseToSend, sid, resolvedUserId, resolvedUsername, { provider: 'chzzk' })");
-    expect(server).toContain("substituteAllPlaceholders(cleaned, sid, resolvedUserId, resolvedUsername, { provider: 'cime' })");
-    expect(server).toContain("substituteAllPlaceholders(cleaned, sid, resolvedUserId, resolvedUsername, { provider: 'youtube' })");
+    expect(server).toContain("substituteAllPlaceholders(responseToSend, sid, resolvedUserId, resolvedUsername, { provider: 'chzzk', pointViewerId: counterUserId })");
+    for (const provider of ['cime', 'youtube']) {
+      expect(server).toContain(`substituteAllPlaceholders(cleaned, sid, resolvedUserId, resolvedUsername, { provider: '${provider}', pointViewerId: counterUserId })`);
+    }
     expect(server).toContain("const chatPostPlatform = String(chatPost?.provider || chatPost?.platform || '').toLowerCase()");
     expect(server).toMatch(/if \(!uids\.length\) \{\s*if \(normalizedProvider === 'chzzk'\) return null;/);
     expect(server).toMatch(/if \(normalizedProvider === 'chzzk'\) return null;\s*const cimeCached = userSubMonthsCache/);

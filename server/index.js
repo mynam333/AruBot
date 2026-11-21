@@ -31,6 +31,7 @@ import dotenv from 'dotenv';
 import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, getBotSettingsStrict, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, revokeSession, getSessionUserId, listChannelPoints, listChannelPointsPage, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, deductChannelPointsIfEnough, getChannelPoints, getChannelPointBalanceSummary, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, getUserAttendanceSummary, incrementBotCounter, getOrCreatePublicShortLink, resolvePublicShortLink, issueApiKey, revokeApiKey, getOwnerPidForApiKey, issueApiWebSocketTicket, consumeApiWebSocketTicket, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, findSidByChannelViewerTokenSupabase, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, listPlatformAccountsForUserIds, findAppUserIdByChannelUid, findExactPublicChannelIdentity, getPublicChannelPointsSnapshot, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, markPlatformTokenValidated, deletePlatformTokens, deletePlatformAccount, getAppUserAdminStatus, getArubotAdminConsoleSnapshot, getArubotAdminStreamerFeatureDetails, getYoutubeBotProfile, upsertYoutubeBotProfile, updateYoutubeBotProfileTokens, markYoutubeBotProfileStatus, deleteYoutubeBotProfile, getYoutubeStreamerChannel, upsertYoutubeStreamerChannel, markYoutubeStreamerChannelModeratorRegistered, deleteYoutubeStreamerChannel, listYoutubeStreamerChannelsByYoutubeChannelId, updateYoutubeStreamerChannelLive, updateYoutubeStreamerChannelWebsub, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, claimBotRuleCooldown, enqueueDurableRuntimeJob, enqueuePaidDurableRuntimeJob, claimDurableRuntimeJobs, completeDurableRuntimeJob, failDurableRuntimeJob, claimRuntimeLease, releaseRuntimeLease, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps, recordBotEventLog, listBotEventLogs, getBotEventLog, insertDrawingDonationItem, listDrawingDonationItems, getDrawingDonationItem, getCurrentDrawingDonationItem, updateDrawingDonationItemStatus, deleteDrawingDonationItem, reorderDrawingDonationItems, uploadDrawingDonationObject, deleteDrawingDonationObjectKeys, deleteAccountData, cleanupPrivacyRetentionData, validateSecretEncryptionConfig, getPgPoolStatus, checkDatabaseReady, closeDatabaseConnections } from './supabase.js';
 import { confirmPlatformTokenConsent, confirmYoutubeBotProfileConsent, countActiveDurableRuntimeJobs, touchPlatformTokenUsed, touchYoutubeBotProfileUsed } from './supabase.js';
 import { createPlatformProfileService } from './platform-profiles.js';
+import { annotatePointDisplay } from './point-variable-display.js';
 import { getBroadcastBonusSettings, saveBroadcastBonusSettings, getViewerBroadcastBonus } from './supabase.js';
 import { createChzzkInfoClient, chzzkChannelIdentityMatches, chzzkNonNegativeNumber } from './chzzk-info.js';
 import { createPvdIdlePlaybackStore } from './pvd-idle-playback.js';
@@ -10246,14 +10247,21 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}, inter
       commandExecution.check();
       runtimeContext = mergeBlueprintReadContexts(runtimeContext, hydratedContext);
       const scope = buildBlueprintScope(runtimeContext, flow, nodeOutputs);
+      const renderDisplayText = async template => {
+        const display = !simulateViewer && /\{user\.(?:points|channelPoints)\}/.test(template)
+          ? await annotatePointDisplay(template, sid, scope.user?.userId, (ownerSid, viewerId) =>
+            withBlueprintVariableDeadline('broadcast_bonus', () => getViewerBroadcastBonus(ownerSid, viewerId)))
+          : template;
+        return renderBlueprintTemplate(display, scope);
+      };
       if (node.type === 'start') {
         output = { context: runtimeContext };
       } else if (node.type === 'end') {
-        output = { status: config.status || 'success', message: renderBlueprintTemplate(config.message || '', scope) };
+        output = { status: config.status || 'success', message: await renderDisplayText(config.message || '') };
         await recordStep(node, 'done', incoming, output, startedAt);
         return output;
       } else if (node.type === 'chat') {
-        const message = renderBlueprintTemplate(config.message || config.text || '', scope).slice(0, 100);
+        const message = (await renderDisplayText(config.message || config.text || '')).slice(0, 100);
         output = await executeBlueprintChatNode(ownerUserId, sid, node, message, runtimeContext);
       } else if (node.type === 'commandExecute') {
         const command = renderBlueprintTemplate(config.command || '', scope);
@@ -10441,14 +10449,14 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}, inter
         output = { key, passed, remainingMs: passed ? 0 : until - now, dryRun: simulateViewer };
         nextPort = passed ? 'true' : 'false';
       } else if (node.type === 'highlight') {
-        output = { marked: true, label: renderBlueprintTemplate(config.label || '하이라이트', scope), at: new Date().toISOString() };
+        output = { marked: true, label: await renderDisplayText(config.label || '하이라이트'), at: new Date().toISOString() };
       } else if (node.type === 'log') {
-        output = { message: renderBlueprintTemplate(config.message || '', scope), at: new Date().toISOString() };
+        output = { message: await renderDisplayText(config.message || ''), at: new Date().toISOString() };
       } else if (node.type === 'join') {
         output = { joined: true, incoming };
       } else if (node.type === 'approval') {
         if (isTest && !dryRun) throw new Error('blueprint_test_unsupported_node:approval');
-        const message = renderBlueprintTemplate(config.message || '승인이 필요합니다.', scope);
+        const message = await renderDisplayText(config.message || '승인이 필요합니다.');
         const job = dryRun ? null : await queueAutomationJob(ownerUserId, {
           connectionId: null,
           jobType: 'blueprint.approval',
@@ -10490,7 +10498,7 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}, inter
           id: overlayId,
           overlayId,
           kind: 'text',
-          text: renderBlueprintTemplate(config.text || '', scope),
+          text: await renderDisplayText(config.text || ''),
           x: config.x ?? 50,
           y: config.y ?? 50,
           width: config.width ?? 46,
@@ -10505,7 +10513,7 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}, inter
           id: overlayId,
           overlayId,
           kind: 'text',
-          text: renderBlueprintTemplate(config.text || '', scope),
+          text: await renderDisplayText(config.text || ''),
         });
         if (config.positionMode == null) delete payload.positionMode;
         const sent = dryRun ? 0 : broadcastFxEventToSid(sid, 'fx:update', payload);
@@ -10518,7 +10526,7 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}, inter
         const payload = normalizeFxPayload({
           ...renderBlueprintValueDeep(config || {}, scope),
           kind: 'tts',
-          text: renderBlueprintTemplate(config.text || '', scope),
+          text: await renderDisplayText(config.text || ''),
           voice: renderBlueprintTemplate(config.voice || '', scope),
           rate: Math.min(2, Math.max(0.5, Number(evaluateBlueprintValue(config.rate || 1, scope) || 1))),
           pitch: Math.min(2, Math.max(0.5, Number(evaluateBlueprintValue(config.pitch || 1, scope) || 1))),
@@ -12186,7 +12194,7 @@ async function executeRouletteResultActions(sid, def, picked, userId, username, 
     // Only a literal saved command prefix authorizes command dispatch. Rendered
     // usernames/memos/result labels must never become a new command or effect.
     const command = rendered.commandTemplate ? await executeRouletteResultCommand(
-      sid, rendered.text, userId, username, post, { ...context, commandTemplate: rendered.commandTemplate },
+      sid, rendered.commandText, userId, username, post, { ...context, commandTemplate: rendered.commandTemplate },
     ) : { executed: false };
     if (!command?.executed && rendered.used && rendered.text && post.suppressResultChat !== true) {
       await sendChatByPost(sid, post, '[룰렛 결과] ' + rendered.text, { timeout: 5000 });
@@ -12818,6 +12826,19 @@ async function substituteAllPlaceholders(text, sid, userId, username, context = 
   let out = substituteDdayVariables(text);
   const provider = String(context?.provider || context?.platform || '').trim().toLowerCase();
   const lookupOptions = { deadlineAt: Number(context?.lookupDeadlineAt || 0) };
+  // Resolve authored balance tokens before inserting viewer names or live titles.
+  if (userId && /\{user\.(?:points|channelPoints)\}/.test(out)) {
+    let ordinary = 0;
+    try {
+      const channelUid = await resolveStreamerUidForSid(sid, provider);
+      if (channelUid) {
+        ordinary = await getChannelPoints(channelUid, userId);
+        const viewerId = Object.hasOwn(context, 'pointViewerId') ? context.pointViewerId : userId;
+        out = await annotatePointDisplay(out, sid, viewerId, getViewerBroadcastBonus, context.projectPointSuffix);
+      }
+    } catch { /* Use the ordinary balance if the bonus lookup is unavailable. */ }
+    out = out.replace(/\{user\.(?:points|channelPoints)\}/g, String(ordinary));
+  }
   if (/\{live\.(?:title|category|viewers|startedAt|elapsed|elapsed_ko|channel)\}/.test(out)) {
     let liveInfo = await getLiveInfoForSid(sid, { provider });
     const providerScopedLiveInfo = filterLiveInfoByProvider(liveInfo, provider);
@@ -12884,20 +12905,6 @@ async function substituteAllPlaceholders(text, sid, userId, username, context = 
       out = out.replace(/\{user\.subscriptionMonths\}/g, months != null ? String(months) : '');
     } catch {
       out = out.replace(/\{user\.subscriptionMonths\}/g, '');
-    }
-  }
-  // User channel points
-  if (userId && (/{user\.points}/.test(out) || /{user\.channelPoints}/.test(out))) {
-    try {
-      const channelUid = await resolveStreamerUidForSid(sid, provider);
-      if (channelUid) {
-        const pts = await getChannelPoints(channelUid, userId);
-        out = out.replace(/{user\.points}/g, String(pts)).replace(/{user\.channelPoints}/g, String(pts));
-      } else {
-        out = out.replace(/{user\.points}/g, '0').replace(/{user\.channelPoints}/g, '0');
-      }
-    } catch {
-      out = out.replace(/{user\.points}/g, '0').replace(/{user\.channelPoints}/g, '0');
     }
   }
   // User total attendance days
@@ -22324,8 +22331,8 @@ const BOT_VARIABLES = [
   { key: '{user.id}', label: '시청자 ID', description: '채팅을 보낸 시청자의 플랫폼/아루봇 식별자입니다.', group: '시청자', providers: BOT_VARIABLE_PROVIDERS },
   { key: '{user.username}', label: '시청자 이름', description: '시청자 이름과 같은 값입니다.', group: '시청자', providers: BOT_VARIABLE_PROVIDERS },
   { key: '{user.nickname}', label: '시청자 닉네임', description: '시청자 이름과 같은 값입니다.', group: '시청자', providers: BOT_VARIABLE_PROVIDERS },
-  { key: '{user.points}', label: '보유 포인트', description: '현재 채널에서 시청자가 보유한 통합 포인트입니다.', group: '시청자', providers: BOT_VARIABLE_PROVIDERS },
-  { key: '{user.channelPoints}', label: '채널 포인트', description: '보유 포인트와 같은 값입니다.', group: '시청자', providers: BOT_VARIABLE_PROVIDERS },
+  { key: '{user.points}', label: '보유 포인트', description: '일반 포인트입니다. 남은 추가 포인트는 메시지에만 (+숫자)로 표시되며 계산에는 포함되지 않습니다.', group: '시청자', providers: BOT_VARIABLE_PROVIDERS },
+  { key: '{user.channelPoints}', label: '채널 포인트', description: '보유 포인트와 같은 값입니다. 추가 포인트는 표시만 하고 계산에는 포함하지 않습니다.', group: '시청자', providers: BOT_VARIABLE_PROVIDERS },
   { key: '{user.attendanceDays}', label: '누적 출석일', description: '현재 채널에서 기록된 누적 출석일입니다.', group: '시청자', providers: BOT_VARIABLE_PROVIDERS },
   { key: '{attendance.streak}', label: '연속 출석일', description: '출석 시점 또는 현재 출석 기록의 연속 출석일입니다.', group: '출석', providers: BOT_VARIABLE_PROVIDERS, contexts: ['attendance', 'blueprint'] },
   { key: '{attendance.totalDays}', label: '누적 출석일', description: '출석 시점 또는 현재 출석 기록의 전체 출석일입니다.', group: '출석', providers: BOT_VARIABLE_PROVIDERS, contexts: ['attendance', 'blueprint'] },
@@ -25373,7 +25380,7 @@ async function ensureChzzkSessionOwned(sid, channelId) {
 
             // Substitute placeholders after live-setting actions so this response sees fresh platform data.
             try {
-              responseToSend = await substituteAllPlaceholders(responseToSend, sid, resolvedUserId, resolvedUsername, { provider: 'chzzk' });
+              responseToSend = await substituteAllPlaceholders(responseToSend, sid, resolvedUserId, resolvedUsername, { provider: 'chzzk', pointViewerId: counterUserId });
             } catch { }
 
             // Special trigger: ${video_donation} -> enqueue video donation instead of printing token
@@ -26815,7 +26822,7 @@ async function processYoutubeChatAutomation(entry, ev) {
         });
         cleaned = liveChangeResult.text;
       }
-      try { cleaned = await substituteAllPlaceholders(cleaned, sid, resolvedUserId, resolvedUsername, { provider: 'youtube' }); } catch { }
+      try { cleaned = await substituteAllPlaceholders(cleaned, sid, resolvedUserId, resolvedUsername, { provider: 'youtube', pointViewerId: counterUserId }); } catch { }
 
       if (allowExecute && cmd) {
         const payload = {
@@ -28049,7 +28056,7 @@ async function processCimeChatAutomation(entry, ev) {
         if (liveChangeResult.executed.includes('title_change')) commandFeatures.push('live_title_change');
         if (liveChangeResult.executed.includes('game_change')) commandFeatures.push('live_game_change');
       }
-      try { cleaned = await substituteAllPlaceholders(cleaned, sid, resolvedUserId, resolvedUsername, { provider: 'cime' }); } catch { }
+      try { cleaned = await substituteAllPlaceholders(cleaned, sid, resolvedUserId, resolvedUsername, { provider: 'cime', pointViewerId: counterUserId }); } catch { }
 
       if (allowExecute && cmd) {
         const payload = {

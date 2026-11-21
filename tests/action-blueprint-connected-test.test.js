@@ -71,6 +71,24 @@ const connected = {
 };
 
 describe('blueprint simulation and connected-device runtime', () => {
+  test('a balance is numeric for arithmetic and comparison, including when the same run displays a bonus', async () => {
+    const blueprint = graph('award', [
+      { type: 'setVariable', config: { key: 'double', value: '{user.points} * 2' } },
+      { type: 'overlay', config: { overlayId: '{user.points}', text: '{user.channelPoints}P / {flow.double}' } },
+      { type: 'condition', config: { left: '{user.points}', operator: 'gte', right: '550' } },
+    ], true);
+    const { executeActionBlueprint, bindings } = runtime([blueprint], {
+      ...loadSource('server/point-variable-display.js'), withBlueprintVariableDeadline: (_family, fn) => fn(),
+      getViewerBroadcastBonus: jest.fn(async () => ({live:true, remaining:100})),
+      createActionBlueprintVariableResolvers: () => ({loadUserPoints: async () => 500}),
+    });
+    const result = await executeActionBlueprint('owner','award',{source:'chat', user:{userId:'viewer'}});
+    expect(result.ok).toBe(true);
+    expect(result.flow.double).toBe(1000);
+    expect(result.nodeOutputs.n1.payload).toMatchObject({ overlayId:'500', text:'500P (+100) / 1000' });
+    expect(result.nodeOutputs.n2).toMatchObject({ left:500, passed:false });
+    expect(bindings.getViewerBroadcastBonus.mock.calls).toEqual([['user:owner', 'viewer']]);
+  });
   test.each([undefined, 'fixed', 'random'])('overlay updates only change placement when explicitly requested: %s', async (positionMode) => {
     const config = { overlayId: 'existing', text: 'updated', ...(positionMode ? { positionMode } : {}) };
     const { executeActionBlueprint, bindings } = runtime([graph('draft', [{ type: 'overlayUpdate', config }])], {

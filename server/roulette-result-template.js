@@ -37,7 +37,13 @@ export async function renderRouletteResultTemplate(template, context, dependenci
         values.push(String(value ?? ''));
         return `${prefix}value_${values.length - 1}__`;
       });
-    let rendered = await substituteAllPlaceholders(protectedText, sid, userId, username, { provider });
+    // The same template may be dispatched as a command or posted as a message.
+    // Keep the display suffix out of executable arguments without rendering effects twice.
+    const suffixSlot = `${prefix}bonus__`;
+    let displaySuffix = '';
+    let rendered = await substituteAllPlaceholders(protectedText, sid, userId, username, {
+      provider, projectPointSuffix: suffix => { displaySuffix = suffix; return suffixSlot; },
+    });
     commandExecution.check();
     rendered = await resolveCommandCounterVariables(counterPlan, rendered, { sid, provider, userId: context.chatPost?.counterUserId ?? userId });
     commandExecution.check();
@@ -46,7 +52,7 @@ export async function renderRouletteResultTemplate(template, context, dependenci
     rendered = String(rendered || '').replace(new RegExp(`${prefix}value_(\\d+)__`, 'g'), (token, index) => values[Number(index)] ?? token);
     assertSafeTextPayload(rendered);
     const argsText = context.argsText !== undefined ? String(context.argsText || '')
-      : operations.reduce((text, op) => text.split(op.slot).join(''), rendered).trim();
+      : operations.reduce((text, op) => text.split(op.slot).join(''), rendered).replaceAll(suffixSlot, '').trim();
     let text = inputMode ? operations.map(op => op.slot).join(' ') : rendered;
     const features = [...(counterPlan.used ? ['counter'] : []), ...(memoPlan.entries.length ? ['memo'] : [])];
     const actionJobs = [];
@@ -88,7 +94,7 @@ export async function renderRouletteResultTemplate(template, context, dependenci
     }
     commandExecution.check();
     assertSafeTextPayload(text);
-    return { text: text.trim(), commandTemplate: inputMode ? '' : commandTemplate,
+    return { text: text.replaceAll(suffixSlot, displaySuffix).trim(), commandText: text.replaceAll(suffixSlot, '').trim(), commandTemplate: inputMode ? '' : commandTemplate,
       used: operations.length > 0 || counterPlan.used || memoPlan.entries.length > 0 || rendered !== source,
       features, actionJobs, errors };
   });
