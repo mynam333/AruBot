@@ -146,7 +146,7 @@ test.each(['youtube', 'cime'])('%s real command handler saves only verified mana
     recordCommandExecutionLog: async () => {},
     getCimeLiveActorRoleLevel: jest.fn(async () => role),
   };
-  const handler = loadFunctions([functionName], bindings)[functionName];
+  const handler = loadFunctions([functionName, 'spendChatCommandPoints'], bindings)[functionName];
   const entry = { ownerUserId: 'owner', primarySid: 'user:owner', channelId: 'channel', connected: false, sentReplies: new Set() };
   await handler(entry, { id: '1', userId: 'manager', user: 'Manager', role: { moderator: true }, message: '!공지 원문  ${blueprint::no}  ' });
   expect(store.write).toHaveBeenCalledWith('user:owner', ['rule:memo-rule'], '원문  ${blueprint::no}  ');

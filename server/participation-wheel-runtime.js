@@ -108,7 +108,8 @@ export function createParticipationWheelRuntime({ getWheel, enterWheel, recordEv
     if (parsed.invalid) return { handled: true, reply: `사용법: ${parsed.command}${parsed.source === 'points' ? ' [칸 수 1~100]' : ''} 항목 (60자 이내)` };
     if (!input.userId || input.userId === 'unknown_user') return { handled: true, reply: wheelErrorMessage('invalid_identity') };
     try {
-      const payload = { ...parsed, userId: input.userId, username: input.username, channelUid: input.channelUid,
+      const channelUid = parsed.source === 'points' && input.getPointChannelUid ? await input.getPointChannelUid() : input.channelUid;
+      const payload = { ...parsed, userId: input.userId, username: input.username, channelUid,
         eventId: wheelEventId({ ...input, kind: 'chat', now: now() }) };
       const result = await enterWheel(input.sid, payload);
       await record(input.sid, { ...input, ...payload }, result);

@@ -31,8 +31,10 @@ import dotenv from 'dotenv';
 import { initDb, upsertTokens, getTokens, updateTokens, revokeTokens, getBotSettings, getBotSettingsStrict, getBotStats, updateBotStats, getBotRules, upsertBotRule, deleteBotRule, markLiveDay, recordAttendanceAndGetStreak, migrateSidToUserPid, upsertSession, revokeSession, getSessionUserId, listChannelPoints, listChannelPointsPage, listViewerPointBalancesForUserIds, listPointViewerIdentitySummaries, listPointIdentityKeysForUserId, setChannelPoints, incrChannelPoints, deductChannelPointsIfEnough, getChannelPoints, getChannelPointBalanceSummary, deleteChannelPoints, clearAllChannelPoints, bulkUpsertChannelPoints, getUserAttendanceTotalDays, getUserAttendanceSummary, incrementBotCounter, getOrCreatePublicShortLink, resolvePublicShortLink, issueApiKey, revokeApiKey, getOwnerPidForApiKey, issueApiWebSocketTicket, consumeApiWebSocketTicket, touchApiKeyLastUsed, getActiveApiKeyForOwner, revokeAllApiKeysForOwner, findSidByViewerToken, findSidByRouletteToken, findSidByChannelViewerTokenSupabase, getOrCreateViewerTokenSupabase, rotateViewerTokenSupabase, insertRouletteSession, getRouletteSessionByToken, listRouletteSessionsByToken, listAllSidsWithTokens, getLiveSessionFromDB, upsertLiveSessionToDB, updateLiveSessionLastUpdate, getActiveLiveSessionsFromDB, deleteOldLiveSessionsFromDB, initializeLiveSessionsOnStartup, cleanupOldSessions, upsertPlatformIdentity, listPlatformAccounts, listPlatformAccountsForUserIds, findAppUserIdByChannelUid, findExactPublicChannelIdentity, getPublicChannelPointsSnapshot, updatePlatformAccountProfile, upsertPlatformTokens, getPlatformTokens, listPlatformTokenUsers, markPlatformTokenValidated, deletePlatformTokens, deletePlatformAccount, getAppUserAdminStatus, getArubotAdminConsoleSnapshot, getArubotAdminStreamerFeatureDetails, getYoutubeBotProfile, upsertYoutubeBotProfile, updateYoutubeBotProfileTokens, markYoutubeBotProfileStatus, deleteYoutubeBotProfile, getYoutubeStreamerChannel, upsertYoutubeStreamerChannel, markYoutubeStreamerChannelModeratorRegistered, deleteYoutubeStreamerChannel, listYoutubeStreamerChannelsByYoutubeChannelId, updateYoutubeStreamerChannelLive, updateYoutubeStreamerChannelWebsub, getAutomationSettings, setAutomationSettings, listAutomationConnections, findAutomationConnectionByControlTokenHash, upsertAutomationConnection, deleteAutomationConnection, enqueueAutomationJob, getOrCreateAutomationLocalAgent, listAutomationLocalAgents, authenticateAutomationLocalAgent, touchAutomationLocalAgent, claimAutomationJobsForAgent, completeAutomationJobForAgent, claimBotRuleCooldown, enqueueDurableRuntimeJob, enqueuePaidDurableRuntimeJob, claimDurableRuntimeJobs, completeDurableRuntimeJob, failDurableRuntimeJob, claimRuntimeLease, releaseRuntimeLease, listPredictionsForSid, getPredictionForSid, getActivePredictionForChannel, createPrediction, lockPredictionForSid, cancelPredictionForSid, settlePredictionForSid, placePredictionBet, listActionBlueprints, getActionBlueprint, upsertActionBlueprint, publishActionBlueprint, deleteActionBlueprint, insertActionBlueprintRun, finishActionBlueprintRun, insertActionBlueprintRunStep, listActionBlueprintRuns, listActionBlueprintVersions, restoreActionBlueprintVersion, listActionBlueprintRunSteps, recordBotEventLog, listBotEventLogs, getBotEventLog, insertDrawingDonationItem, listDrawingDonationItems, getDrawingDonationItem, getCurrentDrawingDonationItem, updateDrawingDonationItemStatus, deleteDrawingDonationItem, reorderDrawingDonationItems, uploadDrawingDonationObject, deleteDrawingDonationObjectKeys, deleteAccountData, cleanupPrivacyRetentionData, validateSecretEncryptionConfig, getPgPoolStatus, checkDatabaseReady, closeDatabaseConnections } from './supabase.js';
 import { confirmPlatformTokenConsent, confirmYoutubeBotProfileConsent, countActiveDurableRuntimeJobs, touchPlatformTokenUsed, touchYoutubeBotProfileUsed } from './supabase.js';
 import { createPlatformProfileService } from './platform-profiles.js';
+import { getBroadcastBonusSettings, saveBroadcastBonusSettings, getViewerBroadcastBonus } from './supabase.js';
 import { createChzzkInfoClient, chzzkChannelIdentityMatches, chzzkNonNegativeNumber } from './chzzk-info.js';
 import { createPvdIdlePlaybackStore } from './pvd-idle-playback.js';
+import { refundBroadcastPoints } from './supabase.js';
 import { createBgmPlayerPresence, getPvdBgmSettings, insertPvdRequest, updateBgmPlaybackAvailability } from './pvd-bgm.js';
 import { normalizePvdVolume, getPvdVolumes, getPvdVolumePatch } from '../shared/pvd-volume.js';
 import { normalizeChzzkVideoDonationSettings } from './chzzk-video-donation.js';
@@ -3400,6 +3402,37 @@ const commandAdmission = createCommandAdmission({
 async function admitChatCommand(sid, provider, userId) {
   return (await commandAdmission.admit({ sid, provider, userId })).allowed;
 }
+
+async function spendChatCommandPoints({ sid, responseTemplate, argsText, commandCost, userId, username, channelUid, skipCost }, deductChannelPointsIfEnough) {
+  // Only the selected, configured response can authorize a feature purchase.
+  const template = String(responseTemplate || '');
+  const roulette = template.match(/\$\{\s*roulette::([^}]*)\}/i);
+  const rouletteName = roulette?.[1].trim() || '';
+  const mediaToken = /\$\{\s*bgm_request\s*\}/i.test(template) ? '${bgm_request}'
+    : /\$\{\s*video_donation\s*\}/i.test(template) ? '${video_donation}' : '';
+  const requested = parseInt(argsText, 10);
+  const count = rouletteName && Number.isFinite(requested) ? Math.max(1, Math.min(10, requested)) : 1;
+  const spend = { rouletteName, mediaToken, count, pointDelta: 0, pointBefore: null, pointAfter: null };
+  if (roulette && !rouletteName) return { ...spend, error: '룰렛 이름이 필요합니다.' };
+  const amount = commandCost * count;
+  if (skipCost || (!mediaToken && amount === 0)) return spend;
+  if (!userId || /^(?:anonymous$|unknown_user$|cime:nickname:)/i.test(userId)) {
+    return { ...spend, error: '시청자 ID를 확인할 수 없어 포인트를 사용할 수 없습니다.' };
+  }
+  if (amount === 0) return spend;
+  try {
+    const uid = typeof channelUid === 'function' ? await channelUid() : channelUid;
+    if (!uid) return { ...spend, error: '포인트 확인에 실패했습니다. 채널 연결을 확인한 뒤 다시 시도해 주세요.' };
+    // This is the rule fee. The media job separately bills video/BGM usage.
+    const category = rouletteName ? 'roulette' : 'command';
+    const deduction = await deductChannelPointsIfEnough(uid, userId, username, amount, { sid, category });
+    if (!deduction.deducted) return { ...spend, error: `포인트가 부족합니다. (${amount} 필요, ${deduction.balanceBefore} 보유 중)` };
+    return { ...spend, pointDelta: -amount, pointBefore: deduction.balanceBefore, pointAfter: deduction.balanceAfter };
+  } catch {
+    return { ...spend, error: '포인트 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.' };
+  }
+}
+
 const rouletteProcessing = new Set(); // sid currently processing
 const ROULETTE_SPIN_MS = 5200; // must match viewer spin duration
 const ROULETTE_EMPHASIS_MS = 1000; // final emphasis time in viewer
@@ -6928,15 +6961,11 @@ app.post('/api/video-donation/delete', async (req, res) => {
     const q = getVideoQueue(sid);
     const idx = q.findIndex(it => String(it.id) === id);
     if (idx < 0) return res.status(404).json({ error: 'not_found' });
-    const removingHead = idx === 0;
-    const wasIdleDeferred = removingHead && pvdPlaybackState.get(sid)?.idleDeferred === true;
-    const [removedItem] = q.splice(idx, 1);
-    await settleDurableRuntimeItem(removedItem, { status: 'deleted', refunded: false });
-    if (removedItem?.source === 'chzzk-donation') void chzzkVideoRuntime.notifyPlayback(sid, removedItem, 'end');
-    if (removingHead) {
+    const { removed, removingHead, wasIdleDeferred } = await finishVideoQueueItem(sid, q[idx], 'deleted', false);
+    if (removed && removingHead) {
       try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
       await broadcastPvdStart(sid, { deferForIdle: wasIdleDeferred });
-    } else {
+    } else if (removed) {
       notifyPvdAdminSubscribers(sid, 'deleted').catch(() => null);
     }
     return res.json({ ok: true });
@@ -6952,52 +6981,45 @@ app.post('/api/video-donation/delete-refund', async (req, res) => {
     if (!sid) return res.status(401).json({ error: 'Login required' });
     const id = String(req.body?.id || '');
     if (!id) return res.status(400).json({ error: 'id required' });
-    const q = getVideoQueue(sid);
-    const idx = q.findIndex(it => String(it.id) === id);
-    if (idx < 0) return res.status(404).json({ error: 'not_found' });
-    const item = q[idx];
-    const removingHead = idx === 0;
-    const wasIdleDeferred = removingHead && pvdPlaybackState.get(sid)?.idleDeferred === true;
-    // Refund cost to requester
-    try {
-      const uid = await resolveStreamerUidForSid(sid);
-      if (uid && item?.userId && item?.cost) {
-        const before = await getChannelPoints(uid, String(item.userId)).catch(() => null);
-        await incrChannelPoints(uid, String(item.userId), item.username ? String(item.username) : null, Number(item.cost));
-        await recordBotEventLogSafe(sid, {
-          category: 'video_donation',
-          eventType: 'video_donation_refund_delete',
-          provider: 'admin',
-          channelUid: uid,
-          viewerUserId: String(item.userId),
-          viewerName: item.username ? String(item.username) : null,
-          pointDelta: Number(item.cost || 0),
-          pointBefore: Number.isFinite(Number(before)) ? Number(before) : null,
-          pointAfter: Number.isFinite(Number(before)) ? Number(before) + Number(item.cost || 0) : null,
-          status: 'refunded',
-          targetName: item.title || item.mediaId || item.mediaUrl || '영상 후원',
-          summary: `영상 후원 삭제 후 포인트 반환: ${item.title || item.mediaId || '영상'} (+${Number(item.cost || 0)}P)`,
-          metadata: {
-            queueItemId: item.id || null,
-            mediaProvider: item.mediaProvider || null,
-            mediaId: item.mediaId || item.videoId || null,
-            cost: Number(item.cost || 0),
-            removedHead: removingHead,
-          },
-        });
+    const item = getVideoQueue(sid).find(it => String(it.id) === id);
+    if (!item) {
+      const job = await getDurableRuntimeJob(id);
+      if (job?.sid === sid && job.jobType === 'video-donation' && job.status === 'completed' && job.result?.refundRequested) {
+        return res.json({ ok: true, deduplicated: true, refundedAmount: job.result.refundedAmount });
       }
-    } catch (e) {
-      console.warn('[pvd:delete-refund] refund failed', e?.message || e);
+      return res.status(404).json({ error: 'not_found' });
     }
-    // Remove from queue
-    q.splice(idx, 1);
-    await settleDurableRuntimeItem(item, { status: 'deleted', refunded: true });
-    if (item?.source === 'chzzk-donation') void chzzkVideoRuntime.notifyPlayback(sid, item, 'end');
-    if (removingHead) {
+    const { removed, removingHead, wasIdleDeferred, settlement } = await finishVideoQueueItem(sid, item, 'deleted', true);
+    const refundedAmount = settlement?.result?.refundedAmount || 0;
+    if (settlement?.applied && refundedAmount > 0) {
+      await recordBotEventLogSafe(sid, {
+        category: 'video_donation',
+        eventType: 'video_donation_refund_delete',
+        provider: 'admin',
+        channelUid: settlement.channelUid,
+        viewerUserId: settlement.userId,
+        viewerName: item.username ? String(item.username) : null,
+        pointDelta: refundedAmount,
+        status: 'refunded',
+        targetName: item.title || item.mediaId || item.mediaUrl || '영상 후원',
+        summary: `영상 후원 삭제 후 포인트 반환: ${item.title || item.mediaId || '영상'} (+${refundedAmount}P)`,
+        metadata: {
+          queueItemId: item.id || null,
+          mediaProvider: item.mediaProvider || null,
+          mediaId: item.mediaId || item.videoId || null,
+          cost: Number(item.cost || 0),
+          ordinaryRefunded: settlement.result.ordinaryRefunded,
+          bonusRefunded: settlement.result.bonusRefunded,
+          removedHead: removingHead,
+        },
+      });
+    }
+    if (removed && removingHead) {
       try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
       await broadcastPvdStart(sid, { deferForIdle: wasIdleDeferred });
-    } else {
+    } else if (removed) {
       // Inform clients of tail change
+      const q = getVideoQueue(sid);
       const set = pvdSidSockets.get(sid);
       if (set && set.size) {
         const msg = JSON.stringify({
@@ -7019,7 +7041,7 @@ app.post('/api/video-donation/delete-refund', async (req, res) => {
       }
       notifyPvdAdminSubscribers(sid, 'deleted_refunded').catch(() => null);
     }
-    return res.json({ ok: true });
+    return res.json({ ok: true, refundedAmount });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to delete-refund item' });
   }
@@ -7380,34 +7402,39 @@ function getPvdQueueItemKey(item) {
   return String(item?.id || `${item?.mediaProvider || 'unknown'}:${item?.mediaId || item?.videoId || item?.mediaUrl || item?.embedUrl || ''}:${item?.ts || item?.createdAt || ''}`);
 }
 
+async function finishVideoQueueItem(sid, item, status, refund) {
+  const paid = Number(item.cost) > 0;
+  const settlement = paid ? await chzzkVideoStore.settlePaidQueueItem({
+    sid, id: item.runtimeJobId || item.id, workerId: DURABLE_RUNTIME_WORKER_ID, status, refund,
+  }, refundBroadcastPoints) : null;
+
+  // The head (and even the array) can change while the transaction is in flight.
+  const queue = getVideoQueue(sid);
+  const index = queue.findIndex(entry => entry.id === item.id);
+  const removingHead = index === 0;
+  const wasIdleDeferred = removingHead && pvdPlaybackState.get(sid)?.idleDeferred === true;
+  if (index >= 0) {
+    queue.splice(index, 1);
+    if (item.source === 'chzzk-donation') void chzzkVideoRuntime.notifyPlayback(sid, item, 'end');
+    if (!paid) await settleDurableRuntimeItem(item, { status, refunded: false });
+  }
+  return { removed: index >= 0, removingHead, wasIdleDeferred, settlement };
+}
+
 async function popCurrentVideoDonationItem(sid, options = {}) {
   const q = getVideoQueue(sid);
   const head = q[0] || null;
   const expectedItemId = String(options.expectedItemId || '').trim();
   if (!head) return { popped: null, queue: q, empty: true };
+  const refund = options.refundOnError === true && String(options.cause || '').toLowerCase() === 'error';
+  if (refund && !expectedItemId) return { popped: null, queue: q, head, mismatch: true };
   if (expectedItemId && String(head.id || '') !== expectedItemId && getPvdQueueItemKey(head) !== expectedItemId) {
     return { popped: null, queue: q, head, mismatch: true };
   }
 
-  const popped = q.shift() || null;
-  if (popped && options.refundOnError && String(options.cause || '').toLowerCase() === 'error') {
-    try {
-      const uid = await resolveStreamerUidForSid(sid);
-      if (uid && popped.userId && popped.cost) {
-        await incrChannelPoints(uid, String(popped.userId), popped.username ? String(popped.username) : null, Number(popped.cost));
-      }
-    } catch (e) {
-      console.warn('[pvd:refund] failed', e?.message || e);
-    }
-  }
-  if (popped) {
-    if (popped.source === 'chzzk-donation') void chzzkVideoRuntime.notifyPlayback(sid, popped, 'end');
-    await settleDurableRuntimeItem(popped, {
-      status: String(options.cause || 'completed'),
-      refunded: options.refundOnError === true && String(options.cause || '').toLowerCase() === 'error',
-    });
-  }
-  return { popped, queue: q };
+  const { removed, removingHead } = await finishVideoQueueItem(sid, head, String(options.cause || 'completed'), refund);
+  if (removed && !removingHead) notifyPvdAdminSubscribers(sid, 'removed').catch(() => null);
+  return { popped: removed ? head : null, headChanged: removingHead, queue: getVideoQueue(sid) };
 }
 
 function setPvdPlaybackBaseFromAtSec(state, item, atSec) {
@@ -7535,7 +7562,7 @@ function pvdDeterministicTokenFromUid(uid) {
   }
 }
 
-function scheduleNextPvdAutoPop(sid) {
+function scheduleNextPvdAutoPop(sid, minDelayMs = 500) {
   try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
   if (!chatIngress.canRun()) return;
   const q = getVideoQueue(sid);
@@ -7571,7 +7598,7 @@ function scheduleNextPvdAutoPop(sid) {
   const elapsedSec = getCurrentPvdElapsedSec(sid);
   const total = Math.max(1, Number(item.durationSec || 0));
   const remaining = Math.max(0.5, total - elapsedSec);
-  const ms = Math.max(500, remaining * 1000);
+  const ms = Math.max(minDelayMs, remaining * 1000);
   const scheduledItemKey = getPvdQueueItemKey(item);
   const timer = setTimeout(async () => {
     if (!chatIngress.canRun()) return;
@@ -7591,9 +7618,10 @@ function scheduleNextPvdAutoPop(sid) {
         return scheduleNextPvdAutoPop(sid);
       }
       const result = await popCurrentVideoDonationItem(sid, { cause: 'auto_timer', expectedItemId: scheduledItemKey });
-      if (result.popped) await broadcastPvdStart(sid);
+      if (result.headChanged) await broadcastPvdStart(sid);
     } catch (e) {
       console.warn('[pvd:autoPop] failed', e?.message || e);
+      if (getVideoQueue(sid)[0]?.id === item.id) scheduleNextPvdAutoPop(sid, 5000);
     } finally { runtimeBackgroundInFlight -= 1; }
   }, ms);
   videoDonationTimers.set(sid, timer);
@@ -8133,13 +8161,13 @@ app.post('/api/video-donation/pop-by-token', async (req, res) => {
 
     const cause = String(req.body?.cause || '').toLowerCase();
     const expectedItemId = String(req.body?.itemId || req.body?.expectedItemId || '').trim();
-    const { popped, queue, mismatch, head } = await popCurrentVideoDonationItem(sid, {
+    const { popped, headChanged, queue, mismatch, head } = await popCurrentVideoDonationItem(sid, {
       cause,
       expectedItemId,
       refundOnError: true,
     });
     // Broadcast next (or null) to all viewers
-    if (popped) {
+    if (headChanged) {
       try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
       await broadcastPvdStart(sid);
     }
@@ -8398,7 +8426,7 @@ app.post('/api/video-donation/request', rateLimiters.userWrite, async (req, res)
     const acceptedItem = durable.job?.payload?.item || item;
     const queueSize = await getVideoDonationReceiptQueueSize(sid, acceptedItem, durable.job?.status);
     await runDurableRuntimeWorker();
-    await recordBotEventLogSafe(sid, {
+    if (durable.created !== false) await recordBotEventLogSafe(sid, {
       category: 'video_donation',
       eventType: isBgm ? 'bgm_request' : 'video_donation_request',
       provider: 'viewer',
@@ -8530,13 +8558,13 @@ app.post('/api/video-donation/pop', async (req, res) => {
     if (!sid) return res.status(401).json({ error: 'Login required' });
     const cause = String(req.body?.cause || '').toLowerCase();
     const expectedItemId = String(req.body?.itemId || req.body?.expectedItemId || '').trim();
-    const { popped, queue, mismatch, head } = await popCurrentVideoDonationItem(sid, {
+    const { popped, headChanged, queue, mismatch, head } = await popCurrentVideoDonationItem(sid, {
       cause,
       expectedItemId,
       refundOnError: true,
     });
     // if popping current, schedule next and broadcast
-    if (popped) {
+    if (headChanged) {
       try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
       await broadcastPvdStart(sid);
     }
@@ -12595,7 +12623,7 @@ app.post('/api/video-donation/control', async (req, res) => {
     if (op === 'skip') {
       const result = await popCurrentVideoDonationItem(sid, { cause: 'skipped', expectedItemId: req.body?.itemId });
       if (result.mismatch) return res.status(409).json({ error: 'item_mismatch' });
-      if (result.popped) await broadcastPvdStart(sid);
+      if (result.headChanged) await broadcastPvdStart(sid);
       return res.json({ ok: true });
     }
     if (op === 'duration' || op === 'duration_sync') {
@@ -21410,12 +21438,12 @@ app.post('/api/local-remote/video-donation/pop', requireAutomationLocalAgent, as
     const sid = getLocalRemoteSid(req);
     if (!sid) return res.status(401).json({ error: 'Invalid local program token' });
     const expectedItemId = String(req.body?.itemId || req.body?.expectedItemId || '').trim();
-    const { popped, queue, mismatch, head } = await popCurrentVideoDonationItem(sid, {
+    const { popped, headChanged, queue, mismatch, head } = await popCurrentVideoDonationItem(sid, {
       cause: req.body?.cause || 'local_remote',
       expectedItemId,
       refundOnError: false,
     });
-    if (popped) {
+    if (headChanged) {
       try { clearTimeout(videoDonationTimers.get(sid)); } catch { }
       await broadcastPvdStart(sid);
     }
@@ -22877,6 +22905,37 @@ app.get('/api/channelpoints', async (req, res) => {
   } catch (e) {
     console.error('[channelpoints:list] error', e?.message || e);
     return res.status(500).json({ error: 'Failed to list channel points' });
+  }
+});
+
+async function broadcastBonusSettingsRoute(req, res) {
+  res.setHeader('Cache-Control', 'private, no-store');
+  try {
+    const owner = req.botManagement?.ownerUserId || await getSessionActorUserId(req, { strict: true });
+    if (!owner) return res.status(401).json({ error: '로그인이 필요합니다.' });
+    const sid = `user:${owner}`;
+    const data = req.method === 'PUT' ? await saveBroadcastBonusSettings(sid, req.body) : await getBroadcastBonusSettings(sid);
+    return res.json(data);
+  } catch (error) {
+    if (error.status === 400 || error.status === 409) return res.status(error.status).json({ error: error.message });
+    console.error('[points:broadcast-bonus]', error?.message || error);
+    return res.status(503).json({ error: '방송 포인트 설정을 확인하지 못했습니다.' });
+  }
+}
+app.get('/api/points/broadcast-bonus', broadcastBonusSettingsRoute);
+app.put('/api/points/broadcast-bonus', rateLimiters.userWrite, broadcastBonusSettingsRoute);
+
+app.get('/api/public/:uid/broadcast-bonus', async (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  const uid = normalizePublicChannelUid(req.params.uid);
+  if (!uid || !parsePublicPointPolicyUid(uid)) return res.status(400).json({ error: 'invalid uid' });
+  try {
+    const identity = await resolveVerifiedPublicChannelIdentity(uid);
+    if (!identity?.ownerUserId) return res.status(404).json({ error: 'not_found' });
+    const viewer = await getSessionActorUserId(req, { strict: true });
+    return res.json(await getViewerBroadcastBonus(`user:${identity.ownerUserId}`, viewer));
+  } catch {
+    return res.status(503).json({ error: '방송 포인트를 조회할 수 없습니다.' });
   }
 });
 
@@ -25146,7 +25205,8 @@ async function ensureChzzkSessionOwned(sid, channelId) {
                 provider: 'chzzk', text, event: msg,
               }) : { handled: false };
               const wheelReply = marbleReply.handled ? marbleReply : !isBotSelf ? await participationWheelRuntime.chat({
-                sid, channelUid, userId: resolvedUserId, username: resolvedUsername,
+                sid, channelUid, userId: counterUserId, username: resolvedUsername,
+                getPointChannelUid: () => resolveStreamerUidForSid(sid, 'chzzk'),
                 provider: 'chzzk', text, event: msg,
               }) : { handled: false };
               if (wheelReply.handled) {
@@ -25252,13 +25312,17 @@ async function ensureChzzkSessionOwned(sid, channelId) {
             const responseTemplate = response;
 
             // Points cost enforcement per command (default 0)
-            let allowExecute = true;
             const commandCost = Math.max(0, Number(r.pointsCost || 0));
-            // Some rules (roulette) handle cost after parsing count; detect roulette token in responses
-            const isRouletteRule = (Array.isArray(r.responses) ? r.responses : []).some((s) => typeof s === 'string' && /\$\{\s*roulette::/i.test(s));
-            let commandPointDelta = 0;
-            let commandPointBefore = null;
-            let commandPointAfter = null;
+            const executionContext = msg?.executionContext || { source: 'chat', shouldDeductPoints: true };
+            const spend = await spendChatCommandPoints({
+              sid, responseTemplate, argsText: commandMatch.argsText, commandCost,
+              userId: counterUserId, username: resolvedUsername,
+              channelUid: async () => (await resolveChzzkChannelUidsForSid(sid, commandSettings))[0],
+              skipCost: executionContext.source === 'roulette' || executionContext.shouldDeductPoints === false,
+            }, deductChannelPointsIfEnough);
+            const allowExecute = !spend.error;
+            if (!allowExecute) response = spend.error;
+            const { pointDelta: commandPointDelta, pointBefore: commandPointBefore, pointAfter: commandPointAfter } = spend;
             const commandFeatures = [];
             const commandActionJobs = [];
 
@@ -25282,34 +25346,6 @@ async function ensureChzzkSessionOwned(sid, channelId) {
                   commandFeatures.push('attendance');
                 }
               } catch { }
-            }
-
-            const executionContext = msg?.executionContext || { source: 'chat', shouldDeductPoints: true };
-            const shouldSkipPointsDeduction = executionContext.source === 'roulette' || !executionContext.shouldDeductPoints;
-
-            if (!isRouletteRule && commandCost > 0 && resolvedUserId && !shouldSkipPointsDeduction) {
-              try {
-                // Resolve streamer channel UID (same as other points operations)
-                let channelUid = null;
-                const s = await getBotSettings(sid) || {};
-                const uids = await resolveChzzkChannelUidsForSid(sid, s);
-                if (uids.length) channelUid = uids[0];
-                if (channelUid) {
-                  const deduction = await deductChannelPointsIfEnough(channelUid, String(resolvedUserId), String(resolvedUsername || ''), commandCost);
-                  if (!deduction.deducted) {
-                    // Not enough points: override response and block execution
-                    response = `포인트가 부족합니다. (${commandCost} 필요, ${deduction.balanceBefore} 보유 중)`;
-                    allowExecute = false;
-                  } else {
-                    commandPointDelta -= commandCost;
-                    commandPointBefore = deduction.balanceBefore;
-                    commandPointAfter = deduction.balanceAfter;
-                  }
-                }
-              } catch {
-                response = '포인트 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.';
-                allowExecute = false;
-              }
             }
 
             // Prepare args for trigger handling (remove matched keyword from start)
@@ -25341,9 +25377,8 @@ async function ensureChzzkSessionOwned(sid, channelId) {
             } catch { }
 
             // Special trigger: ${video_donation} -> enqueue video donation instead of printing token
-            const vdRe = /\$\{\s*(?:video_donation|bgm_request)\s*\}/i;
             const vdReAll = /\$\{\s*(?:video_donation|bgm_request)\s*\}/ig;
-            if (allowExecute && typeof responseToSend === 'string' && vdRe.test(responseToSend)) {
+            if (allowExecute && spend.mediaToken && typeof responseToSend === 'string' && vdReAll.test(responseToSend)) {
               // args were parsed above as 'args' from user message
               const firstArg = Array.isArray(argsVd) ? (argsVd[0] || '') : '';
               
@@ -25360,11 +25395,13 @@ async function ensureChzzkSessionOwned(sid, channelId) {
                     userId: resolvedUserId,
                     username: resolvedUsername,
                     args: argsVd,
-                    response: responseToSend,
+                    response: `${spend.mediaToken} ${responseToSend.replace(vdReAll, '').trim()}`,
                     vdReAll,
                     context: {
                       source: 'chat-command',
                       provider: 'chzzk',
+                      messageId: msg.messageId || msg.id || msg.msgId || msg.eventId,
+                      messageTimestamp: msg.messageTime || msg.timestamp || msg.msgTime,
                       command: { keyword: matchedKeyword || '', ruleId: r.id || null, ruleName: r.name || null },
                     },
                   });
@@ -25378,120 +25415,59 @@ async function ensureChzzkSessionOwned(sid, channelId) {
             }
 
             // Special trigger: ${roulette::name} -> start a roulette spin and avoid echoing the token
-            const rlRe = /\$\{\s*roulette::([^}]+)\s*\}/i;
             const rlReAll = /\$\{\s*roulette::([^}]+)\s*\}/ig;
-            if (typeof responseToSend === 'string' && rlRe.test(responseToSend)) {
+            if (allowExecute && spend.rouletteName && typeof responseToSend === 'string' && responseToSend.match(rlReAll)) {
               try {
-                const m = String(responseToSend).match(rlRe);
-                const name = m && m[1] ? String(m[1]).trim() : '';
+                const { rouletteName: name, count } = spend;
                 // Always strip token to avoid echo
-                responseToSend = String(responseToSend).replace(rlReAll, '').trim() || (name ? '' : '룰렛 이름이 필요합니다.');
-                // Parse count from args: after command keyword, first numeric token; clamp to [1,10]; default 1
-                let count = 1;
-                try {
-                  const rest = commandMatch.argsText;
-                  const t = rest.split(/\s+/).map(String).filter(Boolean);
-                  if (t.length >= 1) {
-                    const n = parseInt(t[0], 10);
-                    if (Number.isFinite(n)) {
-                      count = Math.max(1, Math.min(10, n));
-                    } else {
-                      count = 1;
-                    }
-                  }
-                } catch { count = 1; }
-                if (name && allowExecute) {
-                  // If this rule has commandCost, charge count*cost now (we skipped earlier for roulette)
-                  if (commandCost > 0 && resolvedUserId && !shouldSkipPointsDeduction) {
-                    try {
-                      // Resolve channel UID strictly; if missing, block execution
-                      let channelUid = null;
-                      const s = await getBotSettings(sid) || {};
-                      const uids = await resolveChzzkChannelUidsForSid(sid, s);
-                      if (uids.length) channelUid = uids[0];
-                      if (!channelUid) {
-                        responseToSend = '포인트 확인에 실패했습니다. 채널 연결을 확인한 뒤 다시 시도해 주세요.';
-                        allowExecute = false;
-                      } else {
-                        const need = commandCost * count;
-                        try {
-                          const deduction = await deductChannelPointsIfEnough(channelUid, String(resolvedUserId), String(resolvedUsername || ''), need);
-                          if (!deduction.deducted) {
-                            responseToSend = `포인트가 부족합니다. (${need} 필요, ${deduction.balanceBefore} 보유 중)`;
-                            allowExecute = false;
-                          } else {
-                            commandPointDelta -= need;
-                            commandPointBefore = deduction.balanceBefore;
-                            commandPointAfter = deduction.balanceAfter;
-                          }
-                        } catch (e) {
-                          responseToSend = '포인트 차감에 실패했습니다. 잠시 후 다시 시도해 주세요.';
-                          allowExecute = false;
-                        }
-                      }
-                    } catch (e) {
-                      console.error(e);
-                      responseToSend = '포인트 처리 중 오류가 발생했습니다.';
-                      allowExecute = false;
-                    }
-                  }
-                  // Only enqueue if execution is still allowed after points checks
-                  if (allowExecute) {
-                    try {
-                      const accessToken = await getValidAccessToken(sid);
+                responseToSend = String(responseToSend).replace(rlReAll, '').trim();
+                const accessToken = await getValidAccessToken(sid);
 
-                      const settings = await updateBotSettingsAtomically(sid, (current) => ({
-                        ...current,
-                        rouletteViewerToken: String(current.rouletteViewerToken || '').trim() || rouletteRandomToken(),
-                      }));
-                      const token = settings.rouletteViewerToken;
+                const settings = await updateBotSettingsAtomically(sid, (current) => ({
+                  ...current,
+                  rouletteViewerToken: String(current.rouletteViewerToken || '').trim() || rouletteRandomToken(),
+                }));
+                const token = settings.rouletteViewerToken;
 
-                      rouletteTokenToSid.set(token, sid);
-                      console.log(`[Roulette] Token mapping set: ${token} -> ${sid}`);
+                rouletteTokenToSid.set(token, sid);
+                console.log(`[Roulette] Token mapping set: ${token} -> ${sid}`);
 
-                      const base = {
-                        name,
-                        userId: String(resolvedUserId || ''),
-                        username: String(resolvedUsername || ''),
-                        // For batches (count>1), suppress per-spin chat and tag batch meta; for single spin, allow per-spin chat
-                        chatPost: count > 1
-                          ? makeChzzkChatPost(entry.sessionKey, accessToken, resolvedUsername, { liveManageActorId: resolvedUserId, counterUserId, suppressResultChat: true, batchId: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, batchCount: count })
-                          : makeChzzkChatPost(entry.sessionKey, accessToken, resolvedUsername, { liveManageActorId: resolvedUserId, counterUserId })
-                      };
+                const base = {
+                  name,
+                  userId: String(resolvedUserId || ''),
+                  username: String(resolvedUsername || ''),
+                  // For batches (count>1), suppress per-spin chat and tag batch meta; for single spin, allow per-spin chat
+                  chatPost: count > 1
+                    ? makeChzzkChatPost(entry.sessionKey, accessToken, resolvedUsername, { liveManageActorId: resolvedUserId, counterUserId, suppressResultChat: true, batchId: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, batchCount: count })
+                    : makeChzzkChatPost(entry.sessionKey, accessToken, resolvedUsername, { liveManageActorId: resolvedUserId, counterUserId })
+                };
 
-                      console.log(`[Roulette] Enqueueing ${count} spins for roulette: ${name}, user: ${resolvedUsername}`);
+                console.log(`[Roulette] Enqueueing ${count} spins for roulette: ${name}, user: ${resolvedUsername}`);
 
-                      // First spin: normal animation (instant=false)
-                      const queuePosition = await enqueueRouletteSpin(sid, {
-                        ...base,
-                        instant: false,
-                        eventContext: {
-                          source: 'chat-command',
-                          triggerName: matchedKeyword || '',
-                          pointDelta: commandPointDelta,
-                          pointBefore: commandPointBefore,
-                          pointAfter: commandPointAfter,
-                        },
-                      });
-                      console.log(`[Roulette] First spin enqueued at position: ${queuePosition}`);
+                // First spin: normal animation (instant=false)
+                const queuePosition = await enqueueRouletteSpin(sid, {
+                  ...base,
+                  instant: false,
+                  eventContext: {
+                    source: 'chat-command',
+                    triggerName: matchedKeyword || '',
+                    pointDelta: commandPointDelta,
+                    pointBefore: commandPointBefore,
+                    pointAfter: commandPointAfter,
+                  },
+                });
+                console.log(`[Roulette] First spin enqueued at position: ${queuePosition}`);
 
-                      // Remaining spins (if any): instant display on viewer
-                      for (let i = 1; i < count; i++) {
-                        const pos = await enqueueRouletteSpin(sid, { ...base, instant: true, eventContext: { source: 'chat-command', triggerName: matchedKeyword || '' } });
-                        console.log(`[Roulette] Spin ${i + 1} enqueued at position: ${pos}`);
-                      }
-
-                      // Keep any remaining text (including a planned counter) so
-                      // mixed roulette + counter responses can still display it.
-                      responseToSend = String(responseToSend || '').trim();
-                      commandFeatures.push('roulette');
-
-                    } catch (e) {
-                      console.error('[Roulette] Execution error:', e);
-                      responseToSend = '룰렛 실행 중 오류가 발생했습니다: ' + String(e?.message || e);
-                    }
-                  }
+                // Remaining spins (if any): instant display on viewer
+                for (let i = 1; i < count; i++) {
+                  const pos = await enqueueRouletteSpin(sid, { ...base, instant: true, eventContext: { source: 'chat-command', triggerName: matchedKeyword || '' } });
+                  console.log(`[Roulette] Spin ${i + 1} enqueued at position: ${pos}`);
                 }
+
+                // Keep any remaining text (including a planned counter) so
+                // mixed roulette + counter responses can still display it.
+                responseToSend = String(responseToSend || '').trim();
+                commandFeatures.push('roulette');
                 ruleUsed = true;
               } catch (e) {
                 responseToSend = '룰렛 실행 중 오류가 발생했습니다: ' + String(e?.message || e);
@@ -25536,7 +25512,7 @@ async function ensureChzzkSessionOwned(sid, channelId) {
                     source: executionContext.source || 'chat',
                     executionContext: {
                       ...executionContext,
-                      pointsDeducted: !shouldSkipPointsDeduction && commandCost > 0,
+                      pointsDeducted: commandPointDelta < 0,
                       commandCost: commandCost
                     }
                   };
@@ -25560,7 +25536,7 @@ async function ensureChzzkSessionOwned(sid, channelId) {
                       source: executionContext.source === 'roulette' ? 'arubot-roulette' : 'arubot-chat',
                       metadata: {
                         executionContext: executionContext,
-                        pointsDeducted: !shouldSkipPointsDeduction && commandCost > 0,
+                        pointsDeducted: commandPointDelta < 0,
                         commandCost: commandCost
                       }
                     });
@@ -26719,7 +26695,7 @@ async function processYoutubeChatAutomation(entry, ev) {
         provider: 'youtube', text, event: ev,
       });
       const wheelReply = marbleReply.handled ? marbleReply : await participationWheelRuntime.chat({
-        sid, channelUid: entry.channelId, userId: resolvedUserId, username: resolvedUsername,
+        sid, channelUid: entry.channelId, userId: counterUserId, username: resolvedUsername,
         provider: 'youtube', text, event: ev,
       });
       if (wheelReply.handled) {
@@ -26792,12 +26768,14 @@ async function processYoutubeChatAutomation(entry, ev) {
       const responses = Array.isArray(r.responses) ? r.responses.filter(Boolean) : [];
       let response = responses[Math.floor(Math.random() * responses.length)] || '';
       const responseTemplate = response;
-      let allowExecute = true;
       const commandCost = Math.max(0, Number(r.pointsCost || 0));
-      const isRouletteRule = responses.some((s) => typeof s === 'string' && /\$\{\s*roulette::/i.test(s));
-      let commandPointDelta = 0;
-      let commandPointBefore = null;
-      let commandPointAfter = null;
+      const spend = await spendChatCommandPoints({
+        sid, responseTemplate, argsText: commandMatch.argsText, commandCost,
+        userId: counterUserId, username: resolvedUsername, channelUid: entry.channelId,
+      }, deductChannelPointsIfEnough);
+      const allowExecute = !spend.error;
+      if (!allowExecute) response = spend.error;
+      const { pointDelta: commandPointDelta, pointBefore: commandPointBefore, pointAfter: commandPointAfter } = spend;
       const commandFeatures = [];
       const commandActionJobs = [];
       if (allowExecute && liveState.live && settings.attendanceCommandOnly === true && isAttendanceCommandText(text, settings)) {
@@ -26820,22 +26798,6 @@ async function processYoutubeChatAutomation(entry, ev) {
             commandFeatures.push('attendance');
           }
         } catch { }
-      }
-      if (!isRouletteRule && commandCost > 0 && entry.channelId && resolvedUserId) {
-        try {
-          const deduction = await deductChannelPointsIfEnough(entry.channelId, resolvedUserId, resolvedUsername, commandCost);
-          if (!deduction.deducted) {
-            response = `포인트가 부족합니다. (${commandCost} 필요, ${deduction.balanceBefore} 보유 중)`;
-            allowExecute = false;
-          } else {
-            commandPointDelta -= commandCost;
-            commandPointBefore = deduction.balanceBefore;
-            commandPointAfter = deduction.balanceAfter;
-          }
-        } catch {
-          response = '포인트 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.';
-          allowExecute = false;
-        }
       }
 
       const cmd = matchedKeyword || '';
@@ -26863,15 +26825,14 @@ async function processYoutubeChatAutomation(entry, ev) {
           from: { userId: resolvedUserId, username: resolvedUsername },
           at: Date.now(),
           source: 'youtube-live-chat',
-          executionContext: { source: 'youtube-live-chat', pointsDeducted: commandCost > 0, commandCost }
+          executionContext: { source: 'youtube-live-chat', pointsDeducted: commandPointDelta < 0, commandCost }
         };
         try { emitWarudoEvent(sid, payload); } catch { }
         try { broadcastToDesktop(sid, { ...payload, metadata: payload.executionContext }); } catch { }
       }
 
-      const vdRe = /\$\{\s*(?:video_donation|bgm_request)\s*\}/i;
       const vdReAll = /\$\{\s*(?:video_donation|bgm_request)\s*\}/ig;
-      if (allowExecute && vdRe.test(cleaned)) {
+      if (allowExecute && spend.mediaToken && vdReAll.test(cleaned)) {
         try {
           cleaned = await enqueueVideoDonationFromArgs({
             sid,
@@ -26879,11 +26840,12 @@ async function processYoutubeChatAutomation(entry, ev) {
             userId: resolvedUserId,
             username: resolvedUsername,
             args,
-            response: cleaned,
+            response: `${spend.mediaToken} ${cleaned.replace(vdReAll, '').trim()}`,
             vdReAll,
             context: {
               source: 'youtube-live-chat-command',
               provider: 'youtube',
+              messageId: ev.id,
               command: { keyword: matchedKeyword || '', ruleId: r.id || null, ruleName: r.name || null },
             },
           });
@@ -26893,58 +26855,34 @@ async function processYoutubeChatAutomation(entry, ev) {
         }
       }
 
-      const rlRe = /\$\{\s*roulette::([^}]+)\s*\}/i;
       const rlReAll = /\$\{\s*roulette::([^}]+)\s*\}/ig;
-      if (allowExecute && rlRe.test(cleaned)) {
+      if (allowExecute && spend.rouletteName && cleaned.match(rlReAll)) {
         try {
-          const m = String(cleaned).match(rlRe);
-          const name = m && m[1] ? String(m[1]).trim() : '';
+          const { rouletteName: name, count } = spend;
           cleaned = String(cleaned).replace(rlReAll, '').trim();
-          let count = 1;
-          const n = parseInt(args[0] || '', 10);
-          if (Number.isFinite(n)) count = Math.max(1, Math.min(10, n));
-          if (name) {
-            if (commandCost > 0 && entry.channelId && resolvedUserId) {
-              const need = commandCost * count;
-              const deduction = await deductChannelPointsIfEnough(entry.channelId, resolvedUserId, resolvedUsername, need).catch(() => null);
-              if (!deduction) {
-                cleaned = '포인트 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.';
-                allowExecute = false;
-              } else if (!deduction.deducted) {
-                cleaned = `포인트가 부족합니다. (${need} 필요, ${deduction.balanceBefore} 보유 중)`;
-                allowExecute = false;
-              } else {
-                commandPointDelta -= need;
-                commandPointBefore = deduction.balanceBefore;
-                commandPointAfter = deduction.balanceAfter;
-              }
-            }
-          }
-          if (name && allowExecute) {
-            const base = {
-              name,
-              userId: resolvedUserId,
-              username: resolvedUsername,
-              chatPost: count > 1
-                ? makeYoutubeChatPost(ownerUserId, entry.liveChatId, resolvedUsername, { counterUserId, suppressResultChat: true, batchId: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, batchCount: count })
-                : makeYoutubeChatPost(ownerUserId, entry.liveChatId, resolvedUsername, { counterUserId })
-            };
-            await enqueueRouletteSpin(sid, {
-              ...base,
-              instant: false,
-              eventContext: {
-                source: 'youtube-live-chat-command',
-                triggerName: matchedKeyword || '',
-                pointDelta: commandPointDelta,
-                pointBefore: commandPointBefore,
-                pointAfter: commandPointAfter,
-              },
-            });
-            for (let i = 1; i < count; i++) await enqueueRouletteSpin(sid, { ...base, instant: true, eventContext: { source: 'youtube-live-chat-command', triggerName: matchedKeyword || '' } });
-            // Preserve non-roulette content such as a planned counter value.
-            cleaned = String(cleaned || '').trim();
-            commandFeatures.push('roulette');
-          }
+          const base = {
+            name,
+            userId: resolvedUserId,
+            username: resolvedUsername,
+            chatPost: count > 1
+              ? makeYoutubeChatPost(ownerUserId, entry.liveChatId, resolvedUsername, { counterUserId, suppressResultChat: true, batchId: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, batchCount: count })
+              : makeYoutubeChatPost(ownerUserId, entry.liveChatId, resolvedUsername, { counterUserId })
+          };
+          await enqueueRouletteSpin(sid, {
+            ...base,
+            instant: false,
+            eventContext: {
+              source: 'youtube-live-chat-command',
+              triggerName: matchedKeyword || '',
+              pointDelta: commandPointDelta,
+              pointBefore: commandPointBefore,
+              pointAfter: commandPointAfter,
+            },
+          });
+          for (let i = 1; i < count; i++) await enqueueRouletteSpin(sid, { ...base, instant: true, eventContext: { source: 'youtube-live-chat-command', triggerName: matchedKeyword || '' } });
+          // Preserve non-roulette content such as a planned counter value.
+          cleaned = String(cleaned || '').trim();
+          commandFeatures.push('roulette');
         } catch {
           cleaned = '룰렛 실행 중 오류가 발생했습니다.';
         }
@@ -27812,7 +27750,11 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
     username: String(username || ''),
     status: 'queued'
   };
-  const idempotencyKey = String(context.eventId || context.messageId || '').trim() || crypto.createHash('sha256')
+  const chatKey = context.messageId ? [context.provider, String(context.messageId)]
+    : context.messageTimestamp ? [context.provider, userId, context.messageTimestamp, commandArgs] : null;
+  const idempotencyKey = String(context.eventId || '').trim()
+    || (chatKey && 'chat:' + crypto.createHash('sha256').update(JSON.stringify(chatKey)).digest('hex'))
+    || crypto.createHash('sha256')
     .update(`${sid}|${userId}|${media.provider}|${media.mediaId}|${start}|${requestedEndSec ?? ''}|${context.source || ''}|${Math.floor(Date.now() / 2000)}`)
     .digest('hex');
   const durable = await enqueuePaidDurableRuntimeJob({
@@ -27833,7 +27775,7 @@ async function enqueueVideoDonationFromArgs({ sid, channelUid, userId, username,
   const acceptedItem = durable.job?.payload?.item || queueItem;
   const queueSize = await getVideoDonationReceiptQueueSize(sid, acceptedItem, durable.job?.status);
   await runDurableRuntimeWorker();
-  await recordBotEventLogSafe(sid, {
+  if (durable.created !== false) await recordBotEventLogSafe(sid, {
     category: 'video_donation',
     eventType: isBgm ? 'bgm_request' : 'video_donation_request',
     provider: providerFromLogContext(context),
@@ -27964,7 +27906,7 @@ async function processCimeChatAutomation(entry, ev) {
         provider: 'cime', text, event: ev,
       }) : { handled: false };
       const wheelReply = marbleReply.handled ? marbleReply : await participationWheelRuntime.chat({
-        sid, channelUid: pointChannelUid || entry.channelId, userId: resolvedUserId, username: resolvedUsername,
+        sid, channelUid: pointChannelUid || entry.channelId, userId: counterUserId, username: resolvedUsername,
         provider: 'cime', text, event: ev,
       });
       if (wheelReply.handled) {
@@ -28058,12 +28000,14 @@ async function processCimeChatAutomation(entry, ev) {
       const responses = Array.isArray(r.responses) ? r.responses.filter(Boolean) : [];
       let response = responses[Math.floor(Math.random() * responses.length)] || '';
       const responseTemplate = response;
-      let allowExecute = true;
       const commandCost = Math.max(0, Number(r.pointsCost || 0));
-      const isRouletteRule = responses.some((s) => typeof s === 'string' && /\$\{\s*roulette::/i.test(s));
-      let commandPointDelta = 0;
-      let commandPointBefore = null;
-      let commandPointAfter = null;
+      const spend = await spendChatCommandPoints({
+        sid, responseTemplate, argsText: commandMatch.argsText, commandCost,
+        userId: counterUserId, username: resolvedUsername, channelUid: pointChannelUid,
+      }, deductChannelPointsIfEnough);
+      const allowExecute = !spend.error;
+      if (!allowExecute) response = spend.error;
+      const { pointDelta: commandPointDelta, pointBefore: commandPointBefore, pointAfter: commandPointAfter } = spend;
       const commandFeatures = [];
       const commandActionJobs = [];
       if (allowExecute && currentlyLive && settings.attendanceCommandOnly === true && isAttendanceCommandText(text, settings)) {
@@ -28086,22 +28030,6 @@ async function processCimeChatAutomation(entry, ev) {
             commandFeatures.push('attendance');
           }
         } catch { }
-      }
-      if (!isRouletteRule && commandCost > 0 && pointChannelUid && resolvedUserId) {
-        try {
-          const deduction = await deductChannelPointsIfEnough(pointChannelUid, resolvedUserId, resolvedUsername, commandCost);
-          if (!deduction.deducted) {
-            response = `포인트가 부족합니다. (${commandCost} 필요, ${deduction.balanceBefore} 보유 중)`;
-            allowExecute = false;
-          } else {
-            commandPointDelta -= commandCost;
-            commandPointBefore = deduction.balanceBefore;
-            commandPointAfter = deduction.balanceAfter;
-          }
-        } catch {
-          response = '포인트 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.';
-          allowExecute = false;
-        }
       }
 
       const cmd = matchedKeyword || '';
@@ -28131,15 +28059,14 @@ async function processCimeChatAutomation(entry, ev) {
           from: { userId: resolvedUserId, username: resolvedUsername },
           at: Date.now(),
           source: 'cime-chat',
-          executionContext: { source: 'cime-chat', pointsDeducted: commandCost > 0, commandCost }
+          executionContext: { source: 'cime-chat', pointsDeducted: commandPointDelta < 0, commandCost }
         };
         try { emitWarudoEvent(sid, payload); } catch { }
         try { broadcastToDesktop(sid, { ...payload, metadata: payload.executionContext }); } catch { }
       }
 
-      const vdRe = /\$\{\s*(?:video_donation|bgm_request)\s*\}/i;
       const vdReAll = /\$\{\s*(?:video_donation|bgm_request)\s*\}/ig;
-      if (allowExecute && vdRe.test(cleaned)) {
+      if (allowExecute && spend.mediaToken && vdReAll.test(cleaned)) {
         try {
           cleaned = await enqueueVideoDonationFromArgs({
             sid,
@@ -28147,11 +28074,12 @@ async function processCimeChatAutomation(entry, ev) {
             userId: resolvedUserId,
             username: resolvedUsername,
             args,
-            response: cleaned,
+            response: `${spend.mediaToken} ${cleaned.replace(vdReAll, '').trim()}`,
             vdReAll,
             context: {
               source: 'cime-chat-command',
               provider: 'cime',
+              messageId: ev.id,
               command: { keyword: matchedKeyword || '', ruleId: r.id || null, ruleName: r.name || null },
             },
           });
@@ -28161,58 +28089,34 @@ async function processCimeChatAutomation(entry, ev) {
         }
       }
 
-      const rlRe = /\$\{\s*roulette::([^}]+)\s*\}/i;
       const rlReAll = /\$\{\s*roulette::([^}]+)\s*\}/ig;
-      if (allowExecute && rlRe.test(cleaned)) {
+      if (allowExecute && spend.rouletteName && cleaned.match(rlReAll)) {
         try {
-          const m = String(cleaned).match(rlRe);
-          const name = m && m[1] ? String(m[1]).trim() : '';
+          const { rouletteName: name, count } = spend;
           cleaned = String(cleaned).replace(rlReAll, '').trim();
-          let count = 1;
-          const n = parseInt(args[0] || '', 10);
-          if (Number.isFinite(n)) count = Math.max(1, Math.min(10, n));
-          if (name) {
-            if (commandCost > 0 && pointChannelUid && resolvedUserId) {
-              const need = commandCost * count;
-              const deduction = await deductChannelPointsIfEnough(pointChannelUid, resolvedUserId, resolvedUsername, need).catch(() => null);
-              if (!deduction) {
-                cleaned = '포인트 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.';
-                allowExecute = false;
-              } else if (!deduction.deducted) {
-                cleaned = `포인트가 부족합니다. (${need} 필요, ${deduction.balanceBefore} 보유 중)`;
-                allowExecute = false;
-              } else {
-                commandPointDelta -= need;
-                commandPointBefore = deduction.balanceBefore;
-                commandPointAfter = deduction.balanceAfter;
-              }
-            }
-          }
-          if (name && allowExecute) {
-            const base = {
-              name,
-              userId: resolvedUserId,
-              username: resolvedUsername,
-              chatPost: count > 1
-                ? makeCimeChatPost(ownerUserId, resolvedUsername, { liveManageActorId: resolvedUserId, counterUserId, suppressResultChat: true, batchId: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, batchCount: count })
-                : makeCimeChatPost(ownerUserId, resolvedUsername, { liveManageActorId: resolvedUserId, counterUserId })
-            };
-            await enqueueRouletteSpin(sid, {
-              ...base,
-              instant: false,
-              eventContext: {
-                source: 'cime-chat-command',
-                triggerName: matchedKeyword || '',
-                pointDelta: commandPointDelta,
-                pointBefore: commandPointBefore,
-                pointAfter: commandPointAfter,
-              },
-            });
-            for (let i = 1; i < count; i++) await enqueueRouletteSpin(sid, { ...base, instant: true, eventContext: { source: 'cime-chat-command', triggerName: matchedKeyword || '' } });
-            // Preserve non-roulette content such as a planned counter value.
-            cleaned = String(cleaned || '').trim();
-            commandFeatures.push('roulette');
-          }
+          const base = {
+            name,
+            userId: resolvedUserId,
+            username: resolvedUsername,
+            chatPost: count > 1
+              ? makeCimeChatPost(ownerUserId, resolvedUsername, { liveManageActorId: resolvedUserId, counterUserId, suppressResultChat: true, batchId: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, batchCount: count })
+              : makeCimeChatPost(ownerUserId, resolvedUsername, { liveManageActorId: resolvedUserId, counterUserId })
+          };
+          await enqueueRouletteSpin(sid, {
+            ...base,
+            instant: false,
+            eventContext: {
+              source: 'cime-chat-command',
+              triggerName: matchedKeyword || '',
+              pointDelta: commandPointDelta,
+              pointBefore: commandPointBefore,
+              pointAfter: commandPointAfter,
+            },
+          });
+          for (let i = 1; i < count; i++) await enqueueRouletteSpin(sid, { ...base, instant: true, eventContext: { source: 'cime-chat-command', triggerName: matchedKeyword || '' } });
+          // Preserve non-roulette content such as a planned counter value.
+          cleaned = String(cleaned || '').trim();
+          commandFeatures.push('roulette');
         } catch (e) {
           cleaned = '룰렛 실행 중 오류가 발생했습니다.';
         }

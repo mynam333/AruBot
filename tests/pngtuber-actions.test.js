@@ -345,11 +345,11 @@ describe('actual command handlers keep template authorization and existing point
       sendYoutubeChat: async (_owner, _chat, text) => sent.push(text), sendCimeChat: async (_owner, text) => sent.push(text),
       getCimeLiveActorRoleLevel: async () => 1,
     };
-    const handler = loadFunctions([functionName], bindings)[functionName];
+    const handler = loadFunctions([functionName, 'spendChatCommandPoints'], bindings)[functionName];
     const entry = { ownerUserId: 'owner', primarySid: sid, channelId: 'channel', connected: false, sentReplies: new Set() };
     await handler(entry, { id: 'paid', userId: 'viewer', user: '${pngtuber::viewer}', role: {}, message: '!react ${pngtuber::arg}' });
     expect(deductChannelPointsIfEnough).toHaveBeenCalledTimes(1);
-    expect(deductChannelPointsIfEnough).toHaveBeenCalledWith('channel', 'viewer', '${pngtuber::viewer}', 500);
+    expect(deductChannelPointsIfEnough).toHaveBeenCalledWith('channel', 'viewer', '${pngtuber::viewer}', 500, { sid, category: 'command' });
     expect(r.enqueueAutomationJob).toHaveBeenCalledTimes(1);
     expect(r.enqueueAutomationJob.mock.calls[0][1].payload.reactionId).toBe('saved');
     expect(sent).toHaveLength(1);

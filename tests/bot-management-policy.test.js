@@ -55,6 +55,7 @@ describe('strict bot delegation policy', () => {
   test.each([
     ['GET', '/api/bot/rules', 'commands', true], ['POST', '/api/bot/rules/upsert', 'commands', false],
     ['GET', '/api/channelpoints/list', 'points', true], ['POST', '/api/channelpoints/incr', 'points', false],
+    ['GET', '/api/points/broadcast-bonus', 'points', true], ['PUT', '/api/points/broadcast-bonus', 'points', false],
     ['GET', '/api/drawing-donation/admin/ws', 'drawing', true], ['POST', '/api/drawing-donation/approve', 'drawing', false],
     ['GET', '/api/video-donation/queue', 'video', true], ['POST', '/api/video-donation/control', 'video', false],
     ['PUT', '/api/wheel/settings', 'wheel', false], ['POST', '/api/automations/run', 'automations', false],

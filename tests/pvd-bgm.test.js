@@ -158,10 +158,10 @@ function commandHarness(settings) {
     providerFromLogContext: () => 'youtube', enqueuePaidDurableRuntimeJob: enqueue,
     getVideoDonationReceiptQueueSize: async () => 1, runDurableRuntimeWorker: async () => {}, recordBotEventLogSafe: log,
   });
-  const request = (response = '${bgm_request}') => enqueueVideoDonationFromArgs({
+  const request = (response = '${bgm_request}', context = { eventId: 'message-1' }) => enqueueVideoDonationFromArgs({
     sid: 'sid', channelUid: 'channel', userId: 'viewer', username: 'Viewer',
     args: ['https://youtu.be/video000001', '1:00', '2:00'], response,
-    vdReAll: /\$\{\s*(?:bgm_request|video_donation)\s*\}/ig, context: { eventId: 'message-1' },
+    vdReAll: /\$\{\s*(?:bgm_request|video_donation)\s*\}/ig, context,
   });
   return { request, enqueue, resolve, log };
 }
@@ -189,6 +189,21 @@ test('video requests keep their own rate and idempotency key', async () => {
   const h = commandHarness({ videoDonationAcceptEnabled: true, videoDonationPointsPerSecond: 2, bgmPointsPerSecond: 9 });
   await h.request('${video_donation}');
   expect(h.enqueue).toHaveBeenCalledWith(expect.objectContaining({ pointsCost: 120, idempotencyKey: 'message-1', payload: { item: expect.objectContaining({ kind: 'video' }) } }));
+});
+
+test('delayed chat retries reuse the provider message ID, or the original CHZZK timestamp', async () => {
+  const h = commandHarness({ bgmEnabled: true, bgmAcceptEnabled: true });
+  const now = jest.spyOn(Date, 'now');
+  try {
+    for (const time of [10000, 90000]) {
+      now.mockReturnValue(time);
+      for (const context of [{ provider: 'cime', messageId: 'same' }, { provider: 'youtube', messageId: 'same' },
+        { provider: 'chzzk', messageTimestamp: 7000 }]) await h.request('${bgm_request}', context);
+    }
+    const keys = h.enqueue.mock.calls.map(([job]) => job.idempotencyKey);
+    expect(new Set(keys.slice(0, 3)).size).toBe(3);
+    expect(keys.slice(3)).toEqual(keys.slice(0, 3));
+  } finally { now.mockRestore(); }
 });
 
 test('backend settings reject simultaneous BGM and video idle music', async () => {

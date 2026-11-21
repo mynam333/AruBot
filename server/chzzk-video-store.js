@@ -1,5 +1,10 @@
+import { settlePaidVideoWithClient } from './pvd-paid-settlement.js';
+
 export function createChzzkVideoStore({ withPgClient }) {
   return {
+    settlePaidQueueItem(input, refundPoints) {
+      return withPgClient(pg => settlePaidVideoWithClient(pg, input, refundPoints));
+    },
     listConfigured() {
       return withPgClient(async (pg) => {
         const { rows } = await pg.query(`select sid, settings from bot_settings

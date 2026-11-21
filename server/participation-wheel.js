@@ -185,8 +185,7 @@ function stableJson(value) {
  * stale snapshots; an event's first outcome wins even if replay metadata changes.
  */
 export function createParticipationWheelStore({
-  withPgClient, deductChannelPointsIfEnoughWithClient, resolvePointChannelIdentity,
-  resolvePointUserIdentity, upsertCanonicalPointDelta,
+  withPgClient, debitBroadcastPoints, refundBroadcastPoints, resolvePointChannelIdentity, resolvePointUserIdentity,
   randomInt: draw = randomInt, randomUUID: uuid = randomUUID,
 }) {
   if (typeof withPgClient !== 'function') throw new TypeError('withPgClient is required');
@@ -220,7 +219,7 @@ export function createParticipationWheelStore({
             // Read the DB clock after obtaining the row lock, including after a wait.
             const clock = await pg.query('select floor(extract(epoch from clock_timestamp()) * 1000)::bigint as now_ms');
             const now = Number(clock.rows[0].now_ms);
-            const result = await apply(pg, state, now);
+            const result = await apply(pg, state, now, owner);
             outcome = result.outcome || {};
             if (result.changed) {
               state.revision++;
@@ -267,7 +266,7 @@ export function createParticipationWheelStore({
       slots: input.slots, colorIndex, createdAt: now, ...privateFields });
   }
 
-  async function refundEntries(pg, entries) {
+  async function refundEntries(pg, sid, entries) {
     const refunds = new Map();
     for (const entry of entries) {
       if (entry.source !== 'points') continue;
@@ -280,17 +279,29 @@ export function createParticipationWheelStore({
       const channel = await resolvePointChannelIdentity(pg, paid.channelUid);
       const user = await resolvePointUserIdentity(pg, paid.userId);
       if (!channel.canonicalChannelUid || !user.canonicalUserId) fail('invalid_identity');
-      const key = JSON.stringify([channel.canonicalChannelUid, user.canonicalUserId]);
+      // Wins consume the bonus-funded part first. Legacy entries were entirely ordinary points.
+      const funding = paid.funding;
+      const ordinarySpent = funding === undefined ? amount : Math.min(amount, funding.ordinarySpent);
+      const bonusSpent = amount - ordinarySpent;
+      if (funding !== undefined && (!Number.isSafeInteger(funding.ordinarySpent) || funding.ordinarySpent < 0
+        || !Number.isSafeInteger(funding.bonusSpent) || funding.bonusSpent < bonusSpent
+        || (bonusSpent > 0 && !funding.sessionKey))) fail('invalid_refund_state', 503);
+      // Linking identities can change the wallet; bonus usage belongs to the original debit row.
+      const sessionKey = bonusSpent ? funding.sessionKey : null;
+      const usageUserId = bonusSpent ? paid.userId : null;
+      const key = JSON.stringify([channel.canonicalChannelUid, user.canonicalUserId, sessionKey, usageUserId]);
       const previous = refunds.get(key);
       refunds.set(key, { channelUid: channel.canonicalChannelUid, userId: user.canonicalUserId,
         lockKey: `${channel.canonicalChannelUid}:${user.canonicalUserId}`,
-        username: entry.username, amount: (previous?.amount || 0) + amount });
+        username: entry.username, amount: (previous?.amount || 0) + amount,
+        receipt: { sessionKey, userId: usageUserId, ordinarySpent: (previous?.receipt.ordinarySpent || 0) + ordinarySpent,
+          bonusSpent: (previous?.receipt.bonusSpent || 0) + bonusSpent } });
     }
     // All refund paths acquire canonical identity locks in the same order.
     for (const refund of [...refunds.values()].sort((a, b) => a.lockKey < b.lockKey ? -1 : a.lockKey > b.lockKey ? 1 : 0)) {
       if (!Number.isSafeInteger(refund.amount)) fail('invalid_refund_state', 503);
-      await pg.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [refund.lockKey]);
-      await upsertCanonicalPointDelta(pg, refund.channelUid, refund.userId, refund.username, refund.amount);
+      const { channelUid, userId, username, amount, receipt } = refund;
+      await refundBroadcastPoints(pg, { sid, channelUid, userId, username, amount, receipt });
     }
   }
 
@@ -316,7 +327,7 @@ export function createParticipationWheelStore({
 
   async function actParticipationWheel(sid, input) {
     const action = parseParticipationWheelAction(input);
-    return (await transaction(sid, mutationRequest('action', action.requestId, action), async (pg, state, now) => {
+    return (await transaction(sid, mutationRequest('action', action.requestId, action), async (pg, state, now, owner) => {
       if (action.revision !== undefined && action.revision !== state.revision) return { outcome: failure('revision_conflict', 409) };
       switch (action.action) {
         case 'open':
@@ -333,13 +344,13 @@ export function createParticipationWheelStore({
         case 'remove': {
           const entry = state.entries.find((item) => item.id === action.entryId);
           if (!entry) return { outcome: failure('entry_not_found', 404) };
-          await refundEntries(pg, [entry]);
+          await refundEntries(pg, owner, [entry]);
           state.entries = state.entries.filter((item) => item.id !== entry.id);
           return { changed: true };
         }
         case 'clear':
           if (isSpinning(state, now)) return { outcome: failure('spinning', 409) };
-          await refundEntries(pg, state.entries);
+          await refundEntries(pg, owner, state.entries);
           state.entries = [];
           state.chatUsage = {};
           state.roundId = uuid();
@@ -371,7 +382,7 @@ export function createParticipationWheelStore({
 
   async function enterParticipationWheel(sid, input) {
     const entry = parseParticipationWheelEntry(input);
-    const answer = await transaction(sid, mutationRequest('entry', entry.eventId, entry, true), async (pg, state, now) => {
+    const answer = await transaction(sid, mutationRequest('entry', entry.eventId, entry, true), async (pg, state, now, owner) => {
       const reject = (reason) => ({ outcome: { accepted: false, reason } });
       if (!state.collecting) return reject('closed');
       if (!state.settings[entry.source].enabled) return reject('disabled');
@@ -392,10 +403,14 @@ export function createParticipationWheelStore({
       let paid;
       if (cost) {
         if (!Number.isSafeInteger(cost) || cost > MAX_POINT_AMOUNT) return reject('insufficient_points');
-        const deduction = await deductChannelPointsIfEnoughWithClient(pg, entry.channelUid, entry.userId, entry.username, cost);
+        const deduction = await debitBroadcastPoints(pg, { sid: owner, channelUid: entry.channelUid, userId: entry.userId,
+          username: entry.username, amount: cost, category: 'wheel' });
         if (!deduction.deducted) return reject('insufficient_points');
+        const { bonusSpent, ordinarySpent, sessionKey } = deduction;
+        if (!Number.isSafeInteger(bonusSpent) || bonusSpent < 0 || !Number.isSafeInteger(ordinarySpent) || ordinarySpent < 0
+          || bonusSpent + ordinarySpent !== cost || (bonusSpent && !sessionKey)) fail('invalid_refund_state', 503);
         paid = { channelUid: identity(deduction.streamerUid), userId: identity(deduction.userId),
-          costPerSlot: state.settings.points.costPerSlot, refundableSlots: slots };
+          costPerSlot: state.settings.points.costPerSlot, refundableSlots: slots, funding: { bonusSpent, ordinarySpent, sessionKey } };
       }
       addEntry(state, { ...entry, slots }, now, paid ? { paid } : {});
       if (usageKey) state.chatUsage[usageKey] = used + slots;

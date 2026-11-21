@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/input';
 import { Pagination } from '@/components/ui/pagination';
 import { PageHeader } from '@/components/ui/page';
 import { apiUrl, readJson } from '@/shared/api/http';
+import { BroadcastBonusSettings } from './broadcast-bonus-settings';
 
 type PointRow = {
   user_id?: string;
@@ -263,6 +264,8 @@ export function PointsPage() {
           새로고침
         </Button>
       </div>
+
+      {canRead('points') ? <BroadcastBonusSettings writable={writable} /> : null}
 
       <Card>
         <CardHeader>

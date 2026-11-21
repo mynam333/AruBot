@@ -11,6 +11,7 @@ import { decodeChannelRouteParam } from '@/shared/lib/channel-route-param';
 import { readPublicChannelData, readPublicChannelHub, readPublicChannelProfile, type PublicChannelKind } from '@/shared/api/public';
 import { PublicPointEarningSummary, type PublicPointEarningPolicy } from './public-point-earning-summary';
 import { PublicRealtimeDataView } from './public-realtime-data-view';
+import { PublicBroadcastBonus } from './public-broadcast-bonus';
 import { PublicRequestQueue } from './public-request-queue';
 import { PublicSongbook } from './public-songbook';
 
@@ -249,6 +250,7 @@ export async function PublicChannelPage({ channelUid: routeChannelUid, kind }: {
           </div>
         </CardHeader>
       </Card>}
+      {kind === 'points' ? <PublicBroadcastBonus key={channelUid} channelUid={channelUid} /> : null}
       {kind === 'requests' ? (
         <PublicRequestQueue key={channelUid} channelUid={channelUid} initialData={data} />
       ) : kind === 'songbook' ? (

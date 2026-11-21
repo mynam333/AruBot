@@ -32,6 +32,7 @@ function loadPages() {
       '@/components/ui/page': { ErrorState: placeholder },
       '@/components/ui/share-link-actions': { ShareLinkActions: placeholder },
       './public-point-earning-summary': { PublicPointEarningSummary: placeholder },
+      './public-broadcast-bonus': { PublicBroadcastBonus: placeholder },
       './public-realtime-data-view': { PublicRealtimeDataView: placeholder },
       './public-request-queue': { PublicRequestQueue: placeholder },
       './public-songbook': { PublicSongbook: placeholder },

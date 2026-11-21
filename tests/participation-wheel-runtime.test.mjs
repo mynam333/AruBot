@@ -55,6 +55,19 @@ test('paid input delegates one atomic spend with trusted identity', async () => 
   assert.equal(received.cost, undefined);
 });
 
+test('a paid command uses the provider point wallet, not the fallback channel for other commands', async () => {
+  const entries = [];
+  let lookups = 0;
+  const runtime = createParticipationWheelRuntime({ getWheel: async () => ({ settings }),
+    enterWheel: async (_sid, value) => { entries.push(value); return { accepted: true }; } });
+  const chat = { ...input, channelUid: 'fallback', getPointChannelUid: async () => { lookups++; return 'point-channel'; } };
+  await runtime.chat(chat);
+  await runtime.chat({ ...chat, text: '!돌림판추가 1 커피' });
+  assert.equal(lookups, 1);
+  assert.equal(entries[1].channelUid, 'point-channel');
+  assert.equal(entries[1].userId, input.userId);
+});
+
 test('an inactive wheel never shadows existing custom commands or accepts donations', async () => {
   let calls = 0;
   const runtime = createParticipationWheelRuntime({ getWheel: async () => ({ settings, collecting: false }), enterWheel: async () => { calls++; } });

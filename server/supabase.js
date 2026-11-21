@@ -22,6 +22,7 @@ import { lockUnlinkedAccount, cleanupUnlinkedAccountBatch } from './unlinked-acc
 import { platformTokenSnapshotMatches } from './platform-token-guard.js';
 import { validateCommandRuleRegex } from './rule-pattern.js';
 import { validateCommandPermission } from './command-permissions.js';
+import { readBroadcastBonus, saveBroadcastBonus, readEligibleAllowance, useAllowance, restoreAllowance } from './broadcast-bonus.js';
 const { Client, Pool } = pkg;
 
 export const botManagementStore = createBotManagementStore({ withPgClient, ensureIdentityTables: ensurePlatformIdentityTables });
@@ -35,8 +36,7 @@ export const marbleStore = createMarbleStore({ withPgClient, ensureIdentityTable
 export const {
   getParticipationWheel, updateParticipationWheel, actParticipationWheel, enterParticipationWheel,
 } = createParticipationWheelStore({
-  withPgClient, deductChannelPointsIfEnoughWithClient, resolvePointChannelIdentity,
-  resolvePointUserIdentity, upsertCanonicalPointDelta,
+  withPgClient, debitBroadcastPoints, refundBroadcastPoints, resolvePointChannelIdentity, resolvePointUserIdentity,
 });
 
 let supabase;
@@ -1724,9 +1724,9 @@ async function upsertCanonicalPointDelta(pg, canonicalChannelUid, canonicalUserI
 
 async function setCanonicalPointBalance(pg, channelIdentity, userIdentity, username, points) {
   await deletePointRowsForIdentity(pg, channelIdentity.channelAliases, userIdentity.identityKeys);
-  const table = await ensureChannelPointsTableWithClient(pg, channelIdentity.canonicalChannelUid);
+  const canonicalTable = await ensureChannelPointsTableWithClient(pg, channelIdentity.canonicalChannelUid);
   await pg.query(
-    `insert into ${quoteChannelPointsTable(table)} (user_id, username, points) values ($1, $2, $3)
+    `insert into ${quoteChannelPointsTable(canonicalTable)} (user_id, username, points) values ($1, $2, $3)
      on conflict (user_id) do update set username = excluded.username, points = excluded.points`,
     [String(userIdentity.canonicalUserId), username ? String(username) : null, Number(points) || 0]
   );
@@ -1860,7 +1860,7 @@ export async function releaseRuntimeLease(resourceKey, ownerId) {
   });
 }
 
-async function deductChannelPointsIfEnoughWithClient(pg, streamerUid, userId, username, amount) {
+async function deductChannelPointsIfEnoughWithClient(pg, streamerUid, userId, username, amount, context) {
   const normalizedAmount = normalizePointDeductionAmount(amount);
   const channelIdentity = await resolvePointChannelIdentity(pg, streamerUid);
   const userIdentity = await resolvePointUserIdentity(pg, userId);
@@ -1887,6 +1887,9 @@ async function deductChannelPointsIfEnoughWithClient(pg, streamerUid, userId, us
     }
   }
 
+  const allowance = context ? await readEligibleAllowance(pg, context.sid, context.category, userIdentity) : null;
+  const remaining = allowance?.remaining || 0;
+  balanceBefore += remaining;
   if (balanceBefore < normalizedAmount) {
     return normalizePointDeductionResult({
       deducted: false,
@@ -1899,17 +1902,15 @@ async function deductChannelPointsIfEnoughWithClient(pg, streamerUid, userId, us
     });
   }
 
-  await deletePointRowsForIdentity(pg, channelIdentity.channelAliases, userIdentity.identityKeys);
+  const bonusSpent = Math.min(remaining, normalizedAmount);
+  const ordinarySpent = normalizedAmount - bonusSpent;
   const balanceAfter = balanceBefore - normalizedAmount;
-  const canonicalTable = await ensureChannelPointsTableWithClient(pg, channelIdentity.canonicalChannelUid);
-  await pg.query(
-    `insert into ${quoteChannelPointsTable(canonicalTable)} (user_id, username, points)
-     values ($1, $2, $3)
-     on conflict (user_id) do update set username = excluded.username, points = excluded.points`,
-    [String(userIdentity.canonicalUserId), resolvedUsername, balanceAfter]
-  );
+  if (ordinarySpent > 0) {
+    await setCanonicalPointBalance(pg, channelIdentity, userIdentity, resolvedUsername, balanceBefore - remaining - ordinarySpent);
+  }
+  if (bonusSpent > 0) await useAllowance(pg, context.sid, userIdentity.canonicalUserId, bonusSpent);
 
-  return normalizePointDeductionResult({
+  return { ...normalizePointDeductionResult({
     deducted: true,
     sufficient: true,
     amount: normalizedAmount,
@@ -1917,10 +1918,46 @@ async function deductChannelPointsIfEnoughWithClient(pg, streamerUid, userId, us
     balance_after: balanceAfter,
     canonical_channel_uid: channelIdentity.canonicalChannelUid,
     canonical_user_id: userIdentity.canonicalUserId,
-  });
+  }), bonusSpent, ordinarySpent, sessionKey: bonusSpent > 0 ? allowance.sessionKey : null };
 }
 
-export async function deductChannelPointsIfEnough(streamerUid, userId, username, amount) {
+export async function debitBroadcastPoints(pg, { sid, channelUid, userId, username, amount, category }) {
+  const result = await deductChannelPointsIfEnoughWithClient(pg, channelUid, userId, username, amount, { sid, category });
+  return { bonusSpent: 0, ordinarySpent: 0, sessionKey: null, ...result, ok: result.deducted, balance: result.balanceAfter };
+}
+
+// Caller claims an idempotent refund marker in this same transaction.
+export async function refundBroadcastPoints(pg, { sid, channelUid, userId, username, amount, receipt }) {
+  const total = normalizePointDeductionAmount(amount);
+  const regular = receipt ? receipt.ordinarySpent : total;
+  if (!Number.isSafeInteger(regular) || regular < 0 || (receipt && (
+    !Number.isSafeInteger(receipt.bonusSpent) || receipt.bonusSpent < 0 || receipt.bonusSpent + regular !== total
+    || (receipt.bonusSpent > 0 && (!receipt.sessionKey || !receipt.userId))
+  ))) throw new Error('Invalid broadcast point refund receipt');
+  const channel = await resolvePointChannelIdentity(pg, channelUid);
+  const viewer = await resolvePointUserIdentity(pg, userId);
+  if (!channel.canonicalChannelUid || !viewer.canonicalUserId) throw new Error('Invalid refund identity');
+  await pg.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`${channel.canonicalChannelUid}:${viewer.canonicalUserId}`]);
+  const restored = receipt ? await restoreAllowance(pg, sid, receipt) : 0;
+  if (regular) await upsertCanonicalPointDelta(pg, channel.canonicalChannelUid, viewer.canonicalUserId, username, regular);
+  return { ordinaryRefunded: regular, bonusRefunded: restored };
+}
+
+export const getBroadcastBonusSettings = (sid) => withPgClient(pg => readBroadcastBonus(pg, sid));
+export const saveBroadcastBonusSettings = (sid, input) => withPgClient(pg => saveBroadcastBonus(pg, sid, input), 0);
+
+export const getViewerBroadcastBonus = (sid, viewerId) => withPgClient(async pg => {
+  const keys = viewerId ? (await resolvePointUserIdentity(pg, viewerId)).identityKeys : [];
+  const { rows } = await pg.query(`select bonus_amount, bonus_categories,
+    case when cardinality($2::text[])>0 then greatest(0, bonus_amount -
+      (select coalesce(sum(spent),0) from broadcast_bonus_usage where sid=$1 and user_id=any($2::text[]))) end as remaining
+    from live_sessions where sid=$1 and live`, [sid, keys]);
+  const row = rows[0];
+  return { live: !!row, amount: row?.bonus_amount ?? 0, categories: row?.bonus_categories ?? [],
+    remaining: row?.remaining == null ? null : Number(row.remaining) };
+});
+
+export async function deductChannelPointsIfEnough(streamerUid, userId, username, amount, context) {
   const normalizedAmount = normalizePointDeductionAmount(amount);
   if (!getDbUrl()) {
     ensure();
@@ -1939,14 +1976,14 @@ export async function deductChannelPointsIfEnough(streamerUid, userId, username,
   return withPgClient(async (pg) => {
     await pg.query('begin');
     try {
-      const result = await deductChannelPointsIfEnoughWithClient(pg, streamerUid, userId, username, normalizedAmount);
+      const result = await deductChannelPointsIfEnoughWithClient(pg, streamerUid, userId, username, normalizedAmount, context);
       await pg.query('commit');
       return result;
     } catch (error) {
       try { await pg.query('rollback'); } catch {}
       throw error;
     }
-  });
+  }, 0);
 }
 
 export async function getChannelPoints(streamerUid, userId) {
@@ -3384,6 +3421,9 @@ export async function deleteAccountData(ownerUserId, options = {}) {
         owner, ownerSid: `user:${owner}`, ownerPids: [owner, `user:${owner}`],
         identityKeys: [`user:${owner}`, makeArubotViewerUuid(owner)], channelAliases: [`user:${owner}`],
       } : await collectAccountPrivacyScope(pg, owner);
+      await deleteRowsByColumnValues(pg, summary, 'public.broadcast_bonus_usage', [
+        { column: 'user_id', values: uniqueNonEmpty([scope.owner, ...scope.identityKeys]) },
+      ]);
       await deleteRowsByColumnValues(pg, summary, 'public.prediction_bets', [
         { column: 'user_id', values: scope.identityKeys },
       ]);
@@ -9253,6 +9293,7 @@ export async function enqueueDurableRuntimeJob(input) {
 
 export async function enqueuePaidDurableRuntimeJob(input) {
   const row = durableRuntimeJobRow(input);
+  const paidVideo = row.job_type === 'video-donation' && row.points_cost > 0;
   if (row.points_cost > 0 && (!row.channel_uid || !row.user_id)) {
     const error = new Error('channelUid and userId are required for a paid durable job');
     error.code = 'invalid_paid_durable_runtime_job';
@@ -9260,6 +9301,8 @@ export async function enqueuePaidDurableRuntimeJob(input) {
   }
 
   if (!getDbUrl()) {
+    // The legacy RPC only debits ordinary points and cannot persist an allocation.
+    if (paidVideo) throw new Error('Paid video and BGM requests require a direct PostgreSQL connection');
     ensure();
     if (typeof supabase.rpc !== 'function') throw new Error('Paid durable job RPC is unavailable');
     const { data, error } = await supabase.rpc('arubot_enqueue_paid_durable_runtime_job', {
@@ -9306,7 +9349,10 @@ export async function enqueuePaidDurableRuntimeJob(input) {
 
       let deduction = null;
       if (row.points_cost > 0) {
-        deduction = await deductChannelPointsIfEnoughWithClient(
+        deduction = paidVideo ? await debitBroadcastPoints(pg, {
+          sid: row.sid, channelUid: row.channel_uid, userId: row.user_id, username: row.username,
+          amount: row.points_cost, category: row.payload.item?.kind === 'bgm' ? 'bgm' : 'video',
+        }) : await deductChannelPointsIfEnoughWithClient(
           pg,
           row.channel_uid,
           row.user_id,
@@ -9317,9 +9363,24 @@ export async function enqueuePaidDurableRuntimeJob(input) {
           await pg.query('rollback');
           return { created: false, job: null, deduction };
         }
+        if (paidVideo) {
+          const { streamerUid, userId, bonusSpent, ordinarySpent, sessionKey } = deduction;
+          if (!streamerUid || !userId || !Number.isSafeInteger(bonusSpent) || bonusSpent < 0
+            || !Number.isSafeInteger(ordinarySpent) || ordinarySpent < 0
+            || bonusSpent + ordinarySpent !== row.points_cost || (bonusSpent > 0 && !sessionKey)) {
+            throw new Error('Invalid video point allocation');
+          }
+          row.channel_uid = streamerUid;
+          row.user_id = userId;
+          row.payload = { ...row.payload, pointReceipt: { ...deduction } };
+        }
       }
 
       const inserted = await insertDurableRuntimeJobWithClient(pg, row);
+      if (paidVideo && !inserted.created) {
+        await pg.query('rollback');
+        return { ...inserted, deduction: null };
+      }
       await pg.query('commit');
       return { ...inserted, deduction };
     } catch (error) {
