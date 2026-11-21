@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import pg from 'pg';
+import { recoverVisiblePvdJobs } from '../server/pvd-lease-recovery.js';
 
 test('paid video and BGM: durable debit, refund allocation, rollback and concurrent settlement', {
   skip: !process.env.ARUBOT_TEST_POSTGRES_URL, timeout: 45000,
@@ -88,10 +89,38 @@ test('paid video and BGM: durable debit, refund allocation, rollback and concurr
     const drawing = await buy('ordinary-drawing', 'video', 3, 'drawing-donation');
     assert.equal(drawing.job.payload.pointReceipt, undefined);
     assert.deepEqual([await balance(), await used()], [27, 9]);
+
+    const video = await buy('handoff', 'video', 1);
+    const head = video.job.id, tail = free.job.id;
+    await claim();
+    await pool.query("update durable_runtime_jobs set locked_at=now()-interval '5 minutes', attempt_count=max_attempts where id=$1",[head]);
+    // A clean ownership handoff is not a new dispatch failure, even on the last attempt.
+    assert.ok((await api.claimDurableRuntimeJobs({workerId:'replacement',jobTypes:['video-donation']})).some(j=>j.id===head));
+    assert.deepEqual(await api.renewDurableRuntimeJobs({workerId:'replacement',jobIds:[head]}),[head]);
+    assert.equal((await api.getDurableRuntimeJob(head)).status,'processing');
+    assert.deepEqual(await api.chzzkVideoStore.renew([head],'replacement'),[]);
+    await assert.rejects(settle(head), /not owned/);
+    const exhausted = ids => pool.query(`update durable_runtime_jobs set status='failed', locked_by=null, locked_at=null,
+      last_error='max_attempts_exhausted',attempt_count=max_attempts,completed_at=now() where id=any($1::text[])`,[ids]);
+    await exhausted([head,tail]);
+    const orphan = (await buy('absent', 'video', 1)).job.id;
+    await exhausted([orphan]);
+    const before = [await balance(),await used()];
+    const snap = async () => ({status:'playing',elapsedSec:426,currentItem:{id:head,kind:'video',durationSec:42},
+      waitingCount:2,waitingItems:[{id:tail},{id:played.job.id}]});
+    const recovered = await recoverVisiblePvdJobs(pool,'s',snap);
+    assert.deepEqual(new Map(recovered.map(j=>[j.id,j.status])),new Map([[head,'completed'],[tail,'queued']]));
+    assert.deepEqual(await recoverVisiblePvdJobs(pool,'s',snap),[]);
+    assert.equal((await api.getDurableRuntimeJob(orphan)).status,'failed');
+    assert.equal((await settle(head)).applied,false);
+    assert.deepEqual([await balance(),await used()],before);
+    // An explicitly deleted in-memory orphan can still refund exactly once.
+    assert.equal((await settle(orphan)).applied,true);
+    assert.equal((await settle(orphan)).applied,false);
   } finally {
     await api?.closeDatabaseConnections();
     await pool?.end();
-    if (created) await admin.query('drop database ' + name);
-    await admin.end();
+    try { if (created) await admin.query('drop database ' + name + ' with (force)'); }
+    finally { await admin.end(); }
   }
 });

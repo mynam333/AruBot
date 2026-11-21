@@ -29,7 +29,7 @@ export function createChzzkVideoStore({ withPgClient }) {
       if (!ids.length) return Promise.resolve([]);
       return withPgClient(async (pg) => {
         const { rows } = await pg.query(`update durable_runtime_jobs set locked_at = now(), updated_at = now()
-          where id = any($1::uuid[]) and locked_by = $2 and status = 'processing'
+          where id = any($1::text[]) and locked_by = $2 and status = 'processing'
             and job_type = 'video-donation' and payload->'item'->>'source' = 'chzzk-donation'
           returning id`, [ids, workerId]);
         return (rows || []).map((row) => row.id);

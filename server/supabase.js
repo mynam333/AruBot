@@ -9425,6 +9425,8 @@ export async function countActiveDurableRuntimeJobs(sid, jobType) {
   return Math.max(0, Number(result.count || 0));
 }
 
+export const hasDurableLeaseDatabase = () => Boolean(getDbUrl());
+
 export async function claimDurableRuntimeJobs(options = {}) {
   const workerId = String(options.workerId || '').trim();
   if (!workerId) throw new Error('workerId is required');
@@ -9452,6 +9454,7 @@ export async function claimDurableRuntimeJobs(options = {}) {
           set status = 'failed', last_error = coalesce(last_error, 'max_attempts_exhausted'),
               completed_at = coalesce(completed_at, now()), updated_at = now(), locked_by = null, locked_at = null
         where attempt_count >= max_attempts
+          and not (job_type = 'video-donation' and status = 'processing' and last_error is null)
           and (
             status = 'queued'
             or (status = 'processing' and locked_at < now() - ($1::bigint * interval '1 millisecond'))
@@ -9462,22 +9465,24 @@ export async function claimDurableRuntimeJobs(options = {}) {
       `with candidates as (
          select id
            from durable_runtime_jobs
-          where attempt_count < max_attempts
+          where (attempt_count < max_attempts or (job_type = 'video-donation' and status = 'processing' and last_error is null))
             and ($4::text[] is null or job_type = any($4::text[]))
             and (
               (status = 'queued' and available_at <= now())
               or (status = 'processing' and locked_at < now() - ($3::bigint * interval '1 millisecond'))
             )
-          order by available_at asc, created_at asc
+          order by available_at asc, created_at asc, id asc
           for update skip locked
           limit $2
-       )
+       ), claimed as (
        update durable_runtime_jobs as job
           set status = 'processing', locked_by = $1, locked_at = now(),
-              attempt_count = job.attempt_count + 1, updated_at = now()
+              attempt_count = case when job.job_type = 'video-donation' and job.status = 'processing' and job.last_error is null
+                                   then job.attempt_count else job.attempt_count + 1 end, updated_at = now()
          from candidates
         where job.id = candidates.id
-       returning job.*`,
+       returning job.*)
+       select * from claimed order by available_at, created_at, id`,
       [workerId, limit, leaseMs, jobTypes.length ? jobTypes : null]
     );
     return (result.rows || []).map(normalizeDurableRuntimeJob);

@@ -4,7 +4,7 @@ export async function settlePaidVideoWithClient(pg, { sid, id, workerId, status,
   await pg.query('begin');
   try {
     const { rows: [job] } = await pg.query(
-      `select status, locked_by, points_cost, channel_uid, user_id, username, payload, result
+      `select status, locked_by, last_error, attempt_count, max_attempts, points_cost, channel_uid, user_id, username, payload, result
          from durable_runtime_jobs where sid=$1 and id=$2 and job_type='video-donation' for update`, [sid, id],
     );
     if (!job) throw new Error('Paid video job not found');
@@ -12,8 +12,10 @@ export async function settlePaidVideoWithClient(pg, { sid, id, workerId, status,
       await pg.query('commit');
       return { applied: false, result: job.result };
     }
-    if (job.status !== 'processing' || !workerId || job.locked_by !== workerId) {
-      throw new Error('Paid video job is not owned by this worker');
+    const orphanedLease = job.status === 'failed' && job.locked_by == null && job.result == null
+      && job.last_error === 'max_attempts_exhausted' && job.attempt_count >= job.max_attempts;
+    if (!workerId || (!orphanedLease && (job.status !== 'processing' || job.locked_by !== workerId))) {
+      throw Object.assign(new Error('Paid video job is not owned by this worker'), {code:'pvd_job_not_owned'});
     }
     const amount = Number(job.points_cost);
     if (!Number.isSafeInteger(amount) || amount <= 0 || !job.channel_uid || !job.user_id) {

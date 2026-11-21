@@ -1,7 +1,7 @@
 import express from 'express';
 import { createChatIngressClient, createIngressSocket } from './chat-ingress-client.mjs';
 import { createChatRuntimeLifecycle, protectRuntimeSocket } from './chat-runtime-lifecycle.mjs';
-import { transferDurableRuntimeJobs, renewDurableRuntimeJobs } from './supabase.js';
+import { transferDurableRuntimeJobs, renewDurableRuntimeJobs, hasDurableLeaseDatabase } from './supabase.js';
 import { cleanupUnlinkedAccounts } from './supabase.js';
 import { deleteAccountAutomationSoundFiles } from './account-local-files.js';
 import { createLocalAvatarRelay, normalizeChzzkAvatarEvent } from './local-avatar-relay.js';
@@ -6971,6 +6971,8 @@ app.post('/api/video-donation/delete', async (req, res) => {
     }
     return res.json({ ok: true });
   } catch (e) {
+    if (e?.code === 'pvd_job_not_owned') return res.status(409).json({ error: '재생 작업을 인계 중입니다. 잠시 후 다시 시도해 주세요.' });
+    console.warn('[pvd:delete]', e?.message || e);
     return res.status(500).json({ error: 'Failed to delete item' });
   }
 });
@@ -7044,6 +7046,8 @@ app.post('/api/video-donation/delete-refund', async (req, res) => {
     }
     return res.json({ ok: true, refundedAmount });
   } catch (e) {
+    if (e?.code === 'pvd_job_not_owned') return res.status(409).json({ error: '재생 작업을 인계 중입니다. 잠시 후 다시 시도해 주세요.' });
+    console.warn('[pvd:delete-refund]', e?.message || e);
     return res.status(500).json({ error: 'Failed to delete-refund item' });
   }
 });
@@ -7128,10 +7132,12 @@ async function runDurableRuntimeWorker() {
   if (durableRuntimeWorkerRunning || !chatIngress.canRun()) return false;
   durableRuntimeWorkerRunning = true;
   try {
-    if (chatIngress.enabled) {
+    if (chatIngress.enabled || hasDurableLeaseDatabase()) {
       const jobIds = [...new Set([...videoDonationQueues.values(), ...rouletteQueues.values()]
         .flatMap(queue => queue.map(item => item.runtimeJobId).filter(Boolean)))];
-      await renewDurableRuntimeJobs({ workerId: DURABLE_RUNTIME_WORKER_ID, jobIds });
+      for (let i = 0; i < jobIds.length; i += 1000) {
+        await renewDurableRuntimeJobs({ workerId: DURABLE_RUNTIME_WORKER_ID, jobIds: jobIds.slice(i, i + 1000) });
+      }
     }
     await renewChzzkVideoQueueJobs();
     const jobs = await claimDurableRuntimeJobs({
@@ -7318,12 +7324,13 @@ async function renewChzzkVideoQueueJobs() {
   const entries = [...videoDonationQueues.entries()];
   const ids = entries.flatMap(([, queue]) => queue.filter((item) => item.source === 'chzzk-donation').map((item) => item.runtimeJobId)).filter(Boolean);
   if (!ids.length) return;
+  const checked = new Set(ids);
   const active = new Set(await chzzkVideoStore.renew(ids, DURABLE_RUNTIME_WORKER_ID));
   for (const [sid, queue] of entries) {
     const previous = queue[0];
     let changed = false;
     for (let i = queue.length - 1; i >= 0; i--) {
-      if (queue[i].source === 'chzzk-donation' && !active.has(queue[i].runtimeJobId)) { queue.splice(i, 1); changed = true; }
+      if (queue[i].source === 'chzzk-donation' && checked.has(queue[i].runtimeJobId) && !active.has(queue[i].runtimeJobId)) { queue.splice(i, 1); changed = true; }
     }
     if (previous !== queue[0]) await broadcastPvdStart(sid);
     else if (changed) await notifyPvdAdminSubscribers(sid, 'chzzk_queue_reconciled');

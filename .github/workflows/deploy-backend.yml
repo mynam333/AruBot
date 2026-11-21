@@ -469,6 +469,7 @@ jobs:
           fi
 
           # Existing installations stay on the legacy path until explicitly opted in.
+          node scripts/recover-pvd-leases.mjs
           switch_current_release
 
           if ! start_release "$RELEASE_DIR" "$RELEASE_SHA" || ! wait_for_release "$RELEASE_SHA"; then
