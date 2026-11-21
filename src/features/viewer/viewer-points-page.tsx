@@ -653,7 +653,7 @@ export function ViewerPointsPage() {
             <Card className="bg-card/80">
               <CardHeader>
                 <CardTitle>내 참여 포인트</CardTitle>
-                <CardDescription>방송별 보유 포인트의 합계입니다. 방송 한정 포인트는 포함되지 않습니다.</CardDescription>
+                <CardDescription>방송별 일반 포인트의 합계입니다.</CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="text-[clamp(2.4rem,6vw,4rem)] font-semibold leading-none">{formatNumber(totalPoints)}</div>
@@ -851,9 +851,6 @@ export function ViewerPointsPage() {
             <CardContent className="grid gap-3 text-sm leading-6 text-muted-foreground">
               <div className="rounded-[var(--radius-control)] border bg-background/70 p-3">
                 아루봇에 연결한 플랫폼 계정의 포인트만 한 줄로 모여 보입니다.
-              </div>
-              <div className="rounded-[var(--radius-control)] border bg-background/70 p-3">
-                방송 한정 포인트가 있는 채널에서는 지정된 항목에만 쓸 수 있습니다. 남은 한정 포인트는 다음 방송으로 이월되지 않습니다.
               </div>
             </CardContent>
           </Card>

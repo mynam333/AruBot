@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { BROADCAST_BONUS_CATEGORIES, MAX_BROADCAST_BONUS } from '../../../shared/broadcast-bonus.js';
 import { readJson } from '@/shared/api/http';
+import { BroadcastBonusDisclosure } from '@/features/points/broadcast-bonus-disclosure';
 
 type PublicBonus = { live: boolean; amount: number; categories: string[]; remaining: number | null };
 
@@ -56,12 +57,11 @@ export function PublicBroadcastBonus({ channelUid }: { channelUid: string }) {
     };
   }, [channelUid]);
 
-  if (!bonus) return null;
-  const labels = BROADCAST_BONUS_CATEGORIES.filter(({ id }) => bonus.categories.includes(id)).map(({ label }) => label);
+  const labels = BROADCAST_BONUS_CATEGORIES.filter(({ id }) => bonus?.categories.includes(id)).map(({ label }) => label);
   return (
-    <section aria-labelledby="public-bonus-title" className="grid gap-3 border-y py-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+    <BroadcastBonusDisclosure hidden={!bonus}>
+      {bonus && <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
       <div>
-        <h2 id="public-bonus-title" className="font-semibold">방송 한정 포인트</h2>
         <p className="mt-1 text-sm leading-6 text-muted-foreground">이번 방송에서만 사용할 수 있으며 랭킹에는 포함되지 않습니다.</p>
         <p className="mt-1 break-keep text-sm">사용처: {labels.join(' · ')}</p>
       </div>
@@ -71,6 +71,7 @@ export function PublicBroadcastBonus({ channelUid }: { channelUid: string }) {
           <div><dt className="text-xs text-muted-foreground">내 잔액</dt><dd className="font-semibold tabular-nums text-primary">{bonus.remaining.toLocaleString('ko-KR')}P</dd></div>
         ) : null}
       </dl>
-    </section>
+      </div>}
+    </BroadcastBonusDisclosure>
   );
 }

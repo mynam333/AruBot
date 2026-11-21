@@ -69,6 +69,16 @@ async function capture(page, name) {
   if (shots) await page.screenshot({ path: join(shots, name + '.png') });
 }
 
+async function expandBonus(panel) {
+  const summary = panel.locator('summary');
+  await summary.waitFor();
+  assert.equal(await panel.locator('details').evaluate((el) => el.open), false);
+  assert.equal(await panel.locator('details > div').isVisible(), false);
+  await summary.focus();
+  await summary.press('Enter');
+  await panel.locator('details[open]').waitFor();
+}
+
 test('delegated editor saves only this session, validates limits and can turn it off', async (t) => {
   let saved = first;
   const writes = [];
@@ -85,6 +95,7 @@ test('delegated editor saves only this session, validates limits and can turn it
   const panel = page.getByRole('region', { name: '방송 한정 포인트' });
   const amount = panel.getByLabel('1인 한도 (P)');
   const save = panel.getByRole('button', { name: '한도 저장' });
+  await expandBonus(panel);
   await panel.getByText('방송 중 · 사용 중').waitFor();
   assert.equal(await amount.inputValue(), '200');
   for (const { label } of BROADCAST_BONUS_CATEGORIES) assert.ok(await panel.getByLabel(label).isVisible());
@@ -94,6 +105,11 @@ test('delegated editor saves only this session, validates limits and can turn it
     assert.ok(await save.isDisabled());
   }
   await amount.fill('500');
+  await panel.locator('summary').click();
+  assert.ok(await amount.isHidden());
+  await expandBonus(panel);
+  assert.equal(await amount.inputValue(), '500');
+  assert.equal(writes.length, 0);
   await panel.getByLabel(BROADCAST_BONUS_CATEGORIES[0].label).uncheck();
   assert.ok(await save.isDisabled());
   await panel.getByLabel(BROADCAST_BONUS_CATEGORIES[1].label).check();
@@ -121,6 +137,7 @@ test('offline, failed reads and changed broadcasts cannot submit a stale draft',
   const refresh = panel.getByRole('button', { name: '방송 상태 새로고침' });
   const amount = panel.getByRole('spinbutton');
   const save = panel.getByRole('button', { name: '한도 저장' });
+  await expandBonus(panel);
   await panel.getByText('오프라인').waitFor();
   assert.ok(await amount.isDisabled());
   assert.ok(await save.isDisabled());
@@ -148,6 +165,7 @@ test('points:read plus donations:write allows inspection but no mutation', async
   const methods = [];
   const page = await open(t, { scopes: ['points:read', 'donations:write'], api: ({ method, reply }) => { methods.push(method); return reply(first); } });
   const panel = page.getByRole('region', { name: '방송 한정 포인트' });
+  await expandBonus(panel);
   await panel.getByText('포인트 쓰기 권한이 필요합니다.').waitFor();
   assert.ok(await panel.getByRole('spinbutton').isDisabled());
   assert.ok(await panel.getByRole('checkbox').first().isDisabled());
@@ -168,6 +186,7 @@ test('public limit and private remaining stay separate from ranking, including z
   } });
   const panel = page.getByRole('region', { name: '방송 한정 포인트' });
   const row = page.getByRole('row').filter({ hasText: '테스트 시청자' });
+  await expandBonus(panel);
   await panel.getByText('125P', { exact: true }).waitFor();
   await row.getByText('321P').waitFor();
   await capture(page, 'public-mobile');
@@ -203,6 +222,7 @@ test('a failed public poll drops the personal balance; subsequent reads are not 
   const page = await open(t, { path: publicPath, api: ({ reply }) =>
     reply({ live: true, amount: 200, categories: ['command'], remaining }, status) });
   const panel = page.getByRole('region', { name: '방송 한정 포인트' });
+  await expandBonus(panel);
   await panel.getByText('90P', { exact: true }).waitFor();
   await page.evaluate(() => {
     const original = window.fetch;
@@ -224,9 +244,10 @@ test('a failed public poll drops the personal balance; subsequent reads are not 
   reads.forEach((read) => assert.deepEqual(read, ['include', 'no-store']));
 });
 
-test('viewer overview describes the limit without calling a managed channel API', async (t) => {
+test('viewer overview shows ordinary points without advertising the event feature', async (t) => {
   const calls = [];
   const page = await open(t, { path: '/viewer/me', api: ({ url, reply }) => { calls.push(url.pathname); return reply({}, 403); } });
-  await page.getByText('방송 한정 포인트는 포함되지 않습니다.', { exact: false }).waitFor();
+  await page.getByText('방송별 일반 포인트의 합계입니다.').waitFor();
+  assert.equal(await page.getByText('방송 한정 포인트', { exact: false }).count(), 0);
   assert.deepEqual(calls, []);
 });

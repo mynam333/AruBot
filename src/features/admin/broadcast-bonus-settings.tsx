@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { apiUrl, readJson } from '@/shared/api/http';
+import { BroadcastBonusDisclosure } from '@/features/points/broadcast-bonus-disclosure';
 
 type Bonus = { live: boolean; sessionKey: string | null; amount: number; categories: string[] };
 type Draft = { sessionKey: string; amount: string; categories: string[] };
@@ -112,9 +113,8 @@ export function BroadcastBonusSettings({ writable }: { writable: boolean }) {
   const status = loadFailed ? '조회 실패' : !saved ? '확인 중' : !live ? '오프라인'
     : saved.amount === 0 ? '방송 중 · 사용 안 함' : '방송 중 · 사용 중';
   return (
-    <section aria-labelledby="broadcast-bonus-heading" className="grid min-w-0 gap-4 border-y py-4">
+    <BroadcastBonusDisclosure active={live && !loadFailed && saved.amount > 0}>
       <div className="flex flex-wrap items-center gap-2">
-        <h2 id="broadcast-bonus-heading" className="text-base font-semibold">방송 한정 포인트</h2>
         <Badge tone={live && !loadFailed ? 'mint' : 'neutral'}>{status}</Badge>
         <Button type="button" size="icon" variant="ghost" className="ml-auto" title="방송 상태 새로고침"
           aria-label="방송 상태 새로고침" disabled={saving} onClick={() => void refresh()}>
@@ -157,6 +157,6 @@ export function BroadcastBonusSettings({ writable }: { writable: boolean }) {
         </p>
         {notice ? <p className="mt-1 text-sm font-semibold" role="status">{notice}</p> : null}
       </form>
-    </section>
+    </BroadcastBonusDisclosure>
   );
 }
