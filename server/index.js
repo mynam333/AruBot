@@ -22919,7 +22919,7 @@ async function broadcastBonusSettingsRoute(req, res) {
   } catch (error) {
     if (error.status === 400 || error.status === 409) return res.status(error.status).json({ error: error.message });
     console.error('[points:broadcast-bonus]', error?.message || error);
-    return res.status(503).json({ error: '방송 포인트 설정을 확인하지 못했습니다.' });
+    return res.status(503).json({ error: '추가 포인트 설정을 확인하지 못했습니다.' });
   }
 }
 app.get('/api/points/broadcast-bonus', broadcastBonusSettingsRoute);
@@ -22935,7 +22935,7 @@ app.get('/api/public/:uid/broadcast-bonus', async (req, res) => {
     const viewer = await getSessionActorUserId(req, { strict: true });
     return res.json(await getViewerBroadcastBonus(`user:${identity.ownerUserId}`, viewer));
   } catch {
-    return res.status(503).json({ error: '방송 포인트를 조회할 수 없습니다.' });
+    return res.status(503).json({ error: '추가 포인트를 조회할 수 없습니다.' });
   }
 });
 

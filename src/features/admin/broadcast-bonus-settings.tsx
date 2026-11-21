@@ -91,7 +91,7 @@ export function BroadcastBonusSettings({ writable }: { writable: boolean }) {
       if (!mounted.current) return;
       if (response.ok) {
         setDraft(null);
-        setNotice(value === 0 ? '방송 한정 포인트를 껐습니다.' : '방송 한정 포인트를 저장했습니다.');
+        setNotice(value === 0 ? '이번 방송의 추가 포인트를 껐습니다.' : '추가 포인트를 저장했습니다.');
       } else if (response.status === 409) {
         setDraft(null);
         setNotice('방송 상태가 바뀌었습니다. 현재 방송을 확인해 주세요.');
@@ -122,12 +122,12 @@ export function BroadcastBonusSettings({ writable }: { writable: boolean }) {
         </Button>
       </div>
       <p className="text-sm text-muted-foreground">
-        시청자마다 이번 방송에서만 쓸 수 있는 한도입니다. 한도나 사용처를 바꿔도 이미 쓴 포인트는 초기화되지 않습니다.
+        이번 방송에서 시청자마다 받는 포인트입니다. 선택한 사용처에서 일반 포인트보다 먼저 쓰이고, 방송이 끝나면 남은 추가 포인트는 사라집니다. 지급액을 바꿔도 이미 쓴 포인트는 다시 지급되지 않습니다.
       </p>
       <form onSubmit={(event) => { event.preventDefault(); void save(); }}>
         <fieldset disabled={!editable} className="flex min-w-0 flex-wrap items-end gap-x-6 gap-y-3">
           <div className="grid w-full gap-1.5 sm:w-44">
-            <label htmlFor="broadcast-bonus-amount" className="text-sm font-semibold">1인 한도 (P)</label>
+            <label htmlFor="broadcast-bonus-amount" className="text-sm font-semibold">1인당 추가 포인트 (P)</label>
             <Input id="broadcast-bonus-amount" type="number" min={0} max={MAX_BROADCAST_BONUS} step={1} inputMode="numeric"
               value={amount} placeholder="0" onChange={(event) => edit(event.target.value, categories)}
               aria-invalid={editable && !validAmount} aria-describedby="broadcast-bonus-help" />
@@ -146,7 +146,7 @@ export function BroadcastBonusSettings({ writable }: { writable: boolean }) {
           </fieldset>
           <Button type="submit" variant="outline" disabled={!canSave}>
             {saving ? <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" /> : <Save aria-hidden="true" className="h-4 w-4" />}
-            한도 저장
+            추가 포인트 저장
           </Button>
         </fieldset>
         <p id="broadcast-bonus-help" className="mt-2 text-sm text-muted-foreground" role="status">

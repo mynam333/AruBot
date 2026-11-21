@@ -92,9 +92,9 @@ test('delegated editor saves only this session, validates limits and can turn it
     }
     return reply(saved);
   } });
-  const panel = page.getByRole('region', { name: '방송 한정 포인트' });
-  const amount = panel.getByLabel('1인 한도 (P)');
-  const save = panel.getByRole('button', { name: '한도 저장' });
+  const panel = page.getByRole('region', { name: '추가 포인트' });
+  const amount = panel.getByLabel('1인당 추가 포인트 (P)');
+  const save = panel.getByRole('button', { name: '추가 포인트 저장' });
   await expandBonus(panel);
   await panel.getByText('방송 중 · 사용 중').waitFor();
   assert.equal(await amount.inputValue(), '200');
@@ -114,7 +114,7 @@ test('delegated editor saves only this session, validates limits and can turn it
   assert.ok(await save.isDisabled());
   await panel.getByLabel(BROADCAST_BONUS_CATEGORIES[1].label).check();
   await save.click();
-  await panel.getByText('방송 한정 포인트를 저장했습니다.').waitFor();
+  await panel.getByText('추가 포인트를 저장했습니다.').waitFor();
   await capture(page, 'admin-desktop');
   await amount.fill('0');
   await save.click();
@@ -133,10 +133,10 @@ test('offline, failed reads and changed broadcasts cannot submit a stale draft',
     }
     return reply(state, status);
   } });
-  const panel = page.getByRole('region', { name: '방송 한정 포인트' });
+  const panel = page.getByRole('region', { name: '추가 포인트' });
   const refresh = panel.getByRole('button', { name: '방송 상태 새로고침' });
   const amount = panel.getByRole('spinbutton');
-  const save = panel.getByRole('button', { name: '한도 저장' });
+  const save = panel.getByRole('button', { name: '추가 포인트 저장' });
   await expandBonus(panel);
   await panel.getByText('오프라인').waitFor();
   assert.ok(await amount.isDisabled());
@@ -164,12 +164,12 @@ test('offline, failed reads and changed broadcasts cannot submit a stale draft',
 test('points:read plus donations:write allows inspection but no mutation', async (t) => {
   const methods = [];
   const page = await open(t, { scopes: ['points:read', 'donations:write'], api: ({ method, reply }) => { methods.push(method); return reply(first); } });
-  const panel = page.getByRole('region', { name: '방송 한정 포인트' });
+  const panel = page.getByRole('region', { name: '추가 포인트' });
   await expandBonus(panel);
   await panel.getByText('포인트 쓰기 권한이 필요합니다.').waitFor();
   assert.ok(await panel.getByRole('spinbutton').isDisabled());
   assert.ok(await panel.getByRole('checkbox').first().isDisabled());
-  assert.ok(await panel.getByRole('button', { name: '한도 저장' }).isDisabled());
+  assert.ok(await panel.getByRole('button', { name: '추가 포인트 저장' }).isDisabled());
   await panel.locator('form').evaluate((form) => form.requestSubmit());
   assert.ok(methods.every((method) => method === 'GET'));
 });
@@ -184,7 +184,7 @@ test('public limit and private remaining stay separate from ranking, including z
     if (pause) { const notify = pause; pause = null; await new Promise((resolve) => { release = resolve; notify(); }); }
     return reply(result);
   } });
-  const panel = page.getByRole('region', { name: '방송 한정 포인트' });
+  const panel = page.getByRole('region', { name: '추가 포인트' });
   const row = page.getByRole('row').filter({ hasText: '테스트 시청자' });
   await expandBonus(panel);
   await panel.getByText('125P', { exact: true }).waitFor();
@@ -202,7 +202,7 @@ test('public limit and private remaining stay separate from ranking, including z
   await signal('arubot:auth-changed');
   await panel.getByText('500P').waitFor();
   release();
-  assert.ok(await panel.getByText('내 잔액').isHidden());
+  assert.ok(await panel.getByText('남은 추가 포인트').isHidden());
   assert.match(await panel.textContent(), /BGM 신청 · 룰렛/);
   for (const inactive of [{ ...state, amount: 0 }, { ...state, live: false }]) {
     state = { ...state, amount: 500, live: true };
@@ -221,7 +221,7 @@ test('a failed public poll drops the personal balance; subsequent reads are not 
   let status = 200, remaining = 90;
   const page = await open(t, { path: publicPath, api: ({ reply }) =>
     reply({ live: true, amount: 200, categories: ['command'], remaining }, status) });
-  const panel = page.getByRole('region', { name: '방송 한정 포인트' });
+  const panel = page.getByRole('region', { name: '추가 포인트' });
   await expandBonus(panel);
   await panel.getByText('90P', { exact: true }).waitFor();
   await page.evaluate(() => {
@@ -248,6 +248,6 @@ test('viewer overview shows ordinary points without advertising the event featur
   const calls = [];
   const page = await open(t, { path: '/viewer/me', api: ({ url, reply }) => { calls.push(url.pathname); return reply({}, 403); } });
   await page.getByText('방송별 일반 포인트의 합계입니다.').waitFor();
-  assert.equal(await page.getByText('방송 한정 포인트', { exact: false }).count(), 0);
+  assert.equal(await page.getByText('추가 포인트', { exact: false }).count(), 0);
   assert.deepEqual(calls, []);
 });

@@ -66,9 +66,9 @@ export function PublicBroadcastBonus({ channelUid }: { channelUid: string }) {
         <p className="mt-1 break-keep text-sm">사용처: {labels.join(' · ')}</p>
       </div>
       <dl className="flex flex-wrap gap-x-6 gap-y-2">
-        <div><dt className="text-xs text-muted-foreground">1인 한도</dt><dd className="font-semibold tabular-nums">{bonus.amount.toLocaleString('ko-KR')}P</dd></div>
+        <div><dt className="text-xs text-muted-foreground">1인당 추가 포인트</dt><dd className="font-semibold tabular-nums">{bonus.amount.toLocaleString('ko-KR')}P</dd></div>
         {bonus.remaining !== null ? (
-          <div><dt className="text-xs text-muted-foreground">내 잔액</dt><dd className="font-semibold tabular-nums text-primary">{bonus.remaining.toLocaleString('ko-KR')}P</dd></div>
+          <div><dt className="text-xs text-muted-foreground">남은 추가 포인트</dt><dd className="font-semibold tabular-nums text-primary">{bonus.remaining.toLocaleString('ko-KR')}P</dd></div>
         ) : null}
       </dl>
       </div>}
