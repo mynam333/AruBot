@@ -4,6 +4,9 @@ export const BROADCAST_BONUS_CATEGORIES = Object.freeze([
   { id: 'wheel', label: '돌림판' },
   { id: 'command', label: '채팅 명령어' },
   { id: 'roulette', label: '룰렛' },
+  { id: 'drawing', label: '그림 후원' },
+  { id: 'marble', label: '주루마블 주사위' },
+  { id: 'blueprint', label: '블루프린트 포인트 차감' },
 ]);
 export const MAX_BROADCAST_BONUS = 1_000_000_000;
 

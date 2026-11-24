@@ -643,7 +643,9 @@ export function createMarbleStore({ withPgClient, ensureIdentityTables, deductCh
             if (typeof deductChannelPointsIfEnoughWithClient !== 'function') throw new Error('Atomic point deduction is unavailable');
             const username = String(input.username || '\uc2dc\uccad\uc790').slice(0, 80);
             const next = apply(state, { action: 'roll', playerId, source: 'points', username }, now);
-            const deduction = await deductChannelPointsIfEnoughWithClient(pg, channelUid, userId, username, config.cost);
+            const deduction = await deductChannelPointsIfEnoughWithClient(pg, channelUid, userId, username, config.cost, {
+              sid: `user:${owner}`, category: 'marble',
+            });
             if (deduction?.deducted !== true) result = { accepted: false, reason: 'insufficient_points', cost: config.cost };
             else { await save(pg, row, next); result = { accepted: true, cost: config.cost }; }
           }

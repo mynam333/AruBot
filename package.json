@@ -57,7 +57,7 @@
     "lint": "eslint .",
     "preview": "next start",
     "test": "jest",
-    "test:drawing": "node --test tests/drawing-v2.test.mjs tests/drawing-selection.test.mjs tests/drawing-local-storage.test.mjs tests/drawing-archive.test.mjs tests/drawing-retention.test.mjs",
+    "test:drawing": "node --test tests/drawing-v2.test.mjs tests/drawing-selection.test.mjs tests/drawing-local-storage.test.mjs tests/drawing-archive.test.mjs tests/drawing-retention.test.mjs tests/drawing-paid-postgres.test.mjs",
     "test:avatars": "node --test tests/local-avatars.test.cjs tests/local-avatars-engine-v3.test.cjs tests/local-avatars-engine-review.test.cjs tests/local-avatars-service-v3.test.cjs tests/local-avatars-overlay-v3.test.cjs tests/local-avatar-relay.test.mjs",
     "test:avatars:ui": "node --test tests/local-avatars-editor-v3.test.cjs",
     "test:pngtuber": "node --test tests/local-pngtuber-core.test.cjs tests/local-pngtuber-service.test.cjs tests/local-pngtuber-integration.test.cjs",

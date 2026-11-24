@@ -122,7 +122,7 @@ export function BroadcastBonusSettings({ writable }: { writable: boolean }) {
         </Button>
       </div>
       <p className="text-sm text-muted-foreground">
-        이번 방송에서 시청자마다 받는 포인트입니다. 선택한 사용처에서 일반 포인트보다 먼저 쓰이고, 방송이 끝나면 남은 추가 포인트는 사라집니다. 지급액을 바꿔도 이미 쓴 포인트는 다시 지급되지 않습니다.
+        이번 방송에서 시청자마다 받는 포인트입니다. 선택한 사용처에서 일반 포인트보다 먼저 쓰이고, 방송이 끝나면 남은 추가 포인트는 사라집니다. 지급액을 바꿔도 이미 쓴 포인트는 다시 지급되지 않습니다. 승부예측에는 일반 포인트만 사용할 수 있습니다.
       </p>
       <form onSubmit={(event) => { event.preventDefault(); void save(); }}>
         <fieldset disabled={!editable} className="flex min-w-0 flex-wrap items-end gap-x-6 gap-y-3">

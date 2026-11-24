@@ -35,7 +35,10 @@ function database(initial) {
       return { rows: [] };
     } };
   };
-  db.credit = async (_pg, _row, deduction) => { db.points += deduction.amount; };
+  db.credit = async (_pg, _row, deduction) => {
+    db.points += deduction.amount;
+    return { ordinaryRefunded: deduction.amount, bonusRefunded: 0 };
+  };
   return db;
 }
 

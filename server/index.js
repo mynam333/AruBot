@@ -11,7 +11,7 @@ import { createCommandExecutionSafety, isCommandSafetyError } from './command-ex
 import { createCommandAdmission } from './command-admission.js';
 import { commandAdmissionStore } from './supabase.js';
 import { assertSafeTextPayload, createSafeJsonReplacer, inspectTextPayload } from '../shared/text-safety.js';
-import { downloadDrawingDonationObject, getDurableRuntimeJob, findSidByDrawingViewerToken } from './supabase.js';
+import { downloadDrawingDonationObject, getDurableRuntimeJob, getDrawingSubmissionByKey, findSidByDrawingViewerToken } from './supabase.js';
 import { DRAWING_ORIGINAL_LIMIT, inspectOriginal, originalOwnerKey, validateDrawingSubmission, verifyDrawingOriginal } from './drawing-original.js';
 import { optimizeDrawingOriginal } from './drawing-original-storage.js';
 import { encodeDrawingRecording } from './drawing-recording-storage.js';
@@ -9070,6 +9070,7 @@ app.get('/api/viewer/drawing-donation/streamers/:channelUid', async (req, res) =
     const data = await collectViewerDrawingDonationStreamers(ownerUserId, { channelIdentity: identity });
     const streamer = findViewerDrawingStreamer(data.streamers, channelUid, identity);
     if (!streamer) return res.status(404).json({ error: 'not_available' });
+    streamer.drawingBonusPoints = await getDrawingBonusPoints(streamer.pointSettingsSid, ownerUserId).catch(() => 0);
     return res.json({ ...data, streamer });
   } catch (e) {
     return res.status(500).json({ error: 'Failed to load drawing donation streamer' });
@@ -9108,6 +9109,28 @@ app.get('/api/drawing-donation/originals/:id', async (req, res) => {
   }
 });
 
+async function getDrawingBonusPoints(sid, viewerId) {
+  const bonus = await getViewerBroadcastBonus(sid, viewerId);
+  return bonus.live && bonus.categories.includes('drawing') ? Number(bonus.remaining || 0) : 0;
+}
+
+async function precheckDrawingCost(sid, viewerId, ordinaryPoints, cost) {
+  const ordinary = Number(ordinaryPoints || 0);
+  if (ordinary >= cost) return null;
+  const have = ordinary + await getDrawingBonusPoints(sid, viewerId);
+  return have < cost ? { error: 'insufficient_points', need: cost, have } : null;
+}
+
+async function cleanupUnacceptedDrawingFiles(durable, item) {
+  if (durable.created !== false) return;
+  const saved = durable.job?.payload?.item;
+  if (!saved && durable.deduction?.deducted !== false) return;
+  // A lost commit acknowledgement may be retried internally and return our own files as a duplicate.
+  const retained = [saved?.strokeObjectKey, saved?.previewObjectKey];
+  const unused = [item.strokeObjectKey, item.previewObjectKey].filter(key => key && !retained.includes(key));
+  if (unused.length) await deleteDrawingDonationObjectKeys(unused).catch(() => null);
+}
+
 async function submitDrawingV2(req, res, ownerUserId, streamer, resolved) {
   const body = req.body;
   const requestId = String(req.get('idempotency-key') || body.requestId || '');
@@ -9130,7 +9153,8 @@ async function submitDrawingV2(req, res, ownerUserId, streamer, resolved) {
   const { document, documentHash, strokes, pointCount, rawPointCount, jsonSize, ink, replay } = validated;
   const cost = drawingCost(document, resolved.drawing);
   if (body.expectedCost !== cost) return res.status(409).json({ error: 'drawing_price_changed', cost });
-  if (Number(streamer.points || 0) < cost) return res.status(400).json({ error: 'insufficient_points', need: cost, have: streamer.points });
+  const insufficient = await precheckDrawingCost(resolved.sid, ownerUserId, streamer.points, cost);
+  if (insufficient) return res.status(400).json(insufficient);
   const activeQueue = await listDrawingQueueForSid(resolved.sid);
   const mine = activeQueue.filter((item) => item.viewerUserId === ownerUserId);
   if (resolved.drawing.perUserQueueLimit > 0 && mine.length >= resolved.drawing.perUserQueueLimit) return res.status(429).json({ error: 'drawing_queue_limit' });
@@ -9143,14 +9167,15 @@ async function submitDrawingV2(req, res, ownerUserId, streamer, resolved) {
   const verification = await verifyDrawingOriginal(document, originalBuffer);
   const original = verification.storage.original, storedBuffer = Buffer.from(verification.storage.buffer);
   if (original.sourceHash !== uploadedOriginal.hash || original.format !== 'webp' || crypto.createHash('sha256').update(storedBuffer).digest('hex') !== original.hash) throw new Error('drawing_original_mismatch');
-  const base = `drawing-donations/${originalOwnerKey(resolved.sid)}/${runtimeJobId}`;
+  // Concurrent retries share a job ID, but only the winning attempt owns its stored files.
+  const base = `drawing-donations/${originalOwnerKey(resolved.sid)}/${crypto.randomUUID()}`;
   const recording = await encodeDrawingRecording(document);
   const strokeObjectKey = `${base}/${documentHash}.json.gz`, previewObjectKey = `${base}/${original.hash}.${original.format}`;
   const { strokes: _strokes, ...metadata } = document;
   const item = {
     id: runtimeJobId, runtimeJobId, ownerSid: resolved.sid, channelUid: streamer.channelUid,
     viewerUserId: ownerUserId, viewerName: null, status: resolved.drawing.approvalMode === 'auto' ? 'approved' : 'queued',
-    cost, pointDeductions: [{ userId: ownerUserId, username: null, amount: cost }], pointRefunded: false,
+    cost, pointDeductions: [], pointRefunded: false,
     canvas: { ...resolved.drawing.canvas, document: metadata }, strokes: [], strokeObjectKey, previewObjectKey,
     previewImage: verification.previewImage,
     metrics: { strokeCount: strokes.length, pointCount, rawPointCount, jsonSize, ink, documentHash, rendererVersion: document.rendererVersion, pricingVersion: 2, original, recording: { encoding: recording.encoding, byteLength: recording.byteLength, rawByteLength: recording.rawByteLength }, comparison: verification.comparison },
@@ -9163,9 +9188,13 @@ async function submitDrawingV2(req, res, ownerUserId, streamer, resolved) {
     throw Object.assign(new Error('drawing_storage_unavailable'), { status: 503 });
   }
   const durable = await enqueuePaidDurableRuntimeJob({ id: runtimeJobId, sid: resolved.sid, jobType: 'drawing-donation', idempotencyKey, channelUid: streamer.channelUid, userId: ownerUserId, pointsCost: cost, payload: { item }, maxAttempts: 8 });
-  if (durable.deduction && !durable.deduction.deducted) return res.status(400).json({ error: 'insufficient_points' });
-  const accepted = durable.job?.payload?.item || item;
-  if (accepted.metrics.documentHash !== documentHash || (accepted.metrics.original.sourceHash || accepted.metrics.original.hash) !== uploadedOriginal.hash) return res.status(409).json({ error: 'drawing_request_conflict' });
+  await cleanupUnacceptedDrawingFiles(durable, item);
+  if (durable.deduction && !durable.deduction.deducted) {
+    return res.status(400).json({ error: 'insufficient_points', need: cost, have: durable.deduction.balanceBefore });
+  }
+  const accepted = durable.job?.payload?.item;
+  if (!accepted || ['failed', 'cancelled'].includes(durable.job.status)) return res.status(409).json({ error: 'drawing_previous_request_failed' });
+  if (accepted.viewerUserId !== ownerUserId || accepted.metrics?.documentHash !== documentHash || (accepted.metrics.original?.sourceHash || accepted.metrics.original?.hash) !== uploadedOriginal.hash) return res.status(409).json({ error: 'drawing_request_conflict' });
   await runDurableRuntimeWorker();
   await deleteDrawingDonationObjectKeys([originalKey]).catch(() => null);
   if (durable.created !== false) await recordBotEventLogSafe(resolved.sid, {
@@ -9193,6 +9222,21 @@ app.post('/api/drawing-donation/submit', rateLimiters.userWrite, async (req, res
 
     if (req.body?.document) return await submitDrawingV2(req, res, ownerUserId, streamer, resolved);
 
+    const { strokes, pointCount, rawPointCount, jsonSize, ink } = normalizeDrawingStrokePayload(req.body || {}, resolved.drawing);
+    const requestId = String(req.get('idempotency-key') || req.body?.requestId || req.body?.request_id || '').trim();
+    const idempotencyKey = requestId || crypto.createHash('sha256')
+      .update(`${resolved.sid}|${ownerUserId}|${channelUid}|${jsonSize}|${ink}|${Math.floor(Date.now() / 2000)}`)
+      .digest('hex');
+    const acknowledgePrevious = async (job) => {
+      const accepted = job?.payload?.item;
+      if (!accepted || ['failed', 'cancelled'].includes(job.status)) return res.status(409).json({ error: 'drawing_previous_request_failed' });
+      if (accepted.viewerUserId !== ownerUserId) return res.status(409).json({ error: 'drawing_request_conflict' });
+      const saved = await getDrawingDonationItem(resolved.sid, accepted.id, { includeStrokes: true }).catch(() => null);
+      return res.json({ ok: true, item: saved || accepted, deduplicated: true });
+    };
+    const previous = await getDrawingSubmissionByKey(resolved.sid, idempotencyKey);
+    if (previous) return await acknowledgePrevious(previous);
+
     const activeQueue = await listDrawingQueueForSid(resolved.sid).catch(() => []);
     const viewerActiveItems = (activeQueue || []).filter((item) => String(item.viewerUserId || '') === ownerUserId);
     if (resolved.drawing.perUserQueueLimit > 0 && viewerActiveItems.length >= resolved.drawing.perUserQueueLimit) {
@@ -9210,9 +9254,9 @@ app.post('/api/drawing-donation/submit', rateLimiters.userWrite, async (req, res
       }
     }
 
-    const { strokes, pointCount, rawPointCount, jsonSize, ink } = normalizeDrawingStrokePayload(req.body || {}, resolved.drawing);
     const cost = calculateDrawingDonationCost(resolved.drawing, ink);
-    if (Number(streamer.points || 0) < cost) return res.status(400).json({ error: 'insufficient_points', need: cost, have: Number(streamer.points || 0) });
+    const insufficient = await precheckDrawingCost(resolved.sid, ownerUserId, streamer.points, cost);
+    if (insufficient) return res.status(400).json(insufficient);
 
     const replay = computeDrawingReplay(strokes, resolved.drawing.replayMaxSec);
     const runtimeJobId = crypto.randomUUID();
@@ -9225,7 +9269,7 @@ app.post('/api/drawing-donation/submit', rateLimiters.userWrite, async (req, res
       viewerName: req.body?.viewerName ? String(req.body.viewerName) : null,
       status: resolved.drawing.approvalMode === 'auto' ? 'approved' : 'queued',
       cost,
-      pointDeductions: [{ userId: ownerUserId, username: req.body?.viewerName ? String(req.body.viewerName) : null, amount: cost }],
+      pointDeductions: [],
       pointRefunded: false,
       canvas: resolved.drawing.canvas,
       strokes,
@@ -9242,15 +9286,11 @@ app.post('/api/drawing-donation/submit', rateLimiters.userWrite, async (req, res
       item.strokes = [];
       item.metrics = { ...item.metrics, storage: { strokeObjectKey, strokeStorage: strokeObjectKey.startsWith('local:') ? 'local' : 'supabase' } };
     }
-    const requestId = String(req.get('idempotency-key') || req.body?.requestId || req.body?.request_id || '').trim();
-    const fallbackIdempotencyKey = crypto.createHash('sha256')
-      .update(`${resolved.sid}|${ownerUserId}|${channelUid}|${jsonSize}|${ink}|${Math.floor(Date.now() / 2000)}`)
-      .digest('hex');
     const durable = await enqueuePaidDurableRuntimeJob({
       id: runtimeJobId,
       sid: resolved.sid,
       jobType: 'drawing-donation',
-      idempotencyKey: requestId || fallbackIdempotencyKey,
+      idempotencyKey,
       channelUid: streamer.channelUid,
       userId: ownerUserId,
       username: item.viewerName,
@@ -9258,16 +9298,17 @@ app.post('/api/drawing-donation/submit', rateLimiters.userWrite, async (req, res
       payload: { item },
       maxAttempts: 8,
     });
+    await cleanupUnacceptedDrawingFiles(durable, item);
     if (durable.deduction && !durable.deduction.deducted) {
-      if (item.strokeObjectKey) await deleteDrawingDonationObjectKeys([item.strokeObjectKey]).catch(() => null);
       return res.status(400).json({
         error: 'insufficient_points',
         need: cost,
         have: durable.deduction.balanceBefore,
       });
     }
+    if (!durable.created) return await acknowledgePrevious(durable.job);
+    const acceptedItem = durable.job.payload.item;
     await runDurableRuntimeWorker();
-    const acceptedItem = durable.job?.payload?.item || item;
     const savedItem = await getDrawingDonationItem(resolved.sid, acceptedItem.id, { includeStrokes: true }).catch(() => null) || acceptedItem;
     if (durable.created !== false) {
       await recordBotEventLogSafe(resolved.sid, {
@@ -10371,7 +10412,14 @@ async function executeActionBlueprint(ownerUserId, idOrSlug, context = {}, inter
           : userId ? await getChannelPoints(channelUid, userId) : 0;
         if (node.type === 'pointsAdjust' && userId) {
           const delta = Math.floor(Number(evaluateBlueprintValue(config.delta || 0, scope) || 0));
-          if (!dryRun && !suppressPointMutations) await incrChannelPoints(channelUid, userId, username || userId, delta);
+          if (!dryRun && !suppressPointMutations) {
+            if (delta < 0) {
+              const charge = await deductChannelPointsIfEnough(channelUid, userId, username || userId, -delta, { sid, category: 'blueprint' });
+              if (!charge.deducted) throw new Error('insufficient_points');
+            } else if (delta > 0) {
+              await incrChannelPoints(channelUid, userId, username || userId, delta);
+            }
+          }
           const nextPoints = !dryRun && !suppressPointMutations
             ? await getChannelPoints(channelUid, userId)
             : (simulateViewer ? current + delta : current);

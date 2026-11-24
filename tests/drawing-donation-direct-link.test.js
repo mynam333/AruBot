@@ -12,11 +12,12 @@ function harness() {
     collectViewerPointIdentityKeys: jest.fn().mockReturnValue(['viewer-owner', 'viewer-channel']),
     listViewerPointBalancesForUserIds: jest.fn().mockResolvedValue([]),
     getBotSettings: jest.fn().mockResolvedValue({ drawingDonation: { enabled: true, costPoints: 100 } }),
+    getViewerBroadcastBonus: jest.fn().mockResolvedValue({ live: true, categories: ['drawing'], remaining: 100 }),
     findBlockedBotUser: jest.fn().mockReturnValue(null),
     collectDrawingLiveSurfacesForSid: jest.fn().mockResolvedValue([]),
   };
   const functions = loadServerFunctions([
-    'collectViewerDrawingDonationStreamers', 'resolveDrawingDonationSettingsForBalance',
+    'collectViewerDrawingDonationStreamers', 'resolveDrawingDonationSettingsForBalance', 'getDrawingBonusPoints',
     'normalizeDrawingDonationSettings', 'getDefaultDrawingDonationSettings', 'applyDrawingPointCost',
   ], bindings);
   const routeBindings = {
@@ -44,12 +45,13 @@ describe('drawing donation direct links', () => {
     const { streamer } = res.json.mock.calls[0][0];
     expect(streamer).toMatchObject({
       publicUid: 'chzzk:public-channel', channelName: 'Streamer',
-      canonicalChannelUid: 'streamer-owner', points: 0, identities: [],
+      canonicalChannelUid: 'streamer-owner', points: 0, drawingBonusPoints: 100, identities: [],
       drawingDonation: { enabled: true, costPoints: 100 },
     });
     expect(streamer.pointSettingsSid).toBe('user:streamer-owner');
     expect(JSON.parse(JSON.stringify(streamer))).not.toHaveProperty('pointSettingsSid');
     expect(h.getBotSettings).toHaveBeenCalledWith('user:streamer-owner');
+    expect(h.getViewerBroadcastBonus).toHaveBeenCalledWith('user:streamer-owner', 'viewer-owner');
   });
 
   test('preserves actual point balances instead of adding a duplicate zero-point streamer', async () => {

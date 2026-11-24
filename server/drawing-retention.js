@@ -18,8 +18,10 @@ export async function refundDrawingRow(pg, row, credit) {
     }
     for (const deduction of [...deductions].sort((a, b) => String(a.userId).localeCompare(String(b.userId)))) {
       const amount = Number(deduction.amount);
-      if (amount > 0) await credit(pg, row, { ...deduction, amount });
-      refundedAmount += amount;
+      if (amount > 0) {
+        const { ordinaryRefunded, bonusRefunded } = await credit(pg, row, { ...deduction, amount });
+        refundedAmount += ordinaryRefunded + bonusRefunded;
+      }
     }
   }
   const updated = await pg.query(

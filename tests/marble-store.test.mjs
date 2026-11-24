@@ -210,8 +210,8 @@ function fixture() {
       ensureIdentityTables: async () => { db.identityCalls++; if (db.failIdentity) { db.failIdentity = false; throw new Error('schema unavailable'); } },
       uuid: () => `00000000-0000-4000-8000-${String(++db.uuid).padStart(12, '0')}`,
       randomInt: () => 0,
-      deductChannelPointsIfEnoughWithClient: async (pg, channel, user, username, cost) => {
-        db.deductions.push({ pg, channel, user, username, cost });
+      deductChannelPointsIfEnoughWithClient: async (pg, channel, user, username, cost, context) => {
+        db.deductions.push({ pg, channel, user, username, cost, context });
         const balance = db.balances.get(user) || 0;
         if (balance < cost) return { deducted: false };
         pg.write(db.balances, user, balance - cost);
@@ -440,6 +440,7 @@ test('remote ingress targets only the source actor pawn and deducts source point
   const result = await db.store.trigger(member, points({ command: '!personal', channelUid: 'member-channel', playerId: 'player-1' }));
   assert.equal(result.accepted, true); assert.equal(result.cost, 250);
   assert.equal(db.deductions[0].channel, 'member-channel');
+  assert.deepEqual(db.deductions[0].context, { sid: `user:${member}`, category: 'marble' });
   assert.equal(db.state().playerStates[joined.playerId].phase, 'effect');
   assert.equal(db.state().playerStates['player-1'].phase, 'ready');
   assert.deepEqual((await db.store.snapshot(member)).state, local.state);
@@ -875,6 +876,7 @@ test('points deduct once on transaction client, current approved price, and firs
   assert.equal(db.state().playerStates['player-1'].phase, 'effect');
   const deduction = db.deductions[0];
   assert.equal(deduction.channel, 'channel');
+  assert.deepEqual(deduction.context, { sid: `user:${owner}`, category: 'marble' });
   assert.ok(db.calls.some(call => call.pg === deduction.pg && call.sql.startsWith('update marble_rooms')));
   assert.ok(db.calls.some(call => call.pg === deduction.pg && call.sql.startsWith('insert into marble_source_requests')));
 });

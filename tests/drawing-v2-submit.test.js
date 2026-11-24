@@ -18,6 +18,7 @@ function harness() {
   const bindings = {
     ...model, ...recording, crypto, originalOwnerKey,
     getDurableRuntimeJob: jest.fn(async (id) => jobs.get(id)),
+    getViewerBroadcastBonus: jest.fn().mockResolvedValue({ live: true, categories: ['drawing'], remaining: 100 }),
     validateDrawingSubmission: jest.fn(() => ({ document, documentHash, strokes: document.strokes, ...model.validateDrawing(document), ink: model.drawingInk(document), replay: model.buildTimeline(document) })),
     listDrawingQueueForSid: jest.fn().mockResolvedValue([]),
     downloadDrawingDonationObject: jest.fn().mockResolvedValue(original),
@@ -33,13 +34,77 @@ function harness() {
     runDurableRuntimeWorker: jest.fn().mockResolvedValue(true),
     recordBotEventLogSafe: jest.fn().mockResolvedValue(true),
   };
-  const functions = loadServerFunctions(['submitDrawingV2'], bindings);
+  const functions = loadServerFunctions(['submitDrawingV2', 'getDrawingBonusPoints', 'precheckDrawingCost', 'cleanupUnacceptedDrawingFiles'], bindings);
   const request = { get: () => '', body: { requestId: 'submission-repeat-1234', document, documentHash, original: { hash: originalHash, key: `local:drawing-donations/uploads/${originalOwnerKey('viewer')}/1760000000000-${crypto.randomUUID()}.png` }, expectedCost: 100 } };
   const response = () => ({ status: jest.fn().mockReturnThis(), json: jest.fn().mockReturnThis() });
-  return { ...bindings, document, documentHash, original, originalHash, storedBuffer, storedHash, storage, request, response, jobs, submit: (req, res) => functions.submitDrawingV2(req, res, 'viewer', { points: 500, channelUid: 'channel' }, { sid: 'user:streamer', drawing: settings }) };
+  return { ...bindings, ...functions, document, documentHash, original, originalHash, storedBuffer, storedHash, storage, request, response, jobs, submit: (req, res, points = 0) => functions.submitDrawingV2(req, res, 'viewer', { points, channelUid: 'channel' }, { sid: 'user:streamer', drawing: settings }) };
 }
 
 describe('V2 drawing acceptance without production services', () => {
+  test.each([
+    [{ live: false, categories: ['drawing'], remaining: 200 }, 5],
+    [{ live: true, categories: ['video'], remaining: 200 }, 5],
+    [{ live: true, categories: ['drawing'], remaining: 25 }, 30],
+  ])('rejects an unfunded drawing before accessing original storage', async (bonus, have) => {
+    const h = harness(), res = h.response();
+    h.getViewerBroadcastBonus.mockResolvedValue(bonus);
+    await h.submit(h.request, res, 5);
+    expect(res.json).toHaveBeenCalledWith({ error: 'insufficient_points', need: 100, have });
+    expect(h.downloadDrawingDonationObject).not.toHaveBeenCalled();
+    expect(h.verifyDrawingOriginal).not.toHaveBeenCalled();
+    expect(h.uploadDrawingDonationObject).not.toHaveBeenCalled();
+    expect(h.enqueuePaidDurableRuntimeJob).not.toHaveBeenCalled();
+  });
+
+  test('ordinary-funded submissions skip the extra read; an ambiguous commit preserves files', async () => {
+    const h = harness();
+    h.enqueuePaidDurableRuntimeJob.mockRejectedValueOnce(new Error('commit acknowledgement lost'));
+    await expect(h.submit(h.request, h.response(), 100)).rejects.toThrow('commit acknowledgement lost');
+    expect(h.getViewerBroadcastBonus).not.toHaveBeenCalled();
+    expect(h.deleteDrawingDonationObjectKeys).not.toHaveBeenCalled();
+    h.enqueuePaidDurableRuntimeJob.mockImplementationOnce(async input => ({ created: false, job: input, deduction: null }));
+    await h.submit(h.request, h.response(), 100);
+    expect(h.deleteDrawingDonationObjectKeys.mock.calls).toEqual([[[h.request.body.original.key]]]);
+  });
+
+  test('insufficient total points is decided by the debit and releases the rejected attempt files', async () => {
+    const h = harness(), res = h.response();
+    h.enqueuePaidDurableRuntimeJob.mockResolvedValue({ created: false, job: null, deduction: { deducted: false, balanceBefore: 35 } });
+    await h.submit(h.request, res);
+    expect(res.json).toHaveBeenCalledWith({ error: 'insufficient_points', need: 100, have: 35 });
+    expect(h.deleteDrawingDonationObjectKeys).toHaveBeenCalledWith(h.uploadDrawingDonationObject.mock.calls.map(([key]) => 'local:' + key));
+    expect(h.runDurableRuntimeWorker).not.toHaveBeenCalled();
+  });
+
+  test('legacy stroke submit with zero ordinary points reaches the same paid job and returns its saved receipt', async () => {
+    const h = harness(), res = h.response();
+    const points = [{ userId: 'viewer', streamerUid: 'channel', amount: 100, bonusSpent: 100, ordinarySpent: 0, sessionKey: 'session' }];
+    h.enqueuePaidDurableRuntimeJob.mockImplementation(async ({ payload: { item }, jobType }) => {
+      expect(jobType).toBe('drawing-donation');
+      expect(item.pointDeductions).toEqual([]);
+      return { created: true, job: { payload: { item: { ...item, pointDeductions: points } } } };
+    });
+    const getDrawingSubmissionByKey = jest.fn().mockResolvedValue(null);
+    const route = loadServerFunctions.route('/api/drawing-donation/submit', {
+      getDrawingSubmissionByKey,
+      ...h, getCurrentSessionUserId: async () => 'viewer', resolveVerifiedPublicChannelIdentity: async () => ({}),
+      collectViewerDrawingDonationStreamers: async () => ({}), findViewerDrawingStreamer: () => ({ channelUid: 'channel', points: 0 }),
+      resolveDrawingDonationSettingsForBalance: async () => ({ sid: 'streamer', drawing: { enabled: true } }), findBlockedBotUser: () => null,
+      normalizeDrawingStrokePayload: () => ({ strokes: [], pointCount: 1, rawPointCount: 1, jsonSize: 10, ink: 1 }),
+      calculateDrawingDonationCost: () => 100, computeDrawingReplay: () => ({}), normalizeDrawingPreviewImage: () => null,
+      maybeStoreDrawingStrokes: async () => null, getDrawingDonationItem: async () => null,
+    });
+    await route({ get: () => '', body: { channelUid: 'channel' } }, res);
+    expect(res.json.mock.calls[0][0]).toMatchObject({ ok: true, item: { pointDeductions: points } });
+    getDrawingSubmissionByKey.mockResolvedValue({ status: 'completed', payload: { item: res.json.mock.calls[0][0].item } });
+    h.getViewerBroadcastBonus.mockClear().mockResolvedValue({ live: false, categories: [], remaining: 0 });
+    const retry = h.response();
+    await route({ get: () => '', body: { channelUid: 'channel' } }, retry);
+    expect(retry.json.mock.calls[0][0]).toMatchObject({ ok: true, deduplicated: true, item: { pointDeductions: points } });
+    expect(h.getViewerBroadcastBonus).not.toHaveBeenCalled();
+    expect(h.enqueuePaidDurableRuntimeJob).toHaveBeenCalledTimes(1);
+  });
+
   test('persists exact assets before charging and acknowledges both hashes', async () => {
     const h = harness(), res = h.response(); await h.submit(h.request, res);
     expect(h.uploadDrawingDonationObject).toHaveBeenCalledTimes(2);
@@ -59,7 +124,9 @@ describe('V2 drawing acceptance without production services', () => {
 
   test('a lost acknowledgement can be retried without charging or rendering twice', async () => {
     const h = harness(); await h.submit(h.request, h.response());
+    h.getViewerBroadcastBonus.mockClear().mockResolvedValue({ live: false, categories: [], remaining: 0 });
     const response = h.response(); await h.submit(h.request, response);
+    expect(h.getViewerBroadcastBonus).not.toHaveBeenCalled();
     expect(h.enqueuePaidDurableRuntimeJob).toHaveBeenCalledTimes(1);
     expect(h.verifyDrawingOriginal).toHaveBeenCalledTimes(1);
     expect(response.json.mock.calls[0][0]).toMatchObject({ ok: true, deduplicated: true, originalHash: h.originalHash });

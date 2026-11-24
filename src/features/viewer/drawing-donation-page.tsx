@@ -21,6 +21,7 @@ type Streamer = {
   avatarUrl?: string | null;
   provider?: string | null;
   points: number;
+  drawingBonusPoints?: number;
   liveSurfaces?: LiveSurface[];
   drawingDonation: {
     pricingMode: 'fixed' | 'ink';
@@ -273,7 +274,7 @@ export function DrawingDonationEditorPage({ channelUid }: { channelUid: string }
       <section className="mx-auto mt-[clamp(1rem,3vw,2rem)] max-w-7xl space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <Button asChild variant="ghost"><Link href={`/c/${encodeURIComponent(channelUid)}`}><ArrowLeft aria-hidden="true" className="h-[1em] w-[1em]" /> 공개 페이지로</Link></Button>
-          {streamer ? <Badge tone="mint">{formatNumber(streamer.points)}P 보유</Badge> : null}
+          {streamer ? <Badge tone="mint">{formatNumber(streamer.points)}P 보유{(streamer.drawingBonusPoints ?? 0) > 0 && ` · 추가 포인트 ${formatNumber(streamer.drawingBonusPoints ?? 0)}P`}</Badge> : null}
         </div>
 
         {streamerStatus !== 'ready' ? (
@@ -335,9 +336,14 @@ export function DrawingDonationEditorPage({ channelUid }: { channelUid: string }
           <DrawingStudio
             channelUid={streamer.publicUid || streamer.channelUid}
             viewerUserId={streamer.viewerUserId || channelUid}
-            points={streamer.points}
+            points={streamer.points + (streamer.drawingBonusPoints ?? 0)}
             settings={streamer.drawingDonation}
-            onSubmitted={(cost) => setStreamer((current) => current ? { ...current, points: Math.max(0, current.points - cost) } : current)}
+            onSubmitted={() => {
+              void loadStreamer(channelUid).then(({ streamer: fresh }) => setStreamer(current =>
+                current?.channelUid === fresh.channelUid && current.viewerUserId === fresh.viewerUserId
+                  ? { ...current, points: fresh.points, drawingBonusPoints: fresh.drawingBonusPoints } : current
+              )).catch(() => undefined);
+            }}
             background={<>
               {selectedSurface?.hlsSupported ? (
                 livePlaybackUrl ? (

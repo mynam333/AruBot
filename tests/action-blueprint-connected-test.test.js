@@ -232,6 +232,19 @@ describe('blueprint simulation and connected-device runtime', () => {
     expect(bindings.listAutomationLocalAgents).not.toHaveBeenCalled();
   });
 
+  test.each([true, false])('negative adjustment charges the blueprint category before downstream effects: %s', async (deducted) => {
+    const { executeActionBlueprint, bindings } = runtime([graph('paid', [{ type: 'pointsAdjust', config: { delta: -50 } }, 'obs'], true)], {
+      getChannelPoints: jest.fn(async () => 0), deductChannelPointsIfEnough: jest.fn(async () => ({ deducted })),
+    });
+    const result = await executeActionBlueprint('owner', 'paid', { source: 'chat-command', user: { userId: 'viewer' }, channelUid: 'channel' });
+    expect(bindings.deductChannelPointsIfEnough).toHaveBeenCalledWith('channel', 'viewer', 'viewer', 50, { sid: 'user:owner', category: 'blueprint' });
+    expect(bindings.incrChannelPoints).not.toHaveBeenCalled();
+    expect(result.ok).toBe(deducted);
+    expect(bindings.queueAutomationJob).toHaveBeenCalledTimes(deducted ? 1 : 0);
+    if (deducted) expect(result.nodeOutputs.n0.points).toBe(0);
+    else expect(result.error).toBe('insufficient_points');
+  });
+
   test('ordinary nested actions still mutate real points with the original viewer context', async () => {
     let points = 100;
     const { executeActionBlueprint, bindings } = runtime([

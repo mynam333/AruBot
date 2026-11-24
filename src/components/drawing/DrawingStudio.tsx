@@ -18,7 +18,7 @@ import { MAX_DOCUMENT_BYTES, MAX_ORIGINAL_BYTES, RECORDING_HEADROOM_BYTES, drawi
 import { constrainLinePoint, constrainShapePoint, distortSelection, rotateSelection, selectionCorners, selectionRect, transformSelection } from '../../../shared/drawing/selection.js';
 
 export type DrawingStudioSettings = { pricingMode: string; costPoints: number; inkCostPerUnit: number; replayMaxSec: number; canvas: { widthRatio: number; heightRatio: number }; maxStrokes?: number; maxPoints?: number; blocked?: boolean };
-type Props = { channelUid: string; viewerUserId: string; points: number; settings: DrawingStudioSettings; background?: ReactNode; backgroundControls?: ReactNode; onSubmitted?: (cost: number) => void; localOnly?: boolean };
+type Props = { channelUid: string; viewerUserId: string; points: number; settings: DrawingStudioSettings; background?: ReactNode; backgroundControls?: ReactNode; onSubmitted?: () => void; localOnly?: boolean };
 type Selection = { rect: SelectionRect; frame: SelectionFrame; layerId: string; operationId: string | null };
 const CLOSED_SHAPES = ['rectangle', 'ellipse', 'star', 'heart'];
 const HANDLES = [ ['nw', '왼쪽 위', 0, 0], ['n', '위', 50, 0], ['ne', '오른쪽 위', 100, 0], ['e', '오른쪽', 100, 50], ['se', '오른쪽 아래', 100, 100], ['s', '아래', 50, 100], ['sw', '왼쪽 아래', 0, 100], ['w', '왼쪽', 0, 50] ] as const;
@@ -508,7 +508,7 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
       const payload = await response.json(); if (!response.ok) throw new Error(payload.error);
       if (payload.documentHash !== review.hash || payload.originalHash !== review.originalHash) throw new Error('drawing_original_mismatch');
       const empty = createDrawing(settings.canvas.widthRatio, settings.canvas.heightRatio, uid());
-      historyRef.current = []; redoRef.current = []; originRef.current = 0; assign(empty); setLayerId('layer-1'); setSelection(null); setReview(null); onSubmitted?.(review.cost);
+      historyRef.current = []; redoRef.current = []; originRef.current = 0; assign(empty); setLayerId('layer-1'); setSelection(null); setReview(null); onSubmitted?.();
       await writeDraft(draftKey, null).catch(() => toast.warning('후원은 접수되었지만 이 기기의 초안을 삭제하지 못했습니다.'));
       toast.success('그림을 후원 대기열에 등록했습니다.');
     } catch (error) { report(error); } finally { setBusy(false); }
@@ -567,8 +567,8 @@ export function DrawingStudio({ channelUid, viewerUserId, points, settings, back
         </section> : null}
         <div className="space-y-2 border-y py-3"><label className="flex items-center justify-between text-xs">좌우 대칭<input type="checkbox" checked={mirror} onChange={(e) => setMirror(e.target.checked)} /></label><label className="flex items-center justify-between text-xs">상하 대칭<input type="checkbox" checked={mirrorY} onChange={(e) => setMirrorY(e.target.checked)} /></label></div>
         {!isShape ? <details className="border-y py-2"><summary className="cursor-pointer text-xs font-medium">재질 설정</summary><div className="mt-3 space-y-3">{(['texture', 'hardness', 'flow', 'angle'] as const).filter((key) => key === 'texture' ? !['pen', 'airbrush', 'eraser'].includes(brush.type) : key === 'hardness' ? brush.type === 'airbrush' : key === 'angle' ? ['marker', 'highlighter'].includes(brush.type) : ['airbrush', 'watercolor', 'highlighter'].includes(brush.type)).map((key) => <label key={key} className="grid gap-1 text-xs">{{ texture: brush.type === 'brush' ? '마른 붓결' : '종이 질감', hardness: '분사 경도', flow: '재질 농도', angle: '펜촉 각도' }[key]}<input type="range" min={key === 'flow' ? 5 : 0} max={key === 'angle' ? 180 : 100} value={brush[key] * (key === 'angle' ? 1 : 100)} onChange={(e) => setBrush({ ...brush, [key]: Number(e.target.value) / (key === 'angle' ? 1 : 100) })} /></label>)}<Button size="sm" variant="ghost" onClick={() => setBrush(createBrush(brush.type, brush.color))}>브러시 초기화</Button></div></details> : null}
-        <div className="flex items-center justify-between text-sm"><span>사용 포인트</span><strong className={cost > points ? 'text-rose-500' : ''}>{cost.toLocaleString()}P</strong></div><div className="text-right text-xs text-muted-foreground">보유 {points.toLocaleString()}P</div>
-        <Button className="w-full" onClick={openReview} disabled={busy || !visibleStrokes(doc).some((s) => s.brush.type !== 'eraser') || cost > points || settings.blocked || !!recoverable}>{busy ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />} 그림 보내기</Button>
+        <div className="flex items-center justify-between text-sm"><span>사용 포인트</span><strong>{cost.toLocaleString()}P</strong></div><div className="text-right text-xs text-muted-foreground">사용 가능 {points.toLocaleString()}P</div>
+        <Button className="w-full" onClick={openReview} disabled={busy || !visibleStrokes(doc).some((s) => s.brush.type !== 'eraser') || settings.blocked || !!recoverable}>{busy ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />} 그림 보내기</Button>
         <Button variant="ghost" className="w-full" onClick={() => { if (window.confirm('그림을 모두 지울까요? 실행 취소로 복원할 수 있습니다.')) { commit({ ...doc, strokes: [] }); setSelection(null); } }} disabled={!doc.strokes.length || busy}><Trash2 size={15} /> 전체 지우기</Button>
         {settings.blocked ? <p className="text-xs text-rose-500">이 방송에서는 후원할 수 없습니다.</p> : null}
       </aside>

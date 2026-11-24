@@ -2866,9 +2866,13 @@ export async function getBotEventLog(ownerUserId, id) {
   });
 }
 
+let drawingTablesReadyFor = null;
 async function ensureDrawingDonationTables() {
+  const dbUrl = getDbUrl();
+  if (dbUrl && drawingTablesReadyFor === dbUrl) return;
   await withPgClient(async (pg) => {
     await pg.query(`
+      select pg_advisory_xact_lock(hashtextextended('drawing-donation:schema', 0));
       create table if not exists public.drawing_donation_items (
         id text primary key,
         sid text not null,
@@ -2909,6 +2913,7 @@ async function ensureDrawingDonationTables() {
       alter table public.drawing_donation_items add column if not exists preview_object_key text;
     `);
   });
+  drawingTablesReadyFor = dbUrl;
 }
 
 function normalizeDrawingDonationRow(row, { includeStrokes = false } = {}) {
@@ -3003,6 +3008,21 @@ async function hydrateDrawingDonationStrokes(item) {
     item.strokes = [];
   }
   return item;
+}
+
+export async function getDrawingSubmissionByKey(sid, key) {
+  const idempotencyKey = key.slice(0, 256);
+  if (getDbUrl()) return withPgClient(async pg => {
+    await ensureDurableRuntimeJobsWithClient(pg);
+    const { rows } = await pg.query(`select * from durable_runtime_jobs
+      where sid=$1 and job_type='drawing-donation' and idempotency_key=$2`, [sid, idempotencyKey]);
+    return normalizeDurableRuntimeJob(rows[0]);
+  });
+  ensure();
+  const { data, error } = await supabase.from('durable_runtime_jobs').select('*').eq('sid', sid)
+    .eq('job_type', 'drawing-donation').eq('idempotency_key', idempotencyKey).maybeSingle();
+  if (error) throw error;
+  return normalizeDurableRuntimeJob(data);
 }
 
 export async function insertDrawingDonationItem(item = {}) {
@@ -3204,11 +3224,13 @@ export async function updateDrawingDonationItemStatus(sid, id, status, extra = {
 }
 
 async function creditDrawingRefund(pg, row, deduction) {
-  const channel = await resolvePointChannelIdentity(pg, row.channel_uid);
-  const user = await resolvePointUserIdentity(pg, deduction.userId);
-  if (!channel.canonicalChannelUid || !user.canonicalUserId) throw new Error('drawing_refund_identity_invalid');
-  await pg.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`${channel.canonicalChannelUid}:${user.canonicalUserId}`]);
-  await upsertCanonicalPointDelta(pg, channel.canonicalChannelUid, user.canonicalUserId, deduction.username || row.viewer_name, deduction.amount);
+  // Older entries have only userId, username and amount, possibly across several aliases.
+  const split = ['streamerUid', 'ordinarySpent', 'bonusSpent', 'sessionKey'].some(key => Object.hasOwn(deduction, key));
+  if (split && (deduction.streamerUid !== row.channel_uid || deduction.userId !== row.viewer_user_id)) {
+    throw new Error('drawing_refund_identity_invalid');
+  }
+  return refundBroadcastPoints(pg, { sid: row.sid, channelUid: row.channel_uid, userId: deduction.userId,
+    username: deduction.username || row.viewer_name, amount: deduction.amount, receipt: split ? deduction : null });
 }
 
 export async function refundDrawingDonationItem(sid, id) {
@@ -9294,6 +9316,7 @@ export async function enqueueDurableRuntimeJob(input) {
 export async function enqueuePaidDurableRuntimeJob(input) {
   const row = durableRuntimeJobRow(input);
   const paidVideo = row.job_type === 'video-donation' && row.points_cost > 0;
+  const paidDrawing = row.job_type === 'drawing-donation' && row.points_cost > 0;
   if (row.points_cost > 0 && (!row.channel_uid || !row.user_id)) {
     const error = new Error('channelUid and userId are required for a paid durable job');
     error.code = 'invalid_paid_durable_runtime_job';
@@ -9303,6 +9326,7 @@ export async function enqueuePaidDurableRuntimeJob(input) {
   if (!getDbUrl()) {
     // The legacy RPC only debits ordinary points and cannot persist an allocation.
     if (paidVideo) throw new Error('Paid video and BGM requests require a direct PostgreSQL connection');
+    if (paidDrawing) throw new Error('Paid drawing donations require a direct PostgreSQL connection');
     ensure();
     if (typeof supabase.rpc !== 'function') throw new Error('Paid durable job RPC is unavailable');
     const { data, error } = await supabase.rpc('arubot_enqueue_paid_durable_runtime_job', {
@@ -9357,11 +9381,27 @@ export async function enqueuePaidDurableRuntimeJob(input) {
           row.channel_uid,
           row.user_id,
           row.username,
-          row.points_cost
+          row.points_cost,
+          paidDrawing ? { sid: row.sid, category: 'drawing' } : undefined
         );
         if (!deduction.deducted) {
           await pg.query('rollback');
           return { created: false, job: null, deduction };
+        }
+        if (paidDrawing) {
+          const { userId, streamerUid, ordinarySpent, bonusSpent, sessionKey } = deduction;
+          const item = row.payload.item;
+          if (item?.cost !== row.points_cost || !userId || !streamerUid
+            || !Number.isSafeInteger(ordinarySpent) || ordinarySpent < 0 || !Number.isSafeInteger(bonusSpent)
+            || bonusSpent < 0 || ordinarySpent + bonusSpent !== row.points_cost || (bonusSpent > 0 && !sessionKey)) {
+            throw new Error('Invalid drawing point allocation');
+          }
+          row.channel_uid = streamerUid;
+          row.user_id = userId;
+          // The drawing worker inserts payload.item, not the job envelope, into the refund ledger.
+          row.payload = { ...row.payload, item: { ...item, channelUid: streamerUid, viewerUserId: userId,
+            pointDeductions: [{ userId, streamerUid, username: row.username, amount: row.points_cost,
+              ordinarySpent, bonusSpent, sessionKey }] } };
         }
         if (paidVideo) {
           const { streamerUid, userId, bonusSpent, ordinarySpent, sessionKey } = deduction;
@@ -9377,7 +9417,7 @@ export async function enqueuePaidDurableRuntimeJob(input) {
       }
 
       const inserted = await insertDurableRuntimeJobWithClient(pg, row);
-      if (paidVideo && !inserted.created) {
+      if ((paidVideo || paidDrawing) && !inserted.created) {
         await pg.query('rollback');
         return { ...inserted, deduction: null };
       }

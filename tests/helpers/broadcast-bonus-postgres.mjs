@@ -39,6 +39,7 @@ try {
   assert.throws(() => validateBroadcastBonus({sessionKey:first, amount:5, categories:[]}), {status:400});
   assert.throws(() => validateBroadcastBonus({sessionKey:first, amount:-1, categories}), {status:400});
   assert.throws(() => validateBroadcastBonus({sessionKey:first, amount:5, categories:['all']}), {status:400});
+  assert.throws(() => validateBroadcastBonus({sessionKey:first, amount:5, categories:['prediction']}), {status:400});
   async function tx(work) {
     const c = await pool.connect();
     try { await c.query('begin'); const result = await work(c); await c.query('commit'); return result; }
@@ -49,7 +50,14 @@ try {
   const refund = receipt => tx(c => refundBroadcastPoints(c,{...args,userId:'v',amount:receipt.amount,receipt}));
   const remaining = async viewer => (await getViewerBroadcastBonus(sid,viewer)).remaining;
   const ordinary = async () => (await listChannelPoints('OwnerCh'))[0].points;
+  const additions = ['drawing', 'marble', 'blueprint'];
+  await saveBroadcastBonusSettings(sid, { sessionKey: first, amount: 60, categories: additions });
+  for (const category of additions) assert.equal((await debit('newCategoriesViewer', 20, category)).bonusSpent, 20);
+  assert.equal(await remaining('newCategoriesViewer'), 0);
+  assert.equal((await debit('newCategoriesViewer', 1, 'marble')).ok, false);
+  assert.equal((await debit('predictionViewer', 1, 'prediction')).ok, false);
   await configure(100);
+  for (const category of additions) assert.equal((await debit('unselectedViewer', 1, category)).ok, false);
   assert.equal(await remaining(null), null);
   assert.equal(await remaining('newViewer'), 100);
   assert.equal((await debit('viewerch',56,'command')).ok, false);
