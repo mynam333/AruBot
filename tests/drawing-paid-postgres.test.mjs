@@ -106,7 +106,7 @@ test('drawing debit, worker persistence, refunds and retention use the original 
   } finally {
     await api?.closeDatabaseConnections();
     await pool?.end();
-    try { if (created) await admin.query('drop database ' + name + ' with (force)'); }
+    try { if (created) await admin.query('drop database ' + name); }
     finally { await admin.end(); }
   }
 });

@@ -120,7 +120,8 @@ test('paid video and BGM: durable debit, refund allocation, rollback and concurr
   } finally {
     await api?.closeDatabaseConnections();
     await pool?.end();
-    try { if (created) await admin.query('drop database ' + name + ' with (force)'); }
+    // Pool.end() can resolve before the last socket closes. Do not kill that connection.
+    try { if (created) await admin.query('drop database ' + name); }
     finally { await admin.end(); }
   }
 });
